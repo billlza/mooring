@@ -1,0 +1,150 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render hy2.json (design 8.3); the file is this text plus one newline."
+---
+{
+  "log": {
+    "level": "fatal"
+  },
+  "inbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "hy2-in",
+      "listen": "46.78.90.12",
+      "listen_port": 61000,
+      "obfs": {
+        "type": "salamander",
+        "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldCECAFpaWlpaWlo"
+      },
+      "users": [
+        {
+          "name": "fxuseraaab",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCAVpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaac",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCAlpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaad",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCA1paWlpaWlo"
+        },
+        {
+          "name": "probe",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldBMCAFpaWlpaWlo"
+        }
+      ],
+      "ignore_client_bandwidth": true,
+      "tls": {
+        "enabled": true,
+        "alpn": [
+          "h3"
+        ],
+        "certificate": [
+          "-----BEGIN CERTIFICATE-----",
+          "MIIBnDCCAUKgAwIBAgIITU9PUklORwIwCgYIKoZIzj0EAwIwJTEjMCEGA1UEAwwa",
+          "bjYxNmQ3MzMxMDAwMDAwMDIuaW50ZXJuYWwwHhcNMjYxMDAxMDAwMDAwWhcNMzYw",
+          "OTI4MDAwMDAwWjAlMSMwIQYDVQQDDBpuNjE2ZDczMzEwMDAwMDAwMi5pbnRlcm5h",
+          "bDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABD2anWcqf5TMWaRsd6J07g1qy42+",
+          "HHW3DsvblOszxmW5nkUCz0zt0ONgeFwOorQEoJISD0hU0rzNSuXU0URSVZGjXDBa",
+          "MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUF",
+          "BwMBMCUGA1UdEQQeMByCGm42MTZkNzMzMTAwMDAwMDAyLmludGVybmFsMAoGCCqG",
+          "SM49BAMCA0gAMEUCIAT/D9q+yXdB8A/y3T+n9/sSd7uLVvG7o0xfxMcnoyNNAiEA",
+          "0qw3fMHSLkABMFbbEhUThOPrFkv9znUAdI/eb1uLRkI=",
+          "-----END CERTIFICATE-----"
+        ],
+        "key": [
+          "-----BEGIN PRIVATE KEY-----",
+          "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgCnJVGQFwu/ojrFPS",
+          "NDQDsGpFx1jVPWrFwjgCC1KUnm2hRANCAAQ9mp1nKn+UzFmkbHeidO4NasuNvhx1",
+          "tw7L25TrM8ZluZ5FAs9M7dDjYHhcDqK0BKCSEg9IVNK8zUrl1NFEUlWR",
+          "-----END PRIVATE KEY-----"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaab",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4001-8000-000000020201",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaac",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4002-8000-000000020202",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaad",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4003-8000-000000020203",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-probe",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-1202-4000-8000-000000120200",
+      "packet_encoding": "xudp"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaab"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaab"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaac"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaac"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaad"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaad"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "probe"
+        ],
+        "action": "route",
+        "outbound": "x-probe"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "action": "reject"
+      }
+    ]
+  }
+}

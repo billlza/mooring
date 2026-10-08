@@ -1,0 +1,52 @@
+---
+source: crates/export/tests/export/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-export user export (design 9.1); the file is this text plus one newline."
+---
+{
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "lon1-reality",
+      "server": "45.67.89.10",
+      "server_port": 443,
+      "uuid": "6d6f6f72-0101-4001-8000-000000010101",
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.harbour-target.test",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "QEsWwS6uUzMjri07Ajw6HWWPRuUgAlPCkCstYBSWq18",
+          "short_id": "5f1e310100000001",
+          "support_x25519mlkem768": true
+        }
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "lon1-hy2",
+      "server": "45.67.89.10",
+      "server_ports": [
+        "61000:62999"
+      ],
+      "hop_interval": "30s",
+      "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMBAVpaWlpaWlo",
+      "obfs": {
+        "type": "salamander",
+        "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldCEBAFpaWlpaWlo"
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "n6c6f6e3100000001.internal",
+        "certificate_public_key_sha256": [
+          "m2BfzEHpKpjWF0ZVM6Vefmjwa+FTTdBMh1C5aqdjA1o="
+        ]
+      }
+    }
+  ]
+}

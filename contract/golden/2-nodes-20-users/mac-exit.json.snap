@@ -1,0 +1,155 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render mooring-exit config (design 8.7); the file is this text plus one newline."
+---
+{
+  "log": {
+    "level": "fatal"
+  },
+  "endpoints": [
+    {
+      "type": "wireguard",
+      "tag": "wg-ams1",
+      "system": false,
+      "mtu": 1280,
+      "address": [
+        "10.77.2.2/32"
+      ],
+      "private_key": "uBXGGOSjqNj83tgt4Fz97Od8Ot3GsAo8h1DXblzztGQ=",
+      "peers": [
+        {
+          "address": "46.78.90.12",
+          "port": 27820,
+          "public_key": "1+budQXrzhli3nM4sZneRvUtU8TYm1/D6NLLUJA2TBE=",
+          "allowed_ips": [
+            "10.77.2.1/32"
+          ],
+          "persistent_keepalive_interval": 10
+        }
+      ],
+      "udp_timeout": "5m",
+      "udp_nat_max": 4096,
+      "bind_interface": "en8"
+    },
+    {
+      "type": "wireguard",
+      "tag": "wg-lon1",
+      "system": false,
+      "mtu": 1280,
+      "address": [
+        "10.77.1.2/32"
+      ],
+      "private_key": "GJBYG3LVAULH/bMIsc0pR3nj/Qy1ochAp6Jd1kPCylo=",
+      "peers": [
+        {
+          "address": "45.67.89.10",
+          "port": 27820,
+          "public_key": "bNlQS933+LFbuy6C05O/HL03ezxdOUm0eMvwUDmokFk=",
+          "allowed_ips": [
+            "10.77.1.1/32"
+          ],
+          "persistent_keepalive_interval": 10
+        }
+      ],
+      "udp_timeout": "5m",
+      "udp_nat_max": 4096,
+      "bind_interface": "en8"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "egress",
+      "bind_interface": "en8"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "wg-ams1",
+          "wg-lon1"
+        ],
+        "ip_cidr": [
+          "46.78.90.12/32",
+          "45.67.89.10/32"
+        ],
+        "network": [
+          "tcp"
+        ],
+        "port": [
+          27900
+        ],
+        "action": "route",
+        "outbound": "egress"
+      },
+      {
+        "inbound": [
+          "wg-ams1",
+          "wg-lon1"
+        ],
+        "ip_cidr": [
+          "46.78.90.12/32",
+          "45.67.89.10/32"
+        ],
+        "action": "reject"
+      },
+      {
+        "inbound": [
+          "wg-ams1",
+          "wg-lon1"
+        ],
+        "ip_version": 6,
+        "action": "reject"
+      },
+      {
+        "inbound": [
+          "wg-ams1",
+          "wg-lon1"
+        ],
+        "ip_cidr": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.0.0.0/24",
+          "192.0.2.0/24",
+          "192.88.99.0/24",
+          "192.168.0.0/16",
+          "198.18.0.0/15",
+          "198.51.100.0/24",
+          "203.0.113.0/24",
+          "224.0.0.0/4",
+          "240.0.0.0/4"
+        ],
+        "action": "reject"
+      },
+      {
+        "inbound": [
+          "wg-ams1",
+          "wg-lon1"
+        ],
+        "network": [
+          "tcp"
+        ],
+        "port": [
+          25
+        ],
+        "action": "reject"
+      },
+      {
+        "inbound": [
+          "wg-ams1",
+          "wg-lon1"
+        ],
+        "action": "route",
+        "outbound": "egress"
+      }
+    ],
+    "final": "egress",
+    "auto_detect_interface": false,
+    "default_interface": "en8"
+  }
+}

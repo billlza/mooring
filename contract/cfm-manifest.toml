@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The CFM revisions Mooring's export contract is checked against (design
+# §9.3 items 1, 2 and 4). `cargo xtask acceptance` reads this file into
+# typed serde structs that deny unknown keys (xtask/src/acceptance/
+# manifest.rs) and checks each importer_digest, that no patch is listed
+# twice, and that the [cfm.<client line>] tables are exactly the client
+# lines `mooring_export::shapes()` enumerates. `line` is the CFM release
+# line ("major.minor") and `sing_box_tag` a sing-box release tag
+# ("vX.Y.Z"). The release gate (`cargo xtask release-acceptance`) takes
+# each line's importer_digest, release line and sing-box tag from here.
+# The planned `xtask cfm-client` reads it to build upstream and CFM-patched
+# sing-box CLI clients; docs/cfm-contract.md cites the importer source at
+# exactly these revisions.
+#
+# Values were read on 2026-10-08 from the local CFM checkouts, read-only:
+#   cfm04: /Users/bill/cfw-rs at ac981c3 (the importer files and the six
+#          1.14.1 patches are unmodified in its working tree, except
+#          sing-box-v1.14.1-socks-lifecycle.patch, which carries uncommitted
+#          edits; the hash below is the committed blob).
+#   cfm05: /Users/bill/cfw-rs-liquid-glass-dialogs at 3157ef9 (clean
+#          working tree; design §21 cites f340fae, an ancestor). The
+#          `support_x25519mlkem768` opt-in is committed there (e6c9e05).
+#
+# importer_digest: SHA-256 (`shasum -a 256`) of these three lines, in this
+# order, each "<path> <git object id at the revision>" ending in "\n":
+#   apps/cfw-tauri-shell/src/subscription_import     (tree)
+#   apps/cfw-tauri-shell/src/subscription_import.rs  (blob)
+#   crates/cfw-singbox-config                        (tree)
+# `cargo xtask acceptance` recomputes it from [cfm.<line>.importer]. Any
+# change to CFM's importer changes it and invalidates the accepted entries
+# of contract/cfm-acceptance.toml for that line.
+#
+# patch sha256: `git show <revision>:<path> | shasum -a 256`; each equals
+# the value CFM pins in scripts/dependency_pins.env at the revision. The
+# patches are listed in the order CFM applies them
+# (scripts/libbox_source_contract.sh:437-443 at both revisions:
+# `git apply --whitespace=error-all --unidiff-zero`).
+
+manifest_version = 1
+
+[cfm.cfm04]
+line = "0.4"
+revision = "ac981c3b6c3284824e1018de367335aa6d69433e"
+sing_box_tag = "v1.14.1"
+sing_box_commit = "1ac1a339cb1223e9c70eae14c44411c75033c02d"
+importer_digest = "be5ad5c27b251901a77ee5912812282c9b8088535868c5e2994973b5dbf267e7"
+
+[cfm.cfm04.importer]
+subscription_import_tree = "72feb34c7e73002644afe3af1bea1cd302d4884b"
+subscription_import_rs_blob = "21c932e65f9f60f3a64691bff930eaeda9c5ca77"
+cfw_singbox_config_tree = "b9ef0c0b339d8cc03a6ae7e174fb9e7d44dc5ddf"
+
+[[cfm.cfm04.patch]]
+path = "native/macos/patches/sing-box-v1.14.1-security-dependencies.patch"
+sha256 = "7279aef88a394ee8caf00505ef797e8c6f798047d99615c62da9dca03d987645"
+
+[[cfm.cfm04.patch]]
+path = "native/macos/patches/sing-box-v1.14.1-raw-packet-tun.patch"
+sha256 = "a550daa7b955f838b5b9b8983b41b789ccb9aedcc97b9a53f96f6affbe3f06e9"
+
+[[cfm.cfm04.patch]]
+path = "native/macos/patches/sing-box-v1.14.1-dns-failover.patch"
+sha256 = "b702db8c212448d09fd968ca50efec8205291be5c99be354b0fb59aeac1a6823"
+
+[[cfm.cfm04.patch]]
+path = "native/macos/patches/sing-box-v1.14.1-endpoint-conflict.patch"
+sha256 = "9e15e2d1dfd1c46deead734d40e6c6f021cfc400cdc9effaeb13420485b03565"
+
+[[cfm.cfm04.patch]]
+path = "native/macos/patches/sing-box-v1.14.1-profile-probe.patch"
+sha256 = "2450102e3133f61b124ef2032a9dc96d12a04e32ebab56f5a5ab5eb053d26b34"
+
+[[cfm.cfm04.patch]]
+path = "native/macos/patches/sing-box-v1.14.1-socks-lifecycle.patch"
+sha256 = "1e0e87f417fa683b0a6136fd002651056d1e490215d76bd88fc392fd6c2be829"
+
+[cfm.cfm05]
+line = "0.5"
+revision = "3157ef9043c0df5703ba05b1a7a8c30d27e8268c"
+sing_box_tag = "v1.14.2"
+sing_box_commit = "af6e64c3b69e6132ebaee0e1a3d24e93903f6709"
+importer_digest = "e9c2cfa8e886ee34d65765b743a7a6396880f2c67aa657e4d40c0680359647be"
+
+[cfm.cfm05.importer]
+subscription_import_tree = "63829f8d8e5497ffba4418777fc4d4a348f2b515"
+subscription_import_rs_blob = "35199f48d05292b1932a2a5ef4d8ec0f12e4ee15"
+cfw_singbox_config_tree = "8550bbd3419ad4faf4c2274f6d994ce3debe83d1"
+
+[[cfm.cfm05.patch]]
+path = "native/macos/patches/sing-box-v1.14.2-security-dependencies.patch"
+sha256 = "d2ddb176d0063a9cba1727c6dd76828ef47c7185a83363df5866f2c44b5603c3"
+
+[[cfm.cfm05.patch]]
+path = "native/macos/patches/sing-box-v1.14.2-raw-packet-tun.patch"
+sha256 = "d3aa03dcf3e3e0421bd1b5062dcf8ca60f62252afabd8d15013ed3e4bda25950"
+
+[[cfm.cfm05.patch]]
+path = "native/macos/patches/sing-box-v1.14.2-dns-failover.patch"
+sha256 = "503b5ad3f5a3b1a43920cbb9415c4bc7159d990f47c761f20ec5533a5881ce0b"
+
+[[cfm.cfm05.patch]]
+path = "native/macos/patches/sing-box-v1.14.2-endpoint-conflict.patch"
+sha256 = "d3815c6cc2af12565422c96c1cc0ad41be1792edf796d11efdf98598c8344d49"
+
+[[cfm.cfm05.patch]]
+path = "native/macos/patches/sing-box-v1.14.2-profile-probe.patch"
+sha256 = "fc9d376b27c9cb506ddba1969d1ee51c49b01e7b877fdc201d54c80b73f2e80a"
+
+[[cfm.cfm05.patch]]
+path = "native/macos/patches/sing-box-v1.14.2-socks-lifecycle.patch"
+sha256 = "6522a046fade01547102e6ff43fa12ae5a25250139c803011a606b7fd8fd9821"

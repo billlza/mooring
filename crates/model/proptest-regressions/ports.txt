@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d1389858892afcd1aada9de6f3a0e2912d5e5f5ae02bdb3837b2bc3a5c733038 # shrinks to wg = 1, reflector = 32768, listen = 60999, hop_len = 1
+cc 21928d99333d05e215ee12bfcc94afc14a58223be117e6bf254ca29c3ea2dd29 # shrinks to a = 1, b = 53, c = 53, d = 53

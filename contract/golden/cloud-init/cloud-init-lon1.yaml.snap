@@ -1,0 +1,29 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render cloud-init user-data (design 8.9); the file is this text plus one newline."
+---
+#cloud-config
+ssh_deletekeys: true
+ssh_genkeytypes: []
+ssh_keys:
+  ed25519_private: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+    QyNTUxOQAAACC3Bac9vPvgiPoG81F04fKSXhwU6V1yazxUiBqkiOFH2AAAAIjQRcbz0EXG
+    8wAAAAtzc2gtZWQyNTUxOQAAACC3Bac9vPvgiPoG81F04fKSXhwU6V1yazxUiBqkiOFH2A
+    AAAEAuYUn1GwmQTE8NLLA2xdjvY49zECunogFllhnNXgdnxrcFpz28++CI+gbzUXTh8pJe
+    HBTpXXJrPFSIGqSI4UfYAAAAAAECAwQF
+    -----END OPENSSH PRIVATE KEY-----
+  ed25519_public: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILcFpz28++CI+gbzUXTh8pJeHBTpXXJrPFSIGqSI4UfY"
+disable_root: false
+users:
+  - name: root
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL7LbLT+EDtpolE12r0wbVvyn8A/1YUWZ/WnXYHmnJy4"
+package_update: true
+packages:
+  - wireguard-tools
+  - nftables
+  - chrony
+  - unattended-upgrades
+  - curl

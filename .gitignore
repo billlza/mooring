@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Single bounded build directory. `cargo xtask clean` removes it after each
+# milestone so this host never accumulates build caches.
+/target/
+/dist/
+*.profraw
+*.pending-snap
+.DS_Store

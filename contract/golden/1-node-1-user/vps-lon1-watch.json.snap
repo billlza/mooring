@@ -1,0 +1,11 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render watch.json (design 11.3); the file is this text plus one newline."
+---
+{
+  "keepalive_secs": 10,
+  "target": {
+    "host": "www.harbour-target.test",
+    "ipv4": "45.67.89.200"
+  }
+}

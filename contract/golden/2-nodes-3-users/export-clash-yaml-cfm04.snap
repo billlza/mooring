@@ -1,0 +1,53 @@
+---
+source: crates/export/tests/export/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-export user export (design 9.1); the file is this text plus one newline."
+---
+proxies:
+  - name: "lon1-reality"
+    type: "vless"
+    server: "45.67.89.10"
+    port: 443
+    uuid: "6d6f6f72-0101-4001-8000-000000010101"
+    flow: "xtls-rprx-vision"
+    packet-encoding: "xudp"
+    tls: true
+    servername: "www.harbour-target.test"
+    client-fingerprint: "chrome"
+    reality-opts:
+      public-key: "QEsWwS6uUzMjri07Ajw6HWWPRuUgAlPCkCstYBSWq18"
+      short-id: "5f1e310100000001"
+  - name: "lon1-hy2"
+    type: "hysteria2"
+    server: "45.67.89.10"
+    port: 61000
+    ports: "61000-62999"
+    hop-interval: 30
+    password: "bW9vcmluZy1maXh0dXJlLXNlY3JldAMBAVpaWlpaWlo"
+    obfs: "salamander"
+    obfs-password: "bW9vcmluZy1maXh0dXJlLXNlY3JldCEBAFpaWlpaWlo"
+    sni: "n6c6f6e3100000001.internal"
+    fingerprint: "2d4e7710ab6fd0c32360aec182f026daaa7a822bacafd436065f1981723e14ff"
+  - name: "ams1-reality"
+    type: "vless"
+    server: "46.78.90.12"
+    port: 443
+    uuid: "6d6f6f72-0102-4001-8000-000000010201"
+    flow: "xtls-rprx-vision"
+    packet-encoding: "xudp"
+    tls: true
+    servername: "www.quay-target.test"
+    client-fingerprint: "chrome"
+    reality-opts:
+      public-key: "j5XOIMhZDjZl32xEe6ox0BDSDci5IAX6L-5qGqJRHR8"
+      short-id: "5f1e310200000001"
+  - name: "ams1-hy2"
+    type: "hysteria2"
+    server: "46.78.90.12"
+    port: 61000
+    ports: "61000-62999"
+    hop-interval: 30
+    password: "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCAVpaWlpaWlo"
+    obfs: "salamander"
+    obfs-password: "bW9vcmluZy1maXh0dXJlLXNlY3JldCECAFpaWlpaWlo"
+    sni: "n616d733100000002.internal"
+    fingerprint: "e7d8b4219e0847227158ea5680f072c6b7935601ad90bdf6b886bc286cf06e50"

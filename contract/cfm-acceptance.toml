@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# CFM import acceptance of every export shape (design §9.3 item 2, §16 L7).
+#
+# One [[shape]] entry per (shape hash, client line) that
+# `mooring_export::shapes()` enumerates. `cargo xtask acceptance`, a step of
+# `cargo xtask ci`, fails when an enumerated shape has no entry, an entry is
+# stale, or two entries record the same hash for the same client line
+# (`require_recorded` in xtask/src/acceptance/file.rs). A shape's name and
+# hash change whenever the emitter's keys, key order, constants or leaf
+# domains change.
+#
+# Every entry has name, client_line, hash and status, and status decides
+# the other keys:
+#   pending-real-cfm-import  no real CFM import has run yet (M6). No other
+#                            key. Pending counts as recorded for CI, never
+#                            as accepted.
+#   accepted                 imported into real CFM and connected. Requires
+#                            exactly these other keys: importer_digest,
+#                            export_sha256 and evidence_sha256 (64 lowercase
+#                            hex), cfm_build (a positive integer),
+#                            bundle_version and sing_box_core ("x.y.z"),
+#                            import_date (a TOML local date such as
+#                            2026-10-20) and connect = "connected".
+#
+# The release gate, `cargo xtask release-acceptance` (`require_accepted`;
+# release verification runs it, ci does not), requires every entry to be
+# accepted against the line's current importer digest in
+# contract/cfm-manifest.toml, by a CFM build of that line: bundle_version
+# in the line's release line (`line`) and sing_box_core equal to its
+# `sing_box_tag` without the "v". It fails until M6 accepts every shape.
+#
+# Format: TOML, read into typed serde structs that deny unknown keys.
+
+[[shape]]
+name = "sing-box-json/vless-reality/chrome"
+client_line = "cfm04"
+hash = "420cb0f155f949d18430b81057c5e6528f1a069c408667c0a1c7312fae193dcb"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "sing-box-json/hysteria2"
+client_line = "cfm04"
+hash = "49a84bba9742a9843c7777b2a127a6acdc63223e1701a92cd557656941aecdbb"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "clash-yaml/vless-reality/chrome"
+client_line = "cfm04"
+hash = "507cfdd65f6fd823dee42063ce47beb292dce28c489834bdd777a73fa029972f"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "clash-yaml/hysteria2"
+client_line = "cfm04"
+hash = "0b9f105bd648e8d6b777bb80c36443ef125d1aadc219f37560fdae47620cdf1d"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "sing-box-json/vless-reality/chrome"
+client_line = "cfm05"
+hash = "420cb0f155f949d18430b81057c5e6528f1a069c408667c0a1c7312fae193dcb"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "sing-box-json/hysteria2"
+client_line = "cfm05"
+hash = "49a84bba9742a9843c7777b2a127a6acdc63223e1701a92cd557656941aecdbb"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "clash-yaml/vless-reality/chrome"
+client_line = "cfm05"
+hash = "507cfdd65f6fd823dee42063ce47beb292dce28c489834bdd777a73fa029972f"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "clash-yaml/hysteria2"
+client_line = "cfm05"
+hash = "0b9f105bd648e8d6b777bb80c36443ef125d1aadc219f37560fdae47620cdf1d"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "sing-box-json/vless-reality/chrome-x25519mlkem768"
+client_line = "cfm05"
+hash = "ae47b1bdb3536303682ab7dd0fbd9b2f0c708e73eee45361b952ea561c627ff6"
+status = "pending-real-cfm-import"
+
+[[shape]]
+name = "clash-yaml/vless-reality/chrome-x25519mlkem768"
+client_line = "cfm05"
+hash = "5238bd2e057a9c94d72731ab42df4629e2e2af1cd3f748975fbe5045d849dc78"
+status = "pending-real-cfm-import"

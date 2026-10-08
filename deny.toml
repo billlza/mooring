@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# cargo-deny 0.20 policy (design §4.4, §6.2). `cargo xtask ci` runs
+# `cargo deny --all-features --locked check -D warnings`, so every warn-level
+# diagnostic fails the gate as well; the explicit "deny" settings below make a
+# bare `cargo deny check` just as strict for the checks that have a setting.
+
+[graph]
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
+all-features = true
+
+[advisories]
+ignore = []
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+unused-ignored-advisory = "deny"
+
+[licenses]
+# GPL-3.0-or-later compatible licences, limited to those the graph actually
+# uses: a licence is added together with the first dependency that needs it.
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "GPL-3.0-or-later",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "deny"
+
+[bans]
+multiple-versions = "deny"
+# Dev-only duplicates count too, so the skip list matches `cargo tree -d`
+# for the targets above and `cargo xtask deny-skips` can model it exactly.
+multiple-versions-include-dev = true
+wildcards = "deny"
+allow-wildcard-paths = true
+# Each entry names an exact superseded version (`name@x.y.z`) of a crate that
+# the graph above resolves at more than one version; the newest version is the
+# one generation the workspace uses. `cargo xtask deny-skips` fails when an
+# entry is stale or a duplicate is unlisted. Upstream links are the crates.io
+# dependency pages that show the pinned requirement.
+skip = [
+    { crate = "getrandom@0.2.17", reason = "ring 0.17.14 requires getrandom ^0.2.10; ring is the rcgen 0.14.10 `ring` backend and the x509-parser 0.18.1 `verify` backend (enabled by rcgen's `ring` feature), while mooring-keys and tempfile 3.27.0 use getrandom 0.4. https://crates.io/crates/ring/0.17.14/dependencies" },
+    { crate = "getrandom@0.3.4", reason = "dev-only: proptest 1.11.0 (std feature) -> rand 0.9.5 (os_rng) -> rand_core 0.9.5 requires getrandom ^0.3. https://crates.io/crates/rand_core/0.9.5/dependencies" },
+    { crate = "rand_core@0.9.5", reason = "dev-only: proptest 1.11.0 requires rand ^0.9, which requires rand_core ^0.9; x25519-dalek 3.0.0 (mooring-keys) uses rand_core 0.10. https://crates.io/crates/rand/0.9.5/dependencies" },
+    { crate = "syn@2.0.119", reason = "proc-macro crates still on syn 2: asn1-rs-derive 0.6.0 and asn1-rs-impl 0.2.0 (x509-parser), synstructure 0.13.2, curve25519-dalek-derive 0.1.1 (x25519/ed25519-dalek) and zeroize_derive 1.5.0; serde_derive 1.0.229, thiserror-impl 2.0.21 and displaydoc 0.2.7 use syn 3. https://crates.io/crates/zeroize_derive/1.5.0/dependencies" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+unused-allowed-source = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

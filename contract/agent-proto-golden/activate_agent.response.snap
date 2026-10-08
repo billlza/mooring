@@ -1,0 +1,5 @@
+---
+source: crates/agent-proto/tests/wire/frozen_core.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. Frozen upgrade core (design 11.1): this line, plus one newline, must never change."
+---
+{"Ok":{"AwaitingConfirm":{"generation":41}}}

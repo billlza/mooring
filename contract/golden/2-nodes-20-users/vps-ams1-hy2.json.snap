@@ -1,0 +1,524 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render hy2.json (design 8.3); the file is this text plus one newline."
+---
+{
+  "log": {
+    "level": "fatal"
+  },
+  "inbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "hy2-in",
+      "listen": "46.78.90.12",
+      "listen_port": 61000,
+      "obfs": {
+        "type": "salamander",
+        "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldCECAFpaWlpaWlo"
+      },
+      "users": [
+        {
+          "name": "fxuseraaab",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCAVpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaac",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCAlpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaad",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCA1paWlpaWlo"
+        },
+        {
+          "name": "fxuseraaae",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCBFpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaaf",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCBVpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaag",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCBlpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaah",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCB1paWlpaWlo"
+        },
+        {
+          "name": "fxuseraaai",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCCFpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaaj",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCCVpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaak",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCClpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaal",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCC1paWlpaWlo"
+        },
+        {
+          "name": "fxuseraaam",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCDFpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaan",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCDVpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaao",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCDlpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaap",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCD1paWlpaWlo"
+        },
+        {
+          "name": "fxuseraaaq",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCEFpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaar",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCEVpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaas",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCElpaWlpaWlo"
+        },
+        {
+          "name": "fxuseraaat",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCE1paWlpaWlo"
+        },
+        {
+          "name": "fxuseraaau",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMCFFpaWlpaWlo"
+        },
+        {
+          "name": "probe",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldBMCAFpaWlpaWlo"
+        }
+      ],
+      "ignore_client_bandwidth": true,
+      "tls": {
+        "enabled": true,
+        "alpn": [
+          "h3"
+        ],
+        "certificate": [
+          "-----BEGIN CERTIFICATE-----",
+          "MIIBnDCCAUKgAwIBAgIITU9PUklORwIwCgYIKoZIzj0EAwIwJTEjMCEGA1UEAwwa",
+          "bjYxNmQ3MzMxMDAwMDAwMDIuaW50ZXJuYWwwHhcNMjYxMDAxMDAwMDAwWhcNMzYw",
+          "OTI4MDAwMDAwWjAlMSMwIQYDVQQDDBpuNjE2ZDczMzEwMDAwMDAwMi5pbnRlcm5h",
+          "bDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABD2anWcqf5TMWaRsd6J07g1qy42+",
+          "HHW3DsvblOszxmW5nkUCz0zt0ONgeFwOorQEoJISD0hU0rzNSuXU0URSVZGjXDBa",
+          "MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUF",
+          "BwMBMCUGA1UdEQQeMByCGm42MTZkNzMzMTAwMDAwMDAyLmludGVybmFsMAoGCCqG",
+          "SM49BAMCA0gAMEUCIAT/D9q+yXdB8A/y3T+n9/sSd7uLVvG7o0xfxMcnoyNNAiEA",
+          "0qw3fMHSLkABMFbbEhUThOPrFkv9znUAdI/eb1uLRkI=",
+          "-----END CERTIFICATE-----"
+        ],
+        "key": [
+          "-----BEGIN PRIVATE KEY-----",
+          "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgCnJVGQFwu/ojrFPS",
+          "NDQDsGpFx1jVPWrFwjgCC1KUnm2hRANCAAQ9mp1nKn+UzFmkbHeidO4NasuNvhx1",
+          "tw7L25TrM8ZluZ5FAs9M7dDjYHhcDqK0BKCSEg9IVNK8zUrl1NFEUlWR",
+          "-----END PRIVATE KEY-----"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaab",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4001-8000-000000020201",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaac",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4002-8000-000000020202",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaad",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4003-8000-000000020203",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaae",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4004-8000-000000020204",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaaf",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4005-8000-000000020205",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaag",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4006-8000-000000020206",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaah",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4007-8000-000000020207",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaai",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4008-8000-000000020208",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaaj",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4009-8000-000000020209",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaak",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-400a-8000-00000002020a",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaal",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-400b-8000-00000002020b",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaam",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-400c-8000-00000002020c",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaan",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-400d-8000-00000002020d",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaao",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-400e-8000-00000002020e",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaap",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-400f-8000-00000002020f",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaaq",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4010-8000-000000020210",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaar",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4011-8000-000000020211",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaas",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4012-8000-000000020212",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaat",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4013-8000-000000020213",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaau",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0202-4014-8000-000000020214",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-probe",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-1202-4000-8000-000000120200",
+      "packet_encoding": "xudp"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaab"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaab"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaac"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaac"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaad"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaad"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaae"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaae"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaaf"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaaf"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaag"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaag"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaah"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaah"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaai"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaai"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaaj"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaaj"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaak"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaak"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaal"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaal"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaam"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaam"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaan"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaan"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaao"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaao"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaap"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaap"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaaq"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaaq"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaar"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaar"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaas"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaas"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaat"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaat"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaau"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaau"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "probe"
+        ],
+        "action": "route",
+        "outbound": "x-probe"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "action": "reject"
+      }
+    ]
+  }
+}

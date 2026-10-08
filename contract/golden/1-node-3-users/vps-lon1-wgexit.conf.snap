@@ -1,0 +1,19 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render wgexit.conf (design 8.4); the file is this text plus one newline."
+---
+[Interface]
+Address = 10.77.1.1/30
+ListenPort = 27820
+PrivateKey = kLHtzcgJYSDaWc3YAUUTHdXc1hGsKcrarNmI8FlXGVg=
+MTU = 1280
+Table = off
+PostUp = sysctl -qw net.ipv4.conf.%i.accept_local=1
+PostUp = ip -4 rule add pref 10000 oif %i lookup 77
+PostUp = ip -4 route replace default dev %i table 77
+PreDown = ip -4 rule del pref 10000 oif %i lookup 77
+PreDown = ip -4 route flush table 77
+
+[Peer]
+PublicKey = GCw8FzDlQheBsUANmVfmQTOTJI2m8JC87WVqLeqZYh0=
+AllowedIPs = 0.0.0.0/0

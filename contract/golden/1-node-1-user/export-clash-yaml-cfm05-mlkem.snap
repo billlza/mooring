@@ -1,0 +1,30 @@
+---
+source: crates/export/tests/export/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-export user export (design 9.1); the file is this text plus one newline."
+---
+proxies:
+  - name: "lon1-reality"
+    type: "vless"
+    server: "45.67.89.10"
+    port: 443
+    uuid: "6d6f6f72-0101-4001-8000-000000010101"
+    flow: "xtls-rprx-vision"
+    packet-encoding: "xudp"
+    tls: true
+    servername: "www.harbour-target.test"
+    client-fingerprint: "chrome"
+    reality-opts:
+      public-key: "QEsWwS6uUzMjri07Ajw6HWWPRuUgAlPCkCstYBSWq18"
+      short-id: "5f1e310100000001"
+      support-x25519mlkem768: true
+  - name: "lon1-hy2"
+    type: "hysteria2"
+    server: "45.67.89.10"
+    port: 61000
+    ports: "61000-62999"
+    hop-interval: 30
+    password: "bW9vcmluZy1maXh0dXJlLXNlY3JldAMBAVpaWlpaWlo"
+    obfs: "salamander"
+    obfs-password: "bW9vcmluZy1maXh0dXJlLXNlY3JldCEBAFpaWlpaWlo"
+    sni: "n6c6f6e3100000001.internal"
+    fingerprint: "2d4e7710ab6fd0c32360aec182f026daaa7a822bacafd436065f1981723e14ff"

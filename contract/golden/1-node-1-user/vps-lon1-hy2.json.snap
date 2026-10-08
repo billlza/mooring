@@ -1,0 +1,106 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render hy2.json (design 8.3); the file is this text plus one newline."
+---
+{
+  "log": {
+    "level": "fatal"
+  },
+  "inbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "hy2-in",
+      "listen": "45.67.89.10",
+      "listen_port": 61000,
+      "obfs": {
+        "type": "salamander",
+        "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldCEBAFpaWlpaWlo"
+      },
+      "users": [
+        {
+          "name": "fxuseraaab",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldAMBAVpaWlpaWlo"
+        },
+        {
+          "name": "probe",
+          "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldBMBAFpaWlpaWlo"
+        }
+      ],
+      "ignore_client_bandwidth": true,
+      "tls": {
+        "enabled": true,
+        "alpn": [
+          "h3"
+        ],
+        "certificate": [
+          "-----BEGIN CERTIFICATE-----",
+          "MIIBmzCCAUKgAwIBAgIITU9PUklORwEwCgYIKoZIzj0EAwIwJTEjMCEGA1UEAwwa",
+          "bjZjNmY2ZTMxMDAwMDAwMDEuaW50ZXJuYWwwHhcNMjYxMDAxMDAwMDAwWhcNMzYw",
+          "OTI4MDAwMDAwWjAlMSMwIQYDVQQDDBpuNmM2ZjZlMzEwMDAwMDAwMS5pbnRlcm5h",
+          "bDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABK1e5jDHk6aZY+WwbsjXLrL7qcj9",
+          "0MidgcNYK0Scj4GdJIkv7GAkloz1YCFk4oGbTqS+9yJ81ihcPf1iUUCHHoCjXDBa",
+          "MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUF",
+          "BwMBMCUGA1UdEQQeMByCGm42YzZmNmUzMTAwMDAwMDAxLmludGVybmFsMAoGCCqG",
+          "SM49BAMCA0cAMEQCID7fvy06Sl2ylYNUsKYP62dRjsdzekBjSi4jSnsUKalTAiBN",
+          "5gI8Mnn4djsiDgn+QBFo1Whj7mqtaqYJwWyR8Tt1Ww==",
+          "-----END CERTIFICATE-----"
+        ],
+        "key": [
+          "-----BEGIN PRIVATE KEY-----",
+          "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgSjIXnHGd1K2NN891",
+          "j3zKpm8xhs4eDhIVLR0k5vWBjCehRANCAAStXuYwx5OmmWPlsG7I1y6y+6nI/dDI",
+          "nYHDWCtEnI+BnSSJL+xgJJaM9WAhZOKBm06kvvcifNYoXD39YlFAhx6A",
+          "-----END PRIVATE KEY-----"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "x-fxuseraaab",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-0201-4001-8000-000000020101",
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "vless",
+      "tag": "x-probe",
+      "server": "127.0.0.1",
+      "server_port": 10443,
+      "uuid": "6d6f6f72-1201-4000-8000-000000120100",
+      "packet_encoding": "xudp"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "fxuseraaab"
+        ],
+        "action": "route",
+        "outbound": "x-fxuseraaab"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "auth_user": [
+          "probe"
+        ],
+        "action": "route",
+        "outbound": "x-probe"
+      },
+      {
+        "inbound": [
+          "hy2-in"
+        ],
+        "action": "reject"
+      }
+    ]
+  }
+}

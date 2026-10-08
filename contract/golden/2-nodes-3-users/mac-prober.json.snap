@@ -1,0 +1,173 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render mooring-probe config (design 8.8); the file is this text plus one newline."
+---
+{
+  "log": {
+    "level": "fatal"
+  },
+  "inbounds": [
+    {
+      "type": "direct",
+      "tag": "probe-ams1-reality",
+      "listen": "127.0.0.1",
+      "listen_port": 47101,
+      "network": "tcp",
+      "override_address": "46.78.90.12",
+      "override_port": 27900
+    },
+    {
+      "type": "direct",
+      "tag": "probe-ams1-hy2",
+      "listen": "127.0.0.1",
+      "listen_port": 47102,
+      "network": "tcp",
+      "override_address": "46.78.90.12",
+      "override_port": 27900
+    },
+    {
+      "type": "direct",
+      "tag": "probe-lon1-reality",
+      "listen": "127.0.0.1",
+      "listen_port": 47103,
+      "network": "tcp",
+      "override_address": "45.67.89.10",
+      "override_port": 27900
+    },
+    {
+      "type": "direct",
+      "tag": "probe-lon1-hy2",
+      "listen": "127.0.0.1",
+      "listen_port": 47104,
+      "network": "tcp",
+      "override_address": "45.67.89.10",
+      "override_port": 27900
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "probe-ams1-reality-out",
+      "server": "46.78.90.12",
+      "server_port": 443,
+      "uuid": "6d6f6f72-1102-4000-8000-000000110200",
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.quay-target.test",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "j5XOIMhZDjZl32xEe6ox0BDSDci5IAX6L-5qGqJRHR8",
+          "short_id": "5f1e320200000000"
+        }
+      },
+      "bind_interface": "en8"
+    },
+    {
+      "type": "hysteria2",
+      "tag": "probe-ams1-hy2-out",
+      "server": "46.78.90.12",
+      "server_ports": [
+        "61000:62999"
+      ],
+      "hop_interval": "30s",
+      "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldBMCAFpaWlpaWlo",
+      "obfs": {
+        "type": "salamander",
+        "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldCECAFpaWlpaWlo"
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "n616d733100000002.internal",
+        "certificate_public_key_sha256": [
+          "EnsKF+ODvmyhJSDzRIh+14QX3hmvNQV158R9raL2hI8="
+        ]
+      },
+      "bind_interface": "en8"
+    },
+    {
+      "type": "vless",
+      "tag": "probe-lon1-reality-out",
+      "server": "45.67.89.10",
+      "server_port": 443,
+      "uuid": "6d6f6f72-1101-4000-8000-000000110100",
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.harbour-target.test",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "QEsWwS6uUzMjri07Ajw6HWWPRuUgAlPCkCstYBSWq18",
+          "short_id": "5f1e320100000000"
+        }
+      },
+      "bind_interface": "en8"
+    },
+    {
+      "type": "hysteria2",
+      "tag": "probe-lon1-hy2-out",
+      "server": "45.67.89.10",
+      "server_ports": [
+        "61000:62999"
+      ],
+      "hop_interval": "30s",
+      "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldBMBAFpaWlpaWlo",
+      "obfs": {
+        "type": "salamander",
+        "password": "bW9vcmluZy1maXh0dXJlLXNlY3JldCEBAFpaWlpaWlo"
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "n6c6f6e3100000001.internal",
+        "certificate_public_key_sha256": [
+          "m2BfzEHpKpjWF0ZVM6Vefmjwa+FTTdBMh1C5aqdjA1o="
+        ]
+      },
+      "bind_interface": "en8"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "probe-ams1-reality"
+        ],
+        "action": "route",
+        "outbound": "probe-ams1-reality-out"
+      },
+      {
+        "inbound": [
+          "probe-ams1-hy2"
+        ],
+        "action": "route",
+        "outbound": "probe-ams1-hy2-out"
+      },
+      {
+        "inbound": [
+          "probe-lon1-reality"
+        ],
+        "action": "route",
+        "outbound": "probe-lon1-reality-out"
+      },
+      {
+        "inbound": [
+          "probe-lon1-hy2"
+        ],
+        "action": "route",
+        "outbound": "probe-lon1-hy2-out"
+      }
+    ],
+    "auto_detect_interface": false,
+    "default_interface": "en8"
+  }
+}

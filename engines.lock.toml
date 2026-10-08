@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Pinned inputs for the Go engines (design §4). Integrity values here are
+# Level 1: they detect an accidental wrong or corrupted artifact, not a
+# malicious one. Engine builds run on the research computer, never on the exit
+# Mac (design D-7). Output digests are filled by `cargo xtask engines build`
+# and checked by `cargo xtask engines verify`; an empty table means the
+# artifacts have not been built from these inputs yet.
+
+schema = 1
+
+[go]
+version = "go1.27.1"
+darwin-arm64-sha256 = "ee215d57e0ec269c60cc9ceca68e6bda321ba9ee5afe24f4b0988703c2d87d12"
+linux-amd64-sha256 = "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445"
+env = { GOTOOLCHAIN = "local", CGO_ENABLED = "0", GOFLAGS = "-mod=readonly -trimpath" }
+
+[xray]
+module = "github.com/xtls/xray-core"
+tag = "v26.9.30"
+commit = "b26a91de4f3294e26a0ad0a970b81a386a41f789"
+prerelease = true
+# User decision D-3 (design §4.2): replace the REALITY library pinned by
+# v26.9.30 (8cdf7bf9, mandatory hybrid key share) with its parent e1986a4,
+# which accepts classical and hybrid clients and carries the #36 and #33 fixes.
+upstream-reality = "github.com/xtls/reality v0.0.0-20260908062103-8cdf7bf9c7f0"
+reality-replace = "github.com/xtls/reality v0.0.0-20260908045812-e1986a4d31ca"
+reality-replace-commit = "e1986a4d31ca33c087a72ab4644aef1295693b69"
+ldflags = "-X github.com/xtls/xray-core/core.build=v26.9.30 -s -w -buildid="
+gcflags = "all=-l=4"
+targets = ["linux-amd64", "linux-arm64"]
+
+[xray.outputs]
+
+[sing-box]
+module = "github.com/sagernet/sing-box"
+tag = "v1.14.2"
+commit = "af6e64c3b69e6132ebaee0e1a3d24e93903f6709"
+prerelease = false
+ldflags = "-X 'github.com/sagernet/sing-box/constant.Version=1.14.2' -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 -checklinkname=0 -s -w -buildid="
+common-tags = ["badlinkname", "tfogo_checklinkname0"]
+
+[sing-box.roles.mooring-exit]
+targets = ["darwin-arm64"]
+tags = ["with_gvisor", "with_wireguard"]
+
+[sing-box.roles.mooring-probe]
+targets = ["darwin-arm64"]
+tags = ["with_quic", "with_utls"]
+
+[sing-box.roles.mooring-hy2]
+targets = ["linux-amd64", "linux-arm64"]
+tags = ["with_quic"]
+
+[sing-box.outputs]
+
+[geodata]
+source = "Xray-linux-64.zip from the XTLS/Xray-core v26.9.30 release"
+zip-sha256 = ""
+files = ["geoip.dat", "geosite.dat"]

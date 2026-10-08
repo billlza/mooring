@@ -1,0 +1,579 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render xray.json (design 8.2); the file is this text plus one newline."
+---
+{
+  "log": {
+    "access": "none",
+    "loglevel": "none",
+    "dnsLog": false,
+    "maskAddress": "full"
+  },
+  "api": {
+    "tag": "api",
+    "listen": "127.0.0.1:10085",
+    "services": [
+      "StatsService"
+    ]
+  },
+  "stats": {},
+  "policy": {
+    "levels": {
+      "0": {
+        "handshake": 4,
+        "connIdle": 300,
+        "uplinkOnly": 2,
+        "downlinkOnly": 5,
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      },
+      "1": {
+        "handshake": 2,
+        "connIdle": 30,
+        "uplinkOnly": 1,
+        "downlinkOnly": 1
+      }
+    }
+  },
+  "dns": {
+    "tag": "dns-exit",
+    "queryStrategy": "UseIPv4",
+    "enableParallelQuery": true,
+    "serveStale": true,
+    "serveExpiredTTL": 600,
+    "servers": [
+      {
+        "address": "https://1.1.1.1/dns-query",
+        "unexpectedIPs": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.0.0.0/24",
+          "192.0.2.0/24",
+          "192.88.99.0/24",
+          "192.168.0.0/16",
+          "198.18.0.0/15",
+          "198.51.100.0/24",
+          "203.0.113.0/24",
+          "224.0.0.0/4",
+          "240.0.0.0/4"
+        ]
+      },
+      {
+        "address": "https://1.0.0.1/dns-query",
+        "unexpectedIPs": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.0.0.0/24",
+          "192.0.2.0/24",
+          "192.88.99.0/24",
+          "192.168.0.0/16",
+          "198.18.0.0/15",
+          "198.51.100.0/24",
+          "203.0.113.0/24",
+          "224.0.0.0/4",
+          "240.0.0.0/4"
+        ]
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "tag": "reality-in",
+      "listen": "45.67.89.10",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "6d6f6f72-0101-4001-8000-000000010101",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaab@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4002-8000-000000010102",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaac@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4003-8000-000000010103",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaad@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4004-8000-000000010104",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaae@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4005-8000-000000010105",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaaf@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4006-8000-000000010106",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaag@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4007-8000-000000010107",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaah@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4008-8000-000000010108",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaai@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4009-8000-000000010109",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaaj@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-400a-8000-00000001010a",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaak@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-400b-8000-00000001010b",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaal@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-400c-8000-00000001010c",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaam@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-400d-8000-00000001010d",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaan@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-400e-8000-00000001010e",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaao@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-400f-8000-00000001010f",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaap@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4010-8000-000000010110",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaaq@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4011-8000-000000010111",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaar@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4012-8000-000000010112",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaas@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4013-8000-000000010113",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaat@reality"
+          },
+          {
+            "id": "6d6f6f72-0101-4014-8000-000000010114",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "fxuseraaau@reality"
+          },
+          {
+            "id": "6d6f6f72-1101-4000-8000-000000110100",
+            "flow": "xtls-rprx-vision",
+            "level": 0,
+            "email": "probe@reality"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "target": "45.67.89.200:443",
+          "xver": 0,
+          "serverNames": [
+            "www.harbour-target.test"
+          ],
+          "privateKey": "qAr2x8Vah8WO2JdHLUnMUUjqHpzO0vbDn7gKWAh17E8",
+          "minClientVer": "1.8.1",
+          "maxTimeDiff": 60000,
+          "shortIds": [
+            "5f1e310100000001",
+            "5f1e310100000002",
+            "5f1e310100000003",
+            "5f1e310100000004",
+            "5f1e310100000005",
+            "5f1e310100000006",
+            "5f1e310100000007",
+            "5f1e310100000008",
+            "5f1e310100000009",
+            "5f1e31010000000a",
+            "5f1e31010000000b",
+            "5f1e31010000000c",
+            "5f1e31010000000d",
+            "5f1e31010000000e",
+            "5f1e31010000000f",
+            "5f1e310100000010",
+            "5f1e310100000011",
+            "5f1e310100000012",
+            "5f1e310100000013",
+            "5f1e310100000014",
+            "5f1e320100000000"
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "hy2-loop-in",
+      "listen": "127.0.0.1",
+      "port": 10443,
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "6d6f6f72-0201-4001-8000-000000020101",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaab@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4002-8000-000000020102",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaac@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4003-8000-000000020103",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaad@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4004-8000-000000020104",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaae@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4005-8000-000000020105",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaaf@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4006-8000-000000020106",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaag@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4007-8000-000000020107",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaah@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4008-8000-000000020108",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaai@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4009-8000-000000020109",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaaj@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-400a-8000-00000002010a",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaak@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-400b-8000-00000002010b",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaal@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-400c-8000-00000002010c",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaam@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-400d-8000-00000002010d",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaan@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-400e-8000-00000002010e",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaao@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-400f-8000-00000002010f",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaap@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4010-8000-000000020110",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaaq@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4011-8000-000000020111",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaar@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4012-8000-000000020112",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaas@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4013-8000-000000020113",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaat@hy2"
+          },
+          {
+            "id": "6d6f6f72-0201-4014-8000-000000020114",
+            "flow": "",
+            "level": 0,
+            "email": "fxuseraaau@hy2"
+          },
+          {
+            "id": "6d6f6f72-1201-4000-8000-000000120100",
+            "flow": "",
+            "level": 0,
+            "email": "probe@hy2"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
+    },
+    {
+      "tag": "camo-80",
+      "listen": "45.67.89.10",
+      "port": 80,
+      "protocol": "tunnel",
+      "settings": {
+        "address": "45.67.89.200",
+        "port": 80,
+        "network": "tcp",
+        "userLevel": 1
+      }
+    },
+    {
+      "tag": "camo-u443",
+      "listen": "45.67.89.10",
+      "port": 443,
+      "protocol": "tunnel",
+      "settings": {
+        "address": "45.67.89.200",
+        "port": 443,
+        "network": "udp",
+        "userLevel": 1
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "deny",
+      "protocol": "blackhole"
+    },
+    {
+      "tag": "exit",
+      "protocol": "freedom",
+      "streamSettings": {
+        "sockopt": {
+          "interface": "wgexit",
+          "tcpUserTimeout": 30000,
+          "domainStrategy": "ForceIPv4"
+        }
+      }
+    },
+    {
+      "tag": "camo-80-out",
+      "protocol": "freedom",
+      "settings": {
+        "redirect": "45.67.89.200:80",
+        "userLevel": 1
+      }
+    },
+    {
+      "tag": "camo-u443-out",
+      "protocol": "freedom",
+      "settings": {
+        "redirect": "45.67.89.200:443",
+        "userLevel": 1
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "inboundTag": [
+          "camo-80"
+        ],
+        "outboundTag": "camo-80-out"
+      },
+      {
+        "inboundTag": [
+          "camo-u443"
+        ],
+        "outboundTag": "camo-u443-out"
+      },
+      {
+        "inboundTag": [
+          "dns-exit"
+        ],
+        "outboundTag": "exit"
+      },
+      {
+        "user": [
+          "probe@reality",
+          "probe@hy2"
+        ],
+        "ip": [
+          "46.78.90.12",
+          "45.67.89.10"
+        ],
+        "network": "tcp",
+        "port": "27900",
+        "outboundTag": "exit"
+      },
+      {
+        "ip": [
+          "46.78.90.12",
+          "45.67.89.10"
+        ],
+        "outboundTag": "deny"
+      },
+      {
+        "ip": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.0.0.0/24",
+          "192.0.2.0/24",
+          "192.88.99.0/24",
+          "192.168.0.0/16",
+          "198.18.0.0/15",
+          "198.51.100.0/24",
+          "203.0.113.0/24",
+          "224.0.0.0/4",
+          "240.0.0.0/4",
+          "::/0"
+        ],
+        "outboundTag": "deny"
+      },
+      {
+        "ip": [
+          "geoip:cn"
+        ],
+        "outboundTag": "deny"
+      },
+      {
+        "domain": [
+          "geosite:cn"
+        ],
+        "outboundTag": "deny"
+      },
+      {
+        "network": "udp",
+        "port": "443",
+        "outboundTag": "deny"
+      },
+      {
+        "network": "tcp",
+        "port": "25",
+        "outboundTag": "deny"
+      },
+      {
+        "protocol": [
+          "bittorrent"
+        ],
+        "outboundTag": "deny"
+      },
+      {
+        "inboundTag": [
+          "reality-in",
+          "hy2-loop-in"
+        ],
+        "outboundTag": "exit"
+      }
+    ]
+  }
+}

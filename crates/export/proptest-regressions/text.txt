@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The case below was found by the hand mutation that stopped escaping `"`;
+# it is kept as a regression case for the quoting round trip.
+#
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 09a05eb1be6177ad17267789c5477b1c3a86bc58323509e75999e79c1c146d6c # shrinks to text = "\""

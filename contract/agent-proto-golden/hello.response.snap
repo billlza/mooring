@@ -1,0 +1,5 @@
+---
+source: crates/agent-proto/tests/wire/frozen_core.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. Frozen upgrade core (design 11.1): this line, plus one newline, must never change."
+---
+{"Ok":{"Hello":{"protocol":1,"agent_sha":"5f0e7c0b3a1d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f","host_profile_version":1,"host":{"uplink":"eth0","vps4":"203.0.113.10","arch":"Amd64","ip_local_port_range":{"low":32768,"high":60999},"debian_major":13,"kernel":"6.12.48+deb13-amd64","congestion_control":"bbr","qdisc":"fq"},"wgexit_accept_local":"Enabled","sshd_mismatches":["MaxAuthTries"],"halted":{"at":1791000000,"reason":"Operator"},"holds":{"mac_drain":{"handshake_at_drain":null},"egress_violation":{"at":1791000100,"generation":41},"operator":null},"client_ip":"198.51.100.20"}}}
