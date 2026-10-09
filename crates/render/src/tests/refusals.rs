@@ -223,7 +223,7 @@ fn the_apply_header_carries_the_recorded_site_and_the_hellos_other_facts() {
         assert_eq!(*header.files.get(*file), bundle.file(*file).sha256());
     }
     let blobs = header.blobs();
-    assert_eq!(blobs.len(), 9);
+    assert_eq!(blobs.len(), 10, "six files and four engines, all distinct");
 
     // A Hello from a host that changed since adoption does not change what
     // the bundle was rendered for: the header keeps the recorded facts, and
@@ -480,6 +480,7 @@ fn every_error_kind_is_named_once() {
         RenderErrorKind::Secret,
         RenderErrorKind::Export,
         RenderErrorKind::NoAppliedNodes,
+        RenderErrorKind::DuplicateCredential,
         RenderErrorKind::WireValue,
         RenderErrorKind::AddressNotOnUplink,
         RenderErrorKind::TargetFactsForOtherHost,

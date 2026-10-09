@@ -16,7 +16,9 @@ use mooring_model::iface::{
 };
 use mooring_model::keys::Ed25519Pub;
 use mooring_model::secret::{SecretEntry, SecretMaterial, SecretRef, SecretSnapshot};
-use mooring_model::user::{ClientLine, ClientProfile, User, UserNodePublic, UserStatus};
+use mooring_model::user::{
+    ClientLine, ClientProfile, User, UserNodePublic, UserPolicy, UserStatus,
+};
 use mooring_model::{Deployment, Secret};
 
 use crate::mac::{ExitConfig, ProberConfig, exit, prober};
@@ -119,6 +121,9 @@ pub(crate) fn add_user(fixture: &mut Fixture) -> UserId {
         },
         status: UserStatus::Active,
         per_node,
+        policy: UserPolicy::NONE,
+        alias: None,
+        agreement: None,
     };
     fixture.deployment = edit(&fixture.deployment, |parts| parts.users.push(user));
     id
@@ -165,6 +170,9 @@ pub(crate) fn secrets_where(
             continue;
         }
         let material = match &secret_ref {
+            SecretRef::AlertTopic => {
+                SecretMaterial::Password(secrets.alert_topic().unwrap().clone())
+            }
             SecretRef::NodeRealityPrivate(n) => {
                 SecretMaterial::RealityPrivateKey(secrets.reality_private(n).unwrap().clone())
             }
@@ -183,6 +191,8 @@ pub(crate) fn secrets_where(
             SecretRef::NodeSshBootstrapPrivate(n) => {
                 SecretMaterial::Ed25519Seed(secrets.ssh_bootstrap(n).unwrap().clone())
             }
+            SecretRef::NodeDeadManCheck(n) => uuid(secrets.dead_man_check(n).unwrap()),
+            SecretRef::NodeMacAliveCheck(n) => uuid(secrets.mac_alive_check(n).unwrap()),
             SecretRef::UserVlessUuid(u, n) => uuid(secrets.user_vless_uuid(u, n).unwrap()),
             SecretRef::UserHy2Password(u, n) => {
                 SecretMaterial::Password(secrets.user_hy2_password(u, n).unwrap().clone())

@@ -492,6 +492,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mooring-daemon-core"
+version = "0.1.0"
+dependencies = [
+ "mooring-agent-proto",
+ "mooring-fixtures",
+ "mooring-model",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "mooring-export"
 version = "0.1.0"
 dependencies = [

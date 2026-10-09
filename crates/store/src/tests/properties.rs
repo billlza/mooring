@@ -12,7 +12,7 @@ use proptest::prelude::*;
 use super::builders::{adopted_store, applied_record};
 use super::store_error;
 use crate::error::{StoreError, StoreErrorKind};
-use crate::migrate::Chain;
+use crate::migrate::decode;
 
 /// One write with either the current token or a stale one.
 #[derive(Debug, Clone, Copy)]
@@ -44,10 +44,15 @@ proptest! {
 
     #[test]
     fn decoding_classifies_any_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
-        match Chain::CURRENT.decode(Path::new("state.json"), &bytes) {
-            Ok(decoded) => prop_assert_eq!(decoded.from, 1),
+        match decode(Path::new("state.json"), &bytes) {
+            Ok(decoded) => prop_assert!(matches!(decoded.from, 1 | 2)),
             Err(error) => prop_assert!(
-                matches!(error.kind(), StoreErrorKind::StateCorrupt | StoreErrorKind::DowngradeRefused),
+                matches!(
+                    error.kind(),
+                    StoreErrorKind::StateCorrupt
+                        | StoreErrorKind::DowngradeRefused
+                        | StoreErrorKind::MigrationFailed
+                ),
                 "{:?}", error
             ),
         }
@@ -56,11 +61,11 @@ proptest! {
     #[test]
     fn any_newer_version_is_refused_before_parsing(version in any::<u32>()) {
         let bytes = format!(r#"{{"version": {version}, "unknown": true}}"#);
-        let result = Chain::CURRENT.decode(Path::new("state.json"), bytes.as_bytes());
+        let result = decode(Path::new("state.json"), bytes.as_bytes());
         let error = result.unwrap_err();
-        if version > 1 {
+        if version > 2 {
             prop_assert!(
-                matches!(error, StoreError::DowngradeRefused { found, newest: 1 } if found == version),
+                matches!(error, StoreError::DowngradeRefused { found, newest: 2 } if found == version),
                 "{:?}", error
             );
         } else {

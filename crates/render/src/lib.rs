@@ -3,8 +3,9 @@
 //! Pure renderers for every engine config Mooring runs (design §8).
 //!
 //! - [`vps::bundle`] renders one node's managed files: `xray.json`,
-//!   `hy2.json`, `wgexit.conf`, `nftables.conf` and `watch.json`, with
-//!   their digests and the bundle digest an `Apply` carries.
+//!   `hy2.json`, `wgexit.conf`, `nftables.conf`, `watch.json` and
+//!   `viewer_authorized_keys`, with their digests and the bundle digest an
+//!   `Apply` carries.
 //! - [`vps::cloud_init`] renders a planned node's cloud-init user-data.
 //! - [`mac::exit`] and [`mac::prober`] render the `mooring-exit` and
 //!   `mooring-probe` configs the daemon sends to the engines on stdin.
@@ -42,7 +43,9 @@ pub mod wire;
 #[cfg(test)]
 mod tests;
 
-pub use error::{HostKeyRule, RenderError, RenderErrorKind, WireField};
+pub use error::{
+    CredentialHolder, CredentialKind, HostKeyRule, RenderError, RenderErrorKind, WireField,
+};
 pub use mac::{ExitConfig, ProbeEndpoint, ProberConfig};
 pub use rendered::RenderedFile;
 pub use vps::{CloudInitKeys, EngineCatalog, OpensshHostKey, UserData, VpsBundle};

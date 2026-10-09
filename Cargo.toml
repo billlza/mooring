@@ -8,6 +8,7 @@ members = [
   "crates/render",
   "crates/store",
   "crates/fixtures",
+  "crates/daemon-core",
   "xtask",
 ]
 resolver = "3"
@@ -55,6 +56,7 @@ mooring-agent-proto = { path = "crates/agent-proto" }
 mooring-render = { path = "crates/render" }
 mooring-store = { path = "crates/store" }
 mooring-fixtures = { path = "crates/fixtures" }
+mooring-daemon-core = { path = "crates/daemon-core" }
 
 # One generation of each crypto/encoding crate (deny.toml multiple-versions = "deny").
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }

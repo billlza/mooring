@@ -131,7 +131,9 @@ pub enum NodeLifecycle {
 }
 
 kinds! {
-    /// The stage of a [`NodeLifecycle`], without its data.
+    /// The stage of a [`NodeLifecycle`], without its data. It is serialised
+    /// as its name.
+    #[derive(Serialize, Deserialize)]
     pub enum LifecycleStage {
         /// See [`NodeLifecycle::Planned`].
         Planned,
@@ -381,6 +383,25 @@ mod tests {
             );
         }
         assert_eq!(LifecycleStage::ALL.len(), 6);
+    }
+
+    /// The console's status stream names stages; they are encoded as their
+    /// names and decoded only from them.
+    #[test]
+    fn stages_are_encoded_as_their_names() {
+        for stage in LifecycleStage::ALL {
+            let json = serde_json::to_string(stage).unwrap();
+            assert_eq!(json, format!("\"{}\"", stage.name()));
+            assert_eq!(
+                serde_json::from_str::<LifecycleStage>(&json).unwrap(),
+                *stage
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&LifecycleStage::RetiredPendingProviderDeletion).unwrap(),
+            "\"RetiredPendingProviderDeletion\""
+        );
+        assert!(serde_json::from_str::<LifecycleStage>("\"applied\"").is_err());
     }
 
     #[test]

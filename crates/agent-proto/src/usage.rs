@@ -79,7 +79,7 @@ text_newtype!(
 );
 
 const PROBE_PRINCIPAL: &str = "probe";
-const MAX_OPAQUE_USER_ID_BYTES: usize = 32;
+pub(crate) const MAX_OPAQUE_USER_ID_BYTES: usize = 32;
 
 fn is_opaque_user_id(text: &str) -> bool {
     (1..=MAX_OPAQUE_USER_ID_BYTES).contains(&text.len())
@@ -98,7 +98,7 @@ pub enum Principal {
 
 closed_enum! {
     /// The Xray inbound an accounting email belongs to.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub enum Inbound {
         /// `reality-in` (`…@reality`).
         Reality,
@@ -114,6 +114,78 @@ impl Inbound {
             Self::Reality => "reality",
             Self::Hy2 => "hy2",
         }
+    }
+
+    /// The inbound's bit in an [`InboundSet`].
+    const fn bit(self) -> u8 {
+        match self {
+            Self::Reality => 1,
+            Self::Hy2 => 2,
+        }
+    }
+}
+
+/// A non-empty set of inbounds. On the wire it is a list in
+/// [`Inbound::ALL`] order with each inbound at most once; any other list,
+/// the empty one included, is rejected ([`ValueError::InboundSet`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "Vec<Inbound>", into = "Vec<Inbound>")]
+pub struct InboundSet(u8);
+
+impl InboundSet {
+    /// The set holding `inbound`.
+    pub const fn of(inbound: Inbound) -> Self {
+        Self(inbound.bit())
+    }
+
+    /// The set with `inbound` added.
+    pub const fn with(self, inbound: Inbound) -> Self {
+        Self(self.0 | inbound.bit())
+    }
+
+    /// Whether `inbound` is in the set.
+    pub const fn contains(self, inbound: Inbound) -> bool {
+        self.0 & inbound.bit() != 0
+    }
+
+    /// The inbounds, in [`Inbound::ALL`] order.
+    pub fn iter(self) -> impl Iterator<Item = Inbound> {
+        Inbound::ALL
+            .iter()
+            .copied()
+            .filter(move |inbound| self.contains(*inbound))
+    }
+}
+
+impl TryFrom<Vec<Inbound>> for InboundSet {
+    type Error = ValueError;
+
+    fn try_from(inbounds: Vec<Inbound>) -> Result<Self, Self::Error> {
+        let ordered = inbounds.windows(2).all(|pair| pair[0] < pair[1]);
+        match inbounds.split_first() {
+            Some((first, rest)) if ordered => Ok(rest
+                .iter()
+                .fold(Self::of(*first), |set, inbound| set.with(*inbound))),
+            _ => Err(ValueError::InboundSet),
+        }
+    }
+}
+
+impl From<InboundSet> for Vec<Inbound> {
+    fn from(set: InboundSet) -> Self {
+        set.iter().collect()
+    }
+}
+
+impl fmt::Display for InboundSet {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, inbound) in self.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(", ")?;
+            }
+            formatter.write_str(inbound.as_str())?;
+        }
+        Ok(())
     }
 }
 

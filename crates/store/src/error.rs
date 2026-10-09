@@ -10,8 +10,9 @@ use std::path::PathBuf;
 use mooring_model::collections::NonEmpty;
 use mooring_model::counters::{ConfigGeneration, RuntimeRevision};
 use mooring_model::error::ModelError;
-use mooring_model::ids::NodeId;
+use mooring_model::ids::{NodeId, UserId};
 use mooring_model::secret::SecretRef;
+use mooring_model::user::UserStatus;
 
 use crate::secrets::SecretStoreError;
 use mooring_model::kinds;
@@ -122,11 +123,12 @@ pub enum StoreError {
         /// The newest version this build reads and writes.
         newest: u32,
     },
-    /// A migration step could not lift the state to the next version.
+    /// A migration step could not lift the state to the next version; the
+    /// document on disk is valid for its own version and unchanged.
     ///
-    /// Version 1 is the newest version, so this build's chain has no steps
-    /// and never produces this error; it is the contract for the first
-    /// fallible step.
+    /// In this build only `V1 → V2` can fail, with `StopPolicyUnchosen`: a
+    /// version-1 SIM policy without a hard stop, which the lifted policy
+    /// cannot keep (`mooring_model::v1`). Every explicit hard stop lifts.
     #[error("migrating the state from version {from} to {to} failed")]
     MigrationFailed {
         /// The version the step started from.
@@ -185,8 +187,25 @@ pub enum StoreError {
         /// The node whose confirmed generation the change edited.
         node: NodeId,
     },
-    /// The changed deployment breaks a model invariant.
-    #[error("the changed deployment is invalid")]
+    /// The change moved a user's status outside the user transitions
+    /// (`User::suspend`, `resume`, `revoke`; design §7), or removed a user
+    /// who still holds credentials or is pending revocation: a revocation
+    /// in progress settles only through `Bookkeeping` and never goes back.
+    /// `to` is `None` when the change removed the user.
+    #[error(
+        "the change moved user {user} from {from:?} to {to:?}; a status changes only by suspend, resume and revoke, a revocation settles only through Bookkeeping, and only a revoked user may be removed"
+    )]
+    UserStatusEdited {
+        /// The user.
+        user: UserId,
+        /// The user's status before the change.
+        from: UserStatus,
+        /// The status the change left; `None` if it removed the user.
+        to: Option<UserStatus>,
+    },
+    /// A change, or the initial deployment ([`crate::Store::init`]), breaks
+    /// a model invariant.
+    #[error("the new or changed deployment is invalid")]
     InvalidChange {
         /// The invariant that failed.
         #[source]
@@ -277,6 +296,8 @@ kinds! {
         GenerationEdited,
         /// See [`StoreError::AppliedEdited`].
         AppliedEdited,
+        /// See [`StoreError::UserStatusEdited`].
+        UserStatusEdited,
         /// See [`StoreError::InvalidChange`].
         InvalidChange,
         /// See [`StoreError::SecretRefsChanged`].
@@ -310,6 +331,7 @@ impl StoreError {
             Self::CounterOverflow { .. } => StoreErrorKind::CounterOverflow,
             Self::GenerationEdited { .. } => StoreErrorKind::GenerationEdited,
             Self::AppliedEdited { .. } => StoreErrorKind::AppliedEdited,
+            Self::UserStatusEdited { .. } => StoreErrorKind::UserStatusEdited,
             Self::InvalidChange { .. } => StoreErrorKind::InvalidChange,
             Self::SecretRefsChanged { .. } => StoreErrorKind::SecretRefsChanged,
             Self::SecretPlanMismatch { .. } => StoreErrorKind::SecretPlanMismatch,

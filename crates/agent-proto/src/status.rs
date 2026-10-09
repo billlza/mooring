@@ -2,9 +2,14 @@
 
 //! [`StatusV1`]: a node's status, the reply to `Status`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
-use crate::{GateState, Generation, Halt, Holds, Sha256Hex, UnixTime, WatchConditions};
+use crate::{
+    EngineHealth, GateState, Generation, Halt, Holds, HostHealth, Sha256Hex, StatsEmail, UnixTime,
+    UplinkTransfer, WatchConditions,
+};
 
 /// The generation a node last committed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -19,7 +24,8 @@ pub struct AppliedGeneration {
 /// A node's status: the agent's view at `now` combined with the watch's
 /// latest tick at `watch_at`. Ages are differences of these timestamps, all
 /// taken from the VPS clock, so Mac–VPS clock skew does not enter them; the
-/// Mac marks the node `WatchStale` when `now − watch_at` exceeds 30 s.
+/// Mac marks the node `WatchStale` when `now − watch_at` exceeds
+/// [`crate::WATCH_STALE_SECS`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StatusV1 {
@@ -43,6 +49,23 @@ pub struct StatusV1 {
     pub applied: Option<AppliedGeneration>,
     /// The watch's active conditions.
     pub conditions: WatchConditions,
+    /// The watch's latest successful accounting poll (§11.5); `None` before
+    /// the first.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub accounting_at: Option<UnixTime>,
+    /// For each accounting email, the latest accounting poll at which its
+    /// counters grew; an email with no recorded growth is absent. "Active
+    /// now" in the console is a time here within the latest poll. Only
+    /// opaque emails and times are kept: Xray's online-IP lists are never
+    /// read (they skip loopback, so they would miss every Hysteria2 user,
+    /// and they are addresses).
+    pub last_active: BTreeMap<StatsEmail, UnixTime>,
+    /// The engine units.
+    pub engines: EngineHealth,
+    /// The host.
+    pub host: HostHealth,
+    /// The uplink's transfer this month.
+    pub transfer: UplinkTransfer,
 }
 
 impl StatusV1 {

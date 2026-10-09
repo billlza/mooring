@@ -6,7 +6,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::encoding::{decode_hex_lower, encode_hex_lower};
@@ -81,6 +81,91 @@ impl UserId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// The number of characters in a public alias, hyphen included.
+pub const PUBLIC_ALIAS_LEN: usize = 9;
+
+/// A user's public alias: 40 random bits as two groups of four lowercase
+/// RFC 4648 base32 characters joined by a hyphen, for example `k7qd-m2xa`.
+///
+/// It is never a name: an alias is made only from random bits
+/// ([`PublicAlias::from_random_bytes`], which `mooring-keys` feeds from the
+/// operating system's random source) or decoded from a stored one. No
+/// public conversion turns text into an alias (there is no `FromStr` and
+/// no `TryFrom<String>`), so no command can take an alias an operator
+/// typed. The user and the operator can quote it (in support messages,
+/// say) without naming the user. The hyphen keeps it visibly apart from a
+/// [`UserId`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct PublicAlias(String);
+
+impl PublicAlias {
+    /// Validates `text` as an alias: only for decoding a stored alias, so
+    /// it is not public.
+    pub(crate) fn parse(text: &str) -> Result<Self, ModelError> {
+        let bytes = text.as_bytes();
+        let valid = bytes.len() == PUBLIC_ALIAS_LEN
+            && bytes.iter().enumerate().all(|(index, byte)| {
+                if index == 4 {
+                    *byte == b'-'
+                } else {
+                    BASE32_LOWER.contains(byte)
+                }
+            });
+        if valid {
+            Ok(Self(text.to_owned()))
+        } else {
+            Err(ModelError::InvalidPublicAlias)
+        }
+    }
+
+    /// Encodes 40 random bits, most significant first. The bytes must come
+    /// from a cryptographic random source (`mooring-keys` draws them): any
+    /// 40 bits make a valid alias, so only the source keeps it from
+    /// spelling a name.
+    #[must_use]
+    pub fn from_random_bytes(bytes: [u8; 5]) -> Self {
+        let bits = bytes
+            .iter()
+            .fold(0_u64, |bits, &byte| (bits << 8) | u64::from(byte));
+        let mut text = String::with_capacity(PUBLIC_ALIAS_LEN);
+        for position in (0..8).rev() {
+            let index = (bits >> (5 * position)) & 0x1f;
+            // `index` is masked to 0..32, so it always indexes the alphabet.
+            text.push(char::from(BASE32_LOWER[index as usize]));
+            if position == 4 {
+                text.push('-');
+            }
+        }
+        Self(text)
+    }
+
+    /// The alias as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicAlias {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(de::Error::custom)
+    }
+}
+
+impl From<PublicAlias> for String {
+    fn from(alias: PublicAlias) -> Self {
+        alias.0
+    }
+}
+
+impl fmt::Display for PublicAlias {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -383,6 +468,80 @@ mod tests {
         assert_eq!(UserId::from_low_bits(1 << 50), UserId::from_low_bits(0));
     }
 
+    /// `Text::<T>::FROM_STR` (`TRY_FROM_STRING`) is true exactly when `T`
+    /// implements `FromStr` (`TryFrom<String>`), by the same inherent
+    /// constant probe as [`Serde`].
+    struct Text<T>(std::marker::PhantomData<T>);
+
+    trait NoText {
+        const FROM_STR: bool = false;
+        const TRY_FROM_STRING: bool = false;
+    }
+
+    impl<T> NoText for Text<T> {}
+
+    impl<T: FromStr> Text<T> {
+        const FROM_STR: bool = true;
+    }
+
+    impl<T: TryFrom<String>> Text<T> {
+        const TRY_FROM_STRING: bool = true;
+    }
+
+    #[test]
+    fn public_alias_rules() {
+        // An alias comes only from random bits (`mooring-keys`) or from
+        // decoding a stored one: no public conversion turns text, an
+        // operator's say, into an alias, so an alias is never a name
+        // someone typed. Checked at compile time; the control is a type
+        // with both conversions.
+        const {
+            assert!(Text::<UserId>::FROM_STR && Text::<UserId>::TRY_FROM_STRING);
+            assert!(!Text::<PublicAlias>::FROM_STR, "no FromStr for PublicAlias");
+            assert!(
+                !Text::<PublicAlias>::TRY_FROM_STRING,
+                "no TryFrom<String> for PublicAlias"
+            );
+        }
+        let alias = PublicAlias::from_random_bytes([0x57, 0xe0, 0x36, 0x6a, 0xe0]);
+        assert_eq!(alias.as_str(), "k7qd-m2xa");
+        assert_eq!(alias.to_string(), "k7qd-m2xa");
+        assert_eq!(String::from(alias.clone()), "k7qd-m2xa");
+        assert_eq!(serde_json::to_string(&alias).unwrap(), "\"k7qd-m2xa\"");
+        assert_eq!(
+            serde_json::from_str::<PublicAlias>("\"k7qd-m2xa\"").unwrap(),
+            alias
+        );
+        assert_eq!(PublicAlias::parse("k7qd-m2xa").unwrap(), alias);
+        for bad in [
+            "k7qdm2xa",
+            "k7qd-m2x",
+            "k7qd-m2xa2",
+            "k7q-dm2xa",
+            "K7qd-m2xa",
+            "k7qd-m2x1",
+            "k7qd_m2xa",
+            "abcdefghij",
+            "Alice",
+            "",
+        ] {
+            assert_eq!(
+                PublicAlias::parse(bad),
+                Err(ModelError::InvalidPublicAlias),
+                "{bad}"
+            );
+            let json = serde_json::to_string(bad).unwrap();
+            assert!(serde_json::from_str::<PublicAlias>(&json).is_err(), "{bad}");
+        }
+        let from = PublicAlias::from_random_bytes;
+        assert_eq!(from([0; 5]).as_str(), "aaaa-aaaa");
+        assert_eq!(from([0, 0, 0, 0, 1]).as_str(), "aaaa-aaab");
+        assert_eq!(from([0, 0, 0, 0, 32]).as_str(), "aaaa-aaba");
+        assert_eq!(from([0, 0, 0x10, 0, 0]).as_str(), "aaab-aaaa");
+        assert_eq!(from([0x80, 0, 0, 0, 0]).as_str(), "qaaa-aaaa");
+        assert_eq!(from([0xff; 5]).as_str(), "7777-7777");
+    }
+
     #[test]
     fn short_id_rules() {
         let id = ShortId::parse("5f1e000100000001").unwrap();
@@ -471,7 +630,7 @@ mod tests {
         const SERIALIZE: bool = true;
     }
 
-    impl<T: serde::de::DeserializeOwned> Serde<T> {
+    impl<T: de::DeserializeOwned> Serde<T> {
         const DESERIALIZE: bool = true;
     }
 
@@ -517,6 +676,16 @@ mod tests {
                 && text.as_bytes()[0].is_ascii_lowercase()
                 && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
             prop_assert_eq!(NodeId::parse(&text).is_ok(), expected);
+        }
+
+        /// Every 40 bits make a distinct alias that decodes to itself.
+        #[test]
+        fn public_alias_from_bits_always_parses(bytes in proptest::array::uniform5(any::<u8>()), other in proptest::array::uniform5(any::<u8>())) {
+            let alias = PublicAlias::from_random_bytes(bytes);
+            prop_assert_eq!(PublicAlias::parse(alias.as_str()).unwrap(), alias.clone());
+            let json = serde_json::to_string(&alias).unwrap();
+            prop_assert_eq!(serde_json::from_str::<PublicAlias>(&json).unwrap(), alias.clone());
+            prop_assert_eq!(PublicAlias::from_random_bytes(other) == alias, other == bytes);
         }
 
         #[test]

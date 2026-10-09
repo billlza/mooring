@@ -9,16 +9,22 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroU16;
 
 use mooring_agent_proto::{
-    AcceptLocal, AgentError, AgentErrorKind, AppliedGeneration, ApplyStep, Arch, BlobLen,
-    BundleFiles, BundleHeader, ClearableHold, EgressViolationHold, EngineSet, GateReason,
-    GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostFact, HostFacts,
-    HostProfileVersion, HttpProbe, HttpStatus, HttpVersion, IfName, IoOp, KernelIdent,
-    KernelRelease, LineRequest, MacDrainHold, OperatorHold, PROTOCOL, PortRange, Request,
-    RequestKind, Response, ResponseKind, Role, RollbackCause, Sha256Hex, ShutdownReason,
-    SshEd25519Key, SshdDirective, StatusV1, StderrTail, SystemdOp, TargetFacts, TargetHost,
+    AcceptLocal, AgentError, AgentErrorKind, AgentEvent, AgentEventKind, AppliedGeneration,
+    ApplyStep, Arch, BlobLen, BundleFiles, BundleHeader, ClearableHold, EgressViolationHold,
+    EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq, EventsV1, ExitPhase,
+    GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostFact, HostFacts,
+    HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion, IfName, Inbound,
+    InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MacAlertKind, MacDrainHold,
+    MacReportParts, MacReportV1, NodeName, OperatorHold, PROTOCOL, PortRange, ReportAccuracy,
+    ReportAlert, ReportBand, ReportBandNumber, ReportCapacity, ReportExit, ReportForecast,
+    ReportPlanLine, ReportRadio, ReportRadioAccess, ReportRadioSystem, ReportRouter,
+    ReportSaturation, ReportSeverity, ReportSim, ReportUsage, ReportUser, ReportUserId,
+    ReportUserStatus, Request, RequestKind, Resolution, Response, ResponseKind, Role,
+    RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason, SshEd25519Key,
+    SshdDirective, StatusV1, StderrTail, StoredMacReport, SystemdOp, TargetFacts, TargetHost,
     TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage, TxnState, UnitName,
-    UnixTime, UsageMonth, UsageV1, ValidationTool, WatchConditions, WatchConfig, WatchError,
-    WatchTarget,
+    UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1, VIEWER_STOP_WAIT_SECS,
+    ValidationTool, WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
 };
 
 pub(crate) fn digest(byte: u8) -> Sha256Hex {
@@ -117,8 +123,285 @@ pub(crate) fn status() -> StatusV1 {
         conditions: WatchConditions::new([
             WatchError::TargetDegraded,
             WatchError::ExitFlowCapHit { count: 12 },
+            WatchError::MacSilent { since: None },
+            WatchError::AccountingCanaryMissing {
+                inbounds: InboundSet::of(Inbound::Reality).with(Inbound::Hy2),
+            },
         ])
         .unwrap(),
+        accounting_at: Some(UnixTime::from_secs(1_790_000_160)),
+        last_active: BTreeMap::from([
+            (
+                "u01@reality".parse().unwrap(),
+                UnixTime::from_secs(1_790_000_160),
+            ),
+            (
+                "probe@hy2".parse().unwrap(),
+                UnixTime::from_secs(1_790_000_100),
+            ),
+        ]),
+        engines: engine_health(),
+        host: host_health(),
+        transfer: uplink_transfer(),
+    }
+}
+
+/// Xray active with its Go heap, Hysteria2 stopped after two restarts.
+pub(crate) fn engine_health() -> EngineHealth {
+    EngineHealth {
+        xray: EngineState {
+            restarts: 0,
+            run: EngineRun::Active {
+                uptime_secs: 86_400,
+                go_heap_bytes: Some(21_000_000),
+            },
+        },
+        hy2: EngineState {
+            restarts: 2,
+            run: EngineRun::Inactive,
+        },
+    }
+}
+
+pub(crate) fn host_health() -> HostHealth {
+    HostHealth {
+        uptime_secs: 90_000,
+        load_milli: 120,
+        mem_available_bytes: 600_000_000,
+        disk_free_bytes: 18_000_000_000,
+        journal_bytes: 150_000_000,
+        reboot_required: true,
+        last_unattended_upgrade: Some(UnixTime::from_secs(1_789_950_000)),
+        ntp_synced: true,
+    }
+}
+
+pub(crate) fn uplink_transfer() -> UplinkTransfer {
+    UplinkTransfer {
+        month: UsageMonth::new(2026, 10).unwrap(),
+        counted_from: UnixTime::from_secs(1_790_000_000),
+        rx_bytes: 40_000_000_000,
+        tx_bytes: 41_000_000_000,
+        counter_resets: 1,
+    }
+}
+
+/// Two five-minute bins of a one-hour range.
+pub(crate) fn series_range() -> SeriesRange {
+    SeriesRange::new(
+        UnixTime::from_secs(1_791_417_600),
+        UnixTime::from_secs(1_791_421_200),
+        Resolution::FiveMin,
+    )
+    .unwrap()
+}
+
+pub(crate) fn usage_series() -> UsageSeriesV1 {
+    let bin = |start: u64, entries: &[(&str, u64, u64)]| {
+        UsageBin::new(
+            UnixTime::from_secs(start),
+            entries
+                .iter()
+                .map(|(email, uplink, downlink)| {
+                    (
+                        email.parse().unwrap(),
+                        Traffic {
+                            uplink: *uplink,
+                            downlink: *downlink,
+                        },
+                    )
+                })
+                .collect(),
+        )
+        .unwrap()
+    };
+    UsageSeriesV1::new(
+        series_range(),
+        vec![
+            bin(
+                1_791_417_600,
+                &[("probe@reality", 900, 1200), ("u01@hy2", 0, 5)],
+            ),
+            bin(1_791_418_800, &[("u01@reality", 70_000, 3_100_000)]),
+        ],
+    )
+    .unwrap()
+}
+
+/// One event of every kind, numbered from 40.
+pub(crate) fn events() -> EventsV1 {
+    let kinds = [
+        AgentEventKind::ConditionRaised {
+            condition: WatchError::DiskLow { free: 900_000_000 },
+        },
+        AgentEventKind::ConditionCleared {
+            condition: WatchErrorKind::DiskLow,
+        },
+        AgentEventKind::GateOpened,
+        AgentEventKind::GateClosed,
+        AgentEventKind::HoldRecorded {
+            hold: GateReason::Operator,
+        },
+        AgentEventKind::HoldCleared {
+            hold: GateReason::MacDrain,
+        },
+        AgentEventKind::Halted {
+            reason: ShutdownReason::Operator,
+        },
+        AgentEventKind::Resumed {
+            generation: Generation::new(7),
+        },
+        AgentEventKind::Committed {
+            generation: Generation::new(8),
+        },
+        AgentEventKind::EngineRestarted {
+            engine: EngineUser::Hy2,
+        },
+        AgentEventKind::HostBooted,
+    ];
+    let events = (40..)
+        .zip(kinds)
+        .map(|(seq, kind)| AgentEvent {
+            seq: EventSeq::new(seq),
+            at: UnixTime::from_secs(1_790_000_000 + seq),
+            kind,
+        })
+        .collect();
+    EventsV1::new(events, EventSeq::new(60)).unwrap()
+}
+
+/// The fixture condition of `kind`.
+pub(crate) fn watch_error(kind: WatchErrorKind) -> WatchError {
+    match kind {
+        WatchErrorKind::WgReadFailed => WatchError::WgReadFailed,
+        WatchErrorKind::NftFailed => WatchError::NftFailed,
+        WatchErrorKind::StatsQueryFailed => WatchError::StatsQueryFailed,
+        WatchErrorKind::TargetDegraded => WatchError::TargetDegraded,
+        WatchErrorKind::ExitFlowCapHit => WatchError::ExitFlowCapHit { count: 1 },
+        WatchErrorKind::StateWrite => WatchError::StateWrite { errno: None },
+        WatchErrorKind::MacSilent => WatchError::MacSilent {
+            since: Some(UnixTime::from_secs(1_790_000_000)),
+        },
+        WatchErrorKind::DiskLow => WatchError::DiskLow { free: 900_000_000 },
+        WatchErrorKind::ClockUnsynced => WatchError::ClockUnsynced,
+        WatchErrorKind::RebootPending => WatchError::RebootPending {
+            since: UnixTime::from_secs(1_789_900_000),
+        },
+        WatchErrorKind::AccountingCanaryMissing => WatchError::AccountingCanaryMissing {
+            inbounds: InboundSet::of(Inbound::Reality),
+        },
+    }
+}
+
+/// A report id.
+pub(crate) fn report_user(text: &str) -> ReportUserId {
+    ReportUserId::new(text).unwrap()
+}
+
+/// A node name.
+pub(crate) fn node_name(text: &str) -> NodeName {
+    NodeName::new(text).unwrap()
+}
+
+/// The parts of a degraded exit's report: an attached radio, a building
+/// saturation run, usage for an active and a suspended user, and two
+/// alerts, one about a node.
+pub(crate) fn mac_report_parts() -> MacReportParts {
+    let time = UnixTime::from_secs;
+    MacReportParts {
+        at: time(1_790_000_200),
+        exit: ReportExit {
+            phase: ExitPhase::Degraded,
+            since: time(1_790_000_000),
+        },
+        sim: ReportSim {
+            cycle_starts_at: time(1_789_603_200),
+            cycle_ends_at: time(1_792_195_200),
+            rx_bytes: 40_000_000_000,
+            tx_bytes: 2_500_000_000,
+            accuracy: ReportAccuracy::LowerBound,
+            warn_bytes: 240_000_000_000,
+            hard_stop_bytes: Some(300_000_000_000),
+            line: Some(ReportPlanLine::FairUse {
+                bytes: 644_245_094_400,
+            }),
+            forecast: Some(ReportForecast {
+                daily_average_bytes: 9_000_000_000,
+                projected_bytes: 279_000_000_000,
+            }),
+        },
+        router: ReportRouter::Available {
+            polled_at: time(1_790_000_190),
+            radio: ReportRadio::Attached {
+                access: ReportRadioAccess::NrNsa,
+                band: ReportBand {
+                    system: ReportRadioSystem::Nr,
+                    number: ReportBandNumber::new(78).unwrap(),
+                },
+                rsrp_tenths: Some(-1005),
+                rsrq_tenths: Some(-110),
+                sinr_tenths: None,
+                rssi_tenths: Some(-650),
+            },
+            temperature_c: 47,
+        },
+        capacity: Some(ReportCapacity {
+            at: time(1_790_000_180),
+            tx_bps: 12_000_000,
+            rx_bps: 48_000_000,
+            saturation: ReportSaturation::Building {
+                since: time(1_790_000_100),
+            },
+        }),
+        usage: ReportUsage::Available {
+            through: time(1_790_000_160),
+        },
+        users: BTreeMap::from([
+            (
+                report_user("fxuseraaab"),
+                ReportUser {
+                    status: ReportUserStatus::Active,
+                    cycle: Some(Traffic {
+                        uplink: 300_000_000,
+                        downlink: 9_000_000_000,
+                    }),
+                    last_seen: Some(time(1_790_000_160)),
+                },
+            ),
+            (
+                report_user("fxuseraaac"),
+                ReportUser {
+                    status: ReportUserStatus::Suspended,
+                    cycle: Some(Traffic::default()),
+                    last_seen: None,
+                },
+            ),
+        ]),
+        alerts: vec![
+            ReportAlert {
+                kind: MacAlertKind::ExitDegraded,
+                severity: ReportSeverity::Warning,
+                node: None,
+                active_since: time(1_790_000_000),
+            },
+            ReportAlert {
+                kind: MacAlertKind::NodeDiskLow,
+                severity: ReportSeverity::Critical,
+                node: Some(node_name("lon1")),
+                active_since: time(1_790_000_050),
+            },
+        ],
+    }
+}
+
+pub(crate) fn mac_report() -> MacReportV1 {
+    MacReportV1::new(mac_report_parts()).unwrap()
+}
+
+pub(crate) fn stored_mac_report() -> StoredMacReport {
+    StoredMacReport {
+        received_at: UnixTime::from_secs(1_790_000_205),
+        report: mac_report(),
     }
 }
 
@@ -216,6 +499,10 @@ pub(crate) fn line_request(kind: RequestKind) -> LineRequest {
         RequestKind::Usage => LineRequest::Usage {
             month: UsageMonth::new(2026, 10).unwrap(),
         },
+        RequestKind::UsageSeries => LineRequest::UsageSeries(series_range()),
+        RequestKind::Events => LineRequest::Events {
+            since: EventSeq::new(40),
+        },
         RequestKind::TargetCheck => LineRequest::TargetCheck {
             host: TargetHost::new("www.example.com").unwrap(),
         },
@@ -231,6 +518,8 @@ pub(crate) fn line_request(kind: RequestKind) -> LineRequest {
         RequestKind::Resume => LineRequest::Resume {
             config_generation: Generation::new(7),
         },
+        RequestKind::PutMacReport => LineRequest::PutMacReport(Box::new(mac_report())),
+        RequestKind::MacReport => LineRequest::MacReport,
     }
 }
 
@@ -268,6 +557,8 @@ pub(crate) fn response(kind: ResponseKind) -> Response {
         },
         ResponseKind::Status => Response::Status(Box::new(status())),
         ResponseKind::Usage => Response::Usage(Box::new(usage())),
+        ResponseKind::UsageSeries => Response::UsageSeries(Box::new(usage_series())),
+        ResponseKind::Events => Response::Events(Box::new(events())),
         ResponseKind::TargetFacts => Response::TargetFacts(Box::new(target_facts())),
         ResponseKind::GateClosed => Response::GateClosed { holds: holds() },
         ResponseKind::HoldCleared => Response::HoldCleared { holds: Holds::NONE },
@@ -278,6 +569,10 @@ pub(crate) fn response(kind: ResponseKind) -> Response {
         ResponseKind::Resumed => Response::Resumed {
             generation: Generation::new(7),
         },
+        ResponseKind::MacReportStored => Response::MacReportStored {
+            at: UnixTime::from_secs(1_790_000_200),
+        },
+        ResponseKind::MacReport => Response::MacReport(Box::new(stored_mac_report())),
     }
 }
 
@@ -376,6 +671,18 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         AgentErrorKind::NoUsageRecorded => AgentError::NoUsageRecorded {
             month: UsageMonth::new(2026, 9).unwrap(),
         },
+        AgentErrorKind::SeriesTooLarge => AgentError::SeriesTooLarge { fitting_bins: 30 },
+        AgentErrorKind::SeriesNotRecorded => AgentError::SeriesNotRecorded {
+            recorded: Some(
+                SeriesSpan::new(
+                    UnixTime::from_secs(1_791_331_200),
+                    UnixTime::from_secs(1_791_420_000),
+                    Resolution::FiveMin,
+                )
+                .unwrap(),
+            ),
+        },
+        AgentErrorKind::MacReportMissing => AgentError::MacReportMissing,
         AgentErrorKind::GateCloseFailed => AgentError::GateCloseFailed {
             stderr_tail: tail("Error: No such file or directory"),
         },
@@ -386,6 +693,13 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         AgentErrorKind::RoleNotPermitted => AgentError::RoleNotPermitted {
             role: Role::Bootstrap,
             request: RequestKind::Apply,
+        },
+        AgentErrorKind::GateStopUnconfirmed => AgentError::GateStopUnconfirmed {
+            waited_secs: VIEWER_STOP_WAIT_SECS,
+        },
+        AgentErrorKind::GateReasonNotPermitted => AgentError::GateReasonNotPermitted {
+            role: Role::Viewer,
+            reason: GateReason::MacDrain,
         },
         AgentErrorKind::UnknownRequest => AgentError::UnknownRequest,
         AgentErrorKind::RequestTooLarge => AgentError::RequestTooLarge,

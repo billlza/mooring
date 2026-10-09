@@ -24,11 +24,13 @@
 //!
 //! # Migrations
 //!
-//! `state.json` carries `{"version": N, …}`. A newer version is refused
+//! `state.json` carries `{"version": N, …}`; this build writes version 2
+//! and reads versions 1 and 2. A newer version is refused
 //! (`DowngradeRefused`); an older one is lifted by [`migrate`], a chain of
-//! pure functions, and the first write after lifting backs up the original
-//! document to `state.json.bak-<from>-<to>` (fsynced) before writing the
-//! new version.
+//! pure functions (`V1 → V2`), and the first write after lifting backs up
+//! the original document to `state.json.bak-<from>-<to>` (fsynced) before
+//! writing the new version. A document the chain cannot lift is refused
+//! (`MigrationFailed`) and left as it is.
 //!
 //! # Secrets
 //!

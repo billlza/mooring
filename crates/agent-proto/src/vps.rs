@@ -9,6 +9,8 @@
 //! interface. This module is the one definition both use, so neither side
 //! can rename one without the other.
 
+use serde::{Deserialize, Serialize};
+
 use crate::macros::closed_enum;
 
 /// The kernel WireGuard interface (`wg-quick@wgexit`). Xray's `exit`
@@ -29,6 +31,22 @@ pub const EXIT_ROUTE_TABLE: u16 = 77;
 /// The priority of the `oif` rule that sends device-bound sockets to
 /// [`EXIT_ROUTE_TABLE`].
 pub const EXIT_RULE_PRIORITY: u16 = 10_000;
+
+/// The viewer account's name, as a literal for `concat!` (see
+/// [`VIEWER_ACCOUNT`]).
+macro_rules! viewer_account {
+    () => {
+        "mooring-view"
+    };
+}
+
+pub(crate) use viewer_account;
+
+/// The unprivileged account a remote viewer logs in as (design §15.9,
+/// decision F5, critique C-9). It owns no files; sshd's `Match` block in
+/// the host profile's drop-in gives it a root-owned `authorized_keys` file
+/// and forces `serve-ssh --role viewer` (see [`crate::HostProfile`]).
+pub const VIEWER_ACCOUNT: &str = viewer_account!();
 
 closed_enum! {
     /// A named counter in [`NFT_TABLE`].
@@ -58,7 +76,7 @@ impl NftCounter {
 closed_enum! {
     /// An engine's Unix user: its unit runs as it, and the owner guard
     /// matches the connections it originates by it (`meta skuid`).
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub enum EngineUser {
         /// `mooring-xray.service`.
         Xray,
@@ -108,5 +126,7 @@ mod tests {
         }
         let users: Vec<&str> = EngineUser::ALL.iter().map(|user| user.name()).collect();
         assert_eq!(users, ["mooring-xray", "mooring-hy2"]);
+        assert_eq!(VIEWER_ACCOUNT, "mooring-view");
+        assert!(!users.contains(&VIEWER_ACCOUNT));
     }
 }

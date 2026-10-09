@@ -4,8 +4,8 @@
 //! §12).
 //!
 //! - [`x25519`]: REALITY and WireGuard key pairs (RFC 7748), stored clamped.
-//! - [`credentials`]: credential UUIDs, REALITY short ids, passwords and
-//!   opaque user ids.
+//! - [`credentials`]: credential UUIDs, REALITY short ids, passwords, opaque
+//!   user ids and public aliases.
 //! - [`cert`]: the per-node Hysteria2 certificate (ECDSA P-256). Only the
 //!   certificate is generated here; `mooring-export` derives its SNI and
 //!   its SPKI and DER pins from it.

@@ -9,12 +9,14 @@ use std::net::Ipv4Addr;
 use mooring_model::cert::CertificatePem;
 use mooring_model::collections::NonEmpty;
 use mooring_model::counters::ConfigGeneration;
-use mooring_model::deployment::{Bookkeeping, Deployment, DeploymentParts};
+use mooring_model::date::CalendarDate;
+use mooring_model::deployment::{
+    Bookkeeping, CapacityPolicy, Deployment, DeploymentInit, DeploymentParts,
+};
 use mooring_model::digest::Sha256Digest;
 use mooring_model::dns::DnsName;
 use mooring_model::exit::{
-    CycleDay, EgressCheck, ExitSite, FlowCap, Pairing, ProbePolicy, SimPolicy, TrafficPolicy,
-    Uplink,
+    EgressCheck, ExitSite, FlowCap, Pairing, ProbePolicy, TrafficPolicy, Uplink,
 };
 use mooring_model::ids::{LocalLabel, NodeId, ShortId, UserId, Uuid};
 use mooring_model::iface::{InterfaceSelector, LanSubnet, LinuxIfName, MacAddr};
@@ -29,13 +31,16 @@ use mooring_model::secret::{
     Ed25519Seed, Hy2KeyPem, Password, RealityPrivateKey, Secret, SecretEntry, SecretKind,
     SecretMaterial, SecretRef, WgPrivateKey,
 };
-use mooring_model::state::StateV1;
+use mooring_model::sim::{BillDay, Carrier, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy};
+use mooring_model::state::StateV2;
 use mooring_model::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
     TargetAttestation, TargetFacts, TargetSpec, TlsHandshake, TlsOutcome, TlsVersion, qualify,
 };
 use mooring_model::time::UnixTime;
-use mooring_model::user::{ClientLine, ClientProfile, User, UserNodePublic, UserStatus};
+use mooring_model::user::{
+    ClientLine, ClientProfile, User, UserNodePublic, UserPolicy, UserStatus,
+};
 use mooring_model::wg::{Keepalive, WgIndex, WgLink};
 use tempfile::TempDir;
 
@@ -43,6 +48,31 @@ use crate::ordered::update_config_with_secrets;
 use crate::secrets::InMemorySecretStore;
 use crate::store::Store;
 
+/// The warning threshold of the version-1 goldens, 450e9 bytes.
+pub(crate) const V1_GOLDEN_WARN_BYTES: u64 = 450_000_000_000;
+/// The hard stop of the version-1 goldens, 560e9 bytes.
+pub(crate) const V1_GOLDEN_HARD_STOP_BYTES: u64 = 560_000_000_000;
+
+/// The decided line (F1): SMARTY Unlimited, no fair-use line, no speed cap,
+/// recorded from SMARTY's Price Guide V42.
+pub(crate) fn smarty_plan() -> SimPlan {
+    SimPlan {
+        carrier: Carrier::Smarty,
+        kind: PlanKind::Unlimited,
+        speed_cap_mbps: None,
+        terms: EvidenceRef {
+            url: EvidenceUrl::parse(
+                "https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf",
+            )
+            .unwrap(),
+            dated: CalendarDate::parse("2026-08-25").unwrap(),
+        },
+    }
+}
+
+/// The exit site of the stores the tests build: the SMARTY plan on bill
+/// day 1 with the version-1 goldens' thresholds, so a lifted golden whose
+/// plan is then recorded equals the same history built here.
 pub(crate) fn exit_site() -> ExitSite {
     ExitSite {
         egress: InterfaceSelector::LinkAddr {
@@ -54,9 +84,18 @@ pub(crate) fn exit_site() -> ExitSite {
             carrier_prefixes: NonEmpty::new("31.120.0.0/14".parse::<CarrierPrefix>().unwrap()),
             pairing: Pairing::Paired,
         },
-        sim: SimPolicy::with_defaults(CycleDay::new(1).unwrap()),
+        sim: SimPolicy::new(
+            BillDay::new(1).unwrap(),
+            smarty_plan(),
+            V1_GOLDEN_WARN_BYTES,
+            StopPolicy::HardStop {
+                bytes: V1_GOLDEN_HARD_STOP_BYTES,
+            },
+        )
+        .unwrap(),
         probe: ProbePolicy::default(),
         flow_cap: FlowCap::new(4096).unwrap(),
+        uplink_baseline: None,
     }
 }
 
@@ -67,10 +106,22 @@ pub(crate) fn empty_store() -> (TempDir, Store) {
     (dir, store)
 }
 
+/// What the tests initialise a store with: [`exit_site`], no cap, no
+/// automatic quotas and no alert channels.
+pub(crate) fn deployment_init() -> DeploymentInit {
+    DeploymentInit {
+        exit: exit_site(),
+        policy: TrafficPolicy::default(),
+        capacity: CapacityPolicy::UNLIMITED,
+        auto_quota: None,
+        alerting: None,
+    }
+}
+
 /// A store initialised with an empty deployment.
-pub(crate) fn initialised() -> (TempDir, Store, StateV1) {
+pub(crate) fn initialised() -> (TempDir, Store, StateV2) {
     let (dir, store) = empty_store();
-    let state = store.init(exit_site(), TrafficPolicy::default()).unwrap();
+    let state = store.init(deployment_init()).unwrap();
     (dir, store, state)
 }
 
@@ -144,6 +195,9 @@ pub(crate) fn user(n: u64, nodes: &[(&str, u8)]) -> User {
                 )
             })
             .collect::<BTreeMap<_, _>>(),
+        policy: UserPolicy::NONE,
+        alias: None,
+        agreement: None,
     }
 }
 
@@ -248,7 +302,7 @@ pub(crate) fn target() -> TargetSpec {
 /// A store whose deployment holds `lon1`, adopted at 45.67.89.10 with a
 /// REALITY target, and user 1 on it, with every secret written; the
 /// deployment is at generation 3.
-pub(crate) fn adopted_store() -> (TempDir, Store, StateV1, InMemorySecretStore) {
+pub(crate) fn adopted_store() -> (TempDir, Store, StateV2, InMemorySecretStore) {
     let (dir, store, state) = initialised();
     let mut secrets = InMemorySecretStore::new();
     let add = |parts| with_node(parts, planned_node("lon1", 1, 10));

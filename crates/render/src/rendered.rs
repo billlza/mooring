@@ -25,7 +25,8 @@ impl RenderedFile {
         Self { bytes, sha256 }
     }
 
-    /// The file contents: UTF-8 text ending with one newline.
+    /// The file contents: UTF-8 text ending with one newline, or nothing
+    /// (`viewer_authorized_keys` with no viewer recorded).
     #[must_use]
     pub fn expose_bytes(&self) -> &[u8] {
         &self.bytes

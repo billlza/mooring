@@ -33,6 +33,25 @@ closed_enum! {
         Nftables,
         /// The watch loop's configuration (`watch.json`).
         WatchConfig,
+        /// The remote viewers' keys (`viewer_authorized_keys`, design
+        /// §15.9): one `restrict,command="… --role viewer"` line per
+        /// viewer, and empty when there is none. sshd reads it for
+        /// [`crate::VIEWER_ACCOUNT`] through the host profile's `Match`
+        /// block; it is root-owned and inside the generation directory, so
+        /// the viewer account cannot edit its own keys, and a rollback
+        /// restores the matching set.
+        ///
+        /// sshd opens it as the viewer account, not as root (OpenSSH
+        /// `auth2-pubkey.c`, `user_key_allowed2`, drops to the user before
+        /// opening the keys file), and with StrictModes checks that it and
+        /// every directory above it, the `current` link resolved, are owned
+        /// by root or the user and writable by neither group nor others. So
+        /// it is installed 0644 `root:root`, and `/etc/mooring` and each
+        /// `gen-<N>` are 0755 `root:root` (the secret-bearing files beside
+        /// it keep their own 0600 or 0640 modes): a 0600 or 0640 keys file,
+        /// or a 0750 generation directory, would refuse every viewer login
+        /// (design §8.6; L5 checks it with a real login as the viewer).
+        ViewerKeys,
     }
 }
 
@@ -46,6 +65,7 @@ impl ManagedFile {
             Self::WgConf => "wgexit.conf",
             Self::Nftables => "nftables.conf",
             Self::WatchConfig => "watch.json",
+            Self::ViewerKeys => "viewer_authorized_keys",
         }
     }
 
@@ -58,18 +78,22 @@ impl ManagedFile {
             Self::WgConf => "/etc/mooring/current/wgexit.conf",
             Self::Nftables => "/etc/mooring/current/nftables.conf",
             Self::WatchConfig => "/etc/mooring/current/watch.json",
+            Self::ViewerKeys => "/etc/mooring/current/viewer_authorized_keys",
         }
     }
 
     /// The fixed path the file's consumer reads. For `WgConf` and
     /// `Nftables` it is the system path (`wg-quick` and `nftables.service`
     /// read it), installed as a symlink to [`ManagedFile::current_path`];
-    /// for the others it is the current path itself.
+    /// for the others it is the current path itself (sshd reads
+    /// `ViewerKeys` there).
     pub const fn path(self) -> &'static str {
         match self {
             Self::WgConf => "/etc/wireguard/wgexit.conf",
             Self::Nftables => "/etc/nftables.conf",
-            Self::XrayConfig | Self::Hy2Config | Self::WatchConfig => self.current_path(),
+            Self::XrayConfig | Self::Hy2Config | Self::WatchConfig | Self::ViewerKeys => {
+                self.current_path()
+            }
         }
     }
 }
@@ -101,6 +125,9 @@ pub struct BundleFiles {
     /// [`ManagedFile::WatchConfig`].
     #[serde(rename = "WatchConfig")]
     pub watch_config: Sha256Hex,
+    /// [`ManagedFile::ViewerKeys`].
+    #[serde(rename = "ViewerKeys")]
+    pub viewer_keys: Sha256Hex,
 }
 
 impl BundleFiles {
@@ -112,6 +139,7 @@ impl BundleFiles {
             wg_conf: digest(ManagedFile::WgConf),
             nftables: digest(ManagedFile::Nftables),
             watch_config: digest(ManagedFile::WatchConfig),
+            viewer_keys: digest(ManagedFile::ViewerKeys),
         }
     }
 
@@ -123,6 +151,7 @@ impl BundleFiles {
             ManagedFile::WgConf => &self.wg_conf,
             ManagedFile::Nftables => &self.nftables,
             ManagedFile::WatchConfig => &self.watch_config,
+            ManagedFile::ViewerKeys => &self.viewer_keys,
         }
     }
 
@@ -149,6 +178,7 @@ impl TryFrom<&BTreeMap<ManagedFile, Sha256Hex>> for BundleFiles {
             wg_conf: digest(ManagedFile::WgConf)?,
             nftables: digest(ManagedFile::Nftables)?,
             watch_config: digest(ManagedFile::WatchConfig)?,
+            viewer_keys: digest(ManagedFile::ViewerKeys)?,
         })
     }
 }
@@ -259,6 +289,11 @@ mod tests {
             ManagedFile::WatchConfig.path(),
             "/etc/mooring/current/watch.json"
         );
+        assert_eq!(
+            ManagedFile::ViewerKeys.path(),
+            "/etc/mooring/current/viewer_authorized_keys"
+        );
+        assert_eq!(ManagedFile::ALL.len(), 6);
     }
 
     #[test]

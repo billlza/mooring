@@ -1,0 +1,514 @@
+{
+  "version": 1,
+  "at": 1791453630,
+  "exit": {
+    "state": {
+      "serving": {
+        "ip": "31.120.4.17",
+        "verified_at": 1791453418
+      }
+    },
+    "since": 1791439920,
+    "latches": [],
+    "egress": {
+      "interface": "en8",
+      "lladdr": "02:6d:6f:6f:72:01",
+      "ipv4": "192.168.1.20",
+      "link": {
+        "up": true,
+        "speed_mbps": 2500
+      }
+    },
+    "carrier_check": {
+      "egress_ip": "31.120.4.17",
+      "in_carrier_prefixes": true,
+      "pairing": "paired",
+      "checked_at": 1791453616
+    },
+    "engines": {
+      "exit": {
+        "pid": 4123,
+        "restarts": 0,
+        "last_exit": null
+      },
+      "probe": {
+        "pid": 4127,
+        "restarts": 1,
+        "last_exit": {
+          "at": 1791439860,
+          "end": {
+            "exited": {
+              "code": 1
+            }
+          }
+        }
+      }
+    },
+    "power": {
+      "source": "ac",
+      "assertions_held": true,
+      "last_sleep": 1791421380,
+      "last_wake": 1791439860,
+      "last_drain": {
+        "at": 1791421380,
+        "outcome": "completed"
+      }
+    },
+    "foreign_networks": []
+  },
+  "sim": {
+    "cycle": {
+      "start": "2026-10-01",
+      "next_start": "2026-11-01"
+    },
+    "rx_bytes": 7721969516,
+    "tx_bytes": 6847784287,
+    "accuracy": "exact",
+    "thresholds": {
+      "warn_bytes": 240000000000,
+      "stop": {
+        "hard_stop": {
+          "bytes": 300000000000
+        }
+      },
+      "plan_line": null
+    },
+    "forecast": {
+      "projected": {
+        "cycle": {
+          "start": "2026-10-01",
+          "next_start": "2026-11-01"
+        },
+        "as_of": 1791453630,
+        "used_bytes": 14569753803,
+        "daily_average_bytes": 1964369222,
+        "projected_bytes": 60895445884,
+        "crossings": [
+          {
+            "threshold": "warn",
+            "bytes": 240000000000,
+            "crossing": "not_this_cycle"
+          },
+          {
+            "threshold": "hard_stop",
+            "bytes": 300000000000,
+            "crossing": "not_this_cycle"
+          }
+        ]
+      }
+    }
+  },
+  "router": {
+    "available": {
+      "polled_at": 1791453586,
+      "radio": {
+        "attached": {
+          "access": "nr_nsa",
+          "band": "n78",
+          "carrier": "SMARTY",
+          "signal": {
+            "rsrp": -985,
+            "rsrq": -105,
+            "sinr": 124,
+            "rssi": null
+          }
+        }
+      },
+      "temperature_c": 41,
+      "power": "plugged",
+      "data_counter_bytes": 97412311040,
+      "connected_clients": 1,
+      "unread_sms": 0,
+      "firmware": "NTG9X75C_10.05.07.00",
+      "uptime_secs": 523014
+    }
+  },
+  "capacity": {
+    "at": 1791453610,
+    "tx_bps": 3211264,
+    "rx_bps": 9633792,
+    "uplink_use": {
+      "measured": {
+        "permille": 199,
+        "baseline_p50_bps": 16100000
+      }
+    },
+    "rtt_inflation_ms": 13,
+    "saturation": "clear"
+  },
+  "usage": {
+    "report": {
+      "periods": {
+        "through": 1791453600,
+        "utc_day": "2026-10-08",
+        "cycle": {
+          "start": "2026-10-01",
+          "next_start": "2026-11-01"
+        },
+        "utc_month_start": "2026-10-01"
+      }
+    }
+  },
+  "users": {
+    "fxuseraaab": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "active",
+        "last_seen": 1791453504,
+        "by_node": {
+          "lon1": {
+            "reality": 1791453504,
+            "hy2": 1791450684
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 19922944,
+          "downlink": 415236096
+        },
+        "cycle": {
+          "uplink": 171966464,
+          "downlink": 3533701120
+        },
+        "month": {
+          "uplink": 171966464,
+          "downlink": 3533701120
+        },
+        "lifetime": {
+          "uplink": 2889269760,
+          "downlink": 51827544064
+        },
+        "cycle_served_bytes": 3705667584,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 171966464,
+            "downlink": 3533701120
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 169869312,
+            "downlink": 3502243840
+          },
+          "hy2": {
+            "uplink": 2097152,
+            "downlink": 31457280
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 9909,
+            "hy2": 91
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaac": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "idle",
+        "last_seen": 1791379104,
+        "by_node": {
+          "ams1": {
+            "reality": null,
+            "hy2": 1789906020
+          },
+          "lon1": {
+            "reality": 1791379104,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 0,
+          "downlink": 0
+        },
+        "cycle": {
+          "uplink": 51380224,
+          "downlink": 936378368
+        },
+        "month": {
+          "uplink": 51380224,
+          "downlink": 936378368
+        },
+        "lifetime": {
+          "uplink": 981467136,
+          "downlink": 13865086976
+        },
+        "cycle_served_bytes": 987758592,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 51380224,
+            "downlink": 936378368
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 51380224,
+            "downlink": 936378368
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaad": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "active",
+        "last_seen": 1791453504,
+        "by_node": {
+          "lon1": {
+            "reality": null,
+            "hy2": 1791453504
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 3145728,
+          "downlink": 52428800
+        },
+        "cycle": {
+          "uplink": 66060288,
+          "downlink": 1310720000
+        },
+        "month": {
+          "uplink": 66060288,
+          "downlink": 1310720000
+        },
+        "lifetime": {
+          "uplink": 66060288,
+          "downlink": 1310720000
+        },
+        "cycle_served_bytes": 1376780288,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 66060288,
+            "downlink": 1310720000
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 0,
+            "downlink": 0
+          },
+          "hy2": {
+            "uplink": 66060288,
+            "downlink": 1310720000
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 0,
+            "hy2": 10000
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    }
+  },
+  "nodes": {
+    "ams1": {
+      "role": "standby",
+      "stage": "Applied",
+      "current_generation": 1,
+      "pending_apply_since": null,
+      "verdicts": {
+        "reality": {
+          "at": 1791453422,
+          "outcome": "verified",
+          "latency_ms": 205
+        },
+        "hy2": {
+          "at": 1791453424,
+          "outcome": "verified",
+          "latency_ms": 171
+        }
+      },
+      "agent": {
+        "reported": {
+          "polled_at": 1791453539,
+          "agent_now": 1791453538,
+          "watch_age_secs": 3,
+          "gate": "Open",
+          "holds": {
+            "mac_drain": null,
+            "egress_violation": null,
+            "operator": null
+          },
+          "halted": null,
+          "handshake_age_secs": 19,
+          "applied": {
+            "generation": 1,
+            "digest": "02683d5e7434e861c7fcb58a4df3e5c7aa4ad4e4d4aed99d620de3e92b2ef0b7"
+          },
+          "conditions": [],
+          "accounting_at": 1791453507,
+          "engines": {
+            "xray": {
+              "restarts": 1,
+              "run": {
+                "Active": {
+                  "uptime_secs": 52380,
+                  "go_heap_bytes": 37748736
+                }
+              }
+            },
+            "hy2": {
+              "restarts": 0,
+              "run": {
+                "Active": {
+                  "uptime_secs": 52391,
+                  "go_heap_bytes": null
+                }
+              }
+            }
+          },
+          "host": {
+            "uptime_secs": 52420,
+            "load_milli": 180,
+            "mem_available_bytes": 612368384,
+            "disk_free_bytes": 19327352832,
+            "journal_bytes": 88080384,
+            "reboot_required": false,
+            "last_unattended_upgrade": 1791403440,
+            "ntp_synced": true
+          },
+          "transfer": {
+            "month": "2026-10",
+            "counted_from": 1790812800,
+            "rx_bytes": 96210000000,
+            "tx_bytes": 95870000000,
+            "counter_resets": 7
+          }
+        }
+      }
+    },
+    "lon1": {
+      "role": "primary",
+      "stage": "Applied",
+      "current_generation": 1,
+      "pending_apply_since": null,
+      "verdicts": {
+        "reality": {
+          "at": 1791453418,
+          "outcome": "verified",
+          "latency_ms": 186
+        },
+        "hy2": {
+          "at": 1791453420,
+          "outcome": "verified",
+          "latency_ms": 142
+        }
+      },
+      "agent": {
+        "reported": {
+          "polled_at": 1791453536,
+          "agent_now": 1791453535,
+          "watch_age_secs": 3,
+          "gate": "Open",
+          "holds": {
+            "mac_drain": null,
+            "egress_violation": null,
+            "operator": null
+          },
+          "halted": null,
+          "handshake_age_secs": 19,
+          "applied": {
+            "generation": 1,
+            "digest": "01812c29cdf98e8594d5d0e6cbd662a26869093a5ed0d8bd009668abc35e20a2"
+          },
+          "conditions": [],
+          "accounting_at": 1791453504,
+          "engines": {
+            "xray": {
+              "restarts": 1,
+              "run": {
+                "Active": {
+                  "uptime_secs": 52380,
+                  "go_heap_bytes": 37748736
+                }
+              }
+            },
+            "hy2": {
+              "restarts": 0,
+              "run": {
+                "Active": {
+                  "uptime_secs": 52391,
+                  "go_heap_bytes": null
+                }
+              }
+            }
+          },
+          "host": {
+            "uptime_secs": 52420,
+            "load_milli": 180,
+            "mem_available_bytes": 612368384,
+            "disk_free_bytes": 19327352832,
+            "journal_bytes": 88080384,
+            "reboot_required": false,
+            "last_unattended_upgrade": 1791403440,
+            "ntp_synced": true
+          },
+          "transfer": {
+            "month": "2026-10",
+            "counted_from": 1790812800,
+            "rx_bytes": 96210000000,
+            "tx_bytes": 95870000000,
+            "counter_resets": 7
+          }
+        }
+      }
+    }
+  },
+  "alerts": []
+}

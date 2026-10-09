@@ -8,14 +8,14 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 
-use mooring_model::state::{StateFile, StateV1};
+use mooring_model::state::{StateFile, StateV2};
 
 use super::builders::initialised;
 use super::{mode_of, state_bytes, store_error};
 use crate::durable::temp_path;
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 
-fn bump(store: &crate::store::Store, state: &StateV1) -> StateV1 {
+fn bump(store: &crate::store::Store, state: &StateV2) -> StateV2 {
     store
         .update_config(state.deployment.config_generation(), Ok::<_, Infallible>)
         .unwrap()
@@ -34,10 +34,10 @@ fn state_files_are_private() {
 fn the_document_is_the_versioned_envelope() {
     let (_dir, store, state) = initialised();
     let text = String::from_utf8(state_bytes(&store)).unwrap();
-    assert!(text.starts_with("{\n  \"version\": 1,\n"), "{text}");
+    assert!(text.starts_with("{\n  \"version\": 2,\n"), "{text}");
     assert!(text.ends_with("}\n"), "{text}");
-    let file: StateFile = serde_json::from_str(&text).unwrap();
-    assert_eq!(file, StateFile::V1(state));
+    let file = crate::migrate::parse(text.as_bytes()).unwrap();
+    assert_eq!(file, StateFile::V2(state));
 }
 
 #[test]

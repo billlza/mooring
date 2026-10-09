@@ -1,0 +1,5 @@
+---
+source: crates/agent-proto/tests/wire/protocol_goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. Protocol 1 (design 11.1), not frozen: a change here changes protocol 1. The frame is this line plus one newline."
+---
+{"Ok":{"UsageSeries":{"range":{"from":1791417600,"to":1791418800,"resolution":"FiveMin"},"bins":[{"start":1791417600,"traffic":{"probe@reality":{"uplink":1480,"downlink":5120},"probe@hy2":{"uplink":612,"downlink":389},"fxuseraaab@reality":{"uplink":48211,"downlink":2901334}}},{"start":1791418200,"traffic":{"fxuseraaab@hy2":{"uplink":0,"downlink":77312}}}]}}}

@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
 use crate::{
-    AcceptLocal, AgentError, Generation, Halt, Holds, HostFacts, HostProfileVersion, RequestKind,
-    Sha256Hex, SshEd25519Key, SshdDirective, StatusV1, TargetFacts, UsageV1,
+    AcceptLocal, AgentError, EventsV1, Generation, Halt, Holds, HostFacts, HostProfileVersion,
+    RequestKind, Sha256Hex, SshEd25519Key, SshdDirective, StatusV1, StoredMacReport, TargetFacts,
+    UnixTime, UsageSeriesV1, UsageV1,
 };
 
 /// The agent's one-line answer: `{"Ok": <Response>}` or
@@ -87,9 +88,19 @@ pub enum Response {
     Status(Box<StatusV1>),
     /// Answers `Usage`.
     Usage(Box<UsageV1>),
+    /// Answers `UsageSeries`.
+    UsageSeries(Box<UsageSeriesV1>),
+    /// Answers `Events`.
+    Events(Box<EventsV1>),
     /// Answers `TargetCheck`.
     TargetFacts(Box<TargetFacts>),
-    /// Answers `GateSet`: the gate is closed and the hold recorded.
+    /// Answers `GateSet`: the gate is closed and the hold recorded. It is
+    /// sent only once both are true: the ops role records the hold and
+    /// closes the gate itself; a viewer's stop is done by the watch, and is
+    /// answered `GateClosed` only after the handler has read the Operator
+    /// hold back from `holds.json` and found the gate closed, or
+    /// [`crate::AgentError::GateStopUnconfirmed`] when that does not happen
+    /// within [`crate::VIEWER_STOP_WAIT_SECS`].
     GateClosed {
         /// The holds after recording this one.
         holds: Holds,
@@ -109,6 +120,15 @@ pub enum Response {
         /// The current generation.
         generation: Generation,
     },
+    /// Answers `PutMacReport`: the report is stored, replacing the one
+    /// stored before.
+    MacReportStored {
+        /// The stored report's `at`, echoed.
+        at: UnixTime,
+    },
+    /// Answers `MacReport`: the stored report and when the node received
+    /// it.
+    MacReport(Box<StoredMacReport>),
 }
 
 closed_enum! {
@@ -141,6 +161,10 @@ closed_enum! {
         Status,
         /// [`Response::Usage`].
         Usage,
+        /// [`Response::UsageSeries`].
+        UsageSeries,
+        /// [`Response::Events`].
+        Events,
         /// [`Response::TargetFacts`].
         TargetFacts,
         /// [`Response::GateClosed`].
@@ -151,6 +175,10 @@ closed_enum! {
         Halted,
         /// [`Response::Resumed`].
         Resumed,
+        /// [`Response::MacReportStored`].
+        MacReportStored,
+        /// [`Response::MacReport`].
+        MacReport,
     }
 }
 
@@ -170,11 +198,15 @@ impl ResponseKind {
             Self::Reverted => RequestKind::Rollback,
             Self::Status => RequestKind::Status,
             Self::Usage => RequestKind::Usage,
+            Self::UsageSeries => RequestKind::UsageSeries,
+            Self::Events => RequestKind::Events,
             Self::TargetFacts => RequestKind::TargetCheck,
             Self::GateClosed => RequestKind::GateSet,
             Self::HoldCleared => RequestKind::ClearHold,
             Self::Halted => RequestKind::Shutdown,
             Self::Resumed => RequestKind::Resume,
+            Self::MacReportStored => RequestKind::PutMacReport,
+            Self::MacReport => RequestKind::MacReport,
         }
     }
 }
@@ -196,11 +228,15 @@ impl Response {
             Self::Reverted { .. } => ResponseKind::Reverted,
             Self::Status(_) => ResponseKind::Status,
             Self::Usage(_) => ResponseKind::Usage,
+            Self::UsageSeries(_) => ResponseKind::UsageSeries,
+            Self::Events(_) => ResponseKind::Events,
             Self::TargetFacts(_) => ResponseKind::TargetFacts,
             Self::GateClosed { .. } => ResponseKind::GateClosed,
             Self::HoldCleared { .. } => ResponseKind::HoldCleared,
             Self::Halted(_) => ResponseKind::Halted,
             Self::Resumed { .. } => ResponseKind::Resumed,
+            Self::MacReportStored { .. } => ResponseKind::MacReportStored,
+            Self::MacReport(_) => ResponseKind::MacReport,
         }
     }
 

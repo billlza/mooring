@@ -1,0 +1,5 @@
+---
+source: crates/agent-proto/tests/wire/protocol_goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. Protocol 1 (design 11.1), not frozen: a change here changes protocol 1. The frame is this line plus one newline."
+---
+{"Ok":{"MacReport":{"received_at":1791418203,"report":{"at":1791418200,"exit":{"phase":"Down","since":1791418000},"sim":{"cycle_starts_at":1791331200,"cycle_ends_at":1793923200,"rx_bytes":52000000000,"tx_bytes":4000000000,"accuracy":"LowerBound","warn_bytes":80000000000,"hard_stop_bytes":95000000000,"line":{"Allowance":{"bytes":107374182400}},"forecast":null},"router":{"Available":{"polled_at":1791418190,"radio":"NoService","temperature_c":38}},"capacity":{"at":1791418180,"tx_bps":0,"rx_bps":0,"saturation":"Clear"},"usage":"Unavailable","users":{"fxuseraaab":{"status":"Active","cycle":null,"last_seen":1791417840}},"alerts":[{"kind":"NodeHalted","severity":"Critical","node":"ams1","active_since":1791418000}]}}}}

@@ -1,0 +1,916 @@
+{
+  "exit_state": [
+    "disabled",
+    "preflight",
+    "starting",
+    "verifying",
+    {
+      "serving": {
+        "ip": "198.51.100.17",
+        "verified_at": 1791417660
+      }
+    },
+    {
+      "degraded": {
+        "reasons": [
+          {
+            "node_probe_failed": {
+              "node": "lon1",
+              "protocol": "hy2",
+              "stage": "read"
+            }
+          },
+          {
+            "reachability_suspect": {
+              "node": "lon1"
+            }
+          },
+          {
+            "watch_stale": {
+              "node": "ams1"
+            }
+          },
+          "on_battery",
+          "power_helper_exited"
+        ]
+      }
+    },
+    {
+      "down": {
+        "reason": "secrets_unavailable"
+      }
+    },
+    "paused"
+  ],
+  "degraded_reason": [
+    {
+      "node_probe_failed": {
+        "node": "lon1",
+        "protocol": "hy2",
+        "stage": "read"
+      }
+    },
+    {
+      "reachability_suspect": {
+        "node": "lon1"
+      }
+    },
+    {
+      "watch_stale": {
+        "node": "ams1"
+      }
+    },
+    "on_battery",
+    "power_helper_exited"
+  ],
+  "down_reason": [
+    "egress_interface_absent",
+    {
+      "egress_ambiguous": {
+        "matches": 2
+      }
+    },
+    {
+      "egress_no_ipv4": {
+        "interface": "en8"
+      }
+    },
+    "egress_subnet_mismatch",
+    "uplink_absent",
+    "uplink_equals_egress",
+    {
+      "direct_probe_failed": {
+        "node": "lon1",
+        "stage": "connect"
+      }
+    },
+    "secrets_unavailable",
+    {
+      "agent_not_enabled": {
+        "node": "ams1"
+      }
+    },
+    {
+      "engine_spawn_failed": {
+        "engine": "exit"
+      }
+    },
+    {
+      "engine_config_rejected": {
+        "engine": "probe"
+      }
+    },
+    {
+      "engine_start_failed": {
+        "engine": "exit"
+      }
+    },
+    {
+      "engine_crash_loop": {
+        "engine": "probe"
+      }
+    },
+    {
+      "violation": {
+        "egress_mismatch": {
+          "d1": "192.0.2.1",
+          "d2": "192.0.2.1",
+          "observed": "192.0.2.9"
+        }
+      }
+    },
+    {
+      "sim_cap_reached": {
+        "cycle_start": "2026-10-01"
+      }
+    },
+    {
+      "foreign_network_attached": {
+        "findings": [
+          {
+            "routable_ipv4": {
+              "interface": "en0"
+            }
+          },
+          {
+            "global_ipv6": {
+              "interface": "en0"
+            }
+          },
+          {
+            "default_route": {
+              "interface": "en0",
+              "family": "v6"
+            }
+          },
+          {
+            "personal_hotspot": {
+              "interface": "en5"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "probe_stage": [
+    "connect",
+    "read",
+    "parse",
+    "prober_unavailable",
+    "carrier_address_unstable"
+  ],
+  "process_end": [
+    {
+      "exited": {
+        "code": 1
+      }
+    },
+    {
+      "signalled": {
+        "signal": 9
+      }
+    }
+  ],
+  "power_source": [
+    "ac",
+    "battery"
+  ],
+  "drain_outcome": [
+    "completed",
+    "timed_out",
+    "failed"
+  ],
+  "meter_accuracy": [
+    "exact",
+    "lower_bound"
+  ],
+  "forecast_view": [
+    {
+      "projected": {
+        "cycle": {
+          "start": "2026-10-01",
+          "next_start": "2026-11-01"
+        },
+        "as_of": 1791072000,
+        "used_bytes": 60000000000,
+        "daily_average_bytes": 20000000000,
+        "projected_bytes": 620000000000,
+        "crossings": [
+          {
+            "threshold": "warn",
+            "bytes": 240000000000,
+            "crossing": {
+              "projected": {
+                "on": "2026-10-13"
+              }
+            }
+          },
+          {
+            "threshold": "hard_stop",
+            "bytes": 300000000000,
+            "crossing": {
+              "projected": {
+                "on": "2026-10-16"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "unavailable": {
+        "reason": "MissingDay"
+      }
+    }
+  ],
+  "usage_view": [
+    {
+      "report": {
+        "periods": {
+          "through": 1791453600,
+          "utc_day": "2026-10-08",
+          "cycle": {
+            "start": "2026-10-01",
+            "next_start": "2026-11-01"
+          },
+          "utc_month_start": "2026-10-01"
+        }
+      }
+    },
+    {
+      "unavailable": {
+        "reason": "MissingLedger"
+      }
+    }
+  ],
+  "in_chain_outcome": [
+    "verified",
+    {
+      "violation": {
+        "kind": "EgressMismatch"
+      }
+    },
+    {
+      "failed": {
+        "stage": "parse"
+      }
+    }
+  ],
+  "agent_unreachable": [
+    "spawn",
+    "host_key_mismatch",
+    "auth_failed",
+    "transport",
+    "timeout",
+    "protocol_mismatch",
+    "decode",
+    "response_too_large",
+    "forced_command_not_active"
+  ],
+  "node_agent_state": [
+    "not_polled",
+    {
+      "reported": {
+        "polled_at": 1791453601,
+        "agent_now": 1791453600,
+        "watch_age_secs": 2,
+        "gate": "Open",
+        "holds": {
+          "mac_drain": null,
+          "egress_violation": null,
+          "operator": null
+        },
+        "halted": null,
+        "handshake_age_secs": 20,
+        "applied": null,
+        "conditions": [],
+        "accounting_at": 1791453570,
+        "engines": {
+          "xray": {
+            "restarts": 0,
+            "run": {
+              "Active": {
+                "uptime_secs": 86400,
+                "go_heap_bytes": 48000000
+              }
+            }
+          },
+          "hy2": {
+            "restarts": 0,
+            "run": {
+              "Active": {
+                "uptime_secs": 86400,
+                "go_heap_bytes": null
+              }
+            }
+          }
+        },
+        "host": {
+          "uptime_secs": 400000,
+          "load_milli": 120,
+          "mem_available_bytes": 600000000,
+          "disk_free_bytes": 18000000000,
+          "journal_bytes": 90000000,
+          "reboot_required": false,
+          "last_unattended_upgrade": null,
+          "ntp_synced": true
+        },
+        "transfer": {
+          "month": "2026-10",
+          "counted_from": 1790812800,
+          "rx_bytes": 41000000000,
+          "tx_bytes": 40000000000,
+          "counter_resets": 7
+        }
+      }
+    },
+    {
+      "unreachable": {
+        "since": 1791417600,
+        "cause": "transport"
+      }
+    }
+  ],
+  "alert_condition": [
+    {
+      "exit_violation": {
+        "violations": [
+          "EgressMismatch"
+        ]
+      }
+    },
+    {
+      "sim_cap_reached": {
+        "cycle_start": "2026-10-01"
+      }
+    },
+    "router_offload_active",
+    "router_wifi_radio_on",
+    {
+      "router_overheating": {
+        "level": "level2"
+      }
+    },
+    "router_restarted",
+    {
+      "node_halted": {
+        "node": "lon1"
+      }
+    },
+    {
+      "rollback_failed": {
+        "node": "lon1"
+      }
+    },
+    {
+      "gate_close_failed": {
+        "node": "lon1"
+      }
+    },
+    {
+      "engine_crash_loop": {
+        "host": {
+          "node": {
+            "node": "lon1",
+            "engine": "xray"
+          }
+        }
+      }
+    },
+    {
+      "host_key_mismatch": {
+        "node": "lon1"
+      }
+    },
+    {
+      "mac_silent": {
+        "node": "lon1"
+      }
+    },
+    {
+      "node_unreachable": {
+        "node": "lon1",
+        "since": 1791417600
+      }
+    },
+    {
+      "node_disk_low": {
+        "node": "lon1",
+        "free_bytes": 700000000
+      }
+    },
+    {
+      "sim_warn": {
+        "cycle_start": "2026-10-01"
+      }
+    },
+    {
+      "sim_forecast_crossing": {
+        "cycle_start": "2026-10-01",
+        "threshold": "hard_stop",
+        "on": "2026-10-27"
+      }
+    },
+    {
+      "exit_degraded": {
+        "reasons": [
+          "NodeProbeFailed",
+          "ReachabilitySuspect",
+          "WatchStale",
+          "OnBattery",
+          "PowerHelperExited"
+        ]
+      }
+    },
+    {
+      "foreign_network_attached": {
+        "findings": 2
+      }
+    },
+    {
+      "reachability_suspect": {
+        "node": "lon1"
+      }
+    },
+    {
+      "target_degraded": {
+        "node": "lon1"
+      }
+    },
+    "router_no_service",
+    "router_on_lte",
+    "router_thermal_step_down",
+    {
+      "router_weak_signal": {
+        "rsrp_dbm_x10": -1125
+      }
+    },
+    "router_firmware_changed",
+    {
+      "router_unread_sms": {
+        "count": 1
+      }
+    },
+    {
+      "router_counter_mismatch": {
+        "permille": 63
+      }
+    },
+    {
+      "users_near_quota": {
+        "count": 2
+      }
+    },
+    {
+      "users_over_quota": {
+        "count": 1
+      }
+    },
+    {
+      "users_suspended": {
+        "count": 1
+      }
+    },
+    {
+      "users_expiring_soon": {
+        "count": 3
+      }
+    },
+    {
+      "users_expired": {
+        "count": 1
+      }
+    },
+    "capacity_saturated",
+    {
+      "exit_flow_cap_hit": {
+        "node": "lon1",
+        "count": 12
+      }
+    },
+    {
+      "node_clock_unsynced": {
+        "node": "lon1"
+      }
+    },
+    {
+      "node_reboot_pending": {
+        "node": "lon1",
+        "since": 1791417600
+      }
+    },
+    {
+      "pending_apply": {
+        "node": "lon1",
+        "since": 1791417600
+      }
+    },
+    {
+      "operator_hold_long": {
+        "node": "lon1",
+        "since": 1791417600
+      }
+    },
+    {
+      "accounting_canary_missing": {
+        "node": "lon1",
+        "inbounds": [
+          "Hy2"
+        ]
+      }
+    }
+  ],
+  "severity": [
+    "critical",
+    "warning"
+  ],
+  "mac_engine": [
+    "exit",
+    "probe"
+  ],
+  "node_engine": [
+    "xray",
+    "hy2"
+  ],
+  "engine_host": [
+    {
+      "mac": {
+        "engine": "exit"
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "engine": "hy2"
+      }
+    }
+  ],
+  "degraded_reason_kind": [
+    "NodeProbeFailed",
+    "ReachabilitySuspect",
+    "WatchStale",
+    "OnBattery",
+    "PowerHelperExited"
+  ],
+  "critical_thermal_level": [
+    "level2",
+    "level3"
+  ],
+  "sim_threshold": [
+    "warn",
+    "hard_stop",
+    "fair_use",
+    "allowance"
+  ],
+  "crossing": [
+    {
+      "reached": {
+        "on": "2026-10-03"
+      }
+    },
+    {
+      "projected": {
+        "on": "2026-10-25"
+      }
+    },
+    "not_this_cycle"
+  ],
+  "uplink_use": [
+    "no_baseline",
+    {
+      "measured": {
+        "permille": 870,
+        "baseline_p50_bps": 16000000
+      }
+    }
+  ],
+  "saturation": [
+    "no_evidence",
+    "clear",
+    {
+      "building": {
+        "since": 1791417720
+      }
+    },
+    {
+      "saturated": {
+        "since": 1791417600
+      }
+    }
+  ],
+  "foreign_network_finding": [
+    {
+      "routable_ipv4": {
+        "interface": "en0"
+      }
+    },
+    {
+      "global_ipv6": {
+        "interface": "en0"
+      }
+    },
+    {
+      "default_route": {
+        "interface": "en0",
+        "family": "v6"
+      }
+    },
+    {
+      "personal_hotspot": {
+        "interface": "en5"
+      }
+    }
+  ],
+  "ip_family": [
+    "v4",
+    "v6"
+  ],
+  "quota_state": [
+    "no_quota",
+    {
+      "within": {
+        "used_bytes": 1,
+        "quota_bytes": 10
+      }
+    },
+    {
+      "warn": {
+        "used_bytes": 8,
+        "quota_bytes": 10
+      }
+    },
+    {
+      "over": {
+        "used_bytes": 10,
+        "quota_bytes": 10
+      }
+    },
+    {
+      "usage_unavailable": {
+        "quota_bytes": 10
+      }
+    }
+  ],
+  "expiry_state": [
+    "no_expiry",
+    {
+      "expires": {
+        "at": 1791504000,
+        "days_left": 1
+      }
+    },
+    {
+      "expired": {
+        "at": 1791417600
+      }
+    }
+  ],
+  "radio_access": [
+    "lte",
+    "nr_nsa",
+    "nr_sa"
+  ],
+  "radio_state": [
+    "no_service",
+    {
+      "attached": {
+        "access": "nr_nsa",
+        "band": "n78",
+        "carrier": "SMARTY",
+        "signal": {
+          "rsrp": -985,
+          "rsrq": -105,
+          "sinr": 124,
+          "rssi": null
+        }
+      }
+    }
+  ],
+  "router_power": [
+    "plugged",
+    {
+      "battery": {
+        "percent": 64,
+        "charging": true
+      }
+    }
+  ],
+  "router_unavailable_reason": [
+    "not_configured",
+    "unreachable",
+    "auth_failed",
+    "identity_mismatch",
+    "unsupported",
+    "malformed"
+  ],
+  "router_reading": [
+    {
+      "available": {
+        "polled_at": 1791453600,
+        "radio": {
+          "attached": {
+            "access": "nr_nsa",
+            "band": "n78",
+            "carrier": "SMARTY",
+            "signal": {
+              "rsrp": -985,
+              "rsrq": -105,
+              "sinr": 124,
+              "rssi": null
+            }
+          }
+        },
+        "temperature_c": 41,
+        "power": "plugged",
+        "data_counter_bytes": 212000000000,
+        "connected_clients": 1,
+        "unread_sms": 0,
+        "firmware": "NTG9X75C_10.05.07.00",
+        "uptime_secs": 523000
+      }
+    },
+    {
+      "unavailable": {
+        "reason": "identity_mismatch",
+        "last_polled_at": null
+      }
+    }
+  ],
+  "band": [
+    "B3",
+    "n78"
+  ],
+  "active_now": [
+    "active",
+    "idle",
+    "unknown"
+  ],
+  "forecast_error_kind": [
+    "NoBins",
+    "NothingElapsed",
+    "BinOutsideCycle",
+    "BinsOutOfOrder",
+    "MissingDay",
+    "CounterOverflow",
+    "Model"
+  ],
+  "usage_error_kind": [
+    "LedgerGap",
+    "DuplicateLedger",
+    "MissingLedger",
+    "LedgerForUnknownNode",
+    "PeriodBeforeLedger",
+    "NotCoveredThrough",
+    "BinStraddlesThrough",
+    "PrincipalNotAUser",
+    "UnknownUser",
+    "CounterOverflow",
+    "Model"
+  ],
+  "user_status": [
+    "active",
+    {
+      "suspended": {
+        "reason": "abuse_review",
+        "since": 1791417600
+      }
+    },
+    "revoke_pending",
+    "revoked"
+  ],
+  "suspend_reason": [
+    "operator",
+    {
+      "quota_exceeded": {
+        "cycle_start": "2026-10-01"
+      }
+    },
+    "expired",
+    "abuse_review"
+  ],
+  "lifecycle_stage": [
+    "Planned",
+    "Adopted",
+    "Applied",
+    "Retiring",
+    "RetiredPendingProviderDeletion",
+    "Retired"
+  ],
+  "node_role": [
+    "primary",
+    "standby"
+  ],
+  "pairing": [
+    "paired",
+    "unpaired"
+  ],
+  "probe_protocol": [
+    "reality",
+    "hy2"
+  ],
+  "violation": [
+    {
+      "egress_is_node_address": {
+        "node": "lon1",
+        "ip": "203.0.113.10"
+      }
+    },
+    {
+      "outside_carrier_prefixes": {
+        "ip": "198.51.100.7"
+      }
+    },
+    {
+      "egress_equals_uplink": {
+        "ip": "198.51.100.8"
+      }
+    },
+    {
+      "egress_mismatch": {
+        "d1": "192.0.2.1",
+        "d2": "192.0.2.1",
+        "observed": "192.0.2.9"
+      }
+    }
+  ],
+  "violation_kind": [
+    "EgressIsNodeAddress",
+    "OutsideCarrierPrefixes",
+    "EgressEqualsUplink",
+    "EgressMismatch"
+  ],
+  "stop_policy": [
+    {
+      "hard_stop": {
+        "bytes": 560000000000
+      }
+    },
+    "accept_deprioritisation"
+  ],
+  "plan_line_kind": [
+    "fair_use",
+    "allowance"
+  ],
+  "gate_state": [
+    "Open",
+    "Closed"
+  ],
+  "shutdown_reason": [
+    "EgressIsNodeAddress",
+    "Operator",
+    "Retire"
+  ],
+  "watch_error": [
+    "WgReadFailed",
+    "NftFailed",
+    "StatsQueryFailed",
+    "TargetDegraded",
+    {
+      "ExitFlowCapHit": {
+        "count": 14
+      }
+    },
+    {
+      "StateWrite": {
+        "errno": 28
+      }
+    },
+    {
+      "MacSilent": {
+        "since": 1791416400
+      }
+    },
+    {
+      "DiskLow": {
+        "free": 950000000
+      }
+    },
+    "ClockUnsynced",
+    {
+      "RebootPending": {
+        "since": 1791331200
+      }
+    },
+    {
+      "AccountingCanaryMissing": {
+        "inbounds": [
+          "Reality",
+          "Hy2"
+        ]
+      }
+    }
+  ],
+  "engine_run": [
+    "Inactive",
+    {
+      "Active": {
+        "uptime_secs": 3600,
+        "go_heap_bytes": 37748736
+      }
+    }
+  ],
+  "inbound": [
+    "Reality",
+    "Hy2"
+  ]
+}

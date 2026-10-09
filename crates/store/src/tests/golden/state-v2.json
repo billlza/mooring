@@ -1,0 +1,143 @@
+{
+  "version": 2,
+  "deployment": {
+    "config_generation": 3,
+    "exit": {
+      "egress": {
+        "link_addr": {
+          "lladdr": "02:6d:6f:6f:72:01",
+          "subnet": "192.168.1.0/24"
+        }
+      },
+      "uplink": "same_as_exit",
+      "egress_check": {
+        "carrier_prefixes": [
+          "31.120.0.0/14"
+        ],
+        "pairing": "paired"
+      },
+      "sim": {
+        "bill_day": 1,
+        "plan": null,
+        "warn_bytes": 450000000000,
+        "stop": {
+          "hard_stop": {
+            "bytes": 560000000000
+          }
+        }
+      },
+      "probe": {
+        "direct_every": 30,
+        "in_chain_every": 300,
+        "base_port": 47101
+      },
+      "flow_cap": 4096,
+      "uplink_baseline": null
+    },
+    "policy": {
+      "deny_cn": true,
+      "block_quic": true,
+      "deny_smtp25": true,
+      "deny_bittorrent": true,
+      "camo_forward": true
+    },
+    "capacity": {
+      "max_active_users": null
+    },
+    "auto_quota": null,
+    "alerting": null,
+    "viewers": [],
+    "nodes": [
+      {
+        "id": "lon1",
+        "role": "primary",
+        "ports": {
+          "wg": 27820,
+          "reflector": 27900,
+          "hy2": [
+            {
+              "port": 61000,
+              "hop": {
+                "start": 61001,
+                "end": 62999
+              },
+              "hop_interval": 30,
+              "obfs": "salamander"
+            }
+          ],
+          "reserved": [
+            {
+              "start": 63000,
+              "end": 64999
+            }
+          ],
+          "ephemeral": {
+            "start": 32768,
+            "end": 60999
+          }
+        },
+        "wg_index": 1,
+        "ssh": {
+          "host_ed25519": "CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo="
+        },
+        "reality": {
+          "public_key": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws",
+          "probe_short_id": "a00000000000000a",
+          "target": null
+        },
+        "hy2": {
+          "certificate": "-----BEGIN CERTIFICATE-----\nMAMCAQo=\n-----END CERTIFICATE-----\n"
+        },
+        "wg": {
+          "vps_pub": "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=",
+          "mac_pub": "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=",
+          "keepalive": 10
+        },
+        "lifecycle": {
+          "adopted": {
+            "site": {
+              "address": {
+                "public": "45.67.89.10"
+              },
+              "host_facts": {
+                "uplink_interface": "eth0",
+                "arch": "amd64",
+                "ephemeral_ports": {
+                  "start": 32768,
+                  "end": 60999
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "users": [
+      {
+        "id": "aaaaaaaaab",
+        "label": "User 1",
+        "client": {
+          "line": "cfm05",
+          "capabilities": []
+        },
+        "status": "active",
+        "per_node": {
+          "lon1": {
+            "short_id": "5f1e000000000001"
+          }
+        },
+        "policy": {
+          "expires_at": null,
+          "quota": null
+        },
+        "alias": null,
+        "agreement": null
+      }
+    ],
+    "next_wg_index": 2
+  },
+  "runtime": {
+    "exit_enabled": true,
+    "revision": 2
+  }
+}

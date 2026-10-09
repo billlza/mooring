@@ -1,26 +1,83 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The deployment: every node and user, validated as a whole (design §7).
+//! The deployment: every node, user and viewer, validated as a whole
+//! (design §7).
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU16;
 
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::alerting::AlertSettings;
 use crate::counters::ConfigGeneration;
 use crate::error::{EntityId, ModelError};
 use crate::exit::{ExitSite, TrafficPolicy};
-use crate::ids::{NodeId, ShortId, UserId};
+use crate::ids::{NodeId, PublicAlias, ShortId, UserId};
+use crate::keys::Ed25519Pub;
 use crate::node::{AppliedConfig, Node, NodeAddress, NodeLifecycle};
 use crate::ports::PortConflict;
+use crate::quota::AutoQuotaPolicy;
 use crate::secret::SecretRef;
 use crate::user::{User, UserNodePublic, UserStatus};
+use crate::viewer::Viewer;
 use crate::wg::WgIndex;
 
 /// The most nodes that may be active at once in v1: one WireGuard endpoint
 /// per node on the Mac, at most two.
 pub const MAX_ACTIVE_NODES: usize = 2;
+
+/// The cap on active users the pilot runs with, 5: decisions F3 and D-1,
+/// 2026-10-08, a pilot of at most 5 active users, and the value `exit init`
+/// records ([`CapacityPolicy::PILOT`]).
+pub const PILOT_MAX_ACTIVE_USERS: NonZeroU16 = match NonZeroU16::new(5) {
+    Some(users) => users,
+    None => panic!("the pilot's cap is not zero"),
+};
+
+/// Admission control: how many users may be active at once. Suspended,
+/// revoking and revoked users never count. A fresh deployment records its
+/// cap explicitly ([`DeploymentInit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapacityPolicy {
+    /// The most users that may be `Active` at once, if capped. The key is
+    /// required.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub max_active_users: Option<NonZeroU16>,
+}
+
+impl CapacityPolicy {
+    /// No cap on active users: what a version-1 document lifts to.
+    pub const UNLIMITED: Self = Self {
+        max_active_users: None,
+    };
+
+    /// The pilot's cap, [`PILOT_MAX_ACTIVE_USERS`] (decisions F3 and D-1).
+    pub const PILOT: Self = Self {
+        max_active_users: Some(PILOT_MAX_ACTIVE_USERS),
+    };
+}
+
+/// Everything a fresh deployment records. `exit init` fills every field,
+/// so nothing has a hidden default: the pilot records the SMARTY plan with
+/// the F2 thresholds, [`CapacityPolicy::PILOT`],
+/// `Some(AutoQuotaPolicy::PILOT)` and `Some(AlertSettings::pilot())`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeploymentInit {
+    /// The Mac exit site; its SIM plan must be recorded.
+    pub exit: ExitSite,
+    /// Destination policy.
+    pub policy: TrafficPolicy,
+    /// Admission control.
+    pub capacity: CapacityPolicy,
+    /// Automatic per-user quotas, if on.
+    pub auto_quota: Option<AutoQuotaPolicy>,
+    /// The alert channels, if set up; a fresh deployment has no node, so no
+    /// channel node.
+    pub alerting: Option<AlertSettings>,
+}
 
 /// A deployment's fields without its invariants: the shape to build or edit
 /// a deployment from, and its serialised form.
@@ -33,6 +90,16 @@ pub struct DeploymentParts {
     pub exit: ExitSite,
     /// Destination policy.
     pub policy: TrafficPolicy,
+    /// Admission control.
+    pub capacity: CapacityPolicy,
+    /// Automatic per-user quotas (decision F4), if on. The key is required.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub auto_quota: Option<AutoQuotaPolicy>,
+    /// The alert channels (decision F6), if set up. The key is required.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub alerting: Option<AlertSettings>,
+    /// Every remote viewer (decision F5).
+    pub viewers: Vec<Viewer>,
     /// Every node, including retired ones.
     pub nodes: Vec<Node>,
     /// Every user, including revoked ones.
@@ -41,10 +108,11 @@ pub struct DeploymentParts {
     pub next_wg_index: WgIndex,
 }
 
-/// Every node and user of the one exit, with all cross-entity invariants
-/// checked. Built only from [`DeploymentParts`] (also when deserialised):
+/// Every node, user and viewer of the one exit, with all cross-entity
+/// invariants checked. Built only from [`DeploymentParts`] (also when
+/// deserialised), or fresh by [`Deployment::new`]:
 ///
-/// - node and user ids are unique;
+/// - node and user ids and viewer keys are unique;
 /// - at most [`MAX_ACTIVE_NODES`] nodes are active;
 /// - WireGuard indices are unique and below `next_wg_index`;
 /// - live node addresses are unique;
@@ -52,30 +120,49 @@ pub struct DeploymentParts {
 /// - an applied node has a target and a generation no newer than the deployment's;
 /// - users hold credentials only on active nodes, revoked users on none, and
 ///   a user pending revocation on at least one (the nodes still to commit);
-/// - REALITY short ids are unique per node, probe included.
+/// - REALITY short ids are unique per node, probe included;
+/// - public aliases are unique among users;
+/// - at most `capacity.max_active_users` users are active;
+/// - the digest goes out no earlier than its zone's earliest daily time
+///   (02:00 in Europe/London), and alert channels are set up only for
+///   active nodes.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "DeploymentParts")]
 pub struct Deployment {
     config_generation: ConfigGeneration,
     exit: ExitSite,
     policy: TrafficPolicy,
+    capacity: CapacityPolicy,
+    auto_quota: Option<AutoQuotaPolicy>,
+    alerting: Option<AlertSettings>,
+    viewers: BTreeMap<Ed25519Pub, Viewer>,
     nodes: BTreeMap<NodeId, Node>,
     users: BTreeMap<UserId, User>,
     next_wg_index: WgIndex,
 }
 
 impl Deployment {
-    /// A fresh deployment with no nodes or users.
-    #[must_use]
-    pub fn new(exit: ExitSite, policy: TrafficPolicy) -> Self {
-        Self {
-            config_generation: ConfigGeneration::INITIAL,
-            exit,
-            policy,
-            nodes: BTreeMap::new(),
-            users: BTreeMap::new(),
-            next_wg_index: WgIndex::FIRST,
+    /// A fresh deployment of `init`, with no nodes, users or viewers, at
+    /// the initial generation. `PlanNotRecorded` unless the exit's SIM plan
+    /// is recorded (a policy lifted from version 1 has none); every other
+    /// invariant as for any deployment (an alert channel naming a node is
+    /// `UnknownNode`, because there is none yet).
+    pub fn new(init: DeploymentInit) -> Result<Self, ModelError> {
+        if init.exit.sim.plan().is_none() {
+            return Err(ModelError::PlanNotRecorded);
         }
+        Self::try_from(DeploymentParts {
+            config_generation: ConfigGeneration::INITIAL,
+            exit: init.exit,
+            policy: init.policy,
+            capacity: init.capacity,
+            auto_quota: init.auto_quota,
+            alerting: init.alerting,
+            viewers: Vec::new(),
+            nodes: Vec::new(),
+            users: Vec::new(),
+            next_wg_index: WgIndex::FIRST,
+        })
     }
 
     /// The configuration generation.
@@ -94,6 +181,30 @@ impl Deployment {
     #[must_use]
     pub const fn policy(&self) -> &TrafficPolicy {
         &self.policy
+    }
+
+    /// Admission control.
+    #[must_use]
+    pub const fn capacity(&self) -> CapacityPolicy {
+        self.capacity
+    }
+
+    /// Automatic per-user quotas, if on.
+    #[must_use]
+    pub const fn auto_quota(&self) -> Option<AutoQuotaPolicy> {
+        self.auto_quota
+    }
+
+    /// The alert channels, if set up.
+    #[must_use]
+    pub const fn alerting(&self) -> Option<&AlertSettings> {
+        self.alerting.as_ref()
+    }
+
+    /// Every remote viewer, by key.
+    #[must_use]
+    pub const fn viewers(&self) -> &BTreeMap<Ed25519Pub, Viewer> {
+        &self.viewers
     }
 
     /// Every node by id, including retired ones.
@@ -157,7 +268,10 @@ impl Deployment {
     }
 
     /// Every secret the deployment references; anything else in the
-    /// keychain is orphaned.
+    /// keychain is orphaned. While at least one node has its alert channels
+    /// set up, the deployment references its one ntfy topic
+    /// ([`SecretRef::AlertTopic`]), which every channel node sends to, and
+    /// each channel node its own two Healthchecks checks.
     #[must_use]
     pub fn required_secrets(&self) -> BTreeSet<SecretRef> {
         let mut refs = BTreeSet::new();
@@ -177,6 +291,15 @@ impl Deployment {
                 refs.insert(SecretRef::NodeSshBootstrapPrivate(id.clone()));
             }
         }
+        if let Some(alerting) = &self.alerting {
+            if !alerting.channels.is_empty() {
+                refs.insert(SecretRef::AlertTopic);
+            }
+            for node in &alerting.channels {
+                refs.insert(SecretRef::NodeDeadManCheck(node.clone()));
+                refs.insert(SecretRef::NodeMacAliveCheck(node.clone()));
+            }
+        }
         for user in self.users.values() {
             for node in user.per_node.keys() {
                 refs.insert(SecretRef::UserVlessUuid(user.id.clone(), node.clone()));
@@ -194,14 +317,65 @@ impl Deployment {
             config_generation: self.config_generation,
             exit: self.exit,
             policy: self.policy,
+            capacity: self.capacity,
+            auto_quota: self.auto_quota,
+            alerting: self.alerting,
+            viewers: self.viewers.into_values().collect(),
             nodes: self.nodes.into_values().collect(),
             users: self.users.into_values().collect(),
             next_wg_index: self.next_wg_index,
         }
     }
+}
+
+/// The indexed entities every cross-entity invariant is checked over. The
+/// exit site takes no part in them.
+///
+/// The invariants come in two sets. [`Entities::check_version_1`] holds
+/// exactly the rules version 1 had, and a version-1 document
+/// (`crate::v1`) is checked with those alone, so its decoding never
+/// changes. [`Entities::check`] adds the rules of later versions. A new
+/// invariant therefore goes into `check`, never into the version-1 set: a
+/// version-1 document that breaks it then fails its migration step
+/// (`MigrationFailed`, with the document untouched) rather than reading as
+/// corrupt.
+#[derive(Debug)]
+pub(crate) struct Entities<'a> {
+    pub(crate) config_generation: ConfigGeneration,
+    pub(crate) nodes: &'a BTreeMap<NodeId, Node>,
+    pub(crate) users: &'a BTreeMap<UserId, User>,
+    pub(crate) next_wg_index: WgIndex,
+    pub(crate) capacity: CapacityPolicy,
+    pub(crate) alerting: Option<&'a AlertSettings>,
+}
+
+impl Entities<'_> {
+    /// Checks every invariant listed on [`Deployment`] after unique ids:
+    /// the version-1 rules, then unique public aliases, the cap on active
+    /// users, the digest time and the alert channels' nodes (version 2).
+    pub(crate) fn check(&self) -> Result<(), ModelError> {
+        self.check_version_1()?;
+        self.check_aliases()?;
+        self.check_capacity()?;
+        self.check_digest_time()?;
+        self.check_alert_channels()
+    }
+
+    /// Checks the cross-entity rules of version 1, and only those: the
+    /// active-node cap, WireGuard indices, node addresses, port plans,
+    /// applied targets and generations, where users hold credentials,
+    /// short ids, and the revocation states. Frozen: see the type.
+    pub(crate) fn check_version_1(&self) -> Result<(), ModelError> {
+        self.check_nodes()?;
+        self.check_credentials()
+    }
 
     fn check_nodes(&self) -> Result<(), ModelError> {
-        let active = self.active_nodes().count();
+        let active = self
+            .nodes
+            .values()
+            .filter(|node| node.lifecycle.is_active())
+            .count();
         if active > MAX_ACTIVE_NODES {
             return Err(ModelError::TooManyNodes {
                 max: MAX_ACTIVE_NODES,
@@ -261,7 +435,7 @@ impl Deployment {
         Ok(())
     }
 
-    fn check_users(&self) -> Result<(), ModelError> {
+    fn check_credentials(&self) -> Result<(), ModelError> {
         let mut short_ids: BTreeMap<&NodeId, BTreeSet<ShortId>> = self
             .nodes
             .values()
@@ -269,7 +443,12 @@ impl Deployment {
             .collect();
         for user in self.users.values() {
             for (node_id, public) in &user.per_node {
-                let node = self.node(node_id)?;
+                let node = self
+                    .nodes
+                    .get(node_id)
+                    .ok_or_else(|| ModelError::UnknownNode {
+                        id: node_id.clone(),
+                    })?;
                 if !node.lifecycle.is_active() {
                     return Err(ModelError::CredentialsOnInactiveNode {
                         user: user.id.clone(),
@@ -284,7 +463,9 @@ impl Deployment {
                 }
             }
             match &user.status {
-                UserStatus::Active => {}
+                // A suspended user keeps its credentials, or holds none
+                // after the nodes it held them on were retired.
+                UserStatus::Active | UserStatus::Suspended { .. } => {}
                 UserStatus::RevokePending => {
                     if user.per_node.is_empty() {
                         return Err(ModelError::RevokePendingWithoutCredentials {
@@ -299,6 +480,63 @@ impl Deployment {
                         });
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn check_aliases(&self) -> Result<(), ModelError> {
+        let mut aliases: BTreeSet<&PublicAlias> = BTreeSet::new();
+        for alias in self.users.values().filter_map(|user| user.alias.as_ref()) {
+            if !aliases.insert(alias) {
+                return Err(ModelError::DuplicateAlias {
+                    alias: alias.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn check_capacity(&self) -> Result<(), ModelError> {
+        let Some(max) = self.capacity.max_active_users else {
+            return Ok(());
+        };
+        let active = self
+            .users
+            .values()
+            .filter(|user| user.status == UserStatus::Active)
+            .count();
+        if active > usize::from(max.get()) {
+            return Err(ModelError::TooManyActiveUsers { max, active });
+        }
+        Ok(())
+    }
+
+    /// The digest goes out no earlier than its zone's earliest daily time.
+    fn check_digest_time(&self) -> Result<(), ModelError> {
+        let Some(alerting) = self.alerting else {
+            return Ok(());
+        };
+        let earliest = alerting.digest_zone.earliest_daily_time();
+        if alerting.digest_at < earliest {
+            return Err(ModelError::DigestTimeTooEarly {
+                at: alerting.digest_at,
+                earliest,
+            });
+        }
+        Ok(())
+    }
+
+    /// Every alert channel node exists and is active: an inactive node's
+    /// secrets are deleted, its channels with them.
+    fn check_alert_channels(&self) -> Result<(), ModelError> {
+        for id in self.alerting.iter().flat_map(|alerting| &alerting.channels) {
+            let node = self
+                .nodes
+                .get(id)
+                .ok_or_else(|| ModelError::UnknownNode { id: id.clone() })?;
+            if !node.lifecycle.is_active() {
+                return Err(ModelError::AlertChannelsOnInactiveNode { node: id.clone() });
             }
         }
         Ok(())
@@ -327,7 +565,14 @@ impl Deployment {
 ///   a user pending revocation is served nowhere and exported nowhere.
 /// - `RetirementShutDown` moves a retiring node, which no bundle, Mac config
 ///   or export includes, to `RetiredPendingProviderDeletion` (its address
-///   is still denied everywhere) and drops every user's credentials on it.
+///   is still denied everywhere), and drops every user's credentials on it
+///   and its alert channels: a retired node renders nothing, so no bundle
+///   carries them any more.
+///
+/// Suspending or resuming a user ([`User::suspend`], [`User::resume`]) is
+/// never bookkeeping: it changes which users every node serves, so it is
+/// a configuration change and bumps the generation. Starting a revocation
+/// ([`User::revoke`]) is one too, for the same reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bookkeeping {
     /// `node` committed and confirmed `applied` (design §11.2).
@@ -348,7 +593,8 @@ pub enum Bookkeeping {
     },
     /// The retiring `node` was shut down and its Mac endpoint removed
     /// (design §13.4 step 3); a user pending revocation that held
-    /// credentials only there becomes `Revoked`.
+    /// credentials only there becomes `Revoked`, and the node's alert
+    /// channels are dropped.
     RetirementShutDown {
         /// The node.
         node: NodeId,
@@ -421,6 +667,9 @@ impl Deployment {
                     user.per_node.remove(&node);
                     settle_revocation(user);
                 }
+                if let Some(alerting) = &mut parts.alerting {
+                    alerting.channels.remove(&node);
+                }
             }
         }
         Self::try_from(parts)
@@ -442,7 +691,8 @@ fn settle_revocation(user: &mut User) {
     }
 }
 
-fn index_by_id<K: Ord + Clone, V>(
+/// Indexes `items` by id, refusing a duplicate (`DuplicateId`).
+pub(crate) fn index_by_id<K: Ord + Clone, V>(
     items: Vec<V>,
     id: impl Fn(&V) -> &K,
     duplicate: impl Fn(K) -> EntityId,
@@ -471,12 +721,27 @@ impl TryFrom<DeploymentParts> for Deployment {
             config_generation: parts.config_generation,
             exit: parts.exit,
             policy: parts.policy,
+            capacity: parts.capacity,
+            auto_quota: parts.auto_quota,
+            alerting: parts.alerting,
+            viewers: index_by_id(
+                parts.viewers,
+                |viewer: &Viewer| &viewer.key,
+                EntityId::Viewer,
+            )?,
             nodes: index_by_id(parts.nodes, |node: &Node| &node.id, EntityId::Node)?,
             users: index_by_id(parts.users, |user: &User| &user.id, EntityId::User)?,
             next_wg_index: parts.next_wg_index,
         };
-        deployment.check_nodes()?;
-        deployment.check_users()?;
+        Entities {
+            config_generation: deployment.config_generation,
+            nodes: &deployment.nodes,
+            users: &deployment.users,
+            next_wg_index: deployment.next_wg_index,
+            capacity: deployment.capacity,
+            alerting: deployment.alerting.as_ref(),
+        }
+        .check()?;
         Ok(deployment)
     }
 }
@@ -496,13 +761,18 @@ impl<K, V: Serialize> Serialize for Values<'_, K, V> {
     }
 }
 
-/// Serialises exactly as [`DeploymentParts`], with nodes and users in id order.
+/// Serialises exactly as [`DeploymentParts`], with viewers in key order and
+/// nodes and users in id order.
 impl Serialize for Deployment {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("Deployment", 6)?;
+        let mut state = serializer.serialize_struct("Deployment", 10)?;
         state.serialize_field("config_generation", &self.config_generation)?;
         state.serialize_field("exit", &self.exit)?;
         state.serialize_field("policy", &self.policy)?;
+        state.serialize_field("capacity", &self.capacity)?;
+        state.serialize_field("auto_quota", &self.auto_quota)?;
+        state.serialize_field("alerting", &self.alerting)?;
+        state.serialize_field("viewers", &Values(&self.viewers))?;
         state.serialize_field("nodes", &Values(&self.nodes))?;
         state.serialize_field("users", &Values(&self.users))?;
         state.serialize_field("next_wg_index", &self.next_wg_index)?;
@@ -513,13 +783,44 @@ impl Serialize for Deployment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alerting::{AlertSettings, WallClockTime, WallClockZone};
+    use crate::date::CalendarDate;
     use crate::digest::Sha256Digest;
+    use crate::ids::LocalLabel;
     use crate::node::LifecycleStage;
     use crate::ports::{DEBIAN_EPHEMERAL_PORTS, PortRange};
+    use crate::sim::SimPolicy;
     use crate::testing::{applied, exit_site, node, node_id, site, two_node_parts, user, user_id};
+    use crate::user::SuspendReason;
 
     fn build(parts: DeploymentParts) -> Result<Deployment, ModelError> {
         Deployment::try_from(parts)
+    }
+
+    /// What `exit init` records for the pilot, on the test exit site.
+    fn pilot_init() -> DeploymentInit {
+        DeploymentInit {
+            exit: exit_site(),
+            policy: TrafficPolicy::default(),
+            capacity: CapacityPolicy::PILOT,
+            auto_quota: Some(AutoQuotaPolicy::PILOT),
+            alerting: Some(AlertSettings::pilot()),
+        }
+    }
+
+    fn viewer(byte: u8, label: &str) -> Viewer {
+        Viewer {
+            key: Ed25519Pub::from_bytes([byte; 32]).unwrap(),
+            label: LocalLabel::parse(label).unwrap(),
+            added_on: CalendarDate::parse("2026-10-08").unwrap(),
+        }
+    }
+
+    fn channels(nodes: &[&str]) -> Option<AlertSettings> {
+        Some(AlertSettings {
+            channels: nodes.iter().map(|id| node_id(id)).collect(),
+            ..AlertSettings::pilot()
+        })
     }
 
     #[test]
@@ -540,11 +841,343 @@ mod tests {
 
     #[test]
     fn a_fresh_deployment_is_empty_and_valid() {
-        let fresh = Deployment::new(exit_site(), TrafficPolicy::default());
+        let fresh = Deployment::new(pilot_init()).unwrap();
         assert_eq!(fresh.config_generation(), ConfigGeneration::INITIAL);
         assert_eq!(fresh.next_wg_index(), WgIndex::FIRST);
+        assert!(fresh.nodes().is_empty() && fresh.users().is_empty());
+        assert!(fresh.viewers().is_empty());
         assert!(fresh.required_secrets().is_empty());
+        // Every record is what the init gave, with nothing defaulted.
+        assert_eq!(fresh.exit(), &exit_site());
+        assert_eq!(fresh.capacity(), CapacityPolicy::PILOT);
+        assert_eq!(fresh.auto_quota(), Some(AutoQuotaPolicy::PILOT));
+        assert_eq!(fresh.alerting(), Some(&AlertSettings::pilot()));
         assert_eq!(build(fresh.clone().into_parts()).unwrap(), fresh);
+        let bare = Deployment::new(DeploymentInit {
+            capacity: CapacityPolicy::UNLIMITED,
+            auto_quota: None,
+            alerting: None,
+            ..pilot_init()
+        })
+        .unwrap();
+        assert_eq!(bare.capacity(), CapacityPolicy::UNLIMITED);
+        assert_eq!((bare.auto_quota(), bare.alerting()), (None, None));
+    }
+
+    /// P0-1: a fresh deployment records the plan. Only a policy lifted from
+    /// version 1 has none, and the only ways to hold one are decoding it
+    /// and cloning a lifted state's exit site.
+    #[test]
+    fn a_fresh_deployment_needs_a_recorded_plan() {
+        let lifted: SimPolicy = serde_json::from_str(
+            r#"{"bill_day":1,"plan":null,"warn_bytes":240000000000,"stop":{"hard_stop":{"bytes":300000000000}}}"#,
+        )
+        .unwrap();
+        assert_eq!(lifted.plan(), None);
+        let mut init = pilot_init();
+        init.exit.sim = lifted;
+        assert_eq!(Deployment::new(init), Err(ModelError::PlanNotRecorded));
+        assert!(Deployment::new(pilot_init()).is_ok());
+        // A channel needs a node, and a fresh deployment has none.
+        assert_eq!(
+            Deployment::new(DeploymentInit {
+                alerting: channels(&["lon1"]),
+                ..pilot_init()
+            }),
+            Err(ModelError::UnknownNode {
+                id: node_id("lon1")
+            })
+        );
+    }
+
+    /// Decisions F3 and D-1: the pilot admits at most five active users.
+    #[test]
+    fn the_pilot_cap_is_five() {
+        assert_eq!(PILOT_MAX_ACTIVE_USERS.get(), 5);
+        assert_eq!(
+            CapacityPolicy::PILOT.max_active_users,
+            Some(PILOT_MAX_ACTIVE_USERS)
+        );
+        let mut parts = two_node_parts();
+        parts.capacity = CapacityPolicy::PILOT;
+        for n in 3..=5 {
+            parts
+                .users
+                .push(user(n, &[("lon1", 10 + u8::try_from(n).unwrap())]));
+        }
+        assert!(build(parts.clone()).is_ok(), "five active users");
+        parts.users.push(user(6, &[("lon1", 16)]));
+        assert_eq!(
+            build(parts),
+            Err(ModelError::TooManyActiveUsers {
+                max: PILOT_MAX_ACTIVE_USERS,
+                active: 6
+            })
+        );
+    }
+
+    /// Alert channels exist only for active nodes, planned to retiring.
+    #[test]
+    fn alert_channels_need_an_active_node() {
+        let mut parts = two_node_parts();
+        parts.alerting = channels(&["lon1", "par1"]);
+        assert_eq!(
+            build(parts),
+            Err(ModelError::UnknownNode {
+                id: node_id("par1")
+            })
+        );
+        for lifecycle in [
+            NodeLifecycle::Retired,
+            NodeLifecycle::RetiredPendingProviderDeletion {
+                address: site([45, 67, 89, 10]).address,
+            },
+        ] {
+            let mut parts = two_node_parts();
+            parts.users.clear();
+            parts.nodes[0].lifecycle = lifecycle;
+            parts.alerting = channels(&["lon1"]);
+            assert_eq!(
+                build(parts.clone()),
+                Err(ModelError::AlertChannelsOnInactiveNode {
+                    node: node_id("lon1")
+                })
+            );
+            parts.alerting = channels(&["ams1"]);
+            assert!(build(parts).is_ok());
+        }
+        for lifecycle in [
+            NodeLifecycle::Planned,
+            NodeLifecycle::Adopted {
+                site: site([45, 67, 89, 10]),
+            },
+            NodeLifecycle::Retiring {
+                site: site([45, 67, 89, 10]),
+            },
+        ] {
+            let mut parts = two_node_parts();
+            parts.nodes[0].lifecycle = lifecycle;
+            parts.alerting = channels(&["lon1", "ams1"]);
+            assert!(build(parts).is_ok());
+        }
+        // Settings without channels name no node.
+        let mut parts = two_node_parts();
+        parts.alerting = channels(&[]);
+        assert!(build(parts).is_ok());
+    }
+
+    /// The digest goes out from 02:00 to 23:59 London time, every minute
+    /// checked: an earlier time is skipped or repeated when the UK's clocks
+    /// change, or falls on the previous UTC date. Decoding checks it too.
+    #[test]
+    fn the_digest_goes_out_from_two_oclock() {
+        let earliest = WallClockTime::parse("02:00").unwrap();
+        let mut accepted = 0;
+        for minutes in 0..24 * 60_u16 {
+            let at = WallClockTime::new(
+                u8::try_from(minutes / 60).unwrap(),
+                u8::try_from(minutes % 60).unwrap(),
+            )
+            .unwrap();
+            let mut parts = two_node_parts();
+            parts.alerting = Some(AlertSettings {
+                digest_at: at,
+                ..AlertSettings::pilot()
+            });
+            let built = build(parts.clone());
+            if minutes >= 120 {
+                accepted += 1;
+                assert!(built.is_ok(), "{at}");
+            } else {
+                assert_eq!(
+                    built,
+                    Err(ModelError::DigestTimeTooEarly { at, earliest }),
+                    "{at}"
+                );
+                let json = serde_json::to_string(&parts).unwrap();
+                assert!(serde_json::from_str::<Deployment>(&json).is_err(), "{at}");
+            }
+        }
+        assert_eq!(accepted, 22 * 60);
+    }
+
+    /// The two Healthchecks checks of one channel node.
+    fn checks_of(id: &str) -> [SecretRef; 2] {
+        [
+            SecretRef::NodeDeadManCheck(node_id(id)),
+            SecretRef::NodeMacAliveCheck(node_id(id)),
+        ]
+    }
+
+    /// The deployment's one ntfy topic is required exactly while some node
+    /// has its channels set up, once however many do; each channel node
+    /// adds its own two checks. Without channels nothing is added.
+    #[test]
+    fn the_alert_topic_is_required_iff_a_channel_node_exists() {
+        let without = build(two_node_parts()).unwrap().required_secrets();
+        assert!(!without.contains(&SecretRef::AlertTopic));
+        for alerting in [None, channels(&[])] {
+            let mut parts = two_node_parts();
+            parts.alerting = alerting;
+            assert_eq!(build(parts).unwrap().required_secrets(), without);
+        }
+        for (nodes, expected) in [
+            (&["lon1"][..], vec![checks_of("lon1")]),
+            (&["ams1"][..], vec![checks_of("ams1")]),
+            (
+                &["lon1", "ams1"][..],
+                vec![checks_of("lon1"), checks_of("ams1")],
+            ),
+        ] {
+            let mut parts = two_node_parts();
+            parts.alerting = channels(nodes);
+            let with = build(parts).unwrap().required_secrets();
+            assert!(without.is_subset(&with));
+            let added: BTreeSet<SecretRef> = with.difference(&without).cloned().collect();
+            let mut want: BTreeSet<SecretRef> = expected.into_iter().flatten().collect();
+            want.insert(SecretRef::AlertTopic);
+            assert_eq!(added, want, "{nodes:?}");
+            let without_node: Vec<&SecretRef> = added
+                .iter()
+                .filter(|secret_ref| secret_ref.node().is_none())
+                .collect();
+            assert_eq!(without_node, [&SecretRef::AlertTopic], "{nodes:?}");
+        }
+    }
+
+    /// Shutting a retiring node down drops its alert channels and with them
+    /// its two checks, as it drops the users' credentials there; the topic
+    /// stays while another node has channels, and goes with the last one.
+    #[test]
+    fn a_shut_down_retirement_drops_the_nodes_alert_channels() {
+        let mut parts = two_node_parts();
+        parts.nodes[0].lifecycle = NodeLifecycle::Retiring {
+            site: site([45, 67, 89, 10]),
+        };
+        parts.alerting = channels(&["lon1", "ams1"]);
+        let deployment = build(parts).unwrap();
+        let retired = deployment
+            .clone()
+            .record(Bookkeeping::RetirementShutDown {
+                node: node_id("lon1"),
+            })
+            .unwrap();
+        assert_eq!(retired.config_generation(), deployment.config_generation());
+        assert_eq!(retired.alerting(), channels(&["ams1"]).as_ref());
+        let refs = retired.required_secrets();
+        for secret_ref in checks_of("lon1") {
+            assert!(deployment.required_secrets().contains(&secret_ref));
+            assert!(!refs.contains(&secret_ref), "{secret_ref}");
+        }
+        for secret_ref in checks_of("ams1") {
+            assert!(refs.contains(&secret_ref), "{secret_ref}");
+        }
+        assert!(
+            deployment
+                .required_secrets()
+                .contains(&SecretRef::AlertTopic)
+        );
+        assert!(refs.contains(&SecretRef::AlertTopic));
+        // With lon1 the only channel node, its retirement drops the topic.
+        let mut parts = deployment.clone().into_parts();
+        parts.alerting = channels(&["lon1"]);
+        let alone = build(parts)
+            .unwrap()
+            .record(Bookkeeping::RetirementShutDown {
+                node: node_id("lon1"),
+            })
+            .unwrap();
+        assert_eq!(alone.alerting(), channels(&[]).as_ref());
+        let mut expected = retired.required_secrets();
+        expected.remove(&SecretRef::AlertTopic);
+        for secret_ref in checks_of("ams1") {
+            expected.remove(&secret_ref);
+        }
+        assert_eq!(alone.required_secrets(), expected);
+        // The digest time and zone stay.
+        let alerting = retired.alerting().unwrap();
+        assert_eq!(alerting.digest_zone, WallClockZone::EuropeLondon);
+        assert_eq!(alerting.digest_at, AlertSettings::pilot().digest_at);
+    }
+
+    /// Viewers are unique by key, built or decoded; labels may repeat.
+    #[test]
+    fn viewer_keys_are_unique() {
+        let mut parts = two_node_parts();
+        parts.viewers = vec![viewer(0x22, "phone"), viewer(0x11, "phone")];
+        let deployment = build(parts.clone()).unwrap();
+        let keys: Vec<&Ed25519Pub> = deployment.viewers().keys().collect();
+        assert_eq!(keys, [&viewer(0x11, "x").key, &viewer(0x22, "x").key]);
+        // Viewers reference no secret: only the public half is imported.
+        assert_eq!(
+            deployment.required_secrets(),
+            build(two_node_parts()).unwrap().required_secrets()
+        );
+        parts.viewers.push(viewer(0x22, "tablet"));
+        assert_eq!(
+            build(parts),
+            Err(ModelError::DuplicateId {
+                id: EntityId::Viewer(viewer(0x22, "x").key)
+            })
+        );
+        let mut value = serde_json::to_value(&deployment).unwrap();
+        let first = value["viewers"][0].clone();
+        value["viewers"].as_array_mut().unwrap().push(first);
+        assert!(serde_json::from_value::<Deployment>(value).is_err());
+        assert_eq!(
+            ModelError::DuplicateId {
+                id: EntityId::Viewer(viewer(0x7e, "x").key)
+            }
+            .to_string(),
+            "duplicate viewer fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn4="
+        );
+    }
+
+    /// The version-2 records sit between the cap and the nodes, and each
+    /// key is required.
+    #[test]
+    fn the_new_records_are_required_keys() {
+        let mut parts = two_node_parts();
+        parts.auto_quota = Some(AutoQuotaPolicy::PILOT);
+        parts.alerting = channels(&["lon1"]);
+        parts.viewers = vec![viewer(0x7e, "phone")];
+        let deployment = build(parts).unwrap();
+        let json = serde_json::to_string(&deployment).unwrap();
+        let records = r#""capacity":{"max_active_users":null},"auto_quota":{"from_active_users":6,"budget_percent":80,"sim_factor":2100,"warn_percent":80,"action":"suspend"},"alerting":{"digest_at":"09:00","digest_zone":"europe_london","channels":["lon1"]},"viewers":[{"key":"fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn4=","label":"phone","added_on":"2026-10-08"}],"nodes":["#;
+        assert!(json.contains(records), "{json}");
+        assert_eq!(
+            serde_json::from_str::<Deployment>(&json).unwrap(),
+            deployment
+        );
+        let fresh = serde_json::to_string(&build(two_node_parts()).unwrap()).unwrap();
+        assert!(
+            fresh.contains(r#""auto_quota":null,"alerting":null,"viewers":[],"nodes":["#),
+            "{fresh}"
+        );
+        for (document, key) in [
+            (
+                &json,
+                r#""auto_quota":{"from_active_users":6,"budget_percent":80,"sim_factor":2100,"warn_percent":80,"action":"suspend"},"#,
+            ),
+            (
+                &json,
+                r#""alerting":{"digest_at":"09:00","digest_zone":"europe_london","channels":["lon1"]},"#,
+            ),
+            (
+                &json,
+                r#""viewers":[{"key":"fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn5+fn4=","label":"phone","added_on":"2026-10-08"}],"#,
+            ),
+            (&fresh, r#""auto_quota":null,"#),
+            (&fresh, r#""alerting":null,"#),
+            (&fresh, r#""viewers":[],"#),
+        ] {
+            let missing = document.replacen(key, "", 1);
+            assert_ne!(&missing, document);
+            assert!(
+                serde_json::from_str::<Deployment>(&missing).is_err(),
+                "{missing}"
+            );
+        }
     }
 
     #[test]
@@ -1053,7 +1686,7 @@ mod tests {
             retired
                 .required_secrets()
                 .iter()
-                .all(|secret_ref| secret_ref.node().as_str() == "ams1")
+                .all(|secret_ref| secret_ref.node().map(NodeId::as_str) == Some("ams1"))
         );
         assert_eq!(
             retired.record(Bookkeeping::RetirementShutDown {
@@ -1076,7 +1709,168 @@ mod tests {
             deployment
                 .required_secrets()
                 .iter()
-                .all(|r| r.node().as_str() == "ams1")
+                .all(|r| r.node().map(NodeId::as_str) == Some("ams1"))
         );
+    }
+
+    fn suspended(reason: SuspendReason) -> UserStatus {
+        UserStatus::Suspended {
+            reason,
+            since: crate::time::UnixTime::from_secs(1_791_417_600),
+        }
+    }
+
+    /// A suspended user is served nowhere but keeps its credentials, so
+    /// every one of its secrets stays referenced.
+    #[test]
+    fn suspended_users_are_not_served_and_keep_their_secrets() {
+        let active = build(two_node_parts()).unwrap();
+        let mut parts = two_node_parts();
+        parts.users[0].status = suspended(SuspendReason::Operator);
+        let deployment = build(parts).unwrap();
+        for node in ["lon1", "ams1"] {
+            let served: Vec<UserId> = deployment
+                .served_users(&node_id(node))
+                .map(|(user, _)| user.id.clone())
+                .collect();
+            assert_eq!(served, vec![user_id(2)], "{node}");
+        }
+        assert_eq!(deployment.required_secrets(), active.required_secrets());
+        assert!(
+            deployment
+                .required_secrets()
+                .contains(&SecretRef::UserVlessUuid(user_id(1), node_id("lon1")))
+        );
+    }
+
+    /// Only active users count against the cap.
+    #[test]
+    fn the_active_user_cap_counts_active_users_only() {
+        let cap = |max: u16| CapacityPolicy {
+            max_active_users: Some(NonZeroU16::new(max).unwrap()),
+        };
+        let mut parts = two_node_parts();
+        parts.capacity = cap(2);
+        assert!(build(parts.clone()).is_ok());
+        parts.capacity = cap(1);
+        assert_eq!(
+            build(parts.clone()),
+            Err(ModelError::TooManyActiveUsers {
+                max: NonZeroU16::new(1).unwrap(),
+                active: 2
+            })
+        );
+        for status in [
+            suspended(SuspendReason::QuotaExceeded {
+                cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
+            }),
+            suspended(SuspendReason::Expired),
+            suspended(SuspendReason::AbuseReview),
+            UserStatus::RevokePending,
+        ] {
+            let mut capped = parts.clone();
+            capped.users[1].status = status;
+            assert!(build(capped).is_ok(), "{status:?}");
+        }
+        let mut revoked = parts.clone();
+        revoked.users[1].status = UserStatus::Revoked;
+        revoked.users[1].per_node.clear();
+        assert!(build(revoked).is_ok());
+        // Resuming past the cap is refused when the deployment is rebuilt.
+        let mut over = parts;
+        over.users[1].status = suspended(SuspendReason::Operator);
+        let at_cap = build(over).unwrap();
+        let mut resumed = at_cap.into_parts();
+        resumed.users[1].resume().unwrap();
+        assert_eq!(
+            build(resumed),
+            Err(ModelError::TooManyActiveUsers {
+                max: NonZeroU16::new(1).unwrap(),
+                active: 2
+            })
+        );
+        // A fresh deployment records the cap it is given, and the key is
+        // required.
+        let fresh = Deployment::new(DeploymentInit {
+            capacity: CapacityPolicy::UNLIMITED,
+            ..pilot_init()
+        })
+        .unwrap();
+        assert_eq!(fresh.capacity(), CapacityPolicy::UNLIMITED);
+        let json = serde_json::to_string(&fresh).unwrap();
+        assert!(
+            json.contains(r#""capacity":{"max_active_users":null}"#),
+            "{json}"
+        );
+        let missing = json.replace(r#""capacity":{"max_active_users":null},"#, "");
+        assert!(serde_json::from_str::<Deployment>(&missing).is_err());
+        let missing_cap = json.replace(r#""max_active_users":null"#, "");
+        assert!(missing_cap.contains(r#""capacity":{}"#));
+        assert!(serde_json::from_str::<Deployment>(&missing_cap).is_err());
+        let zero = json.replace(r#""max_active_users":null"#, r#""max_active_users":0"#);
+        assert!(serde_json::from_str::<Deployment>(&zero).is_err());
+    }
+
+    #[test]
+    fn public_aliases_are_unique() {
+        let alias = PublicAlias::parse("k7qd-m2xa").unwrap();
+        let mut parts = two_node_parts();
+        parts.users[0].alias = Some(alias.clone());
+        assert!(build(parts.clone()).is_ok());
+        parts.users[1].alias = Some(PublicAlias::parse("k7qd-m2xb").unwrap());
+        assert!(build(parts.clone()).is_ok());
+        parts.users[1].alias = Some(alias.clone());
+        assert_eq!(build(parts), Err(ModelError::DuplicateAlias { alias }));
+    }
+
+    /// Suspension is not revocation: no bookkeeping commits it, and a
+    /// suspended user can be revoked and committed like an active one.
+    #[test]
+    fn a_suspended_user_can_be_revoked() {
+        let mut parts = two_node_parts();
+        parts.users[0].status = suspended(SuspendReason::AbuseReview);
+        let deployment = build(parts.clone()).unwrap();
+        assert_eq!(
+            deployment.clone().record(Bookkeeping::RevocationCommitted {
+                user: user_id(1),
+                node: node_id("lon1"),
+            }),
+            Err(ModelError::NotRevoking { user: user_id(1) })
+        );
+        parts.users[0].revoke().unwrap();
+        let revoking = build(parts).unwrap();
+        let revoked = ["lon1", "ams1"]
+            .into_iter()
+            .fold(revoking, |deployment, node| {
+                deployment
+                    .record(Bookkeeping::RevocationCommitted {
+                        user: user_id(1),
+                        node: node_id(node),
+                    })
+                    .unwrap()
+            });
+        assert_eq!(revoked.users()[&user_id(1)].status, UserStatus::Revoked);
+        assert_eq!(revoked.config_generation(), deployment.config_generation());
+    }
+
+    /// Retiring the only node a suspended user holds credentials on leaves
+    /// it suspended with none, which is valid.
+    #[test]
+    fn a_retirement_drops_a_suspended_users_credentials() {
+        let mut parts = two_node_parts();
+        parts.nodes[0].lifecycle = NodeLifecycle::Retiring {
+            site: site([45, 67, 89, 10]),
+        };
+        parts.users[0].per_node.remove(&node_id("ams1"));
+        parts.users[0].status = suspended(SuspendReason::Operator);
+        let retired = build(parts)
+            .unwrap()
+            .record(Bookkeeping::RetirementShutDown {
+                node: node_id("lon1"),
+            })
+            .unwrap();
+        let user = &retired.users()[&user_id(1)];
+        assert!(user.per_node.is_empty());
+        assert_eq!(user.status, suspended(SuspendReason::Operator));
     }
 }

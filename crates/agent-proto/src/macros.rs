@@ -99,6 +99,68 @@ macro_rules! text_newtype {
     };
 }
 
+/// Declares a field-less enum that travels as its variant name: a
+/// [`closed_enum!`] deriving the serde traits, with `name()`, the wire
+/// spelling, and `longest_name()`, the length of the longest one, which
+/// size bounds use.
+macro_rules! named_enum {
+    (
+        $(#[$meta:meta])*
+        pub enum $name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident
+            ),+ $(,)?
+        }
+    ) => {
+        $crate::macros::closed_enum! {
+            $(#[$meta])*
+            #[derive(
+                Clone,
+                Copy,
+                Debug,
+                PartialEq,
+                Eq,
+                PartialOrd,
+                Ord,
+                Hash,
+                ::serde::Serialize,
+                ::serde::Deserialize,
+            )]
+            pub enum $name {
+                $(
+                    $(#[$variant_meta])*
+                    $variant
+                ),+
+            }
+        }
+
+        impl $name {
+            /// The variant's name, which is its wire spelling.
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => stringify!($variant)),+
+                }
+            }
+
+            /// The length of the longest name.
+            pub(crate) const fn longest_name() -> usize {
+                let mut longest = 0;
+                let mut index = 0;
+                while index < Self::ALL.len() {
+                    let len = Self::ALL[index].name().len();
+                    if len > longest {
+                        longest = len;
+                    }
+                    index += 1;
+                }
+                longest
+            }
+        }
+    };
+}
+
 pub(crate) use closed_enum;
+pub(crate) use named_enum;
 pub(crate) use string_serde;
 pub(crate) use text_newtype;

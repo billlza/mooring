@@ -6,9 +6,7 @@
 use std::convert::Infallible;
 use std::fs;
 
-use mooring_model::exit::TrafficPolicy;
-
-use super::builders::{applied_record, empty_store, exit_site, initialised};
+use super::builders::{applied_record, deployment_init, empty_store, initialised};
 use super::{state_bytes, store_error};
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 use crate::store::Store;
@@ -56,10 +54,7 @@ fn a_missing_directory_is_an_io_error() {
         "{error:?}"
     );
     assert_eq!(
-        store
-            .init(exit_site(), TrafficPolicy::default())
-            .unwrap_err()
-            .kind(),
+        store.init(deployment_init()).unwrap_err().kind(),
         StoreErrorKind::Io
     );
 }
@@ -67,9 +62,7 @@ fn a_missing_directory_is_an_io_error() {
 #[test]
 fn init_never_replaces_an_existing_state() {
     let (_dir, store, state) = initialised();
-    let error = store
-        .init(exit_site(), TrafficPolicy::default())
-        .unwrap_err();
+    let error = store.init(deployment_init()).unwrap_err();
     assert_eq!(error.kind(), StoreErrorKind::AlreadyInitialized);
     assert!(
         matches!(&error, StoreError::AlreadyInitialized { path } if *path == store.state_path()),
@@ -79,9 +72,7 @@ fn init_never_replaces_an_existing_state() {
 
     // Not even a corrupt one: the operator must look at it first.
     fs::write(store.state_path(), b"garbage").unwrap();
-    let error = store
-        .init(exit_site(), TrafficPolicy::default())
-        .unwrap_err();
+    let error = store.init(deployment_init()).unwrap_err();
     assert_eq!(error.kind(), StoreErrorKind::AlreadyInitialized);
     assert_eq!(state_bytes(&store), b"garbage");
 }
@@ -104,26 +95,31 @@ fn corrupt_documents_are_refused() {
         ("not JSON", "garbage".to_owned()),
         ("truncated", valid[..valid.len() / 2].to_owned()),
         ("trailing bytes", format!("{valid}x")),
-        ("no version", valid.replacen("\"version\": 1,", "", 1)),
+        ("no version", valid.replacen("\"version\": 2,", "", 1)),
         (
             "string version",
-            valid.replacen("\"version\": 1", "\"version\": \"1\"", 1),
+            valid.replacen("\"version\": 2", "\"version\": \"2\"", 1),
         ),
         (
             "negative version",
-            valid.replacen("\"version\": 1", "\"version\": -1", 1),
+            valid.replacen("\"version\": 2", "\"version\": -1", 1),
         ),
         (
             "version beyond u32",
-            valid.replacen("\"version\": 1", "\"version\": 4294967296", 1),
+            valid.replacen("\"version\": 2", "\"version\": 4294967296", 1),
         ),
         (
             "version 0",
-            valid.replacen("\"version\": 1", "\"version\": 0", 1),
+            valid.replacen("\"version\": 2", "\"version\": 0", 1),
+        ),
+        // A version-2 document announced as version 1 fails version 1's schema.
+        (
+            "version 1 schema",
+            valid.replacen("\"version\": 2", "\"version\": 1", 1),
         ),
         (
             "unknown field",
-            valid.replacen("\"version\": 1,", "\"version\": 1, \"secrets\": {},", 1),
+            valid.replacen("\"version\": 2,", "\"version\": 2, \"secrets\": {},", 1),
         ),
         (
             "invalid counter",
@@ -155,22 +151,22 @@ fn newer_versions_are_never_downgraded() {
     let (_dir, store, _) = initialised();
     let valid = String::from_utf8(state_bytes(&store)).unwrap();
     for (found, text) in [
-        (2, valid.replacen("\"version\": 1", "\"version\": 2", 1)),
+        (3, valid.replacen("\"version\": 2", "\"version\": 3", 1)),
         // The newer schema is unknown, so only its version is read.
         (
-            3,
-            r#"{"version": 3, "a_field_from_the_future": [1, 2, 3]}"#.to_owned(),
+            4,
+            r#"{"version": 4, "a_field_from_the_future": [1, 2, 3]}"#.to_owned(),
         ),
         (u32::MAX, format!(r#"{{"version": {}}}"#, u32::MAX)),
     ] {
         fs::write(store.state_path(), &text).unwrap();
         let error = store.load().unwrap_err();
         assert!(
-            matches!(error, StoreError::DowngradeRefused { found: f, newest: 1 } if f == found),
+            matches!(error, StoreError::DowngradeRefused { found: f, newest: 2 } if f == found),
             "{error:?}"
         );
         assert_every_operation_fails(&store, StoreErrorKind::DowngradeRefused);
         assert_eq!(state_bytes(&store), text.as_bytes());
-        assert!(!store.backup_path(found, 1).exists());
+        assert!(!store.backup_path(found, 2).exists());
     }
 }

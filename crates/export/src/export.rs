@@ -85,10 +85,22 @@ impl fmt::Debug for ExportDocument {
 /// The file covers every node the user holds credentials on, primary nodes
 /// first, then by node id; each node contributes its REALITY outbound and
 /// then one Hysteria2 outbound per listener. The shape is selected by the
-/// user's `ClientProfile`. Refused when the user is not active, holds no
-/// credentials, has a capability its CFM line does not accept, or when any
-/// of those nodes has not confirmed the current generation or fails a
-/// certificate check.
+/// user's `ClientProfile`. Refused when the user is not active (suspended,
+/// pending revocation or revoked: `UserNotActive`), holds no credentials,
+/// has a capability its CFM line does not accept, or when any of those
+/// nodes has not confirmed the current generation or fails a certificate
+/// check.
+///
+/// The user's policy is not consulted: an expired or over-quota user is
+/// refused only once an explicit operator or daemon action has moved it to
+/// `Suspended { Expired | QuotaExceeded }`, so an export never depends on
+/// the clock beyond the certificate check at `now`.
+///
+/// An export reads only this user's credentials, so it does not compare
+/// them with other identities'. That check belongs to rendering each
+/// node's bundle (`mooring-render`'s `DuplicateCredential`), and every node
+/// in the file must have confirmed the current generation, whose bundle
+/// passed it.
 pub fn export_user(
     deployment: &Deployment,
     secrets: &SecretSnapshot,
@@ -159,9 +171,12 @@ fn user_outbounds(
     user: &User,
     now: UnixTime,
 ) -> Result<Vec<SingBoxOutbound>, ExportError> {
+    // Only the status decides. An expired or over-quota user is still
+    // exported while `Active`: moving it to `Suspended` is an explicit
+    // operator or daemon action, never a side effect of exporting.
     match user.status {
         UserStatus::Active => {}
-        UserStatus::RevokePending | UserStatus::Revoked => {
+        UserStatus::Suspended { .. } | UserStatus::RevokePending | UserStatus::Revoked => {
             return Err(ExportError::UserNotActive {
                 user: user.id.clone(),
             });

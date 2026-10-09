@@ -9,12 +9,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Cursor, Read, Write};
 
 use mooring_agent_proto::{
-    AgentError, AgentErrorKind, BlobLen, BundleFiles, CertName, HttpStatus, IfName, KernelIdent,
-    KernelRelease, LineRequest, MAX_BLOB_BYTES, MAX_REQUEST_LINE_BYTES, OpaqueUserId, PortRange,
-    ReadError, ReadErrorKind, RedirectUrl, RequestKind, Response, ResponseKind, Role, Sha256Hex,
-    SshEd25519Key, StatsEmail, StderrTail, TargetHost, UnitName, UsageMonth, ValueError,
-    ValueErrorKind, WatchConditions, WatchError, WatchErrorKind, WriteError, WriteErrorKind,
-    read_blob, read_reply, read_request, write_put_blob, write_request,
+    AgentError, AgentErrorKind, BlobLen, BundleFiles, CertName, EventSeq, EventsV1, HttpStatus,
+    IfName, InboundSet, KernelIdent, KernelRelease, LineRequest, MAX_BLOB_BYTES,
+    MAX_REQUEST_LINE_BYTES, MacReportV1, NodeName, NoticeBody, NoticeTitle, OpaqueUserId,
+    PortRange, ReadError, ReadErrorKind, RedirectUrl, ReportBandNumber, ReportUsage, ReportUserId,
+    RequestKind, Resolution, Response, ResponseKind, Role, SeriesRange, SeriesSpan, Sha256Hex,
+    SshEd25519Key, StatsEmail, StderrTail, TargetHost, UnitName, UnixTime, UsageBin, UsageMonth,
+    UsageSeriesV1, ValueError, ValueErrorKind, WatchConditions, WatchError, WatchErrorKind,
+    WriteError, WriteErrorKind, read_blob, read_reply, read_request, write_put_blob, write_request,
 };
 
 use crate::fixtures;
@@ -52,7 +54,38 @@ fn value_error(kind: ValueErrorKind) -> ValueError {
         ValueErrorKind::DuplicateWatchCondition => {
             WatchConditions::new([WatchError::NftFailed, WatchError::NftFailed]).unwrap_err()
         }
+        ValueErrorKind::SeriesSpan => {
+            SeriesSpan::new(time(600), time(600), Resolution::FiveMin).unwrap_err()
+        }
+        ValueErrorKind::RangeTooLarge => {
+            SeriesRange::new(time(0), time(36 * 86_400), Resolution::Day).unwrap_err()
+        }
+        ValueErrorKind::UsageBin => UsageBin::new(time(0), BTreeMap::new()).unwrap_err(),
+        ValueErrorKind::UsageSeries => {
+            let late = fixtures::usage_series().bins()[0].clone();
+            UsageSeriesV1::new(fixtures::usage_series().range(), vec![late.clone(), late])
+                .unwrap_err()
+        }
+        ValueErrorKind::Events => {
+            let page = fixtures::events();
+            EventsV1::new(page.events().to_vec(), EventSeq::FIRST).unwrap_err()
+        }
+        ValueErrorKind::InboundSet => InboundSet::try_from(Vec::new()).unwrap_err(),
+        ValueErrorKind::NodeName => NodeName::new("Lon1").unwrap_err(),
+        ValueErrorKind::ReportUserId => ReportUserId::new("356938035643809").unwrap_err(),
+        ValueErrorKind::ReportBandNumber => ReportBandNumber::new(1007).unwrap_err(),
+        ValueErrorKind::MacReport => {
+            let mut parts = fixtures::mac_report_parts();
+            parts.usage = ReportUsage::Unavailable;
+            MacReportV1::new(parts).unwrap_err()
+        }
+        ValueErrorKind::NoticeTitle => NoticeTitle::new("203.0.113.7").unwrap_err(),
+        ValueErrorKind::NoticeBody => NoticeBody::new("a\n\nb").unwrap_err(),
     }
+}
+
+fn time(secs: u64) -> UnixTime {
+    UnixTime::from_secs(secs)
 }
 
 struct FailingIo;
@@ -118,17 +151,6 @@ fn write_error(kind: WriteErrorKind) -> WriteError {
     }
 }
 
-fn watch_error(kind: WatchErrorKind) -> WatchError {
-    match kind {
-        WatchErrorKind::WgReadFailed => WatchError::WgReadFailed,
-        WatchErrorKind::NftFailed => WatchError::NftFailed,
-        WatchErrorKind::StatsQueryFailed => WatchError::StatsQueryFailed,
-        WatchErrorKind::TargetDegraded => WatchError::TargetDegraded,
-        WatchErrorKind::ExitFlowCapHit => WatchError::ExitFlowCapHit { count: 1 },
-        WatchErrorKind::StateWrite => WatchError::StateWrite { errno: None },
-    }
-}
-
 #[test]
 fn agent_error_kinds_cover_every_variant() {
     assert_kinds(AgentErrorKind::ALL, |kind| {
@@ -153,7 +175,9 @@ fn write_error_kinds_cover_every_variant() {
 
 #[test]
 fn watch_error_kinds_cover_every_variant() {
-    assert_kinds(WatchErrorKind::ALL, |kind| watch_error(kind).kind());
+    assert_kinds(WatchErrorKind::ALL, |kind| {
+        fixtures::watch_error(kind).kind()
+    });
 }
 
 #[test]
@@ -168,7 +192,7 @@ fn every_agent_error_survives_the_wire() {
         );
     }
     for kind in WatchErrorKind::ALL {
-        let error = watch_error(*kind);
+        let error = fixtures::watch_error(*kind);
         let json = serde_json::to_string(&error).unwrap();
         assert_eq!(
             serde_json::from_str::<WatchError>(&json).unwrap(),

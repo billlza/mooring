@@ -8,20 +8,22 @@ use std::convert::Infallible;
 use std::fs::{self, OpenOptions, TryLockError};
 use std::path::PathBuf;
 
-use mooring_model::deployment::DeploymentParts;
+use mooring_model::alerting::AlertSettings;
+use mooring_model::deployment::{Bookkeeping, DeploymentParts};
+use mooring_model::error::ModelError;
 use mooring_model::node::NodeLifecycle;
 use mooring_model::ports::ListenerIdx;
 use mooring_model::secret::{SecretEntry, SecretMaterial, SecretRef};
-use mooring_model::state::{StateFile, StateV1};
+use mooring_model::state::StateV2;
 
 use super::builders::{
-    added_refs, adopted, entries_for, initialised, node_id, planned_node, user, with_lifecycle,
-    with_node, with_user,
+    added_refs, adopted, entries_for, initialised, node_id, planned_node, site, user,
+    with_lifecycle, with_node, with_user,
 };
 use super::{state_bytes, store_error};
 use crate::error::{ChangeError, StoreError, StoreErrorKind};
-use crate::migrate::migrate;
-use crate::ordered::update_config_with_secrets;
+use crate::migrate::{migrate, parse};
+use crate::ordered::{record_with_secrets, update_config_with_secrets};
 use crate::secrets::{
     InMemorySecretStore, SecretOp, SecretStore, SecretStoreError, SecretStoreErrorKind,
 };
@@ -66,8 +68,9 @@ impl Observer {
     }
 
     fn observe(&mut self, op: SecretOp, secret_ref: &SecretRef) {
-        let file: StateFile = serde_json::from_slice(&fs::read(&self.state_path).unwrap()).unwrap();
+        let file = parse(&fs::read(&self.state_path).unwrap()).unwrap();
         let referenced_on_disk = migrate(file)
+            .unwrap()
             .deployment
             .required_secrets()
             .contains(secret_ref);
@@ -140,7 +143,7 @@ fn add_lon1(parts: DeploymentParts) -> Result<DeploymentParts, Infallible> {
 }
 
 /// An initialised store with the planned node lon1 and its secrets.
-fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV1) {
+fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV2) {
     let (dir, store, state) = initialised();
     let mut secrets = Observer::new(&store);
     let next = update_config_with_secrets(
@@ -156,7 +159,7 @@ fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV1) {
 }
 
 /// Every secret the state references is readable from `secrets`.
-fn assert_references_resolve(state: &StateV1, secrets: &impl SecretStore) {
+fn assert_references_resolve(state: &StateV2, secrets: &impl SecretStore) {
     for secret_ref in state.deployment.required_secrets() {
         let material = secrets.get(&secret_ref).unwrap();
         assert_eq!(material.kind(), secret_ref.kind());
@@ -500,4 +503,340 @@ fn a_missing_secret_is_reported_by_the_store() {
         failures.first().error.kind(),
         SecretStoreErrorKind::SecretMissing
     );
+}
+
+/// The two Healthchecks checks of channel node `id` (decision F6).
+fn check_refs(id: &str) -> BTreeSet<SecretRef> {
+    let node = node_id(id);
+    BTreeSet::from([
+        SecretRef::NodeDeadManCheck(node.clone()),
+        SecretRef::NodeMacAliveCheck(node),
+    ])
+}
+
+/// The secrets lon1's alert channels reference as the only channel node:
+/// the deployment's one ntfy topic and lon1's two checks.
+fn lon1_alert_refs() -> BTreeSet<SecretRef> {
+    let mut refs = check_refs("lon1");
+    refs.insert(SecretRef::AlertTopic);
+    refs
+}
+
+/// Parts with the alert channels of exactly `nodes` set up.
+fn with_channels(mut parts: DeploymentParts, nodes: &[&str]) -> DeploymentParts {
+    let mut alerting = AlertSettings::pilot();
+    alerting.channels.extend(nodes.iter().map(|id| node_id(id)));
+    parts.alerting = Some(alerting);
+    parts
+}
+
+/// Parts with lon1's alert channels set up.
+fn with_lon1_channels(parts: DeploymentParts) -> DeploymentParts {
+    with_channels(parts, &["lon1"])
+}
+
+/// A node's alert-channel secrets follow the §7 ordering: written before
+/// the state names the channels, and deleted after a shut-down retirement
+/// drops them (lon1 is the only channel node, so the topic goes too). A
+/// change that makes the node inactive while its channels remain is
+/// refused, with nothing written.
+#[test]
+fn alert_channel_secrets_follow_their_node() {
+    let (_dir, store, mut secrets, state) = with_planned_lon1();
+    let alert_refs = lon1_alert_refs();
+    assert_eq!(
+        added_refs(&state.deployment, with_lon1_channels),
+        alert_refs
+    );
+    let set_up = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        state.deployment.config_generation(),
+        entries_for(&alert_refs, 3),
+        |parts| Ok::<_, Infallible>(with_lon1_channels(parts)),
+    )
+    .unwrap();
+    let puts = secrets.ops(SecretOp::Put);
+    let put: BTreeSet<SecretRef> = puts.iter().map(|seen| seen.secret_ref.clone()).collect();
+    assert_eq!(put, alert_refs);
+    assert!(
+        puts.iter()
+            .all(|seen| !seen.referenced_on_disk && seen.lock_held),
+        "{puts:?}"
+    );
+    assert_references_resolve(&set_up, &secrets);
+    secrets.log.clear();
+
+    // Cancelling the planned node without dropping its channels is refused.
+    let on_disk = state_bytes(&store);
+    let error = store_error(
+        update_config_with_secrets(
+            &store,
+            &mut secrets,
+            set_up.deployment.config_generation(),
+            Vec::new(),
+            |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", NodeLifecycle::Retired)),
+        )
+        .unwrap_err(),
+    );
+    assert!(
+        matches!(
+            &error,
+            StoreError::InvalidChange {
+                source: ModelError::AlertChannelsOnInactiveNode { node }
+            } if *node == node_id("lon1")
+        ),
+        "{error:?}"
+    );
+    assert_eq!(state_bytes(&store), on_disk);
+    assert!(secrets.log.is_empty());
+
+    // Adopt lon1, start retiring it, then shut it down: the record drops
+    // its channels, and their secrets are deleted after the commit.
+    let adopted_state = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        set_up.deployment.config_generation(),
+        Vec::new(),
+        |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", adopted([45, 67, 89, 10]))),
+    )
+    .unwrap();
+    let retiring = store
+        .update_config(adopted_state.deployment.config_generation(), |parts| {
+            let site = match &parts.nodes[0].lifecycle {
+                NodeLifecycle::Adopted { site } => site.clone(),
+                other => panic!("lon1 is {other:?}"),
+            };
+            Ok::<_, Infallible>(with_lifecycle(
+                parts,
+                "lon1",
+                NodeLifecycle::Retiring { site },
+            ))
+        })
+        .unwrap();
+    assert!(
+        retiring
+            .deployment
+            .required_secrets()
+            .is_superset(&alert_refs)
+    );
+    secrets.log.clear();
+    let retired = record_with_secrets(
+        &store,
+        &mut secrets,
+        retiring.deployment.config_generation(),
+        Bookkeeping::RetirementShutDown {
+            node: node_id("lon1"),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        retired
+            .deployment
+            .alerting()
+            .map(|alerting| alerting.channels.len()),
+        Some(0)
+    );
+    let deletes = secrets.ops(SecretOp::Delete);
+    let deleted: BTreeSet<SecretRef> = deletes.iter().map(|seen| seen.secret_ref.clone()).collect();
+    assert!(deleted.is_superset(&alert_refs), "{deleted:?}");
+    assert!(
+        deletes
+            .iter()
+            .all(|seen| !seen.referenced_on_disk && seen.lock_held),
+        "{deletes:?}"
+    );
+    assert!(secrets.inner.refs().is_disjoint(&alert_refs));
+    assert_references_resolve(&retired, &secrets);
+}
+
+/// Planned lon1 and ams1 with their secrets, and lon1's alert channels set
+/// up: the topic and lon1's checks written before the state names them.
+fn with_lon1_channels_and_planned_ams1() -> (tempfile::TempDir, Store, Observer, StateV2) {
+    let (dir, store, mut secrets, state) = with_planned_lon1();
+    let two = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        state.deployment.config_generation(),
+        entries_for(&planned_node_refs("ams1"), 2),
+        |parts| Ok::<_, Infallible>(with_node(parts, planned_node("ams1", 2, 20))),
+    )
+    .unwrap();
+    secrets.log.clear();
+    let set_up = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        two.deployment.config_generation(),
+        entries_for(&lon1_alert_refs(), 3),
+        |parts| Ok::<_, Infallible>(with_lon1_channels(parts)),
+    )
+    .unwrap();
+    let puts = secrets.ops(SecretOp::Put);
+    let put: BTreeSet<SecretRef> = puts.iter().map(|seen| seen.secret_ref.clone()).collect();
+    assert_eq!(put, lon1_alert_refs());
+    assert!(
+        puts.iter()
+            .all(|seen| !seen.referenced_on_disk && seen.lock_held),
+        "{puts:?}"
+    );
+    secrets.log.clear();
+    (dir, store, secrets, set_up)
+}
+
+/// One ntfy topic serves every channel node (decision F6): a second
+/// channel node adds only its two checks, and supplying the topic again is
+/// refused with nothing written; retiring one of two channel nodes deletes
+/// only that node's checks and keeps the topic, which still holds the
+/// material first written. This is design §13.4's rotation order: the
+/// replacement (here the planned ams1) gets its channels before the last
+/// other channel node retires, so the phone's subscription stays valid.
+#[test]
+fn the_alert_topic_is_shared_and_outlives_one_channel_node() {
+    let (_dir, store, mut secrets, set_up) = with_lon1_channels_and_planned_ams1();
+    let topic = secrets.inner.get(&SecretRef::AlertTopic).unwrap();
+    let both = |parts| with_channels(parts, &["lon1", "ams1"]);
+    assert_eq!(added_refs(&set_up.deployment, both), check_refs("ams1"));
+
+    let on_disk = state_bytes(&store);
+    let mut again = entries_for(&check_refs("ams1"), 4);
+    again.extend(entries_for(&[SecretRef::AlertTopic], 4));
+    let error = store_error(
+        update_config_with_secrets(
+            &store,
+            &mut secrets,
+            set_up.deployment.config_generation(),
+            again,
+            |parts| Ok::<_, Infallible>(both(parts)),
+        )
+        .unwrap_err(),
+    );
+    assert!(
+        matches!(&error, StoreError::SecretPlanMismatch { missing, unreferenced }
+            if missing.is_empty() && *unreferenced == BTreeSet::from([SecretRef::AlertTopic])),
+        "{error:?}"
+    );
+    assert_eq!(state_bytes(&store), on_disk);
+    assert!(secrets.log.is_empty());
+
+    let two_channels = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        set_up.deployment.config_generation(),
+        entries_for(&check_refs("ams1"), 4),
+        |parts| Ok::<_, Infallible>(both(parts)),
+    )
+    .unwrap();
+    assert_eq!(secrets.inner.get(&SecretRef::AlertTopic).unwrap(), topic);
+    secrets.log.clear();
+
+    // Adopt lon1, start retiring it, then shut it down.
+    let adopted_state = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        two_channels.deployment.config_generation(),
+        Vec::new(),
+        |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", adopted([45, 67, 89, 10]))),
+    )
+    .unwrap();
+    let retiring = store
+        .update_config(adopted_state.deployment.config_generation(), |parts| {
+            Ok::<_, Infallible>(with_lifecycle(
+                parts,
+                "lon1",
+                NodeLifecycle::Retiring {
+                    site: site([45, 67, 89, 10]),
+                },
+            ))
+        })
+        .unwrap();
+    secrets.log.clear();
+    let retired = record_with_secrets(
+        &store,
+        &mut secrets,
+        retiring.deployment.config_generation(),
+        Bookkeeping::RetirementShutDown {
+            node: node_id("lon1"),
+        },
+    )
+    .unwrap();
+    let deleted: BTreeSet<SecretRef> = secrets
+        .ops(SecretOp::Delete)
+        .iter()
+        .map(|seen| seen.secret_ref.clone())
+        .collect();
+    assert!(deleted.is_superset(&check_refs("lon1")), "{deleted:?}");
+    assert!(!deleted.contains(&SecretRef::AlertTopic), "{deleted:?}");
+    assert!(
+        retired
+            .deployment
+            .required_secrets()
+            .contains(&SecretRef::AlertTopic)
+    );
+    assert_eq!(secrets.inner.get(&SecretRef::AlertTopic).unwrap(), topic);
+    assert!(secrets.inner.refs().is_disjoint(&check_refs("lon1")));
+    assert_references_resolve(&retired, &secrets);
+}
+
+/// Removing the last channel node's channels drops the topic with its
+/// checks: the state stops naming them first, and they are deleted after
+/// the commit, under the lock. Removing one of two keeps the topic.
+#[test]
+fn the_alert_topic_is_deleted_after_the_commit_that_leaves_no_channel_node() {
+    let (_dir, store, mut secrets, set_up) = with_lon1_channels_and_planned_ams1();
+    let two_channels = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        set_up.deployment.config_generation(),
+        entries_for(&check_refs("ams1"), 4),
+        |parts| Ok::<_, Infallible>(with_channels(parts, &["lon1", "ams1"])),
+    )
+    .unwrap();
+    secrets.log.clear();
+
+    let ams1_only = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        two_channels.deployment.config_generation(),
+        Vec::new(),
+        |parts| Ok::<_, Infallible>(with_channels(parts, &["ams1"])),
+    )
+    .unwrap();
+    let deleted: BTreeSet<SecretRef> = secrets
+        .ops(SecretOp::Delete)
+        .iter()
+        .map(|seen| seen.secret_ref.clone())
+        .collect();
+    assert_eq!(deleted, check_refs("lon1"));
+    assert!(secrets.inner.refs().contains(&SecretRef::AlertTopic));
+    secrets.log.clear();
+
+    let none = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        ams1_only.deployment.config_generation(),
+        Vec::new(),
+        |parts| Ok::<_, Infallible>(with_channels(parts, &[])),
+    )
+    .unwrap();
+    let deletes = secrets.ops(SecretOp::Delete);
+    let deleted: BTreeSet<SecretRef> = deletes.iter().map(|seen| seen.secret_ref.clone()).collect();
+    let mut expected = check_refs("ams1");
+    expected.insert(SecretRef::AlertTopic);
+    assert_eq!(deleted, expected);
+    assert!(
+        deletes
+            .iter()
+            .all(|seen| !seen.referenced_on_disk && seen.lock_held),
+        "{deletes:?}"
+    );
+    assert!(secrets.ops(SecretOp::Put).is_empty());
+    assert_eq!(
+        none.deployment
+            .alerting()
+            .map(|alerting| alerting.channels.len()),
+        Some(0)
+    );
+    assert!(!secrets.inner.refs().contains(&SecretRef::AlertTopic));
+    assert_references_resolve(&none, &secrets);
+    assert_eq!(store.load().unwrap(), none);
 }

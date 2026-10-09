@@ -4,17 +4,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
+use std::num::NonZeroU64;
 
 use crate::cert::CertificatePem;
 use crate::collections::NonEmpty;
 use crate::counters::ConfigGeneration;
-use crate::deployment::DeploymentParts;
+use crate::date::CalendarDate;
+use crate::deployment::{CapacityPolicy, DeploymentParts};
 use crate::digest::Sha256Digest;
 use crate::dns::DnsName;
-use crate::exit::{
-    CycleDay, EgressCheck, ExitSite, FlowCap, Pairing, ProbePolicy, SimPolicy, TrafficPolicy,
-    Uplink,
-};
+use crate::exit::{EgressCheck, ExitSite, FlowCap, Pairing, ProbePolicy, TrafficPolicy, Uplink};
 use crate::ids::{LocalLabel, NodeId, ShortId, UserId};
 use crate::iface::{InterfaceSelector, LanSubnet, LinuxIfName, MacAddr};
 use crate::ipv4::{CarrierPrefix, PublicIpv4};
@@ -24,12 +23,16 @@ use crate::node::{
     NodeSite, RealityServer, SshPin,
 };
 use crate::ports::{DEBIAN_EPHEMERAL_PORTS, PortPlan};
+use crate::sim::{
+    BillDay, Carrier, EvidenceRef, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES, PlanKind,
+    SimPlan, SimPolicy, StopPolicy,
+};
 use crate::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
     TargetAttestation, TargetFacts, TargetSpec, TlsHandshake, TlsOutcome, TlsVersion, qualify,
 };
 use crate::time::UnixTime;
-use crate::user::{ClientLine, ClientProfile, User, UserNodePublic, UserStatus};
+use crate::user::{ClientLine, ClientProfile, User, UserNodePublic, UserPolicy, UserStatus};
 use crate::wg::{Keepalive, WgIndex, WgLink};
 
 pub(crate) fn node_id(text: &str) -> NodeId {
@@ -57,9 +60,52 @@ pub(crate) fn exit_site() -> ExitSite {
             ),
             pairing: Pairing::Paired,
         },
-        sim: SimPolicy::with_defaults(CycleDay::new(1).unwrap()),
+        sim: SimPolicy::new(
+            BillDay::new(1).unwrap(),
+            smarty_unlimited_plan(),
+            PILOT_SIM_WARN_BYTES,
+            StopPolicy::HardStop {
+                bytes: PILOT_SIM_HARD_STOP_BYTES,
+            },
+        )
+        .unwrap(),
         probe: ProbePolicy::default(),
         flow_cap: FlowCap::new(4096).unwrap(),
+        uplink_baseline: None,
+    }
+}
+
+/// A fair-use line for tests that need one: 600 × 1024³ bytes.
+pub(crate) const TEST_FAIR_USE_BYTES: NonZeroU64 = match NonZeroU64::new(600 << 30) {
+    Some(bytes) => bytes,
+    None => panic!("the test line is not zero"),
+};
+
+/// The decided line (F1): SMARTY Unlimited, no fair-use line, no speed cap,
+/// recorded from SMARTY's Price Guide V42.
+pub(crate) fn smarty_unlimited_plan() -> SimPlan {
+    SimPlan {
+        carrier: Carrier::Smarty,
+        kind: PlanKind::Unlimited,
+        speed_cap_mbps: None,
+        terms: EvidenceRef {
+            url: EvidenceUrl::parse(
+                "https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf",
+            )
+            .unwrap(),
+            dated: CalendarDate::parse("2026-08-25").unwrap(),
+        },
+    }
+}
+
+/// An unlimited plan with a fair-use line of [`TEST_FAIR_USE_BYTES`], for
+/// the rules only a line exercises.
+pub(crate) fn fair_use_plan() -> SimPlan {
+    SimPlan {
+        kind: PlanKind::UnlimitedFairUse {
+            fair_use_bytes: TEST_FAIR_USE_BYTES,
+        },
+        ..smarty_unlimited_plan()
     }
 }
 
@@ -167,6 +213,9 @@ pub(crate) fn user(n: u64, nodes: &[(&str, u8)]) -> User {
                 )
             })
             .collect::<BTreeMap<_, _>>(),
+        policy: UserPolicy::NONE,
+        alias: None,
+        agreement: None,
     }
 }
 
@@ -176,6 +225,10 @@ pub(crate) fn two_node_parts() -> DeploymentParts {
         config_generation: ConfigGeneration::INITIAL,
         exit: exit_site(),
         policy: TrafficPolicy::default(),
+        capacity: CapacityPolicy::UNLIMITED,
+        auto_quota: None,
+        alerting: None,
+        viewers: Vec::new(),
         nodes: vec![
             node("lon1", 1, 10, applied([45, 67, 89, 10], 1)),
             node("ams1", 2, 20, applied([46, 78, 90, 12], 1)),

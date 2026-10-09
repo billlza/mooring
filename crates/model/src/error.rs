@@ -3,17 +3,19 @@
 //! The model's typed error taxonomy (design §14, domain `model`).
 
 use std::net::Ipv4Addr;
+use std::num::NonZeroU16;
 
 use ipnet::Ipv4Net;
 
+use crate::alerting::WallClockTime;
 use crate::cert::PemLabel;
 use crate::counters::{ConfigGeneration, CounterKind};
 use crate::digest::DigestEncoding;
 use crate::dns::DnsNameRule;
-use crate::ids::{NodeId, UserId, UuidRule};
+use crate::ids::{NodeId, PublicAlias, UserId, UuidRule};
 use crate::iface::{InterfaceNameKind, InterfaceRole, UplinkMode};
 use crate::ipv4::{PrefixRule, SpecialClass};
-use crate::keys::PublicKeyKind;
+use crate::keys::{Ed25519Pub, PublicKeyKind};
 use crate::kinds;
 use crate::node::LifecycleStage;
 use crate::ports::{Port, PortConflict, PortRange};
@@ -27,6 +29,8 @@ pub enum EntityId {
     Node(NodeId),
     /// A user id.
     User(UserId),
+    /// A viewer, by its public key.
+    Viewer(Ed25519Pub),
 }
 
 impl std::fmt::Display for EntityId {
@@ -34,6 +38,7 @@ impl std::fmt::Display for EntityId {
         match self {
             Self::Node(id) => write!(f, "node {id}"),
             Self::User(id) => write!(f, "user {id}"),
+            Self::Viewer(key) => write!(f, "viewer {key}"),
         }
     }
 }
@@ -216,9 +221,19 @@ pub enum ModelError {
     /// A collection that must hold at least one element is empty.
     #[error("collection must not be empty")]
     EmptyCollection,
-    /// The SIM billing cycle day is outside 1..=28.
+    /// The text is not a `YYYY-MM-DD` calendar date between 1970 and 9999,
+    /// or a computed date falls outside that range.
+    #[error("not a YYYY-MM-DD calendar date between 1970-01-01 and 9999-12-31")]
+    InvalidDate,
+    /// The version-1 SIM billing cycle day is outside 1..=28.
     #[error("billing cycle day {day} is outside 1..=28")]
     InvalidCycleDay {
+        /// The rejected day.
+        day: u8,
+    },
+    /// The SIM bill day is outside 1..=31.
+    #[error("bill day {day} is outside 1..=31")]
+    InvalidBillDay {
         /// The rejected day.
         day: u8,
     },
@@ -229,6 +244,72 @@ pub enum ModelError {
         warn_bytes: u64,
         /// The hard-stop threshold in bytes, if one is set.
         hard_stop_bytes: Option<u64>,
+    },
+    /// A SIM threshold (the hard stop, or the warning when there is none)
+    /// is not below the recorded plan's fair-use line or allowance.
+    #[error(
+        "SIM threshold {threshold_bytes} must be below the recorded plan's line of {line_bytes} bytes"
+    )]
+    SimThresholdAbovePlan {
+        /// The threshold in bytes.
+        threshold_bytes: u64,
+        /// The plan's fair-use line or allowance, in bytes.
+        line_bytes: u64,
+    },
+    /// Accepting deprioritisation needs a recorded plan with a fair-use
+    /// line; an unlimited plan without a line, a capped plan and an
+    /// unrecorded plan need a hard stop.
+    #[error(
+        "accepting deprioritisation needs a recorded plan with a fair-use line; set a hard stop instead"
+    )]
+    DeprioritisationNeedsFairUseLine,
+    /// A version-1 SIM policy without a hard stop cannot be lifted: version 2
+    /// needs an explicit stop policy (critique C-10).
+    #[error(
+        "the version-1 SIM policy has no hard stop, and version 2 needs an explicit stop policy: give the version-1 document a hard stop to lift it, then record the plan with `sim set-plan`"
+    )]
+    StopPolicyUnchosen,
+    /// A fresh deployment, and every change that edits the exit's SIM
+    /// policy, needs the policy's plan recorded (P0-1): only a policy
+    /// lifted from version 1 has none, and it keeps none only while it is
+    /// left as it is.
+    #[error(
+        "the exit's SIM plan is not recorded; a fresh deployment and every edited SIM policy need a recorded plan (`sim set-plan`)"
+    )]
+    PlanNotRecorded,
+    /// The quota warning share is outside 1..=99 percent.
+    #[error("quota warning share {percent}% is outside 1..=99")]
+    InvalidWarnPercent {
+        /// The rejected percentage.
+        percent: u8,
+    },
+    /// The share of the served budget is outside 1..=100 percent.
+    #[error("budget share {percent}% is outside 1..=100")]
+    InvalidBudgetPercent {
+        /// The rejected percentage.
+        percent: u8,
+    },
+    /// The SIM factor is below 1000 permille: every served byte crosses the
+    /// SIM at least once.
+    #[error("SIM factor {permille} permille is below 1000")]
+    InvalidSimFactor {
+        /// The rejected factor, in thousandths.
+        permille: u16,
+    },
+    /// The text is not a wall-clock time `HH:MM` between 00:00 and 23:59.
+    #[error("not an HH:MM wall-clock time between 00:00 and 23:59")]
+    InvalidWallClockTime,
+    /// The public alias is not two groups of four lowercase base32
+    /// characters joined by a hyphen.
+    #[error("public alias must be xxxx-xxxx with lowercase base32 characters (a-z, 2-7)")]
+    InvalidPublicAlias,
+    /// The uplink baseline's percentiles are zero or out of order.
+    #[error("uplink baseline needs 0 < p10 ({p10_bps} bit/s) <= p50 ({p50_bps} bit/s)")]
+    InvalidUplinkBaseline {
+        /// The rejected 10th percentile.
+        p10_bps: u64,
+        /// The rejected median.
+        p50_bps: u64,
     },
     /// The probe interval is outside 1..=86400 seconds.
     #[error("probe interval {seconds}s is outside 1..=86400")]
@@ -313,6 +394,20 @@ pub enum ModelError {
         /// The node whose short ids collide.
         node: NodeId,
     },
+    /// Two users share a public alias.
+    #[error("two users share the public alias {alias}")]
+    DuplicateAlias {
+        /// The shared alias.
+        alias: PublicAlias,
+    },
+    /// More users are active than the deployment's cap allows.
+    #[error("{active} users are active, more than the cap of {max}")]
+    TooManyActiveUsers {
+        /// The cap.
+        max: NonZeroU16,
+        /// The number of active users.
+        active: usize,
+    },
     /// The node has no REALITY target yet.
     #[error("node {node} has no REALITY target")]
     TargetNotSet {
@@ -356,9 +451,48 @@ pub enum ModelError {
         /// The inactive node.
         node: NodeId,
     },
+    /// The digest time is before its zone's earliest daily time
+    /// (`WallClockZone::earliest_daily_time`): earlier, the time of day is
+    /// skipped or repeated when the clocks change, or falls on the previous
+    /// UTC date.
+    #[error(
+        "digest time {at} is before {earliest}: an earlier time is skipped or repeated when the clocks change, or falls on the previous UTC date"
+    )]
+    DigestTimeTooEarly {
+        /// The digest time.
+        at: WallClockTime,
+        /// The zone's earliest daily time.
+        earliest: WallClockTime,
+    },
+    /// Alert channels are set up for a node that is not active; retiring a
+    /// node drops its channels.
+    #[error("alert channels are set up for inactive node {node}")]
+    AlertChannelsOnInactiveNode {
+        /// The inactive node.
+        node: NodeId,
+    },
     /// A revocation step names a user who is not pending revocation.
     #[error("user {user} is not pending revocation")]
     NotRevoking {
+        /// The user.
+        user: UserId,
+    },
+    /// Only an active user can be suspended.
+    #[error("user {user} is not active")]
+    UserNotActive {
+        /// The user.
+        user: UserId,
+    },
+    /// Only a suspended user can be resumed.
+    #[error("user {user} is not suspended")]
+    UserNotSuspended {
+        /// The user.
+        user: UserId,
+    },
+    /// The user is already pending revocation or revoked; revocation never
+    /// goes back.
+    #[error("user {user} is already pending revocation or revoked")]
+    RevocationAlreadyStarted {
         /// The user.
         user: UserId,
     },
@@ -396,6 +530,12 @@ pub enum ModelError {
     StateVersionMismatch {
         /// The version this type reads.
         expected: u32,
+        /// The version found.
+        found: u32,
+    },
+    /// The state document's version is not one this build reads.
+    #[error("state version {found} is not a version this build reads")]
+    UnknownStateVersion {
         /// The version found.
         found: u32,
     },
@@ -472,10 +612,34 @@ kinds! {
         CounterOverflow,
         /// See [`ModelError::EmptyCollection`].
         EmptyCollection,
+        /// See [`ModelError::InvalidDate`].
+        InvalidDate,
         /// See [`ModelError::InvalidCycleDay`].
         InvalidCycleDay,
+        /// See [`ModelError::InvalidBillDay`].
+        InvalidBillDay,
         /// See [`ModelError::InvalidSimThresholds`].
         InvalidSimThresholds,
+        /// See [`ModelError::SimThresholdAbovePlan`].
+        SimThresholdAbovePlan,
+        /// See [`ModelError::DeprioritisationNeedsFairUseLine`].
+        DeprioritisationNeedsFairUseLine,
+        /// See [`ModelError::StopPolicyUnchosen`].
+        StopPolicyUnchosen,
+        /// See [`ModelError::PlanNotRecorded`].
+        PlanNotRecorded,
+        /// See [`ModelError::InvalidWarnPercent`].
+        InvalidWarnPercent,
+        /// See [`ModelError::InvalidBudgetPercent`].
+        InvalidBudgetPercent,
+        /// See [`ModelError::InvalidSimFactor`].
+        InvalidSimFactor,
+        /// See [`ModelError::InvalidWallClockTime`].
+        InvalidWallClockTime,
+        /// See [`ModelError::InvalidPublicAlias`].
+        InvalidPublicAlias,
+        /// See [`ModelError::InvalidUplinkBaseline`].
+        InvalidUplinkBaseline,
         /// See [`ModelError::InvalidProbeInterval`].
         InvalidProbeInterval,
         /// See [`ModelError::InvalidProbeBasePort`].
@@ -506,6 +670,10 @@ kinds! {
         WgIndexNotAllocated,
         /// See [`ModelError::DuplicateShortId`].
         DuplicateShortId,
+        /// See [`ModelError::DuplicateAlias`].
+        DuplicateAlias,
+        /// See [`ModelError::TooManyActiveUsers`].
+        TooManyActiveUsers,
         /// See [`ModelError::TargetNotSet`].
         TargetNotSet,
         /// See [`ModelError::GenerationAhead`].
@@ -516,8 +684,18 @@ kinds! {
         NodeNotDeployable,
         /// See [`ModelError::CredentialsOnInactiveNode`].
         CredentialsOnInactiveNode,
+        /// See [`ModelError::DigestTimeTooEarly`].
+        DigestTimeTooEarly,
+        /// See [`ModelError::AlertChannelsOnInactiveNode`].
+        AlertChannelsOnInactiveNode,
         /// See [`ModelError::NotRevoking`].
         NotRevoking,
+        /// See [`ModelError::UserNotActive`].
+        UserNotActive,
+        /// See [`ModelError::UserNotSuspended`].
+        UserNotSuspended,
+        /// See [`ModelError::RevocationAlreadyStarted`].
+        RevocationAlreadyStarted,
         /// See [`ModelError::NoCredentialsOnNode`].
         NoCredentialsOnNode,
         /// See [`ModelError::NodeNotRetiring`].
@@ -528,6 +706,8 @@ kinds! {
         RevokePendingWithoutCredentials,
         /// See [`ModelError::StateVersionMismatch`].
         StateVersionMismatch,
+        /// See [`ModelError::UnknownStateVersion`].
+        UnknownStateVersion,
     }
 }
 
@@ -570,8 +750,22 @@ impl ModelError {
             Self::InvalidCounter { .. } => ModelErrorKind::InvalidCounter,
             Self::CounterOverflow { .. } => ModelErrorKind::CounterOverflow,
             Self::EmptyCollection => ModelErrorKind::EmptyCollection,
+            Self::InvalidDate => ModelErrorKind::InvalidDate,
             Self::InvalidCycleDay { .. } => ModelErrorKind::InvalidCycleDay,
+            Self::InvalidBillDay { .. } => ModelErrorKind::InvalidBillDay,
             Self::InvalidSimThresholds { .. } => ModelErrorKind::InvalidSimThresholds,
+            Self::SimThresholdAbovePlan { .. } => ModelErrorKind::SimThresholdAbovePlan,
+            Self::DeprioritisationNeedsFairUseLine => {
+                ModelErrorKind::DeprioritisationNeedsFairUseLine
+            }
+            Self::StopPolicyUnchosen => ModelErrorKind::StopPolicyUnchosen,
+            Self::PlanNotRecorded => ModelErrorKind::PlanNotRecorded,
+            Self::InvalidWarnPercent { .. } => ModelErrorKind::InvalidWarnPercent,
+            Self::InvalidBudgetPercent { .. } => ModelErrorKind::InvalidBudgetPercent,
+            Self::InvalidSimFactor { .. } => ModelErrorKind::InvalidSimFactor,
+            Self::InvalidWallClockTime => ModelErrorKind::InvalidWallClockTime,
+            Self::InvalidPublicAlias => ModelErrorKind::InvalidPublicAlias,
+            Self::InvalidUplinkBaseline { .. } => ModelErrorKind::InvalidUplinkBaseline,
             Self::InvalidProbeInterval { .. } => ModelErrorKind::InvalidProbeInterval,
             Self::InvalidProbeBasePort { .. } => ModelErrorKind::InvalidProbeBasePort,
             Self::InvalidFlowCap { .. } => ModelErrorKind::InvalidFlowCap,
@@ -587,12 +781,19 @@ impl ModelError {
             Self::DuplicateWgIndex { .. } => ModelErrorKind::DuplicateWgIndex,
             Self::WgIndexNotAllocated { .. } => ModelErrorKind::WgIndexNotAllocated,
             Self::DuplicateShortId { .. } => ModelErrorKind::DuplicateShortId,
+            Self::DuplicateAlias { .. } => ModelErrorKind::DuplicateAlias,
+            Self::TooManyActiveUsers { .. } => ModelErrorKind::TooManyActiveUsers,
             Self::TargetNotSet { .. } => ModelErrorKind::TargetNotSet,
             Self::GenerationAhead { .. } => ModelErrorKind::GenerationAhead,
             Self::GenerationRegressed { .. } => ModelErrorKind::GenerationRegressed,
             Self::NodeNotDeployable { .. } => ModelErrorKind::NodeNotDeployable,
             Self::CredentialsOnInactiveNode { .. } => ModelErrorKind::CredentialsOnInactiveNode,
+            Self::DigestTimeTooEarly { .. } => ModelErrorKind::DigestTimeTooEarly,
+            Self::AlertChannelsOnInactiveNode { .. } => ModelErrorKind::AlertChannelsOnInactiveNode,
             Self::NotRevoking { .. } => ModelErrorKind::NotRevoking,
+            Self::UserNotActive { .. } => ModelErrorKind::UserNotActive,
+            Self::UserNotSuspended { .. } => ModelErrorKind::UserNotSuspended,
+            Self::RevocationAlreadyStarted { .. } => ModelErrorKind::RevocationAlreadyStarted,
             Self::NoCredentialsOnNode { .. } => ModelErrorKind::NoCredentialsOnNode,
             Self::NodeNotRetiring { .. } => ModelErrorKind::NodeNotRetiring,
             Self::RevokedUserHoldsCredentials { .. } => ModelErrorKind::RevokedUserHoldsCredentials,
@@ -600,6 +801,7 @@ impl ModelError {
                 ModelErrorKind::RevokePendingWithoutCredentials
             }
             Self::StateVersionMismatch { .. } => ModelErrorKind::StateVersionMismatch,
+            Self::UnknownStateVersion { .. } => ModelErrorKind::UnknownStateVersion,
         }
     }
 }
@@ -610,13 +812,17 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use super::*;
+    use crate::alerting::{AlertSettings, WallClockTime};
     use crate::cert::{CertificatePem, Hy2Sni};
     use crate::collections::NonEmpty;
     use crate::counters::RuntimeRevision;
-    use crate::deployment::{Bookkeeping, Deployment, DeploymentParts};
+    use crate::date::CalendarDate;
+    use crate::deployment::{
+        Bookkeeping, CapacityPolicy, Deployment, DeploymentInit, DeploymentParts,
+    };
     use crate::dns::DnsName;
     use crate::exit::{
-        CycleDay, FlowCap, ProbeBasePort, ProbeInterval, ProbePolicy, ProbeProtocol, SimPolicy,
+        FlowCap, ProbeBasePort, ProbeInterval, ProbePolicy, ProbeProtocol, UplinkBaseline,
     };
     use crate::ids::{LocalLabel, ShortId, Uuid};
     use crate::iface::{BsdName, InterfaceIndex, MacAddr, ResolvedInterface, ResolvedUplink};
@@ -626,11 +832,17 @@ mod tests {
     use crate::ports::{
         DEFAULT_HOP_INTERVAL, HopInterval, Hy2Listener, Hy2Obfs, Port, PortPlan, PortRange,
     };
+    use crate::quota::{BudgetPercent, SimFactor};
     use crate::secret::{Password, SecretRef};
-    use crate::state::StateV1;
+    use crate::sim::{BillDay, SimPolicy, StopPolicy};
+    use crate::state::StateVersion;
     use crate::target::{CertificateName, EvidenceUrl, HttpStatus, require_attested};
     use crate::testing::{self, attestation, node_id, two_node_parts, user, user_id};
+    use crate::time::UnixTime;
     use crate::user::UserStatus;
+    use crate::user::{SuspendReason, WarnPercent};
+    use crate::v1::StateV1;
+    use crate::v1::{CycleDay, SimPolicyV1};
     use crate::wg::{Keepalive, WgIndex};
 
     fn deployment_error(edit: impl FnOnce(&mut DeploymentParts)) -> ModelError {
@@ -660,7 +872,9 @@ mod tests {
     /// runs).
     fn every_error() -> Vec<(ModelErrorKind, ModelError)> {
         use ModelErrorKind as K;
-        let day = CycleDay::new(1).unwrap();
+        let day = BillDay::new(1).unwrap();
+        let mut revoked = user(1, &[]);
+        revoked.status = UserStatus::Revoked;
         let deployment = Deployment::try_from(two_node_parts()).unwrap();
         let site = testing::exit_site();
         let mut separate_site = site.clone();
@@ -767,10 +981,76 @@ mod tests {
                 K::EmptyCollection,
                 NonEmpty::<u8>::try_from(Vec::new()).unwrap_err(),
             ),
+            (
+                K::InvalidDate,
+                CalendarDate::parse("2026-02-29").unwrap_err(),
+            ),
             (K::InvalidCycleDay, CycleDay::new(0).unwrap_err()),
+            (K::InvalidBillDay, BillDay::new(32).unwrap_err()),
             (
                 K::InvalidSimThresholds,
-                SimPolicy::new(day, 0, None).unwrap_err(),
+                SimPolicy::new(
+                    day,
+                    testing::smarty_unlimited_plan(),
+                    0,
+                    StopPolicy::HardStop { bytes: 1 },
+                )
+                .unwrap_err(),
+            ),
+            (
+                K::SimThresholdAbovePlan,
+                SimPolicy::new(
+                    day,
+                    testing::fair_use_plan(),
+                    1,
+                    StopPolicy::HardStop { bytes: u64::MAX },
+                )
+                .unwrap_err(),
+            ),
+            (
+                K::DeprioritisationNeedsFairUseLine,
+                SimPolicy::new(
+                    day,
+                    testing::smarty_unlimited_plan(),
+                    1,
+                    StopPolicy::AcceptDeprioritisation,
+                )
+                .unwrap_err(),
+            ),
+            (
+                K::StopPolicyUnchosen,
+                SimPolicy::try_from(SimPolicyV1::new(CycleDay::new(1).unwrap(), 1, None).unwrap())
+                    .unwrap_err(),
+            ),
+            (
+                K::PlanNotRecorded,
+                Deployment::new(DeploymentInit {
+                    exit: {
+                        let mut site = testing::exit_site();
+                        site.sim = SimPolicy::try_from(
+                            SimPolicyV1::new(CycleDay::new(1).unwrap(), 1, Some(2)).unwrap(),
+                        )
+                        .unwrap();
+                        site
+                    },
+                    policy: crate::exit::TrafficPolicy::default(),
+                    capacity: CapacityPolicy::UNLIMITED,
+                    auto_quota: None,
+                    alerting: None,
+                })
+                .unwrap_err(),
+            ),
+            (K::InvalidWarnPercent, WarnPercent::new(100).unwrap_err()),
+            (K::InvalidBudgetPercent, BudgetPercent::new(0).unwrap_err()),
+            (K::InvalidSimFactor, SimFactor::new(999).unwrap_err()),
+            (
+                K::InvalidWallClockTime,
+                WallClockTime::parse("24:00").unwrap_err(),
+            ),
+            (K::InvalidPublicAlias, PublicAlias::parse("x").unwrap_err()),
+            (
+                K::InvalidUplinkBaseline,
+                UplinkBaseline::new(2, 1, UnixTime::from_secs(0)).unwrap_err(),
             ),
             (
                 K::InvalidProbeInterval,
@@ -822,6 +1102,20 @@ mod tests {
                 deployment_error(|parts| parts.users.push(user(3, &[("lon1", 1)]))),
             ),
             (
+                K::DuplicateAlias,
+                deployment_error(|parts| {
+                    let alias = PublicAlias::parse("k7qd-m2xa").unwrap();
+                    parts.users[0].alias = Some(alias.clone());
+                    parts.users[1].alias = Some(alias);
+                }),
+            ),
+            (
+                K::TooManyActiveUsers,
+                deployment_error(|parts| {
+                    parts.capacity.max_active_users = NonZeroU16::new(1);
+                }),
+            ),
+            (
                 K::TargetNotSet,
                 deployment_error(|parts| parts.nodes[0].reality.target = None),
             ),
@@ -860,11 +1154,43 @@ mod tests {
                 deployment_error(|parts| parts.nodes[0].lifecycle = NodeLifecycle::Retired),
             ),
             (
+                K::DigestTimeTooEarly,
+                deployment_error(|parts| {
+                    parts.alerting = Some(AlertSettings {
+                        digest_at: WallClockTime::parse("01:30").unwrap(),
+                        ..AlertSettings::pilot()
+                    });
+                }),
+            ),
+            (
+                K::AlertChannelsOnInactiveNode,
+                deployment_error(|parts| {
+                    parts.users.clear();
+                    parts.nodes[0].lifecycle = NodeLifecycle::Retired;
+                    parts.alerting = Some(AlertSettings {
+                        channels: BTreeSet::from([node_id("lon1")]),
+                        ..AlertSettings::pilot()
+                    });
+                }),
+            ),
+            (
                 K::NotRevoking,
                 record_error(Bookkeeping::RevocationCommitted {
                     user: user_id(1),
                     node: node_id("lon1"),
                 }),
+            ),
+            (
+                K::UserNotActive,
+                revoked
+                    .clone()
+                    .suspend(SuspendReason::Operator, UnixTime::from_secs(0))
+                    .unwrap_err(),
+            ),
+            (K::UserNotSuspended, user(1, &[]).resume().unwrap_err()),
+            (
+                K::RevocationAlreadyStarted,
+                revoked.clone().revoke().unwrap_err(),
             ),
             (
                 K::NoCredentialsOnNode,
@@ -901,6 +1227,10 @@ mod tests {
                 K::StateVersionMismatch,
                 StateV1::require_version(2).unwrap_err(),
             ),
+            (
+                K::UnknownStateVersion,
+                StateVersion::try_from(0).unwrap_err(),
+            ),
         ]
     }
 
@@ -934,6 +1264,25 @@ mod tests {
             .to_string(),
             "duplicate node lon1"
         );
+        assert_eq!(
+            ModelErrorKind::DeprioritisationNeedsFairUseLine.name(),
+            "DeprioritisationNeedsFairUseLine"
+        );
+        // The stop texts name no carrier and no invented default.
+        for error in [
+            ModelError::StopPolicyUnchosen,
+            ModelError::DeprioritisationNeedsFairUseLine,
+            ModelError::SimThresholdAbovePlan {
+                threshold_bytes: 2,
+                line_bytes: 1,
+            },
+        ] {
+            let text = error.to_string();
+            assert!(
+                !text.contains("EE") && !text.contains("560000000000"),
+                "{text}"
+            );
+        }
     }
 
     #[test]

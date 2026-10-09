@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Per-user and per-node credentials: UUIDs, REALITY short ids, passwords
-//! and opaque user ids (design §7).
+//! Per-user and per-node credentials: UUIDs, REALITY short ids, passwords,
+//! opaque user ids and public aliases (design §7).
 
 use mooring_model::secret::Password;
-use mooring_model::{Secret, ShortId, UserId, Uuid};
+use mooring_model::{PublicAlias, Secret, ShortId, UserId, Uuid};
 
 use crate::error::KeysError;
 use crate::random::{OsRandom, RandomSource, draw};
@@ -57,12 +57,27 @@ pub(crate) fn user_id_from(source: &mut impl RandomSource) -> Result<UserId, Key
     Ok(UserId::from_low_bits(u64::from_be_bytes(*bytes)))
 }
 
+/// A user's public alias: 40 random bits as `xxxx-xxxx` in lowercase base32.
+/// It is random, never a name, so it can be quoted instead of one.
+///
+/// The caller still checks the new alias against the deployment's users,
+/// which refuses a duplicate (`DuplicateAlias`).
+pub fn public_alias() -> Result<PublicAlias, KeysError> {
+    public_alias_from(&mut OsRandom)
+}
+
+pub(crate) fn public_alias_from(source: &mut impl RandomSource) -> Result<PublicAlias, KeysError> {
+    let bytes = draw::<5>(source)?;
+    Ok(PublicAlias::from_random_bytes(*bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::KeysErrorKind;
     use crate::testing::{CountingRandom, FailingRandom, ReplayRandom, ZeroRandom};
     use mooring_model::ModelError;
+    use mooring_model::ids::PUBLIC_ALIAS_LEN;
     use mooring_model::secret::SecretKind;
 
     #[test]
@@ -140,6 +155,26 @@ mod tests {
     }
 
     #[test]
+    fn public_aliases_take_40_random_bits() {
+        let alias = public_alias_from(&mut ReplayRandom::new(&[0xff; 5])).unwrap();
+        assert_eq!(alias.as_str(), "7777-7777");
+        let alias = public_alias_from(&mut ReplayRandom::new(&[0, 0, 0, 0, 33])).unwrap();
+        assert_eq!(alias.as_str(), "aaaa-aabb");
+        let alias = public_alias_from(&mut CountingRandom::starting_at(0x10)).unwrap();
+        assert_eq!(
+            alias,
+            PublicAlias::from_random_bytes([0x10, 0x11, 0x12, 0x13, 0x14])
+        );
+        // Exactly five bytes are drawn.
+        assert!(public_alias_from(&mut ReplayRandom::new(&[0; 4])).is_err());
+        let generated = public_alias().unwrap();
+        assert_eq!(generated.as_str().len(), PUBLIC_ALIAS_LEN);
+        assert_eq!(generated.as_str().as_bytes()[4], b'-');
+        // Two 40-bit draws collide with probability 2^-40.
+        assert_ne!(public_alias().unwrap(), generated);
+    }
+
+    #[test]
     fn an_all_zero_draw_is_rejected_not_used() {
         assert_eq!(
             short_id_from(&mut ZeroRandom),
@@ -164,7 +199,8 @@ mod tests {
             short_id_from(&mut FailingRandom).unwrap_err().kind(),
             password_from(&mut FailingRandom).unwrap_err().kind(),
             user_id_from(&mut FailingRandom).unwrap_err().kind(),
+            public_alias_from(&mut FailingRandom).unwrap_err().kind(),
         ];
-        assert_eq!(kinds, [KeysErrorKind::Entropy; 4]);
+        assert_eq!(kinds, [KeysErrorKind::Entropy; 5]);
     }
 }

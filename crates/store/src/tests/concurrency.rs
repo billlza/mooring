@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use mooring_model::counters::ConfigGeneration;
 use mooring_model::exit::FlowCap;
-use mooring_model::state::StateFile;
 
 use super::builders::initialised;
 use super::store_error;
@@ -122,7 +121,7 @@ fn concurrent_writers_never_lose_an_update() {
             let mut reads = 0_u32;
             while !stop.load(Ordering::Relaxed) {
                 let bytes = fs::read(&path).unwrap();
-                serde_json::from_slice::<StateFile>(&bytes).unwrap();
+                crate::migrate::parse(&bytes).unwrap();
                 reads += 1;
             }
             reads

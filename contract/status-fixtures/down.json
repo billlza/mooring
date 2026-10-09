@@ -1,0 +1,237 @@
+{
+  "version": 1,
+  "at": 1791477900,
+  "exit": {
+    "state": {
+      "down": {
+        "reason": {
+          "violation": {
+            "egress_mismatch": {
+              "d1": "31.120.4.17",
+              "d2": "31.120.4.17",
+              "observed": "81.2.69.142"
+            }
+          }
+        }
+      }
+    },
+    "since": 1791477600,
+    "latches": [
+      {
+        "violation": {
+          "egress_mismatch": {
+            "d1": "31.120.4.17",
+            "d2": "31.120.4.17",
+            "observed": "81.2.69.142"
+          }
+        },
+        "at": 1791477600
+      }
+    ],
+    "egress": {
+      "interface": "en8",
+      "lladdr": "02:6d:6f:6f:72:01",
+      "ipv4": "192.168.1.20",
+      "link": {
+        "up": true,
+        "speed_mbps": 2500
+      }
+    },
+    "carrier_check": {
+      "egress_ip": "31.120.4.17",
+      "in_carrier_prefixes": true,
+      "pairing": "paired",
+      "checked_at": 1791477879
+    },
+    "engines": {
+      "exit": {
+        "pid": null,
+        "restarts": 0,
+        "last_exit": {
+          "at": 1791477600,
+          "end": {
+            "signalled": {
+              "signal": 15
+            }
+          }
+        }
+      },
+      "probe": {
+        "pid": 6011,
+        "restarts": 0,
+        "last_exit": null
+      }
+    },
+    "power": {
+      "source": "ac",
+      "assertions_held": true,
+      "last_sleep": null,
+      "last_wake": null,
+      "last_drain": null
+    },
+    "foreign_networks": []
+  },
+  "sim": {
+    "cycle": {
+      "start": "2026-10-01",
+      "next_start": "2026-11-01"
+    },
+    "rx_bytes": 9816684626,
+    "tx_bytes": 8705361838,
+    "accuracy": "lower_bound",
+    "thresholds": {
+      "warn_bytes": 240000000000,
+      "stop": {
+        "hard_stop": {
+          "bytes": 300000000000
+        }
+      },
+      "plan_line": null
+    },
+    "forecast": {
+      "unavailable": {
+        "reason": "MissingDay"
+      }
+    }
+  },
+  "router": {
+    "unavailable": {
+      "reason": "unreachable",
+      "last_polled_at": 1791477540
+    }
+  },
+  "capacity": null,
+  "usage": {
+    "unavailable": {
+      "reason": "NotCoveredThrough"
+    }
+  },
+  "users": {
+    "fxuseraaab": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "idle",
+        "last_seen": 1791477569,
+        "by_node": {
+          "lon1": {
+            "reality": 1791477569,
+            "hy2": null
+          }
+        }
+      },
+      "usage": null,
+      "quota": {
+        "usage_unavailable": {
+          "quota_bytes": 50000000000
+        }
+      },
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    }
+  },
+  "nodes": {
+    "lon1": {
+      "role": "primary",
+      "stage": "Applied",
+      "current_generation": 1,
+      "pending_apply_since": null,
+      "verdicts": {
+        "reality": {
+          "at": 1791477600,
+          "outcome": {
+            "violation": {
+              "kind": "EgressMismatch"
+            }
+          },
+          "latency_ms": 188
+        },
+        "hy2": {
+          "at": 1791477360,
+          "outcome": "verified",
+          "latency_ms": 151
+        }
+      },
+      "agent": {
+        "reported": {
+          "polled_at": 1791477831,
+          "agent_now": 1791477830,
+          "watch_age_secs": 3,
+          "gate": "Closed",
+          "holds": {
+            "mac_drain": null,
+            "egress_violation": {
+              "at": 1791477600,
+              "generation": 1
+            },
+            "operator": null
+          },
+          "halted": null,
+          "handshake_age_secs": 331,
+          "applied": {
+            "generation": 1,
+            "digest": "01812c29cdf98e8594d5d0e6cbd662a26869093a5ed0d8bd009668abc35e20a2"
+          },
+          "conditions": [],
+          "accounting_at": 1791477799,
+          "engines": {
+            "xray": {
+              "restarts": 1,
+              "run": {
+                "Active": {
+                  "uptime_secs": 52380,
+                  "go_heap_bytes": 37748736
+                }
+              }
+            },
+            "hy2": {
+              "restarts": 0,
+              "run": {
+                "Active": {
+                  "uptime_secs": 52391,
+                  "go_heap_bytes": null
+                }
+              }
+            }
+          },
+          "host": {
+            "uptime_secs": 52420,
+            "load_milli": 180,
+            "mem_available_bytes": 612368384,
+            "disk_free_bytes": 19327352832,
+            "journal_bytes": 88080384,
+            "reboot_required": false,
+            "last_unattended_upgrade": 1791403440,
+            "ntp_synced": true
+          },
+          "transfer": {
+            "month": "2026-10",
+            "counted_from": 1790812800,
+            "rx_bytes": 96210000000,
+            "tx_bytes": 95870000000,
+            "counter_resets": 7
+          }
+        }
+      }
+    }
+  },
+  "alerts": [
+    {
+      "severity": "critical",
+      "condition": {
+        "exit_violation": {
+          "violations": [
+            "EgressMismatch"
+          ]
+        }
+      },
+      "active_since": 1791477600,
+      "raised_at": 1791477600
+    }
+  ]
+}

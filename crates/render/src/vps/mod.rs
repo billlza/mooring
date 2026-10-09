@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The VPS side: one node's bundle of managed files (design §8.2–§8.5) and
-//! its cloud-init user-data (§8.9).
+//! The VPS side: one node's bundle of managed files (design §8.2–§8.5 and
+//! §15.9) and its cloud-init user-data (§8.9).
 
 mod cloud_init;
 pub(crate) mod hy2;
 pub(crate) mod nft;
 pub(crate) mod served;
+pub(crate) mod viewers;
 pub(crate) mod watch;
 pub(crate) mod wg;
 pub(crate) mod xray;
@@ -60,6 +61,7 @@ struct Files {
     wg: RenderedFile,
     nftables: RenderedFile,
     watch: RenderedFile,
+    viewer_keys: RenderedFile,
 }
 
 impl Files {
@@ -70,6 +72,7 @@ impl Files {
             ManagedFile::WgConf => &self.wg,
             ManagedFile::Nftables => &self.nftables,
             ManagedFile::WatchConfig => &self.watch,
+            ManagedFile::ViewerKeys => &self.viewer_keys,
         }
     }
 }
@@ -261,6 +264,7 @@ fn files(
         wg: RenderedFile::new(encode::text(|sink| wg::write(&wg, sink))),
         nftables: RenderedFile::new(encode::text(|sink| nft::write(&nft, sink))),
         watch: RenderedFile::new(encode::json(&watch::config(node, target)?)?),
+        viewer_keys: RenderedFile::new(viewers::file(deployment.viewers())?),
     })
 }
 
@@ -349,6 +353,7 @@ pub(crate) mod testing {
                 ManagedFile::WgConf => files.wg = replaced,
                 ManagedFile::Nftables => files.nftables = replaced,
                 ManagedFile::WatchConfig => files.watch = replaced,
+                ManagedFile::ViewerKeys => files.viewer_keys = replaced,
             }
         }
         bundle_digest(&files, bundle.host_profile, &bundle.engines, &bundle.site)

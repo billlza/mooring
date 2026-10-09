@@ -76,6 +76,37 @@ impl fmt::Display for HostKeyRule {
     }
 }
 
+/// An identity holding credentials on a node, as a refusal names it: a
+/// user by opaque id, or the Mac's probe. Neither is a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CredentialHolder {
+    /// A user.
+    User(UserId),
+    /// The Mac's in-chain probe identity.
+    Probe,
+}
+
+impl fmt::Display for CredentialHolder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::User(user) => write!(f, "user {user}"),
+            Self::Probe => f.write_str("the probe"),
+        }
+    }
+}
+
+kinds! {
+    /// A per-identity credential a node's engines authenticate by.
+    pub enum CredentialKind {
+        /// The REALITY VLESS UUID (`reality-in`).
+        VlessUuid,
+        /// The loopback VLESS UUID of the Hysteria2 handoff (`hy2-loop-in`).
+        LoopbackUuid,
+        /// The Hysteria2 password.
+        Hy2Password,
+    }
+}
+
 /// Rendering a VPS bundle, a Mac engine config or cloud-init user-data failed.
 ///
 /// No variant carries secret material.
@@ -95,6 +126,26 @@ pub enum RenderError {
     /// No node is applied, so the Mac has no tunnel to serve or probe.
     #[error("no node has applied a configuration, so the Mac has no tunnel to serve or probe")]
     NoAppliedNodes,
+    /// Two identities holding credentials on the node (users, whatever
+    /// their status, and the probe) share a credential of this kind. Xray
+    /// keeps only the last client with a given UUID (v26.9.30
+    /// `proxy/vless/validator.go:35-43`), so `xray run -test` would not
+    /// notice; the engines would merge the two identities' accounting and
+    /// let one authenticate as the other, or keep a suspended or revoked
+    /// credential working. It names both holders, in the order rendering
+    /// checks them (users in id order, then the probe), so the operator can
+    /// find them without reading the Keychain.
+    #[error("{first} and {second} share a credential on node {node} ({kind})")]
+    DuplicateCredential {
+        /// The node.
+        node: NodeId,
+        /// The credential they share.
+        kind: CredentialKind,
+        /// The holder checked first.
+        first: CredentialHolder,
+        /// The holder found to share the first's credential.
+        second: CredentialHolder,
+    },
     /// A value does not satisfy the other side's rule for its field.
     #[error("{field} does not satisfy both the model's and the agent protocol's rule")]
     WireValue {
@@ -156,6 +207,8 @@ kinds! {
         Export,
         /// See [`RenderError::NoAppliedNodes`].
         NoAppliedNodes,
+        /// See [`RenderError::DuplicateCredential`].
+        DuplicateCredential,
         /// See [`RenderError::WireValue`].
         WireValue,
         /// See [`RenderError::AddressNotOnUplink`].
@@ -182,6 +235,7 @@ impl RenderError {
             Self::Secret(_) => RenderErrorKind::Secret,
             Self::Export(_) => RenderErrorKind::Export,
             Self::NoAppliedNodes => RenderErrorKind::NoAppliedNodes,
+            Self::DuplicateCredential { .. } => RenderErrorKind::DuplicateCredential,
             Self::WireValue { .. } => RenderErrorKind::WireValue,
             Self::AddressNotOnUplink { .. } => RenderErrorKind::AddressNotOnUplink,
             Self::TargetFactsForOtherHost { .. } => RenderErrorKind::TargetFactsForOtherHost,

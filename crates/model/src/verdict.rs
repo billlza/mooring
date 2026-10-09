@@ -6,6 +6,8 @@
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::exit::{EgressCheck, Pairing};
 use crate::ids::NodeId;
 use crate::kinds;
@@ -56,7 +58,10 @@ impl UplinkAddress {
 }
 
 /// A violation: the engine is stopped and latched (design §10.2 steps 1-4).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// It is serialised for the latch file and the status stream, with its
+/// evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Violation {
     /// The egress IP is a node's address; that node is also sent `Shutdown`.
     EgressIsNodeAddress {
@@ -87,7 +92,9 @@ pub enum Violation {
 }
 
 kinds! {
-    /// The kind of a [`Violation`], without its details.
+    /// The kind of a [`Violation`], without its details. It is serialised
+    /// as its name.
+    #[derive(Serialize, Deserialize)]
     pub enum ViolationKind {
         /// See [`Violation::EgressIsNodeAddress`].
         EgressIsNodeAddress,
@@ -463,6 +470,54 @@ mod tests {
         let outside = direct_verdict(OUTSIDE, &nodes, &egress).unwrap_err();
         assert_eq!(outside, Violation::OutsideCarrierPrefixes { ip: OUTSIDE });
         assert_eq!(outside.shutdown_node(), None);
+    }
+
+    /// The latch file and the status stream carry violations with their
+    /// evidence; the encodings are fixed, and unknown keys are refused.
+    #[test]
+    fn violations_have_a_fixed_encoding() {
+        let cases = [
+            (
+                Violation::EgressIsNodeAddress {
+                    node: NodeId::parse("lon1").unwrap(),
+                    ip: LON1,
+                },
+                r#"{"egress_is_node_address":{"node":"lon1","ip":"45.67.89.10"}}"#,
+            ),
+            (
+                Violation::OutsideCarrierPrefixes { ip: OUTSIDE },
+                r#"{"outside_carrier_prefixes":{"ip":"81.2.3.4"}}"#,
+            ),
+            (
+                Violation::EgressEqualsUplink { ip: CARRIER_A },
+                r#"{"egress_equals_uplink":{"ip":"31.120.0.7"}}"#,
+            ),
+            (
+                Violation::EgressMismatch {
+                    d1: CARRIER_A,
+                    d2: CARRIER_A,
+                    observed: CARRIER_C,
+                },
+                r#"{"egress_mismatch":{"d1":"31.120.0.7","d2":"31.120.0.7","observed":"31.121.4.9"}}"#,
+            ),
+        ];
+        for (violation, json) in cases {
+            assert_eq!(serde_json::to_string(&violation).unwrap(), json);
+            assert_eq!(serde_json::from_str::<Violation>(json).unwrap(), violation);
+            let kind = serde_json::to_string(&violation.kind()).unwrap();
+            assert_eq!(kind, format!("\"{}\"", violation.kind().name()));
+            assert_eq!(
+                serde_json::from_str::<ViolationKind>(&kind).unwrap(),
+                violation.kind()
+            );
+        }
+        assert!(
+            serde_json::from_str::<Violation>(
+                r#"{"outside_carrier_prefixes":{"ip":"81.2.3.4","at":1}}"#
+            )
+            .is_err()
+        );
+        assert!(serde_json::from_str::<ViolationKind>("\"Unknown\"").is_err());
     }
 
     #[test]

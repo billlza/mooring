@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use mooring_export::{ExportFormat, export_user};
 use mooring_fixtures::{FIXTURE_NOW, Fixture};
 use mooring_model::node::{AppliedConfig, NodeLifecycle};
-use mooring_model::user::UserStatus;
+use mooring_model::user::{SuspendReason, UserStatus};
 use mooring_model::{Bookkeeping, Deployment, NodeId, Sha256Digest, UserId};
 
 use crate::tests::support::{edit, engines, node};
@@ -135,4 +135,40 @@ fn shutting_down_a_retiring_node_changes_no_bundle_and_no_export() {
         &retiring,
         Bookkeeping::RetirementShutDown { node: node("ams1") },
     );
+}
+
+/// Suspending a user is not bookkeeping: every bundle the user was served
+/// in changes, exactly as if the user were gone, so it bumps the
+/// generation. The user's credentials stay referenced, so resuming renders
+/// the original bundles and exports again.
+#[test]
+fn suspending_a_user_changes_the_bundles_and_resuming_restores_them() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let before = rendered(&fixture, &fixture.deployment);
+    let user = fixture.deployment.users().keys().next().unwrap().clone();
+    let suspended = edit(&fixture.deployment, |parts| {
+        parts.users[0]
+            .suspend(SuspendReason::AbuseReview, FIXTURE_NOW)
+            .unwrap();
+    });
+    let during = rendered(&fixture, &suspended);
+    assert_eq!(during.bundles.len(), before.bundles.len());
+    for (node, digest) in &before.bundles {
+        assert_ne!(
+            &during.bundles[node], digest,
+            "{node} still serves the user"
+        );
+    }
+    assert!(during.exports.keys().all(|(id, _)| *id != user));
+    assert_eq!(during.exports.len(), before.exports.len() - 2);
+    let without = edit(&fixture.deployment, |parts| {
+        parts.users.remove(0);
+    });
+    assert_eq!(during.bundles, rendered(&fixture, &without).bundles);
+    assert_eq!(
+        suspended.required_secrets(),
+        fixture.deployment.required_secrets()
+    );
+    let resumed = edit(&suspended, |parts| parts.users[0].resume().unwrap());
+    assert_eq!(rendered(&fixture, &resumed), before);
 }

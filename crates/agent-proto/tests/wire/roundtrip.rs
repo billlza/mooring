@@ -10,18 +10,20 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroU16;
 
 use mooring_agent_proto::{
-    AcceptLocal, AgentError, AgentErrorKind, AppliedGeneration, ApplyStep, Arch, BlobLen,
-    BundleFiles, BundleHeader, CertName, ClearableHold, EgressViolationHold, EngineSet, GateReason,
-    GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostFact, HostFacts,
-    HostProfileVersion, HttpProbe, HttpStatus, HttpVersion, IfName, Inbound, IoOp, KernelIdent,
-    KernelRelease, LineRequest, MAX_BLOB_BYTES, MacDrainHold, OpaqueUserId, OperatorHold,
-    PortRange, Principal, ReadError, RedirectUrl, Reply, Request, RequestKind, Response,
-    ResponseKind, Role, RollbackCause, Sha256Hex, ShutdownReason, SshEd25519Key, SshdDirective,
-    StatsEmail, StatusV1, StderrTail, SystemdOp, TargetFacts, TargetHost, TargetTool, TlsGroup,
-    TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage, TxnState, UnitName, UnixTime, UsageMonth,
-    UsageV1, ValidationTool, WatchConditions, WatchConfig, WatchError, WatchTarget,
-    expect_end_of_input, read_blob, read_reply, read_request, write_put_blob, write_reply,
-    write_request,
+    AcceptLocal, AgentError, AgentErrorKind, AgentEvent, AgentEventKind, AppliedGeneration,
+    ApplyStep, Arch, BlobLen, BundleFiles, BundleHeader, CertName, ClearableHold,
+    EgressViolationHold, EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq,
+    EventsV1, GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostFact,
+    HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion, IfName, Inbound,
+    InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MAX_BLOB_BYTES, MacDrainHold,
+    OpaqueUserId, OperatorHold, PortRange, Principal, ReadError, RedirectUrl, Reply, Request,
+    RequestKind, Resolution, Response, ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan,
+    Sha256Hex, ShutdownReason, SshEd25519Key, SshdDirective, StatsEmail, StatusV1, StderrTail,
+    StoredMacReport, SystemdOp, TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe,
+    TlsSession, TlsVersion, Traffic, TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer,
+    UsageBin, UsageMonth, UsageSeriesV1, UsageV1, ValidationTool, WatchConditions, WatchConfig,
+    WatchError, WatchErrorKind, WatchTarget, expect_end_of_input, read_blob, read_reply,
+    read_request, write_put_blob, write_reply, write_request,
 };
 use proptest::collection::{btree_map, btree_set, vec};
 use proptest::option;
@@ -29,7 +31,7 @@ use proptest::prelude::*;
 use proptest::sample::select;
 use serde_json::Value;
 
-use crate::fixtures;
+use crate::{fixtures, report};
 
 // ---- scalar strategies --------------------------------------------------
 
@@ -216,12 +218,19 @@ fn bundle_header() -> impl Strategy<Value = BundleHeader> {
         digest(),
         host_facts(),
         any::<u32>().prop_map(HostProfileVersion::new),
-        [digest(), digest(), digest(), digest(), digest()],
+        [digest(), digest(), digest(), digest(), digest(), digest()],
         [digest(), digest(), digest(), digest()],
     )
         .prop_map(
             |(config_generation, digest, host_facts, host_profile_version, files, engines)| {
-                let [xray_config, hy2_config, wg_conf, nftables, watch_config] = files;
+                let [
+                    xray_config,
+                    hy2_config,
+                    wg_conf,
+                    nftables,
+                    watch_config,
+                    viewer_keys,
+                ] = files;
                 let [xray, hy2, geoip, geosite] = engines;
                 BundleHeader {
                     config_generation,
@@ -234,6 +243,7 @@ fn bundle_header() -> impl Strategy<Value = BundleHeader> {
                         wg_conf,
                         nftables,
                         watch_config,
+                        viewer_keys,
                     },
                     engines: EngineSet {
                         xray,
@@ -254,7 +264,192 @@ fn watch_error() -> impl Strategy<Value = WatchError> {
         Just(WatchError::TargetDegraded),
         any::<u64>().prop_map(|count| WatchError::ExitFlowCapHit { count }),
         errno().prop_map(|errno| WatchError::StateWrite { errno }),
+        option::of(unix_time()).prop_map(|since| WatchError::MacSilent { since }),
+        any::<u64>().prop_map(|free| WatchError::DiskLow { free }),
+        Just(WatchError::ClockUnsynced),
+        unix_time().prop_map(|since| WatchError::RebootPending { since }),
+        inbound_set().prop_map(|inbounds| WatchError::AccountingCanaryMissing { inbounds }),
     ]
+}
+
+fn engine_state() -> impl Strategy<Value = EngineState> {
+    let run = prop_oneof![
+        Just(EngineRun::Inactive),
+        (any::<u64>(), option::of(any::<u64>())).prop_map(|(uptime_secs, go_heap_bytes)| {
+            EngineRun::Active {
+                uptime_secs,
+                go_heap_bytes,
+            }
+        }),
+    ];
+    (any::<u32>(), run).prop_map(|(restarts, run)| EngineState { restarts, run })
+}
+
+fn engine_health() -> impl Strategy<Value = EngineHealth> {
+    (engine_state(), engine_state()).prop_map(|(xray, hy2)| EngineHealth { xray, hy2 })
+}
+
+fn host_health() -> impl Strategy<Value = HostHealth> {
+    (
+        any::<u64>(),
+        any::<u32>(),
+        any::<u64>(),
+        any::<u64>(),
+        any::<u64>(),
+        any::<bool>(),
+        option::of(unix_time()),
+        any::<bool>(),
+    )
+        .prop_map(
+            |(
+                uptime_secs,
+                load_milli,
+                mem_available_bytes,
+                disk_free_bytes,
+                journal_bytes,
+                reboot_required,
+                last_unattended_upgrade,
+                ntp_synced,
+            )| HostHealth {
+                uptime_secs,
+                load_milli,
+                mem_available_bytes,
+                disk_free_bytes,
+                journal_bytes,
+                reboot_required,
+                last_unattended_upgrade,
+                ntp_synced,
+            },
+        )
+}
+
+fn uplink_transfer() -> impl Strategy<Value = UplinkTransfer> {
+    (
+        usage_month(),
+        unix_time(),
+        any::<u64>(),
+        any::<u64>(),
+        any::<u32>(),
+    )
+        .prop_map(
+            |(month, counted_from, rx_bytes, tx_bytes, counter_resets)| UplinkTransfer {
+                month,
+                counted_from,
+                rx_bytes,
+                tx_bytes,
+                counter_resets,
+            },
+        )
+}
+
+/// A span of `1..=most` whole bins anywhere in `u64` time.
+fn series_span_up_to(most: impl Fn(Resolution) -> u64) -> impl Strategy<Value = SeriesSpan> {
+    select(Resolution::ALL)
+        .prop_flat_map(move |resolution| {
+            let width = resolution.bin_secs();
+            let bins = most(resolution);
+            (Just(resolution), 1..=bins, 0..=(u64::MAX / width - bins))
+        })
+        .prop_map(|(resolution, bins, first)| {
+            let width = resolution.bin_secs();
+            SeriesSpan::new(
+                UnixTime::from_secs(first * width),
+                UnixTime::from_secs((first + bins) * width),
+                resolution,
+            )
+            .unwrap()
+        })
+}
+
+fn series_range() -> impl Strategy<Value = SeriesRange> {
+    series_span_up_to(Resolution::max_bins)
+        .prop_map(|span| SeriesRange::new(span.from(), span.to(), span.resolution()).unwrap())
+}
+
+fn nonzero_traffic() -> impl Strategy<Value = Traffic> {
+    (any::<u64>(), any::<u64>())
+        .prop_filter("zero traffic is omitted", |(up, down)| {
+            *up != 0 || *down != 0
+        })
+        .prop_map(|(uplink, downlink)| Traffic { uplink, downlink })
+}
+
+fn usage_series() -> impl Strategy<Value = UsageSeriesV1> {
+    series_range()
+        .prop_flat_map(|range| {
+            let bins = range.span().bins();
+            (
+                Just(range),
+                btree_map(
+                    0..bins,
+                    btree_map(stats_email(), nonzero_traffic(), 1..4),
+                    0..6,
+                ),
+            )
+        })
+        .prop_map(|(range, bins)| {
+            let span = range.span();
+            let width = span.resolution().bin_secs();
+            let bins = bins
+                .into_iter()
+                .map(|(index, traffic)| {
+                    UsageBin::new(
+                        UnixTime::from_secs(span.from().as_secs() + index * width),
+                        traffic,
+                    )
+                    .unwrap()
+                })
+                .collect();
+            UsageSeriesV1::new(range, bins).unwrap()
+        })
+}
+
+fn agent_event_kind() -> impl Strategy<Value = AgentEventKind> {
+    prop_oneof![
+        watch_error().prop_map(|condition| AgentEventKind::ConditionRaised { condition }),
+        select(WatchErrorKind::ALL)
+            .prop_map(|condition| AgentEventKind::ConditionCleared { condition }),
+        Just(AgentEventKind::GateOpened),
+        Just(AgentEventKind::GateClosed),
+        select(GateReason::ALL).prop_map(|hold| AgentEventKind::HoldRecorded { hold }),
+        select(GateReason::ALL).prop_map(|hold| AgentEventKind::HoldCleared { hold }),
+        select(ShutdownReason::ALL).prop_map(|reason| AgentEventKind::Halted { reason }),
+        generation().prop_map(|generation| AgentEventKind::Resumed { generation }),
+        generation().prop_map(|generation| AgentEventKind::Committed { generation }),
+        select(EngineUser::ALL).prop_map(|engine| AgentEventKind::EngineRestarted { engine }),
+        Just(AgentEventKind::HostBooted),
+    ]
+}
+
+/// Every non-empty set of inbounds.
+fn inbound_set() -> impl Strategy<Value = InboundSet> {
+    prop_oneof![
+        Just(InboundSet::of(Inbound::Reality)),
+        Just(InboundSet::of(Inbound::Hy2)),
+        Just(InboundSet::of(Inbound::Reality).with(Inbound::Hy2)),
+    ]
+}
+
+/// A page: events numbered consecutively upwards from anywhere, below
+/// `end`.
+fn events() -> impl Strategy<Value = EventsV1> {
+    (
+        0..=u64::MAX / 2,
+        vec((unix_time(), agent_event_kind()), 0..8),
+        0..=1000_u64,
+    )
+        .prop_map(|(first, entries, after)| {
+            let count = u64::try_from(entries.len()).unwrap();
+            let events: Vec<AgentEvent> = (first..)
+                .zip(entries)
+                .map(|(seq, (at, kind))| AgentEvent {
+                    seq: EventSeq::new(seq),
+                    at,
+                    kind,
+                })
+                .collect();
+            EventsV1::new(events, EventSeq::new(first + count + after)).unwrap()
+        })
 }
 
 fn watch_conditions() -> impl Strategy<Value = WatchConditions> {
@@ -269,7 +464,7 @@ fn watch_conditions() -> impl Strategy<Value = WatchConditions> {
 }
 
 fn status() -> impl Strategy<Value = StatusV1> {
-    (
+    let watch = (
         unix_time(),
         unix_time(),
         select(GateState::ALL),
@@ -281,21 +476,36 @@ fn status() -> impl Strategy<Value = StatusV1> {
                 .prop_map(|(generation, digest)| AppliedGeneration { generation, digest }),
         ),
         watch_conditions(),
+    );
+    let health = (
+        option::of(unix_time()),
+        btree_map(stats_email(), unix_time(), 0..6),
+        engine_health(),
+        host_health(),
+        uplink_transfer(),
+    );
+    (watch, health).prop_map(
+        |(
+            (now, watch_at, gate, holds, halted, latest_handshake, applied, conditions),
+            (accounting_at, last_active, engines, host, transfer),
+        )| {
+            StatusV1 {
+                now,
+                watch_at,
+                gate,
+                holds,
+                halted,
+                latest_handshake,
+                applied,
+                conditions,
+                accounting_at,
+                last_active,
+                engines,
+                host,
+                transfer,
+            }
+        },
     )
-        .prop_map(
-            |(now, watch_at, gate, holds, halted, latest_handshake, applied, conditions)| {
-                StatusV1 {
-                    now,
-                    watch_at,
-                    gate,
-                    holds,
-                    halted,
-                    latest_handshake,
-                    applied,
-                    conditions,
-                }
-            },
-        )
 }
 
 fn usage() -> impl Strategy<Value = UsageV1> {
@@ -427,10 +637,16 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
             AgentError::TargetFactsUnavailable { tool, stderr_tail }
         }),
         usage_month().prop_map(|month| AgentError::NoUsageRecorded { month }),
+        any::<u32>().prop_map(|fitting_bins| AgentError::SeriesTooLarge { fitting_bins }),
+        option::of(series_span_up_to(|_| 10_000))
+            .prop_map(|recorded| AgentError::SeriesNotRecorded { recorded }),
         stderr_tail().prop_map(|stderr_tail| AgentError::GateCloseFailed { stderr_tail }),
         (select(IoOp::ALL), errno()).prop_map(|(op, errno)| AgentError::Io { op, errno }),
         (select(Role::ALL), select(RequestKind::ALL))
             .prop_map(|(role, request)| AgentError::RoleNotPermitted { role, request }),
+        (select(Role::ALL), select(GateReason::ALL))
+            .prop_map(|(role, reason)| AgentError::GateReasonNotPermitted { role, reason }),
+        Just(AgentError::MacReportMissing),
         Just(AgentError::UnknownRequest),
         Just(AgentError::RequestTooLarge),
     ]
@@ -464,11 +680,17 @@ fn line_request() -> impl Strategy<Value = LineRequest> {
         Just(LineRequest::Rollback),
         Just(LineRequest::Status),
         usage_month().prop_map(|month| LineRequest::Usage { month }),
+        series_range().prop_map(LineRequest::UsageSeries),
+        any::<u64>().prop_map(|since| LineRequest::Events {
+            since: EventSeq::new(since)
+        }),
         target_host().prop_map(|host| LineRequest::TargetCheck { host }),
         select(GateReason::ALL).prop_map(|reason| LineRequest::GateSet { reason }),
         select(ClearableHold::ALL).prop_map(|hold| LineRequest::ClearHold { hold }),
         select(ShutdownReason::ALL).prop_map(|reason| LineRequest::Shutdown { reason }),
         generation().prop_map(|config_generation| LineRequest::Resume { config_generation }),
+        report::mac_report().prop_map(|report| LineRequest::PutMacReport(Box::new(report))),
+        Just(LineRequest::MacReport),
     ]
 }
 
@@ -498,11 +720,20 @@ fn response() -> impl Strategy<Value = Response> {
         generation().prop_map(|generation| Response::Reverted { generation }),
         status().prop_map(|status| Response::Status(Box::new(status))),
         usage().prop_map(|usage| Response::Usage(Box::new(usage))),
+        usage_series().prop_map(|series| Response::UsageSeries(Box::new(series))),
+        events().prop_map(|page| Response::Events(Box::new(page))),
         target_facts().prop_map(|facts| Response::TargetFacts(Box::new(facts))),
         holds().prop_map(|holds| Response::GateClosed { holds }),
         holds().prop_map(|holds| Response::HoldCleared { holds }),
         halt().prop_map(Response::Halted),
         generation().prop_map(|generation| Response::Resumed { generation }),
+        unix_time().prop_map(|at| Response::MacReportStored { at }),
+        (unix_time(), report::mac_report()).prop_map(|(received_at, report)| {
+            Response::MacReport(Box::new(StoredMacReport {
+                received_at,
+                report,
+            }))
+        }),
     ]
 }
 
@@ -678,6 +909,72 @@ proptest! {
             prop_assert_eq!(error.to_agent_error(), AgentError::UnknownRequest);
         }
     }
+
+    /// A received series is refused when a bin repeats, comes out of
+    /// order, starts outside its range or off a bin boundary, or holds an
+    /// entry with no traffic: absent bins mean zero traffic, so a series
+    /// must be unambiguous.
+    #[test]
+    fn a_received_series_must_be_ordered_whole_bins_with_traffic(
+        series in usage_series().prop_filter("has bins", |series| !series.bins().is_empty()),
+        pick in any::<usize>(),
+        how in 0..5_u8,
+    ) {
+        let span = series.range().span();
+        let mut json = serde_json::to_value(&series).unwrap();
+        let bins = json["bins"].as_array_mut().unwrap();
+        let index = pick % bins.len();
+        let start = bins[index]["start"].as_u64().unwrap();
+        match how {
+            1 if bins.len() >= 2 => {
+                let last = bins.len() - 1;
+                bins.swap(0, last);
+            }
+            0 | 1 => {
+                let copy = bins[index].clone();
+                bins.insert(index, copy);
+            }
+            2 => bins[index]["start"] = Value::from(span.to().as_secs()),
+            3 => bins[index]["start"] = Value::from(start + 1),
+            _ => {
+                let traffic = bins[index]["traffic"].as_object_mut().unwrap();
+                let first = traffic.keys().next().unwrap().clone();
+                traffic.insert(first, serde_json::json!({"uplink": 0, "downlink": 0}));
+            }
+        }
+        prop_assert!(serde_json::from_value::<UsageSeriesV1>(json.clone()).is_err(), "accepted {}", json);
+    }
+
+    /// A received journal page is refused when an event repeats, comes
+    /// out of order or is missing from the middle, or when its end does not
+    /// lie after every event.
+    #[test]
+    fn a_received_page_must_be_numbered_upwards_below_its_end(
+        page in events().prop_filter("has events", |page| !page.events().is_empty()),
+        pick in any::<usize>(),
+        how in 0..4_u8,
+    ) {
+        let mut json = serde_json::to_value(&page).unwrap();
+        let last = page.events().last().unwrap().seq.get();
+        let events = json["events"].as_array_mut().unwrap();
+        let index = pick % events.len();
+        match how {
+            0 => {
+                let copy = events[index].clone();
+                events.insert(index, copy);
+            }
+            1 if events.len() >= 2 => {
+                let end = events.len() - 1;
+                events.swap(0, end);
+            }
+            2 if events.len() >= 3 => {
+                let inner = 1 + pick % (events.len() - 2);
+                events.remove(inner);
+            }
+            _ => json["end"] = Value::from(last),
+        }
+        prop_assert!(serde_json::from_value::<EventsV1>(json.clone()).is_err(), "accepted {}", json);
+    }
 }
 
 fn arbitrary_json() -> impl Strategy<Value = Value> {
@@ -729,8 +1026,8 @@ fn fixture_values_round_trip() {
     let header = fixtures::bundle_header();
     assert_eq!(
         header.blobs().len(),
-        9,
-        "five files and four engines, all distinct"
+        10,
+        "six files and four engines, all distinct"
     );
 }
 
@@ -788,5 +1085,47 @@ fn every_object_of_every_fixture_message_denies_unknown_keys() {
     objects += assert_each_object_denies_unknown_keys(&fixtures::host_facts());
     objects += assert_each_object_denies_unknown_keys(&fixtures::holds());
     objects += assert_each_object_denies_unknown_keys(&fixtures::watch_config());
+    objects += assert_each_object_denies_unknown_keys(&fixtures::series_range());
+    objects += assert_each_object_denies_unknown_keys(&fixtures::usage_series());
+    objects += assert_each_object_denies_unknown_keys(&fixtures::events());
+    objects += assert_each_object_denies_unknown_keys(&fixtures::engine_health());
+    objects += assert_each_object_denies_unknown_keys(&fixtures::host_health());
+    objects += assert_each_object_denies_unknown_keys(&fixtures::uplink_transfer());
+    objects += assert_each_object_denies_unknown_keys(&fixtures::mac_report());
+    objects += assert_each_object_denies_unknown_keys(&fixtures::stored_mac_report());
+    for kind in WatchErrorKind::ALL {
+        objects += assert_each_object_denies_unknown_keys(&fixtures::watch_error(*kind));
+    }
+    for event in fixtures::events().events() {
+        objects += assert_each_object_denies_unknown_keys(event);
+    }
     assert!(objects > 100, "only {objects} objects were checked");
+}
+
+/// Every object the new protocol-1 types add is among those the test
+/// above tries: each health, series and journal object, every condition
+/// with data and every event kind with data.
+#[test]
+fn the_new_objects_are_all_reached() {
+    let paths = |value: Value| {
+        let mut out = Vec::new();
+        object_paths(&value, &mut Vec::new(), &mut out);
+        out.len()
+    };
+    let status = serde_json::to_value(fixtures::status()).unwrap();
+    for key in ["engines", "host", "transfer", "last_active"] {
+        assert!(status[key].is_object(), "{key}");
+    }
+    assert!(status["engines"]["xray"]["run"]["Active"].is_object());
+    assert_eq!(
+        paths(serde_json::to_value(fixtures::events()).unwrap()),
+        1 + 11 + 2 * 8 + 2,
+        "the page, each event, the tag and fields of the 8 kinds with data, \
+         and the tag and fields of the raised condition"
+    );
+    assert_eq!(
+        paths(serde_json::to_value(fixtures::usage_series()).unwrap()),
+        1 + 1 + 2 * 2 + 3,
+        "the series, its range, each bin and its traffic, each entry"
+    );
 }

@@ -2,6 +2,7 @@
 
 //! Collections that always hold at least one element.
 
+use std::collections::{BTreeSet, btree_set};
 use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -108,10 +109,90 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for NonEmpty<T> {
     }
 }
 
+/// A set with at least one element, in order; deserialising `[]` fails.
+/// On the wire it is a list in increasing order, as `BTreeSet` writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NonEmptySet<T: Ord>(BTreeSet<T>);
+
+impl<T: Ord> NonEmptySet<T> {
+    /// A set holding exactly `first`.
+    #[must_use]
+    pub fn new(first: T) -> Self {
+        Self(BTreeSet::from([first]))
+    }
+
+    /// Iterates over the elements in increasing order.
+    pub fn iter(&self) -> btree_set::Iter<'_, T> {
+        self.0.iter()
+    }
+
+    /// Adds an element; whether it was not already present.
+    pub fn insert(&mut self, item: T) -> bool {
+        self.0.insert(item)
+    }
+}
+
+impl<T: Ord> TryFrom<BTreeSet<T>> for NonEmptySet<T> {
+    type Error = ModelError;
+
+    fn try_from(items: BTreeSet<T>) -> Result<Self, Self::Error> {
+        if items.is_empty() {
+            Err(ModelError::EmptyCollection)
+        } else {
+            Ok(Self(items))
+        }
+    }
+}
+
+impl<T: Ord> From<NonEmptySet<T>> for BTreeSet<T> {
+    fn from(set: NonEmptySet<T>) -> Self {
+        set.0
+    }
+}
+
+impl<'a, T: Ord> IntoIterator for &'a NonEmptySet<T> {
+    type Item = &'a T;
+    type IntoIter = btree_set::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<T: Ord + Serialize> Serialize for NonEmptySet<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de, T: Ord + Deserialize<'de>> Deserialize<'de> for NonEmptySet<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let items = BTreeSet::<T>::deserialize(deserializer)?;
+        Self::try_from(items).map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn a_non_empty_set_rejects_the_empty_set_and_keeps_order() {
+        assert_eq!(
+            NonEmptySet::<u8>::try_from(BTreeSet::new()),
+            Err(ModelError::EmptyCollection)
+        );
+        assert!(serde_json::from_str::<NonEmptySet<u8>>("[]").is_err());
+        let set: NonEmptySet<u8> = serde_json::from_str("[3,1]").unwrap();
+        assert_eq!(set.iter().copied().collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(serde_json::to_string(&set).unwrap(), "[1,3]");
+        let mut grown = NonEmptySet::new(7_u8);
+        assert!(grown.insert(2));
+        assert!(!grown.insert(7));
+        assert_eq!(BTreeSet::from(grown), BTreeSet::from([2, 7]));
+        assert_eq!((&set).into_iter().count(), 2);
+    }
 
     #[test]
     fn non_empty_rejects_empty_vec_and_json() {

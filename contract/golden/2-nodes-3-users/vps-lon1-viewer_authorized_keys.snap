@@ -1,0 +1,5 @@
+---
+source: crates/render/src/tests/goldens.rs
+description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render viewer_authorized_keys (design 15.9); the file is this text plus one newline, or empty if this text is."
+---
+restrict,command="/usr/local/lib/mooring/agent/current serve-ssh --role viewer" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG1vb3JpbmctZml4dHVyZS12aWV3ZXIta2V5LTAwMDAx

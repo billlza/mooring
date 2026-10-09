@@ -1,0 +1,1767 @@
+{
+  "version": 1,
+  "at": 1791464430,
+  "exit": {
+    "state": {
+      "degraded": {
+        "reasons": [
+          {
+            "node_probe_failed": {
+              "node": "ams1",
+              "protocol": "hy2",
+              "stage": "connect"
+            }
+          },
+          {
+            "watch_stale": {
+              "node": "ams1"
+            }
+          },
+          "on_battery"
+        ]
+      }
+    },
+    "since": 1791462870,
+    "latches": [],
+    "egress": {
+      "interface": "en8",
+      "lladdr": "02:6d:6f:6f:72:01",
+      "ipv4": "192.168.1.20",
+      "link": {
+        "up": true,
+        "speed_mbps": 2500
+      }
+    },
+    "carrier_check": {
+      "egress_ip": "31.121.18.203",
+      "in_carrier_prefixes": true,
+      "pairing": "paired",
+      "checked_at": 1791464421
+    },
+    "engines": {
+      "exit": {
+        "pid": 5310,
+        "restarts": 0,
+        "last_exit": null
+      },
+      "probe": {
+        "pid": 5318,
+        "restarts": 0,
+        "last_exit": null
+      }
+    },
+    "power": {
+      "source": "battery",
+      "assertions_held": false,
+      "last_sleep": null,
+      "last_wake": 1791412800,
+      "last_drain": null
+    },
+    "foreign_networks": []
+  },
+  "sim": {
+    "cycle": {
+      "start": "2026-10-01",
+      "next_start": "2026-11-01"
+    },
+    "rx_bytes": 118768506794,
+    "tx_bytes": 105323015458,
+    "accuracy": "exact",
+    "thresholds": {
+      "warn_bytes": 240000000000,
+      "stop": {
+        "hard_stop": {
+          "bytes": 300000000000
+        }
+      },
+      "plan_line": null
+    },
+    "forecast": {
+      "projected": {
+        "cycle": {
+          "start": "2026-10-01",
+          "next_start": "2026-11-01"
+        },
+        "as_of": 1791464430,
+        "used_bytes": 224091522252,
+        "daily_average_bytes": 29712425030,
+        "projected_bytes": 921085175943,
+        "crossings": [
+          {
+            "threshold": "warn",
+            "bytes": 240000000000,
+            "crossing": {
+              "projected": {
+                "on": "2026-10-09"
+              }
+            }
+          },
+          {
+            "threshold": "hard_stop",
+            "bytes": 300000000000,
+            "crossing": {
+              "projected": {
+                "on": "2026-10-11"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "router": {
+    "available": {
+      "polled_at": 1791464379,
+      "radio": {
+        "attached": {
+          "access": "lte",
+          "band": "B3",
+          "carrier": "SMARTY",
+          "signal": {
+            "rsrp": -1125,
+            "rsrq": -145,
+            "sinr": -15,
+            "rssi": -810
+          }
+        }
+      },
+      "temperature_c": 47,
+      "power": {
+        "battery": {
+          "percent": 64,
+          "charging": false
+        }
+      },
+      "data_counter_bytes": 97412311040,
+      "connected_clients": 1,
+      "unread_sms": 0,
+      "firmware": "NTG9X75C_10.05.07.00",
+      "uptime_secs": 523014
+    }
+  },
+  "capacity": {
+    "at": 1791464418,
+    "tx_bps": 14680064,
+    "rx_bps": 15728640,
+    "uplink_use": {
+      "measured": {
+        "permille": 911,
+        "baseline_p50_bps": 16100000
+      }
+    },
+    "rtt_inflation_ms": 362,
+    "saturation": {
+      "saturated": {
+        "since": 1791461418
+      }
+    }
+  },
+  "usage": {
+    "report": {
+      "periods": {
+        "through": 1791460800,
+        "utc_day": "2026-10-08",
+        "cycle": {
+          "start": "2026-10-01",
+          "next_start": "2026-11-01"
+        },
+        "utc_month_start": "2026-10-01"
+      }
+    }
+  },
+  "users": {
+    "fxuseraaab": {
+      "alias": "abpr-4aaa",
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "active",
+        "last_seen": 1791464338,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464338,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 13631488,
+          "downlink": 272629760
+        },
+        "cycle": {
+          "uplink": 24117248,
+          "downlink": 482344960
+        },
+        "month": {
+          "uplink": 24117248,
+          "downlink": 482344960
+        },
+        "lifetime": {
+          "uplink": 24117248,
+          "downlink": 482344960
+        },
+        "cycle_served_bytes": 506462208,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 24117248,
+            "downlink": 482344960
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 19922944,
+            "downlink": 398458880
+          },
+          "hy2": {
+            "uplink": 4194304,
+            "downlink": 83886080
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 8261,
+            "hy2": 1739
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaac": {
+      "alias": "abpr-4hxp",
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464278,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464278,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 18874368,
+          "downlink": 377487360
+        },
+        "cycle": {
+          "uplink": 1650458624,
+          "downlink": 31935430656
+        },
+        "month": {
+          "uplink": 1650458624,
+          "downlink": 31935430656
+        },
+        "lifetime": {
+          "uplink": 1650458624,
+          "downlink": 31935430656
+        },
+        "cycle_served_bytes": 33585889280,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 1650458624,
+            "downlink": 31935430656
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 1650458624,
+            "downlink": 31935430656
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": {
+        "warn": {
+          "used_bytes": 33585889280,
+          "quota_bytes": 40000000000
+        }
+      },
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaad": {
+      "alias": "abpr-4po6",
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464218,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464218,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 28311552,
+          "downlink": 566231040
+        },
+        "cycle": {
+          "uplink": 1348259020,
+          "downlink": 31260147712
+        },
+        "month": {
+          "uplink": 1348259020,
+          "downlink": 31260147712
+        },
+        "lifetime": {
+          "uplink": 1348259020,
+          "downlink": 31260147712
+        },
+        "cycle_served_bytes": 32608406732,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 1348259020,
+            "downlink": 31260147712
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 59768832,
+            "downlink": 1195376640
+          },
+          "hy2": {
+            "uplink": 1288490188,
+            "downlink": 30064771072
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 385,
+            "hy2": 9615
+          }
+        }
+      },
+      "quota": {
+        "over": {
+          "used_bytes": 32608406732,
+          "quota_bytes": 30000000000
+        }
+      },
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaae": {
+      "alias": "abpr-4xgn",
+      "status": {
+        "suspended": {
+          "reason": {
+            "quota_exceeded": {
+              "cycle_start": "2026-10-01"
+            }
+          },
+          "since": 1791314100
+        }
+      },
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "idle",
+        "last_seen": null,
+        "by_node": {}
+      },
+      "usage": {
+        "today": {
+          "uplink": 0,
+          "downlink": 0
+        },
+        "cycle": {
+          "uplink": 880803840,
+          "downlink": 20971520000
+        },
+        "month": {
+          "uplink": 880803840,
+          "downlink": 20971520000
+        },
+        "lifetime": {
+          "uplink": 880803840,
+          "downlink": 20971520000
+        },
+        "cycle_served_bytes": 21852323840,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 880803840,
+            "downlink": 20971520000
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 880803840,
+            "downlink": 20971520000
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": {
+        "over": {
+          "used_bytes": 21852323840,
+          "quota_bytes": 20000000000
+        }
+      },
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": false
+      }
+    },
+    "fxuseraaaf": {
+      "alias": "abpr-4654",
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464278,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464278,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 9437184,
+          "downlink": 188743680
+        },
+        "cycle": {
+          "uplink": 61865984,
+          "downlink": 1237319680
+        },
+        "month": {
+          "uplink": 61865984,
+          "downlink": 1237319680
+        },
+        "lifetime": {
+          "uplink": 61865984,
+          "downlink": 1237319680
+        },
+        "cycle_served_bytes": 1299185664,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 61865984,
+            "downlink": 1237319680
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 61865984,
+            "downlink": 1237319680
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": {
+        "expires": {
+          "at": 1791633600,
+          "days_left": 2
+        }
+      },
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaag": {
+      "alias": "abpr-5gvl",
+      "status": {
+        "suspended": {
+          "reason": "operator",
+          "since": 1790931600
+        }
+      },
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "idle",
+        "last_seen": null,
+        "by_node": {}
+      },
+      "usage": {
+        "today": {
+          "uplink": 0,
+          "downlink": 0
+        },
+        "cycle": {
+          "uplink": 10485760,
+          "downlink": 209715200
+        },
+        "month": {
+          "uplink": 10485760,
+          "downlink": 209715200
+        },
+        "lifetime": {
+          "uplink": 10485760,
+          "downlink": 209715200
+        },
+        "cycle_served_bytes": 220200960,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 10485760,
+            "downlink": 209715200
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 10485760,
+            "downlink": 209715200
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": false
+      }
+    },
+    "fxuseraaah": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "active",
+        "last_seen": 1791464338,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464338,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 40894464,
+          "downlink": 817889280
+        },
+        "cycle": {
+          "uplink": 61865984,
+          "downlink": 1237319680
+        },
+        "month": {
+          "uplink": 61865984,
+          "downlink": 1237319680
+        },
+        "lifetime": {
+          "uplink": 61865984,
+          "downlink": 1237319680
+        },
+        "cycle_served_bytes": 1299185664,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 61865984,
+            "downlink": 1237319680
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 49283072,
+            "downlink": 985661440
+          },
+          "hy2": {
+            "uplink": 12582912,
+            "downlink": 251658240
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 7966,
+            "hy2": 2034
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaai": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464278,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464278,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 37748736,
+          "downlink": 754974720
+        },
+        "cycle": {
+          "uplink": 69206016,
+          "downlink": 1384120320
+        },
+        "month": {
+          "uplink": 69206016,
+          "downlink": 1384120320
+        },
+        "lifetime": {
+          "uplink": 69206016,
+          "downlink": 1384120320
+        },
+        "cycle_served_bytes": 1453326336,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 69206016,
+            "downlink": 1384120320
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 69206016,
+            "downlink": 1384120320
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaaj": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464218,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464218,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 9437184,
+          "downlink": 188743680
+        },
+        "cycle": {
+          "uplink": 51380224,
+          "downlink": 1027604480
+        },
+        "month": {
+          "uplink": 51380224,
+          "downlink": 1027604480
+        },
+        "lifetime": {
+          "uplink": 51380224,
+          "downlink": 1027604480
+        },
+        "cycle_served_bytes": 1078984704,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 51380224,
+            "downlink": 1027604480
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 51380224,
+            "downlink": 1027604480
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaak": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "active",
+        "last_seen": 1791464338,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464338,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 27262976,
+          "downlink": 545259520
+        },
+        "cycle": {
+          "uplink": 79691776,
+          "downlink": 1593835520
+        },
+        "month": {
+          "uplink": 79691776,
+          "downlink": 1593835520
+        },
+        "lifetime": {
+          "uplink": 79691776,
+          "downlink": 1593835520
+        },
+        "cycle_served_bytes": 1673527296,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 79691776,
+            "downlink": 1593835520
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 71303168,
+            "downlink": 1426063360
+          },
+          "hy2": {
+            "uplink": 8388608,
+            "downlink": 167772160
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 8947,
+            "hy2": 1053
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaal": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464278,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464278,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 28311552,
+          "downlink": 566231040
+        },
+        "cycle": {
+          "uplink": 38797312,
+          "downlink": 775946240
+        },
+        "month": {
+          "uplink": 38797312,
+          "downlink": 775946240
+        },
+        "lifetime": {
+          "uplink": 38797312,
+          "downlink": 775946240
+        },
+        "cycle_served_bytes": 814743552,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 38797312,
+            "downlink": 775946240
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 38797312,
+            "downlink": 775946240
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaam": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464218,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464218,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 37748736,
+          "downlink": 754974720
+        },
+        "cycle": {
+          "uplink": 58720256,
+          "downlink": 1174405120
+        },
+        "month": {
+          "uplink": 58720256,
+          "downlink": 1174405120
+        },
+        "lifetime": {
+          "uplink": 58720256,
+          "downlink": 1174405120
+        },
+        "cycle_served_bytes": 1233125376,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 58720256,
+            "downlink": 1174405120
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 58720256,
+            "downlink": 1174405120
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaan": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "active",
+        "last_seen": 1791464338,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464338,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 13631488,
+          "downlink": 272629760
+        },
+        "cycle": {
+          "uplink": 45088768,
+          "downlink": 901775360
+        },
+        "month": {
+          "uplink": 45088768,
+          "downlink": 901775360
+        },
+        "lifetime": {
+          "uplink": 45088768,
+          "downlink": 901775360
+        },
+        "cycle_served_bytes": 946864128,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 45088768,
+            "downlink": 901775360
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 40894464,
+            "downlink": 817889280
+          },
+          "hy2": {
+            "uplink": 4194304,
+            "downlink": 83886080
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 9070,
+            "hy2": 930
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaao": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464278,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464278,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 18874368,
+          "downlink": 377487360
+        },
+        "cycle": {
+          "uplink": 60817408,
+          "downlink": 1216348160
+        },
+        "month": {
+          "uplink": 60817408,
+          "downlink": 1216348160
+        },
+        "lifetime": {
+          "uplink": 60817408,
+          "downlink": 1216348160
+        },
+        "cycle_served_bytes": 1277165568,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 60817408,
+            "downlink": 1216348160
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 60817408,
+            "downlink": 1216348160
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaap": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464218,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464218,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 28311552,
+          "downlink": 566231040
+        },
+        "cycle": {
+          "uplink": 80740352,
+          "downlink": 1614807040
+        },
+        "month": {
+          "uplink": 80740352,
+          "downlink": 1614807040
+        },
+        "lifetime": {
+          "uplink": 80740352,
+          "downlink": 1614807040
+        },
+        "cycle_served_bytes": 1695547392,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 80740352,
+            "downlink": 1614807040
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 80740352,
+            "downlink": 1614807040
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaaq": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "active",
+        "last_seen": 1791464338,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464338,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 54525952,
+          "downlink": 1090519040
+        },
+        "cycle": {
+          "uplink": 65011712,
+          "downlink": 1300234240
+        },
+        "month": {
+          "uplink": 65011712,
+          "downlink": 1300234240
+        },
+        "lifetime": {
+          "uplink": 65011712,
+          "downlink": 1300234240
+        },
+        "cycle_served_bytes": 1365245952,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 65011712,
+            "downlink": 1300234240
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 48234496,
+            "downlink": 964689920
+          },
+          "hy2": {
+            "uplink": 16777216,
+            "downlink": 335544320
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 7419,
+            "hy2": 2581
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaar": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464278,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464278,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 9437184,
+          "downlink": 188743680
+        },
+        "cycle": {
+          "uplink": 30408704,
+          "downlink": 608174080
+        },
+        "month": {
+          "uplink": 30408704,
+          "downlink": 608174080
+        },
+        "lifetime": {
+          "uplink": 30408704,
+          "downlink": 608174080
+        },
+        "cycle_served_bytes": 638582784,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 30408704,
+            "downlink": 608174080
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 30408704,
+            "downlink": 608174080
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaas": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464218,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464218,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 18874368,
+          "downlink": 377487360
+        },
+        "cycle": {
+          "uplink": 50331648,
+          "downlink": 1006632960
+        },
+        "month": {
+          "uplink": 50331648,
+          "downlink": 1006632960
+        },
+        "lifetime": {
+          "uplink": 50331648,
+          "downlink": 1006632960
+        },
+        "cycle_served_bytes": 1056964608,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 50331648,
+            "downlink": 1006632960
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 50331648,
+            "downlink": 1006632960
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaat": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "active",
+        "last_seen": 1791464338,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464338,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 40894464,
+          "downlink": 817889280
+        },
+        "cycle": {
+          "uplink": 82837504,
+          "downlink": 1656750080
+        },
+        "month": {
+          "uplink": 82837504,
+          "downlink": 1656750080
+        },
+        "lifetime": {
+          "uplink": 82837504,
+          "downlink": 1656750080
+        },
+        "cycle_served_bytes": 1739587584,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 82837504,
+            "downlink": 1656750080
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 70254592,
+            "downlink": 1405091840
+          },
+          "hy2": {
+            "uplink": 12582912,
+            "downlink": 251658240
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 8481,
+            "hy2": 1519
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    },
+    "fxuseraaau": {
+      "alias": null,
+      "status": "active",
+      "nodes": [
+        "ams1",
+        "lon1"
+      ],
+      "activity": {
+        "active_now": "unknown",
+        "last_seen": 1791464278,
+        "by_node": {
+          "lon1": {
+            "reality": 1791464278,
+            "hy2": null
+          }
+        }
+      },
+      "usage": {
+        "today": {
+          "uplink": 37748736,
+          "downlink": 754974720
+        },
+        "cycle": {
+          "uplink": 90177536,
+          "downlink": 1803550720
+        },
+        "month": {
+          "uplink": 90177536,
+          "downlink": 1803550720
+        },
+        "lifetime": {
+          "uplink": 90177536,
+          "downlink": 1803550720
+        },
+        "cycle_served_bytes": 1893728256,
+        "cycle_by_node": {
+          "lon1": {
+            "uplink": 90177536,
+            "downlink": 1803550720
+          }
+        },
+        "cycle_by_protocol": {
+          "reality": {
+            "uplink": 90177536,
+            "downlink": 1803550720
+          },
+          "hy2": {
+            "uplink": 0,
+            "downlink": 0
+          }
+        },
+        "cycle_shares": {
+          "by_node": {
+            "lon1": 10000
+          },
+          "by_protocol": {
+            "reality": 10000,
+            "hy2": 0
+          }
+        }
+      },
+      "quota": "no_quota",
+      "expiry": "no_expiry",
+      "accuracy": {
+        "reality_downlink_counted_at_close": true
+      }
+    }
+  },
+  "nodes": {
+    "ams1": {
+      "role": "standby",
+      "stage": "Applied",
+      "current_generation": 2,
+      "pending_apply_since": 1791450300,
+      "verdicts": {
+        "reality": {
+          "at": 1791462570,
+          "outcome": "verified",
+          "latency_ms": 402
+        },
+        "hy2": {
+          "at": 1791464295,
+          "outcome": {
+            "failed": {
+              "stage": "connect"
+            }
+          },
+          "latency_ms": null
+        }
+      },
+      "agent": {
+        "unreachable": {
+          "since": 1791462870,
+          "cause": "timeout"
+        }
+      }
+    },
+    "lon1": {
+      "role": "primary",
+      "stage": "Applied",
+      "current_generation": 2,
+      "pending_apply_since": null,
+      "verdicts": {
+        "reality": {
+          "at": 1791464290,
+          "outcome": "verified",
+          "latency_ms": 391
+        },
+        "hy2": {
+          "at": 1791464292,
+          "outcome": "verified",
+          "latency_ms": 344
+        }
+      },
+      "agent": {
+        "reported": {
+          "polled_at": 1791464370,
+          "agent_now": 1791464369,
+          "watch_age_secs": 3,
+          "gate": "Open",
+          "holds": {
+            "mac_drain": null,
+            "egress_violation": null,
+            "operator": null
+          },
+          "halted": null,
+          "handshake_age_secs": 7,
+          "applied": {
+            "generation": 2,
+            "digest": "312757caec51971f7aaeb559f6a22db4628363f5f11a3a0a17f6c3cf99896d9d"
+          },
+          "conditions": [
+            {
+              "ExitFlowCapHit": {
+                "count": 14
+              }
+            },
+            {
+              "RebootPending": {
+                "since": 1791403440
+              }
+            }
+          ],
+          "accounting_at": 1791464338,
+          "engines": {
+            "xray": {
+              "restarts": 1,
+              "run": {
+                "Active": {
+                  "uptime_secs": 52380,
+                  "go_heap_bytes": 37748736
+                }
+              }
+            },
+            "hy2": {
+              "restarts": 0,
+              "run": {
+                "Active": {
+                  "uptime_secs": 52391,
+                  "go_heap_bytes": null
+                }
+              }
+            }
+          },
+          "host": {
+            "uptime_secs": 52420,
+            "load_milli": 180,
+            "mem_available_bytes": 612368384,
+            "disk_free_bytes": 19327352832,
+            "journal_bytes": 88080384,
+            "reboot_required": true,
+            "last_unattended_upgrade": 1791403440,
+            "ntp_synced": true
+          },
+          "transfer": {
+            "month": "2026-10",
+            "counted_from": 1790812800,
+            "rx_bytes": 96210000000,
+            "tx_bytes": 95870000000,
+            "counter_resets": 7
+          }
+        }
+      }
+    }
+  },
+  "alerts": [
+    {
+      "severity": "critical",
+      "condition": {
+        "node_unreachable": {
+          "node": "ams1",
+          "since": 1791462870
+        }
+      },
+      "active_since": 1791462870,
+      "raised_at": 1791464430
+    },
+    {
+      "severity": "warning",
+      "condition": {
+        "sim_forecast_crossing": {
+          "cycle_start": "2026-10-01",
+          "threshold": "warn",
+          "on": "2026-10-09"
+        }
+      },
+      "active_since": 1791457230,
+      "raised_at": 1791462030
+    },
+    {
+      "severity": "warning",
+      "condition": {
+        "exit_degraded": {
+          "reasons": [
+            "NodeProbeFailed",
+            "WatchStale",
+            "OnBattery"
+          ]
+        }
+      },
+      "active_since": 1791462870,
+      "raised_at": 1791464430
+    },
+    {
+      "severity": "warning",
+      "condition": "router_on_lte",
+      "active_since": 1791457230,
+      "raised_at": 1791462030
+    },
+    {
+      "severity": "warning",
+      "condition": {
+        "router_weak_signal": {
+          "rsrp_dbm_x10": -1125
+        }
+      },
+      "active_since": 1791457230,
+      "raised_at": 1791462030
+    },
+    {
+      "severity": "warning",
+      "condition": {
+        "users_near_quota": {
+          "count": 1
+        }
+      },
+      "active_since": 1791457230,
+      "raised_at": 1791462030
+    },
+    {
+      "severity": "warning",
+      "condition": {
+        "users_over_quota": {
+          "count": 1
+        }
+      },
+      "active_since": 1791457230,
+      "raised_at": 1791462030
+    },
+    {
+      "severity": "warning",
+      "condition": {
+        "users_suspended": {
+          "count": 2
+        }
+      },
+      "active_since": 1791457230,
+      "raised_at": 1791462030
+    },
+    {
+      "severity": "warning",
+      "condition": {
+        "users_expiring_soon": {
+          "count": 1
+        }
+      },
+      "active_since": 1791457230,
+      "raised_at": 1791462030
+    },
+    {
+      "severity": "warning",
+      "condition": "capacity_saturated",
+      "active_since": 1791462030,
+      "raised_at": 1791464430
+    },
+    {
+      "severity": "warning",
+      "condition": {
+        "exit_flow_cap_hit": {
+          "node": "lon1",
+          "count": 14
+        }
+      },
+      "active_since": 1791457230,
+      "raised_at": 1791462030
+    }
+  ]
+}

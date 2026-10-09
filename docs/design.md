@@ -1,7 +1,19 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # Mooring design
 
-**Status.** Design, revision 4 (2026-10-08): M1 complete, pending the operator's commit. Revision 3 added the user decisions D-3 (Xray v26.9.30 with REALITY e1986a4) and D-7 (build host). Revision 4 brings the document into line with the M1 code (`crates/`, `xtask/`, `contract/`): where the code is stricter, or where the pinned upstream source contradicted revision 3, the code is authoritative and this text now says what it does. It also records the decisions D-8 (rotation order) and D-9 (where CFM acceptance is checked). The pure Rust core is built and tested on this Mac; no engine has been built, and nothing has been run on a VPS or provisioned. Any statement not confirmed in source code or a primary document is marked *(inference)*, and each one is tied to the test lane or milestone that will prove it. Evidence is cited as `file:line` at a named commit, or as a URL with the date it was checked. Pinned upstream trees used for citations:
+**Status.** Design, revision 6 (2026-10-08): M1 is committed (4a95ee0, 2026-10-08). The console foundations of revision 5 and the code of revision 6, both built on it, are pending the operator's commit. Revision 3 added the user decisions D-3 (Xray v26.9.30 with REALITY e1986a4) and D-7 (build host). Revision 4 brought the document into line with the M1 code (`crates/`, `xtask/`, `contract/`): where the code is stricter, or where the pinned upstream source contradicted revision 3, the code is authoritative and this text says what it does. It also recorded the decisions D-8 (rotation order) and D-9 (where CFM acceptance is checked). Revision 5 recorded the operator-console review of 2026-10-08:
+- facts that need no decision: the plan terms and units of EE, then the candidate line (§19.1, now history), the M7's Plugged-In mode and Ethernet path (§2), Durham's IT regulations (§10.2), this MacBook's power facts (§10.3), and the accounting accuracy limits (§11.5);
+- the console design (§15): `MacStatusV1`, what is shown and what is deliberately not recorded, the read-only router adapter, the event journal and the alert machine;
+- the code that landed with it: state version 2 with suspension, user policy, public aliases, agreement records, an active-user cap, the SIM plan record with a bill day and a stop policy, and the uplink baseline (§7); the per-node credential-uniqueness check `DuplicateCredential` (§8.1); and the protocol-1 console frames `UsageSeries`, `Events` and the extended `StatusV1` (§11.1);
+- the operator decisions F1–F20 (§20), each with a recommended default and then marked pending;
+- M2 split into M2a (the M7 alone, from 2026-10-09) and M2b (needs an hourly VPS) (§22).
+
+Revision 6 records the operator's decisions of 2026-10-08 and the code that carries them:
+- **Decided (§20):** F1, the line: SMARTY Unlimited Data Only, after EE declined the order at its credit check; F2, a hard stop at 300e9 SIM bytes with a warning at 240e9; F3, at most 5 active users; F4, automatic quotas from 6 active users, latched per cycle; F5, remote viewing through a viewer role; F6, the alert channels (ntfy on one topic, Healthchecks.io, a 09:00 digest); F12, superseded; F15, no operator traffic over Janet or eduroam; F16, bytes and times only. D-1 is accepted for a pilot of at most 5 active users, with F20 pending. D-8 and D-9 are confirmed by the M1 commit 4a95ee0. On 2026-10-09 two points were decided by the recommended default, following F4/F6 as stated: whom F4's N counts (the users active now and those suspended for quota in the current cycle) and F6's single ntfy topic (§20.2). Every other F and D decision stays pending.
+- **Facts:** SMARTY's terms, billing, units, radio bands and APN, with sources and dates (§19.1). EE's facts stay in §19.1 as history; EE is not the line. Every statement about the exit line now refers to SMARTY on Three's network.
+- **Code (§22, "Revision 6"):** an unlimited plan without a fair-use line, whose stop is mandatory and unbounded by any line (§7); the pilot constants `PILOT_SIM_WARN_BYTES`, `PILOT_SIM_HARD_STOP_BYTES`, `PILOT_MAX_ACTIVE_USERS`, `AutoQuotaPolicy::PILOT` and `AlertSettings::pilot()`; P0-1 by type (`SimPolicy::new` takes a plan, and `Deployment::new` refuses an unrecorded one) and by the store (a change that edits the SIM policy must leave its plan recorded); the F4, F5 and F6 records in state version 2 (automatic quotas, viewers, and alert channels with one ntfy topic for the deployment and two Healthchecks checks per channel node in the Keychain); the viewer role with its Operator-hold-only emergency stop (§11.1); the Mac report `MacReportV1` (§15.9); the Level-0 notice grammar, notices and digest (§15.8); the dead-man ping rule (§15.8); and host profile 2 with the unprivileged `mooring-view` account and `viewer_authorized_keys` (§8.6).
+
+The pure Rust core is built and tested on this Mac; no engine has been built, and nothing has been run on a VPS or provisioned. Any statement not confirmed in source code or a primary document is marked *(inference)*, and each one is tied to the test lane or milestone that will prove it. Evidence is cited as `file:line` at a named commit, or as a URL with the date it was checked. Pinned upstream trees used for citations:
 
 | Tree | Commit |
 |---|---|
@@ -13,7 +25,7 @@
 | CFM 0.4 line | `ac981c3` (sing-box 1.14.1) |
 | CFM 0.5 line | worktree at `3157ef9` (sing-box 1.14.2), which contains `f340fae` (REALITY requires uTLS) and `e6c9e05` (the committed `support_x25519mlkem768` opt-in). The export contract (`docs/cfm-contract.md`, `contract/cfm-manifest.toml`) is pinned at `3157ef9`. |
 
-**What Mooring is.** Mooring lets a small number of trusted users in mainland China reach the internet through the operator's UK mobile connection. Their traffic exits from a NETGEAR Nighthawk M7 Pro (MR7450) with an EE SIM, attached to the operator's Mac. EE puts consumer IPv4 behind CGNAT and reportedly filters unsolicited inbound IPv6, and the MR7450 has no inbound IPv6 controls. The Mac therefore cannot accept connections from China. Instead, a rented Linux VPS faces China, and the Mac dials out a tunnel to that VPS and acts as the exit.
+**What Mooring is.** Mooring lets a small number of trusted users in mainland China reach the internet through the operator's UK mobile connection. Their traffic exits from a NETGEAR Nighthawk M7 Pro (MR7450) with a SMARTY SIM (Hutchison 3G UK Limited trading as SMARTY, on Three's network with Vodafone coverage sharing; §19.1), attached to the operator's Mac. SMARTY's APN is IPv4 only (help 1155220), the line's IPv4 is expected to sit behind CGNAT *(inference; M2b records it)*, and the MR7450 has no inbound IPv6 controls. The Mac therefore cannot accept connections from China. Instead, a rented Linux VPS faces China, and the Mac dials out a tunnel to that VPS and acts as the exit.
 
 ---
 
@@ -22,11 +34,14 @@
 | Area | Decision |
 |---|---|
 | Product | **Mooring**. Repository `mooring`, licensed GPL-3.0-or-later, separate from CFM. Bundle id `com.bill.mooring`; lab builds use `com.bill.mooring.lab`. Branch names are neutral (`main`, `feature/<area>`, `fix/<area>`). No tool, generator or attribution markers appear anywhere. Check the name for collisions before creating the repository. |
-| Topology | CN user (CFM) → **London VPS**, serving VLESS+REALITY+Vision on TCP/443 and Hysteria2 on UDP 61000 (hopping across 61001-62999) → **kernel WireGuard `wgexit`** → **Mac** running a userspace sing-box WireGuard endpoint. The Mac dials out, and its sockets are bound to the **M7 wired interface** → EE → internet. |
+| Topology | CN user (CFM) → **London VPS**, serving VLESS+REALITY+Vision on TCP/443 and Hysteria2 on UDP 61000 (hopping across 61001-62999) → **kernel WireGuard `wgexit`** → **Mac** running a userspace sing-box WireGuard endpoint. The Mac dials out, and its sockets are bound to the **M7 wired interface** → SMARTY (Three's network) → internet. |
 | VPS steering | Xray's only exit outbound is bound to `wgexit` (SO_BINDTODEVICE). Routing uses `ip rule oif wgexit lookup 77` with `default dev wgexit table 77`. `accept_local=1` is set on `wgexit`. An **nft owner guard** (`meta skuid`) rejects any connection either engine originates outside its allowed paths, which makes the steering kernel-enforced. An nft output **gate** fails client connections fast while the Mac is away. |
 | Engines | **VPS:** Xray-core **v26.9.30 with REALITY pinned to e1986a4** handles REALITY, routing, DNS and accounting. sing-box **1.14.2** runs the Hysteria2 inbound only, and hands each user to Xray over loopback. **Mac:** sing-box **1.14.2** runs as two processes: `mooring-exit` (WireGuard endpoint and bound egress) and `mooring-probe` (in-chain probe clients). Every engine is built from pinned source with one Go toolchain and upstream's release flags. |
-| Tunnel uplink | `SameAsExit` (the M7) is the default. `Separate(home interface)` is an explicit setting. Mooring never switches between them automatically. `Separate` may only name a connection the operator contracts for (their own home broadband). It must never name an institutional network: on 2026-10-08 this Mac's only other uplink was Durham University Wi-Fi (Janet AS786, NAT, no IPv6), whose IT regulations limit use to authorised users and academic purposes. On that network the exit runs `SameAsExit` only. |
-| Egress verification | **Mandatory carrier check.** Every observed egress IP must fall inside the EE prefixes recorded in the field spike (M2). In addition, `Paired` mode brackets each in-chain probe between two direct probes. Direct probes run every 30 s and in-chain probes every 300 s. A violation stops the Mac engine (fail closed). |
+| Tunnel uplink | `SameAsExit` (the M7) is the default. `Separate(home interface)` is an explicit setting. Mooring never switches between them automatically. `Separate` may only name a connection the operator contracts for (their own home broadband). It must never name an institutional network: on 2026-10-08 this Mac's only other uplink was Durham University Wi-Fi (Janet AS786, NAT, no IPv6), whose IT regulations limit use to authorised users and academic purposes. On that network the exit runs `SameAsExit` only. Revision 5 (P0-2, §10.2): from M2b on, the exit Mac joins no Durham network at all (Wi-Fi forgotten, no eduroam, no campus Ethernet) while any exit or test tunnel runs, and operator monitoring and control traffic never crosses Janet. |
+| Exit hardware | The M7 runs in **Plugged-In mode** (battery removed, powered by its own adapter through its only USB-C port), and production data uses its **2.5GbE port** through a USB-C Ethernet adapter on the Mac (§2). Its Wi-Fi radio, offloads and UPnP are off, and firmware is installed by hand. Mooring reads the M7's status and never writes its settings (§15.6, §18). |
+| Line (F1, 2026-10-08) | **SMARTY Unlimited Data Only**, £20 a month, rolling monthly, a physical SIM in the M7 (§19.1). It has no fair-use line and no speed cap, so the operator's hard stop is the only volume guard (§7). The pilot records a warning at 240e9 and a hard stop at 300e9 SIM bytes (F2), at most 5 active users (F3, D-1), and automatic quotas from 6 users sharing the cycle's budget (F4: the users active now and those suspended for quota in the current cycle), which stay dormant under that cap unless suspensions for quota this cycle bring the count to six. |
+| Console | `mooringctl … --json` is the only API. `Mooring.app` renders the daemon's `MacStatusV1` stream (§15). There is no web panel and no new listener. The console shows bytes, times and states per opaque user, node and protocol, never destinations, users' IP addresses or M7 identifiers. Remote viewing (F5) and the alert channels (F6) were decided on 2026-10-08: a read-only viewer role on each node for the operator's phone, whose only action is an emergency stop with the Operator hold (§15.9), and ntfy push notices, Healthchecks.io dead-man checks and a daily 09:00 digest, all Level 0 (§15.8). |
+| Egress verification | **Mandatory carrier check.** Every observed egress IP must fall inside the carrier prefixes (SMARTY on Three's network) recorded on the line in the field spike (M2b). In addition, `Paired` mode brackets each in-chain probe between two direct probes. Direct probes run every 30 s and in-chain probes every 300 s. A violation stops the Mac engine (fail closed). |
 | Rust | `mooringctl` (CLI, LaunchAgent daemon and bound SSH dialler) is one signed binary with one keychain identity. `mooring-agent` is a static musl binary on the VPS: forced-command SSH handler, transaction runner, watch loop and reflector. There are eight library crates, plus the test-only `mooring-fixtures`. |
 | Swift | `Mooring.app` provides the menu bar, SMAppService registration, a status stream read from the CLI, and notifications. `mooring-power`, a child of the daemon, holds NetworkClientActive and PreventUserIdleSystemSleep and reports sleep and wake events. Swift never handles secrets. |
 | CFM export | One file per user. The default is sing-box `{"outbounds":[...]}` with an SPKI pin. Clash YAML containing only `proxies:` with a DER `fingerprint` is optional. REALITY always carries `utls` or `client-fingerprint`. URIs are never exported. Shapes are selected by each user's CFM client line. |
@@ -40,12 +55,13 @@
 
 | Asset | Where it exists | Level |
 |---|---|---|
-| User traffic content and metadata | The VPS terminates the proxies, the Mac sees only destination IPs, and EE sees the exit flows | 2 |
+| User traffic content and metadata | The VPS terminates the proxies, the Mac sees only destination IPs, and the carrier (SMARTY on Three's network) sees the exit flows | 2 |
 | Users' China source IPs | VPS only. The inner source on the tunnel is always 10.77.k.1, and the Mac's peer accepts only that source (`allowed_ips` /32) | 2 |
 | SIM-holder attribution (all exit traffic is legally the SIM holder's) | The Mac deny list (authoritative) and VPS policy | 2 |
 | Node keys: REALITY private key, Hysteria2 TLS key, the VPS's WireGuard key | Mac Keychain and that VPS | 2 |
 | Per-user, per-node credentials | Mac Keychain, that VPS, and that user's export file | 2 |
 | SSH operations key | A file on the Mac, mode 0600, excluded from backups | 2 |
+| M7 admin password; the M7's status document, which on other NETGEAR hotspots carries that password, the Wi-Fi keys and SMS bodies (§15.6) | The M7, and the Mac's Keychain if a login proves necessary (M2a) | 2 |
 | The operator's Mac: files, Keychain, other keys, LAN | Mac | Impact equivalent to Level 3 |
 | Engine and blob hashes | Both | 1 (detects accidental corruption) |
 | Accounting and status | Both | 0 |
@@ -56,10 +72,11 @@
 - *Can:*
   - see the flows and China IPs of that node's users;
   - impersonate that node to its users;
-  - push public-destination TCP and UDP out of the EE IP, limited by the Mac's deny list and the SIM cap.
+  - push public-destination TCP and UDP out of the carrier IP, limited by the Mac's deny list and the SIM cap;
+  - read and post to the deployment's one ntfy topic, a Level-1 secret every channel node holds, until the operator replaces it (§12); retiring the node does not revoke it.
 - *Cannot:*
-  - use credentials on the other node, because all credentials are per node;
-  - reach the Mac's loopback, the LAN, the M7 admin page or EE's CGNAT range, because the Mac rejects them by final IP and that rejection is tested directly over `wgexit` (T-deny-mac);
+  - use credentials on the other node, because every access credential is per node;
+  - reach the Mac's loopback, the LAN, the M7 admin page or the carrier's CGNAT range, because the Mac rejects them by final IP and that rejection is tested directly over `wgexit` (T-deny-mac);
   - learn users' real names, which exist only on the Mac;
   - learn the home broadband IP, unless the operator chose `Separate` mode;
   - reach the Mac's files: its only surface is a userspace WireGuard and gVisor stack inside `mooring-exit`, sandboxed if the M5 spike passes.
@@ -77,7 +94,7 @@
 
 **CFM running on the same Mac.** CFM's NetworkExtension sets `includeAllNetworks=false` and `enforceRoutes=false` (CFM `HostBridge.swift:1603-1608`). Interface-bound sockets should therefore bypass its tunnel *(inference; proven in M2 and L6-bypass)*. If that ever changes, the carrier check fails and the exit stops.
 
-**EE** sees WireGuard metadata and the exit flows. This is inherent to the design.
+**The carrier** (SMARTY, on Three's network, whose radio may be Vodafone's under VodafoneThree sharing, §19.1) sees WireGuard metadata and the exit flows. This is inherent to the design.
 
 **Same-user processes on the Mac, or a compromised Mac.** Either means total compromise. The data-protection keychain gives no prompts and keeps secrets out of backups, but the entitled `mooringctl` will export secrets for any process running as the same user. The forced-command SSH key is a robustness control (typed operations, no ad-hoc drift), not a boundary against the operator's own machine.
 
@@ -87,7 +104,7 @@
 
 | Not added | Reason |
 |---|---|
-| WireGuard pre-shared key | It protects tunnel metadata against a future quantum attacker, but EE already sees the same destinations in clear on the exit leg. |
+| WireGuard pre-shared key | It protects tunnel metadata against a future quantum attacker, but the carrier already sees the same destinations in clear on the exit leg. |
 | HMAC or signatures on bundles and agent messages | SSH already authenticates both ends. |
 | Key generation on the VPS (other than its SSH host key) | It gains nothing against a compromised Mac, which holds root SSH, and it would need a second renderer. |
 | Encryption at rest on the VPS | The provider has root. |
@@ -96,7 +113,7 @@
 | Blocking ICMP | It breaks path-MTU discovery. |
 | nft block of the metadata service (169.254.169.254) | Bootstrap replaces the SSH host key that was injected through user-data (§13.2), so user-data holds no live secret afterwards. |
 | LocalAuthentication gating of `user export` | Any same-user process can already read the operations key file. The gate would add a prompt without creating a boundary. |
-| Restricting the reflector to EE source prefixes | A Wi-Fi offload on the M7 would then show up as a timed-out probe rather than as `OutsideCarrierPrefixes`, which turns a detectable violation into an ambiguous one. A per-source limit is used instead (§11.4). |
+| Restricting the reflector to the carrier's source prefixes | A Wi-Fi offload on the M7 would then show up as a timed-out probe rather than as `OutsideCarrierPrefixes`, which turns a detectable violation into an ambiguous one. A per-source limit is used instead (§11.4). |
 | Regex log redactor | Engines run at log levels that do not emit per-flow lines. The canary lane checks this, and stderr tails are scrubbed by exact substring against the bundle's known secrets (§15). |
 | CAP_NET_ADMIN or SO_MARK for Xray | The owner guard enforces the same thing with no privilege on the internet-facing process. |
 | Provider API token (v1) | It would be a long-lived credential able to create and destroy servers. |
@@ -128,7 +145,7 @@
  │   ├► mooring-probe (sing-box: 127.0.0.1:471xx → exported probe clients, bound)       │
  │   └► mooring-power (Swift: IOPM assertions, sleep/wake events)                       │
  └──────────────────────────────┬──────────────────────────────────────────────────────┘
-                                ▼ USB-C or 2.5GbE (never Wi-Fi) → M7 Pro (offload off) → EE 5G (CGNAT) → internet
+                                ▼ 2.5GbE via a USB-C adapter (never Wi-Fi) → M7 Pro, Plugged-In (offload off) → SMARTY 5G on Three (CGNAT) → internet
 ```
 
 **Who sends on each leg.** Every hop splits congestion control, because the VPS terminates TCP and the Mac's gVisor stack terminates it again.
@@ -146,31 +163,47 @@ Evidence:
 - The server forces BBR when `ignore_client_bandwidth` is set with no bandwidth configured: sing-quic `hysteria2/service.go:290-306`.
 - The endpoint routes flows the VPS starts by inbound tag: `protocol/wireguard/endpoint.go:226-246`.
 
+**How the M7 is attached (revision 5).** Facts from the NETGEAR Nighthawk M7 Pro/Ultra user manual 202-12721-02 (June 2025), cited by printed page:
+- The M7 has one 2.5G RJ45 Ethernet port, one USB-C port and two TS-9 antenna ports (p. 9).
+- **Plugged-In mode** is NETGEAR's mode for a fixed location: remove the battery, leave the back cover off for cooling, and power the M7 from a wall adapter through its USB-C port. The manual advises against leaving a battery-powered M7 plugged in for long periods (pp. 12-14, "Charging best practices" and "Set up Plugged-In Mode for fixed usage"). Computer USB ports supply less current than NETGEAR's adapters (p. 12).
+- The USB-C port therefore carries power, not data. **Production data goes over the 2.5GbE port**, through a USB-C Ethernet adapter on the Mac; this MacBookPro18,2 has no built-in Ethernet. Revision 4's "USB-C or 2.5GbE" becomes 2.5GbE.
+- The Ethernet port is **disabled by default**. Enabling or disabling it restarts the M7. In Plugged-In mode it stays enabled for as long as the device is plugged in; on battery it sleeps after two minutes without a connection (pp. 22, 47-48).
+- Whether the M7's USB data interface is RNDIS, for which macOS has no driver, is recorded once in M2a for the record only. Nothing depends on it. *(The RNDIS guess rests on a sibling model.)*
+
+**The line in the M7 (revision 6).** SMARTY's radio and access facts (§19.1, read 2026-10-08):
+- 5G on 3.5 GHz (band n78); 4G on 700, 800, 1400, 1800 and 2100 MHz (bands B28, B20, B32, B3 and B1) (help 4670061, 9 Dec 2025). Whether SMARTY's 5G is standalone or non-standalone is not stated; M2a records which the M7 attaches with.
+- The APN is `mob.asm.net`, IPv4, with no username or password (help 1155220, 18 Mar 2026).
+- Since August 2025 SMARTY customers are moved automatically, on the same SIM, onto combined Three and Vodafone coverage (VodafoneThree network sharing; help 10235435, 5 May 2026), so the M7 may attach to a Vodafone mast.
+
+The thermal, firmware, SIM PIN and power-cut facts are in §10.3 and §19, and the setup steps in M2a (§22).
+
 ---
 
 ## 3. Performance budget
 
 Everything in this section is *(inference)* unless a source is cited.
 
-**Assumptions.** Round-trip times: China↔London C ≈ 280 ms (WonderNetwork: 260–268 ms typical, 315 ms peak); VPS↔Mac over EE M ≈ 40 ms; Mac↔destination D ≈ 20 ms. The VPS↔REALITY target RTT T must be at most 2 ms; this is a hard requirement.
+**Assumptions.** Round-trip times: China↔London C ≈ 280 ms (WonderNetwork: 260–268 ms typical, 315 ms peak); VPS↔Mac over the 5G line M ≈ 40 ms; Mac↔destination D ≈ 20 ms. The VPS↔REALITY target RTT T must be at most 2 ms; this is a hard requirement.
 
 **Time to first byte.** For an HTTPS GET with a warm DNS cache:
 - REALITY: about 1.30 s, or about 1.42 s at peak. REALITY dials the target on every connection (`REALITY tls.go:168`), so a target 20 ms away would add about 40 ms to every connection.
 - Hysteria2 with a warm session: about 0.74 s.
 
 **Throughput in `SameAsExit` mode.**
-- The 5G uplink is about 16 Mbps median for EE 5G (Opensignal, Q4 2025); p10 may be about 5 Mbps.
+- The 5G uplink median is about 20.2 Mbps nationally on Three's network, against 16 Mbps on EE's (Opensignal via ISPreview, 29 Jan 2026; re-fetching the report on 2026-10-08 returned HTTP 429, so neither figure was re-verified). A national median says little about the exit site, which M2a and M2b measure; p10 may be about 5 Mbps.
 - At MTU 1280, payload efficiency is 1228/1340, about 91.6%.
-- That leaves about 12–14 Mbps of user payload **in total**, shared by every user's downloads *and* uploads.
+- That leaves about 15–18 Mbps of user payload **in total** at Three's median (about 12–14 Mbps at 16 Mbps, the uplink of the T-impair profile, §16), shared by every user's downloads *and* uploads.
 
-**SIM volume.**
-- In `SameAsExit` mode each byte served costs about 2.1× on the SIM, so EE's roughly 600 GB threshold is reached at about 280 GB served per month.
-- In `Separate` mode the factor is about 1.04×, or about 575 GB served per month. This is the largest available gain.
+**SIM volume (revision 6).**
+- SMARTY's Unlimited plan has no fair-use line and no speed restriction ([SMARTY-PG] p11, §19.1), so the operator's hard stop is the only volume guard (§7). The pilot records a warning at 240e9 and a hard stop at 300e9 SIM bytes, in decimal bytes (F2; `PILOT_SIM_WARN_BYTES`, `PILOT_SIM_HARD_STOP_BYTES`).
+- In `SameAsExit` mode each byte served costs about 2.1× on the SIM, the recorded estimate `SimFactor::SAME_AS_EXIT_ESTIMATE` (2100 ‰) until M8 measures the factor (§15.4). The 300e9 stop is then about 143e9 bytes served per cycle (300e9 × 1000 / 2100 ≈ 142.9e9), and the warning about 114e9. Automatic quotas divide that served budget (§15.3).
+- In `Separate` mode the factor is about 1.04×, or about 288e9 bytes served per cycle at the same stop. This is the largest available gain.
+- SMARTY counts usage in binary units (1 GB = 1024 MB, 1 MB = 1024 kB, 1 kB = 1024 bytes), per full MB, including re-sent packets and flow-control overhead ([SMARTY-PG] p23). The thresholds are decimal (F2), so this matters only when reconciling against SMARTY's own usage view (§15.3): the 300e9 stop is about 279.4 GB in SMARTY's units.
 - Probing costs about 1 GB per month: in-chain probes every 300 s, direct probes every 30 s.
 
 **MTU.** The MTU is fixed at **1280** in v1. M2 only confirms that the outer path MTU is at least 1340.
 
-**Keepalive.** The keepalive is **10 s** (about 1 MB per day) until M2 measures EE's UDP NAT timeout. After that it must lie in [5 s, NAT_timeout/2], and never above 60 s, which keeps three keepalives inside the watch's 180 s handshake window (`Keepalive`, §7). Measured cellular CGNAT UDP timeouts have a median of 65 s and a range of 10–200 s (arXiv 1605.05606).
+**Keepalive.** The keepalive is **10 s** (about 1 MB per day) until M2b measures the line's UDP NAT timeout (SMARTY on Three's network). After that it must lie in [5 s, NAT_timeout/2], and never above 60 s, which keeps three keepalives inside the watch's 180 s handshake window (`Keepalive`, §7). Measured cellular CGNAT UDP timeouts have a median of 65 s and a range of 10–200 s (arXiv 1605.05606).
 
 **Policy defaults.** Each of these is a switch, and M3 confirms each by an A/B test:
 - `block_quic = true`: UDP/443 to destinations is denied at the VPS. Browsers then fall back to TCP, which is split at the VPS and at the Mac.
@@ -319,7 +352,8 @@ The exit runs only while the operator is logged in. After a FileVault reboot, so
 | `nftables.service` | root | — | `/etc/nftables.conf` → `current/` |
 | `mooring-watch.service` | `mooring-watch` (group `mooring`) | `CAP_NET_ADMIN` only | The **only** process that opens the gate. Holds, accounting, target checks, status. 5 s loop. `Restart=always`, `RestartSec=2`, `StartLimitIntervalSec=0`, `ExecStopPost=agent gate-close`. |
 | `mooring-reflect.service` | `DynamicUser=yes` | none | `agent reflect` on `<VPS4>:27900` |
-| sshd | root, forced command only | — | `restrict,command="/usr/local/lib/mooring/agent/current serve-ssh --role ops"` |
+| `mooring-alert.service` and its timer *(plan, M4; decision F6)* | `DynamicUser=yes` | none | Sends the ntfy notices the Mac rendered (§15.8) and pings the Healthchecks checks that `dead_man_pings` selects, with curl to the fixed origins `https://ntfy.sh` and `https://hc-ping.com`. The deployment's ntfy topic and the node's own check UUIDs arrive through `LoadCredential=`. The digest timer is `OnCalendar=*-*-* 09:00:00 Europe/London`, rendered from `AlertSettings` (§7). No unit renderer exists yet; it is built with the agent in M4. |
+| sshd | root, forced command only; the viewer as `mooring-view` | — | `restrict,command="/usr/local/lib/mooring/agent/current serve-ssh --role ops"`. Host profile 2 (§8.6) adds the unprivileged `mooring-view` account: its keys come from `viewer_authorized_keys` with `restrict,command="… serve-ssh --role viewer"`, and its `Match User` block forces the same command |
 | chrony, unattended-upgrades | Debian | — | Time sync for `maxTimeDiff`. Security updates, with automatic reboot at 20:00 UTC (04:00 China). |
 
 **Hardening on the engine, watch and reflect units.**
@@ -375,7 +409,8 @@ mooring/
     export/      mooring-export       pure: CFM sing-box JSON + Clash YAML emitters by ClientProfile; shape enumeration; certificate
                                       pin derivation and runtime cert checks
     agent-proto/ mooring-agent-proto  request/response/error types, framing, ManagedFile, HostProfile, WatchConfig, PROTOCOL, frozen core,
-                                      the VPS contract names (src/vps.rs), StderrTail
+                                      the VPS contract names (src/vps.rs), StderrTail; revision 6: the Mac report (src/report.rs),
+                                      the notice grammar (src/notice.rs), the dead-man ping rule (src/deadman.rs)
     render/      mooring-render       pure: VPS bundle, Mac exit config, Mac prober config (MacProbeOutbound), cloud-init;
                                       the model <-> agent-proto conversions (src/wire.rs)
     store/       mooring-store        state.json (shared read lock, exclusive write lock + CAS + atomic write + migration chain);
@@ -384,11 +419,15 @@ mooring/
                                       interfaces, for goldens; never a normal or build dependency
     macsys/      mooring-macsys       cfg(macos), the ONLY crate with unsafe: NET_RT_IFLIST2 (if_data64, AF_LINK), gateway lladdr, PF_ROUTE monitor
     daemon-core/ mooring-daemon-core  daemon state machine, verdicts, probe primitive, latches, control protocol; traits for interfaces,
-                                      engines, clock, power, secrets, ssh
-    mooringctl/  (bin) cli, daemon wiring, supervise, ssh (incl. dial-bound), provision, usage, status stream
+                                      engines, clock, power, secrets, ssh, router; console (revision 5, §15): MacStatusV1, event journal
+                                      and availability, alert machine, SIM forecast, capacity monitor, router-status allowlist parser,
+                                      the foreign-network check (P0-2); revision 6: automatic quotas, push notices and the digest,
+                                      the remote viewer's report
+    mooringctl/  (bin) cli, daemon wiring, supervise, ssh (incl. dial-bound), provision, usage, status stream; the read-only
+                       M7 HTTP client bound to the egress; journal and Mac usage files
     mooring-agent/ (bin, x86_64/aarch64-unknown-linux-musl) bootstrap, serve-ssh, txn, watch, reflect, target-check, accounting, self-test
     e2e/         (dev-only) netns harness and lab harness; never built for release
-    fieldkit/    (dev-only bin, darwin + linux-musl) M2 field measurements; never shipped
+    fieldkit/    (dev-only bin, darwin + linux-musl) M2 field measurements, `router capture` with an allowlist redactor; never shipped
   xtask/         M1: ci, graph-check, kinds-coverage, deny-skips, acceptance, release-acceptance, clean.
                  Later: engines {build,verify,upstream-tests,audit}, govulncheck, cfm-client, lane <name>, m0 …, release, release-verify
   apple/         project.yml (XcodeGen); Packages/MooringKit (swift-tools 6.2, macOS 15, .v6); App/; Power/; Tests/
@@ -396,6 +435,9 @@ mooring/
   lanes/         netns/{topology.sh, impair.sh, nat-profiles.sh, ablation.toml}, vm/{qemu-debian13-amd64/, lima-debian13-arm64-lab.yaml}, staging/checklist.md
   docs/          design.md threat-model.md performance.md engines.md cfm-contract.md measurements/
                  runbooks/{provision,rotate,revoke,retire,incident,console-recovery,mac-loss,delivery}.md
+                 runbooks/ added in revision 5: exit-host, power-cut, sim-plan, user-onboarding (Simplified Chinese),
+                 support-triage, abuse-response, carrier-swap, upgrade, capacity-review, absence, legal-notes;
+                 backup-restore only if F18 adopts backups
 ```
 
 ### 6.1 Dependency edges
@@ -413,17 +455,17 @@ mooring/
 | `fixtures` | `model` | — |
 | `xtask` | `export` (shape enumeration for `cargo xtask acceptance`, §9.3), `model` (`Sha256Digest` for the contract files' SHA-256 values); external `toml`, which no other crate uses | — |
 | `macsys` | — | |
-| `daemon-core` | `model`, `render`, `export`, `agent-proto` | |
+| `daemon-core` | `model` and `agent-proto` for the console's pure types (§15). Built: `MacStatusV1`, the usage periods and shares, usage aggregation and activity, the SIM forecast, the capacity monitor, the alert machine, quota and expiry evaluation (with the automatic quota of revision 6), the router-status types, the foreign-network check, and (revision 6) the push notices and digest (`notify`) and the remote viewer's report (`report`). Planned, with M5: the event journal, availability and the router-status parser (after the M2a capture). They are functions of the model's records (`Deployment`, `SimPolicy`, `UplinkBaseline`, users) and agent-proto's frames (`StatusV1`, `UsageSeriesV1`). `render` and `export` join with the state machine, which renders the exit and prober configs (M5). File, Keychain, network and router I/O reach the crate through traits that `mooringctl` implements, so it has no `store`, `keys` or `macsys` edge. A workspace member; this row and `ALLOWED_EDGES` match | `fixtures` |
 | `mooringctl` | `model`, `keys`, `render`, `export`, `agent-proto`, `store`, `macsys`, `daemon-core` | |
-| `mooring-agent` | `agent-proto` only, plus std, serde, serde_json, thiserror and sha2. **The VPS never renders.** | |
+| `mooring-agent` | `agent-proto` only, plus std, serde, serde_json, thiserror and sha2. **The VPS never renders.** For that reason the dead-man ping rule, which a node applies while the Mac may be gone, lives in agent-proto (`dead_man_pings`), and the notices the node sends are rendered on the Mac into agent-proto's notice grammar (§15.8) | |
 | `e2e` | `model`, `keys`, `render`, `export`, `agent-proto`, `daemon-core` | |
 | `fieldkit` | `model` | |
 
 **The cost of xtask's product edges (D-9).** The xtask edges are normal dependencies, so every `cargo xtask` command, `clean` and `graph-check` included, first compiles `export` and `model` and their dependencies (x509-parser among them; about 60 crates instead of serde, serde_json and thiserror), and stops if they do not compile. While the tree does not build, free the disk with `rm -rf target` instead of `cargo xtask clean`. x509-parser is also built a second time with xtask's narrower feature set, which costs space in the bounded `target/` (D-7).
 
-`render` is the one Mac-side crate that sees both the model and the wire types, so every model ↔ agent-proto conversion lives in `crates/render/src/wire.rs` (adoption site, `Apply` header facts, target facts, SSH host-key lines). Rules that both sides validate (interface names, DNS names, port ranges, certificate names, HTTP statuses) are the same rule on each side, which a cross-crate property test in `crates/render/src/tests/wire_rules.rs` proves.
+Two Mac-side crates see both the model and the wire types, and each keeps its model ↔ agent-proto conversions in one module. `render` builds what a node is sent and records what it reports at adoption, in `crates/render/src/wire.rs` (adoption site, `Apply` header facts, target facts, SSH host-key lines). Rules that both sides validate (interface names, DNS names, port ranges, certificate names, HTTP statuses) are the same rule on each side, which a cross-crate property test in `crates/render/src/tests/wire_rules.rs` proves. `daemon-core` reads what a node reports to the console, in `crates/daemon-core/src/wire.rs`: instants, and an accounting principal back to its `UserId`, the inverse of render's accounting name (`Identity::email`), which a property test there round-trips for every user id. Revision 6 adds there what the Mac report sends a node: a `UserId` as agent-proto's `ReportUserId` (`report_user`), a `NodeId` as `NodeName` (`node_name`), a router band number as `ReportBandNumber` (`report_band_number`), and the alert kinds as `MacAlertKind` (`mac_alert_kind`, an exhaustive match). `ReportUserId` and `NodeName` have exactly the model's `UserId` and `NodeId` rules, which `wire_rules.rs` checks at every length and with every byte in every position of a valid id, and with property tests on arbitrary strings; `ReportBandNumber` has exactly the router's `BandNumber` rule, which `daemon-core`'s `wire.rs` checks for every `u16`.
 
-Once `daemon-core` exists (M3), the same check also builds `model`, `keys`, `export`, `agent-proto`, `render` and `daemon-core` for `x86_64-unknown-linux-gnu`, because the Linux e2e lane runs the real daemon-core. M1 does not implement this part.
+When the Linux e2e lane exists (M3, on the research computer or hosted CI), the same check is to build `model`, `keys`, `export`, `agent-proto`, `render` and `daemon-core` for `x86_64-unknown-linux-gnu`, because that lane runs the real daemon-core. It is not implemented: `daemon-core` exists, but this Mac has only the `aarch64-apple-darwin` target, so graph-check builds the host target only.
 
 ### 6.2 Workspace policy
 
@@ -465,15 +507,21 @@ Added with the crates that need them (later milestones):
 
 Non-secret state lives in `~/Library/Application Support/Mooring/state.json`; lab builds use `Mooring-Lab/`. `mooring-store` (`crates/store/src/store.rs`, `ordered.rs`, `durable.rs`) is rooted at a directory the caller passes in; it never reads `HOME` and never creates the directory. Writes follow four rules:
 - An exclusive lock is taken on `state.lock` (`std::fs::File::lock`, mode 0600) for the whole read-modify-write. Reads take a shared lock on the same file, so a reader never sees a state that was renamed into place before its directory was fsynced. The lock has no timeout.
-- Compare-and-swap is done on `config_generation` or `runtime_revision`.
+- Compare-and-swap is done on the deployment's `config_generation` (a `ConfigGeneration`) or on `RuntimeIntent.revision` (a `RuntimeRevision`).
 - Each write goes temp file (mode 0600) → fsync → rename → fsync of the directory (`F_FULLFSYNC` on Apple targets).
 - The CLI is the only writer of `state.json`. The daemon writes only `run/` (control socket, `latch.json`, `engine-*.pid`), `status.json` and `usage/`.
 
-`state.json` is pretty-printed JSON with a trailing newline, with the fields in the order `version`, `deployment`, `runtime`. Nodes and users are serialised as lists in id order, so a duplicate id is a decode error (`DuplicateId`). Two golden files pin the V1 on-disk format: `crates/store/src/tests/golden/state-v1.json` (an `Adopted` node) and `state-v1-every-variant.json` (the `Applied`, `Retiring`, `RetiredPendingProviderDeletion` and `Retired` stages, every user status, a `Separate` uplink, both selector variants and two Hysteria2 listeners). Only the `Planned` stage is pinned by neither: the every-variant document cannot hold it beside `Applied` and `Retiring` under the two-node cap. A serialisation change therefore needs a new version and a migration step.
+`state.json` is pretty-printed JSON with a trailing newline, with the fields in the order `version`, `deployment`, `runtime`. Nodes and users are serialised as lists in id order, and viewers in key order, so a duplicate id or viewer key is a decode error (`DuplicateId`). The store writes version 2 and reads versions 1 and 2. Four golden files in `crates/store/src/tests/golden/` pin the on-disk formats:
+- `state-v1.json` (an `Adopted` node) and `state-v1-every-variant.json` (the `Applied`, `Retiring`, `RetiredPendingProviderDeletion` and `Retired` stages, every version-1 user status, a `Separate` uplink, both selector variants, two Hysteria2 listeners and no SIM hard stop) pin version 1, which is never written again: both still decode with the frozen version-1 types (`crates/model/src/v1.rs`) and re-encode byte for byte.
+- `state-v2.json` is the version-2 form of `state-v1.json`, and exactly what that document lifts to: the plan unrecorded, the 450e9/560e9 hard stop kept, and the revision-6 records empty (`"auto_quota": null`, `"alerting": null`, `"viewers": []`). The version-2 API can no longer build an unrecorded plan (P0-1, below), so the test lifts `state-v1.json` and checks it against the same history built through the version-2 API with the SMARTY plan, once that plan is recorded on the lifted state (`crates/store/src/tests/migration.rs`).
+- `state-v2-every-variant.json` adds every version-2 variant one document can hold: the decided SMARTY `unlimited` plan with no speed cap and bill day 31 at the pilot thresholds (240e9, hard stop 300e9), the pilot cap of 5 active users, `AutoQuotaPolicy::PILOT`, alert channels on `lon1`, one viewer, an uplink baseline, users suspended for each `SuspendReason`, and users with and without a policy, alias and agreement record.
+- A document holds one SIM policy, so the other plan and stop shapes (`unlimited_fair_use`, `AcceptDeprioritisation`, a speed cap, and the capped plans with `Throttled` and `Blocked`) are pinned by the exact-encoding test in `crates/model/src/sim.rs` (`every_policy_shape_has_a_fixed_encoding`) instead.
+
+Only the `Planned` stage is pinned by no document: the every-variant documents cannot hold it beside `Applied` and `Retiring` under the two-node cap. A serialisation change therefore needs a new version and a migration step. Revision 6 extended version 2 in place and regenerated its two goldens, because version 2 has not been committed or released (§22, "Format note"); the version-1 goldens are byte-identical.
 
 ```rust
-pub enum StateFile { V1(StateV1) /* , V2(..) when introduced */ }
-pub struct StateV1 {                            // on disk: {"version": 1, "deployment": …, "runtime": …}
+pub enum StateFile { V1(StateV1) /* read only, lifted on load */, V2(StateV2) }
+pub struct StateV2 {                            // on disk: {"version": 2, "deployment": …, "runtime": …}
     pub deployment: Deployment,
     pub runtime: RuntimeIntent,                 // Mac-only; never affects VPS digests
 }
@@ -484,20 +532,63 @@ pub struct Deployment {                         // built only from DeploymentPar
     config_generation: ConfigGeneration,        // starts at 1; bumped by every change except a Bookkeeping record
     exit: ExitSite,
     policy: TrafficPolicy,
+    capacity: CapacityPolicy,                   // { max_active_users: Option<NonZeroU16> }; exit init records PILOT (5; F3, D-1);
+                                                // UNLIMITED (None) is what a version-1 document lifts to
+    auto_quota: Option<AutoQuotaPolicy>,        // F4; exit init records Some(AutoQuotaPolicy::PILOT); None: off
+    alerting: Option<AlertSettings>,            // F6; exit init records Some(AlertSettings::pilot()); None: not set up
+    viewers: BTreeMap<Ed25519Pub, Viewer>,      // F5; unique by key; serialised as a list in key order
     nodes: BTreeMap<NodeId, Node>,              // at most MAX_ACTIVE_NODES = 2 active (Planned..=Retiring); retired nodes stay
     users: BTreeMap<UserId, User>,
     next_wg_index: WgIndex,                     // monotonic, never reused
+}
+pub struct DeploymentInit {                     // everything a fresh deployment records; exit init fills every field
+    pub exit: ExitSite, pub policy: TrafficPolicy, pub capacity: CapacityPolicy,
+    pub auto_quota: Option<AutoQuotaPolicy>, pub alerting: Option<AlertSettings>,
+}                                               // Deployment::new(init) -> Result: PlanNotRecorded unless exit.sim.plan() is Some
+pub struct AutoQuotaPolicy {                    // decision F4; AutoQuotaPolicy::PILOT = 6, 80, 2100, 80, Suspend
+    pub from_active_users: NonZeroU16,          // automatic quotas apply while at least this many users share the cycle's budget: Active, or suspended for quota this cycle
+    pub budget_percent: BudgetPercent,          // 1..=100: the share of the cycle's served budget those users divide
+    pub sim_factor: SimFactor,                  // SIM bytes per served byte in ‰, >= 1000; SAME_AS_EXIT_ESTIMATE = 2100 (§3)
+    pub warn_percent: WarnPercent,              // 1..=99
+    pub action: QuotaAction,                    // Warn | Suspend
+}
+pub struct AlertSettings {                      // decision F6; AlertSettings::pilot() = 09:00, EuropeLondon, no channels
+    pub digest_at: WallClockTime,               // "HH:MM"; PILOT_DIGEST_AT = 09:00
+    pub digest_zone: WallClockZone,             // EuropeLondon ("Europe/London", tz_name())
+    pub channels: BTreeSet<NodeId>,             // the nodes whose Healthchecks checks are in the Keychain and that send to the one ntfy topic; active nodes only
+}
+pub struct Viewer {                             // decision F5: a key pair generated on the operator's phone
+    pub key: Ed25519Pub,                        // imported through Ed25519Pub::parse_ssh_authorized_key; unique among viewers
+    pub label: LocalLabel,                      // Mac-only (for example "phone"); never rendered or sent
+    pub added_on: CalendarDate,
 }
 pub struct ExitSite {
     pub egress: InterfaceSelector,              // the wired NIC facing the M7
     pub uplink: Uplink,                         // SameAsExit | Separate(InterfaceSelector)
     pub egress_check: EgressCheck,              // fixed from M2 data; changed only by explicit operator action
-    pub sim: SimPolicy,                         // cycle_day 1..=28, warn_bytes (450e9) < hard_stop_bytes: Option<u64> (560e9)
+    pub sim: SimPolicy,                         // below
     pub probe: ProbePolicy,                     // direct 30 s, in-chain 300 s, base_port 47101
     pub flow_cap: FlowCap,                      // node-wide new-flow cap into wgexit; sized from M2
+    pub uplink_baseline: Option<UplinkBaseline>, // { p10_bps, p50_bps, measured_at }, 0 < p10 <= p50; from fieldkit uplink (M2)
+}
+pub struct SimPolicy {                          // private fields; SimPolicy::new checks the invariant below
+    bill_day: BillDay,                          // 1..=31, SMARTY's Renewal Date; a month without the bill day starts its cycle
+                                                // on its last day (inference, to verify at the first short month)
+    plan: Option<SimPlan>,                      // None only in a policy lifted from version 1: SimPolicy::new takes a SimPlan,
+                                                // so no public constructor builds an unrecorded policy (P0-1)
+    warn_bytes: u64,                            // the pilot's 240e9 (PILOT_SIM_WARN_BYTES, F2)
+    stop: StopPolicy,                           // HardStop { bytes } (the pilot's 300e9, PILOT_SIM_HARD_STOP_BYTES, F2)
+                                                // | AcceptDeprioritisation (only with a fair-use line)
+}
+pub struct SimPlan {                            // the decided line (F1): Smarty, Unlimited, no speed cap, terms [SMARTY-PG]
+    pub carrier: Carrier,                       // Smarty
+    pub kind: PlanKind,                         // Unlimited (no line) | UnlimitedFairUse { fair_use_bytes }
+                                                // | Capped { allowance_bytes, after: Throttled { kbps } | Blocked }
+    pub speed_cap_mbps: Option<NonZeroU32>,
+    pub terms: EvidenceRef,                     // { url: EvidenceUrl, dated: CalendarDate }
 }
 pub struct EgressCheck {
-    pub carrier_prefixes: NonEmpty<CarrierPrefix>, // the EE public pool prefixes observed in M2 (RIPE inetnum evidence),
+    pub carrier_prefixes: NonEmpty<CarrierPrefix>, // the carrier's public pool prefixes observed on the line in M2b (RIPE inetnum evidence),
                                                    // never ASN-wide; each canonical and disjoint from SPECIAL_V4
     pub pairing: Pairing,                       // Paired | Unpaired, from the M2 pooling measurement
 }
@@ -548,10 +639,15 @@ pub struct User {
     pub id: UserId,                             // opaque, 10 base32 chars; the only id ever sent to a VPS
     pub label: LocalLabel,                      // Mac-only; never exported or sent
     pub client: ClientProfile,                  // { line: Cfm04 | Cfm05, capabilities: BTreeSet<Capability> }
-    pub status: UserStatus,                     // Active | RevokePending | Revoked
+    pub status: UserStatus,                     // Active | Suspended { reason, since } | RevokePending | Revoked
     pub per_node: BTreeMap<NodeId, UserNodePublic>,   // { short_id: ShortId }; while RevokePending, exactly the nodes
                                                       // that still have to commit the revocation
+    pub policy: UserPolicy,                     // { expires_at: Option<UnixTime>, quota: Option<UserQuota> }; a record only
+    pub alias: Option<PublicAlias>,             // xxxx-xxxx from 40 random bits (mooring-keys); no text constructor; unique
+    pub agreement: Option<AgreementRecord>,     // { version: AgreementVersion, accepted_on: CalendarDate }
 }
+pub enum SuspendReason { Operator, QuotaExceeded { cycle_start: CalendarDate }, Expired, AbuseReview }
+pub struct UserQuota { pub cycle_served_bytes: NonZeroU64, pub warn_percent: WarnPercent /* 1..=99 */, pub action: QuotaAction /* Warn | Suspend */ }
 pub enum Capability { RealityMlkemOptIn /* emits support_x25519mlkem768; accepted by ClientLine::Cfm05 only */ }
 pub enum Bookkeeping {                          // the only changes that keep config_generation (below)
     Applied { node: NodeId, applied: AppliedConfig },
@@ -559,23 +655,58 @@ pub enum Bookkeeping {                          // the only changes that keep co
     RetirementShutDown { node: NodeId },
 }
 pub enum SecretRef {
+    AlertTopic /* alert/topic: the deployment's one ntfy topic, Password material; the only reference without a node */,
     NodeRealityPrivate(NodeId), NodeWgVpsPrivate(NodeId), NodeWgMacPrivate(NodeId),
     NodeHy2Key(NodeId), NodeHy2Obfs(NodeId, ListenerIdx), NodeSshBootstrapPrivate(NodeId) /* deleted at adoption */,
     UserVlessUuid(UserId, NodeId), UserHy2Password(UserId, NodeId), UserLoopUuid(UserId, NodeId),
     ProbeVlessUuid(NodeId), ProbeHy2Password(NodeId), ProbeLoopUuid(NodeId),
+    NodeDeadManCheck(NodeId) /* node/<n>/dead-man-check: Uuid */, NodeMacAliveCheck(NodeId) /* node/<n>/mac-alive-check: Uuid */,
 }
 ```
 
 **Where node facts live.** A node's address and host facts are unknown before adoption, so they belong to the lifecycle (`NodeSite`) rather than to `Node`. `Adopted`, `Applied` and `Retiring` carry the site; `RetiredPendingProviderDeletion` keeps only the address, which every renderer still denies; `Planned` and `Retired` carry nothing.
 
 **Cross-entity invariants** are checked in one place, whenever a `Deployment` is built from `DeploymentParts`, including on decode (`crates/model/src/deployment.rs`):
-- node and user ids are unique;
+- node and user ids, and viewer keys, are unique (`DuplicateId`, with `EntityId::Viewer` for a key);
 - at most `MAX_ACTIVE_NODES` (2) nodes are active, counting `Planned` through `Retiring` (`TooManyNodes`). The bound is two because the Mac exit carries one WireGuard endpoint per node, at most two (§5.1), and the probe port span is sized for two nodes (`PROBE_PORT_SPAN`: 2 nodes × 2 protocols below the macOS ephemeral range). Rotation is ordered around it (§13.4, D-8);
 - WireGuard indices are unique and below `next_wg_index`, and live node addresses are unique;
 - an adopted node's port plan was checked against its host's live range (`PortPlanConflict{EphemeralRangeChanged}`);
 - an `Applied` node has a target, and its applied generation is no newer than the deployment's (`GenerationAhead`);
-- users hold credentials only on active nodes; a `RevokePending` user holds them on at least one node, and a `Revoked` user on none;
-- REALITY short ids are unique per node, the probe's included.
+- users hold credentials only on active nodes; a `RevokePending` user holds them on at least one node, and a `Revoked` user on none. A `Suspended` user keeps its credentials (or holds none once the nodes it held them on are retired), so its secrets stay referenced, but it is served by no node, rendered in no VPS config and refused by every export (`UserNotActive`);
+- REALITY short ids are unique per node, the probe's included;
+- public aliases are unique among users (`DuplicateAlias`);
+- with a cap, at most `capacity.max_active_users` users are `Active` (`TooManyActiveUsers`); suspended, revoking and revoked users do not count;
+- alert channels name only existing (`UnknownNode`), active nodes (`AlertChannelsOnInactiveNode`), because an inactive node's secrets are deleted with its channels. `Bookkeeping::RetirementShutDown` removes the node from `alerting.channels` together with every user's credentials on it, and drops its two Healthchecks check references through `record_with_secrets`, with the deployment's ntfy topic when the node was the last channel node. A configuration change that makes a channel node inactive (`Planned` → `Retired`) must remove the channel in the same closure, through `update_config_with_secrets`; otherwise it fails with `InvalidChange{AlertChannelsOnInactiveNode}`, as `CredentialsOnInactiveNode` does for users.
+
+The rules up to "REALITY short ids" are version 1's, and a version-1 document is checked with exactly those (`Entities::check_version_1`), which no later version edits. The rules a later version adds (here: aliases and the cap; a lifted document has no viewers and no alert channels) are checked when the document is lifted, so a version-1 document that breaks one fails its migration (`MigrationFailed`, file untouched) instead of reading as corrupt.
+
+**User transitions** (`User::suspend`, `resume`, `revoke`): only an `Active` user is suspended (`UserNotActive`), only a `Suspended` one resumed (`UserNotSuspended`), and an `Active` or `Suspended` user is revoked (`RevocationAlreadyStarted` otherwise), becoming `RevokePending` on the nodes holding its credentials, or `Revoked` at once when none does. The store enforces the same table on every configuration change, however the closure edits `User::status` (`UserStatus::may_change_to`): a status changes only by one of those steps, so a revocation in progress settles only through `Bookkeeping::RevocationCommitted` and never goes back, and a suspension is not re-labelled in place. A change may remove only a `Revoked` user, who holds no credentials; any other user leaves through revocation. Anything else is `UserStatusEdited{user, from, to}`, as a forged confirmation is `AppliedEdited`. `UserPolicy` (expiry and quota) is a record, not an enforcement point: exports and renders look only at the status, and moving an expired or over-quota user to `Suspended{Expired | QuotaExceeded}` is an explicit operator or daemon action. The cap (F3: 5) and the automatic quotas (F4) were decided on 2026-10-08 and are the values `exit init` records (below). A user's own `UserPolicy.quota` overrides the automatic quota, larger or smaller; `None` means the automatic quota applies when automatic quotas are on and enough users share the cycle's budget (the users active now and those suspended for quota in the current cycle, §15.3), and otherwise there is no quota. Expiry defaults and whether an export needs an `AgreementRecord` (F9) are still pending, so a user's policy is `UserPolicy::NONE` unless the operator sets one.
+
+**SIM policy invariant** (`SimThresholds::new`, which `SimPolicy::new` uses, also on decode; revision 6):
+- `0 < warn_bytes < hard stop` (`InvalidSimThresholds`).
+- `AcceptDeprioritisation`, the explicit choice to run past a fair-use line, needs a recorded plan that has one, `PlanKind::UnlimitedFairUse` (`DeprioritisationNeedsFairUseLine`). An unlimited plan without a line (SMARTY's, F1), a capped plan and an unrecorded plan therefore all need a hard stop. There is no "no stop" encoding.
+- With a line (a fair-use line, or a capped plan's allowance), the highest threshold (the hard stop, or the warning under `AcceptDeprioritisation`) lies below it (`SimThresholdAbovePlan`). **Without a line there is no upper bound**: SMARTY publishes no volume (§19.1), and any other number would be invented. Revision 5's `UNRECORDED_PLAN_CEILING` was EE's fair-use line, so it was removed with EE, and so was `EE_FAIR_USE_600_GIB`; tests that need a fair-use line use the same 644,245,094,400 bytes as a test-local constant (`TEST_FAIR_USE_BYTES`). What keeps the stop real is that it is mandatory and explicitly recorded: `exit init` records F2's 300e9, and changing it is an operator act (`sim set-stop`, M5). **The model knowingly admits a stop that is no stop in practice**: on a plan without a line it accepts any explicit hard stop, `u64::MAX` included, which guards the line no better than no stop would, so F2's 300 GB rests on the stop being recorded and on the guard M5 builds. That guard is an M5 acceptance item with its own test (§22 M5): `sim set-stop` refuses a stop above `PILOT_SIM_HARD_STOP_BYTES` unless the operator confirms it explicitly, so a typo such as 3e12 for 3e11 cannot pass unnoticed (§19).
+- `SimThresholds::budget_bytes()` is the number of SIM bytes a cycle may use: the hard stop, or under `AcceptDeprioritisation` the fair-use line. It is derived in `new` and not serialised; the automatic quotas divide it (§15.3).
+
+`SimThresholds` (the warning, the stop policy and the plan's line kind and bytes) is the value the console's status carries, checked on decode as the policy is.
+
+**P0-1, by construction and by the store.** `SimPolicy::new(bill_day, plan, warn_bytes, stop)` takes a `SimPlan`, so the API builds only recorded policies. A policy without a plan (`"plan": null`) exists only after lifting a version-1 document, through the crate-private `SimPolicy::unrecorded`, and in a document that holds such a lifted policy; decoding can therefore still build one. Two rules keep it from where it does not belong:
+- `Deployment::new(DeploymentInit)`, which `Store::init` calls before touching any file (not even `state.lock` is created on a refusal), refuses an unrecorded plan with `PlanNotRecorded` (the store reports `InvalidChange{PlanNotRecorded}`), so an exit site decoded from JSON or cloned from a lifted state cannot start a fresh deployment.
+- Every configuration change (`update_config` and `update_config_with_secrets`, both through `change_config`) that edits the exit's SIM policy must leave its plan recorded, or it is refused with `InvalidChange{PlanNotRecorded}` and nothing is written: a recorded plan cannot be un-recorded by a configuration change (a closure swapping in a decoded `"plan": null` policy, or one copied from a lifted backup), and a lifted policy cannot be retuned without recording its plan. A lifted state whose policy a change leaves as it is takes every other change.
+
+A lifted state keeps `"plan": null` until the operator records the plan (`sim set-plan`, M5), and the M5 daemon refuses to serve until then (plan).
+
+**Records added by revision 6 (decisions F4, F5 and F6).** Version 2 now holds them; every new key is required, and every record refuses unknown keys:
+- `auto_quota: Option<AutoQuotaPolicy>` (F4, `crates/model/src/quota.rs`): `{"from_active_users":6,"budget_percent":80,"sim_factor":2100,"warn_percent":80,"action":"suspend"}` or `null`. No rule ties `from_active_users` to the cap: with the cap at 5, `TooManyActiveUsers` keeps the active users below 6, so the automatic quotas stay dormant unless users suspended for quota in the current cycle, who keep sharing its budget, bring the count to 6 (latched per cycle, decided 2026-10-09; `daemon-core` tests both, §15.3).
+- `alerting: Option<AlertSettings>` (F6, `crates/model/src/alerting.rs`): `{"digest_at":"09:00","digest_zone":"europe_london","channels":["lon1"]}` or `null`. No secret is in the state: the deployment's one ntfy topic (`SecretRef::AlertTopic`, Keychain account `alert/topic`) and each channel node's two Healthchecks check UUIDs (`NodeDeadManCheck`, `NodeMacAliveCheck`) are Keychain items. `required_secrets` lists the topic exactly while `channels` is not empty, once however many nodes send to it, and each channel node's checks, so the ordered writes below put the topic before the state that adds the first channel node and delete it only after the commit that leaves none; retiring one of two channel nodes keeps it. The topic is the one reference that belongs to no node (`SecretRef::node` returns `None` for it). The ntfy server and the Healthchecks ping origin are fixed by the node's alert unit (M4), and priorities and tags are code (§15.8). The digest time is a wall-clock time in Europe/London, which the node's systemd timer reads (`OnCalendar=*-*-* 09:00:00 Europe/London`), so no Rust code converts time zones.
+- `viewers: [Viewer]` (F5, `crates/model/src/viewer.rs`): each `{"key": <base64 Ed25519 key>, "label": "phone", "added_on": "2026-10-08"}`. Adding or removing a viewer is a configuration change, because every node's bundle carries the viewer keys (§8.6).
+- Not built yet: the router admin secret `SecretRef::RouterAdmin`, needed only if M2a shows the M7's status fields require a login (§15.6); and the managed file that carries a node's alert secrets to it, which comes with the alert unit in M4 (§5.2).
+
+**What `exit init` records (M5).** Every field of `DeploymentInit` is explicit, so nothing has a hidden default:
+- the SIM policy `SimPolicy::new(bill_day, the SMARTY plan, PILOT_SIM_WARN_BYTES, HardStop { PILOT_SIM_HARD_STOP_BYTES })`, where the SMARTY plan is `SimPlan { carrier: Smarty, kind: Unlimited, speed_cap_mbps: None, terms: { url: https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf, dated: 2026-08-25 } }`;
+- `CapacityPolicy::PILOT`, `Some(AutoQuotaPolicy::PILOT)` and `Some(AlertSettings::pilot())`, with no channel node until `alert setup` (§15.3).
+
+Expiry defaults and agreement records (F9) stay pending; their records default to none.
 
 **Newtypes.** Each enforces its rule in its constructor, and deserialisation goes through the same check.
 - `PublicIpv4` rejects every `SPECIAL_V4` range. CFM accepts RFC1918 and CGNAT addresses, so this is stricter.
@@ -586,12 +717,17 @@ pub enum SecretRef {
 - `Hy2Listener`: the hop range starts at `port + 1`, because exports emit one contiguous client range (`61000:62999`). Listeners live only in `PortPlan`, so the Hysteria2 ports have a single owner, and each listener carries its own `HopInterval`.
 - `HopInterval`: 5..=3600 seconds. The floor is the pinned sing-quic dialer's (`hysteria/hop.go:55-57`, "hop interval must be at least 5 seconds") and CFM 0.5's import bound (`crates/cfw-singbox-config/src/profile_validation.rs:17-18,611-647`); CFM 0.4 accepts 1..=3600. So 5..=3600 is the range every client line both imports and dials, and a plan the exports could not serve cannot be built.
 - `Keepalive`: 5..=60 seconds. 5 s is the §3 floor; 60 s keeps three keepalives (the watch's rx-growth window) inside the watch's 180 s handshake limit.
+- `BillDay`: 1..=31, SMARTY's Renewal Date. SMARTY bills upfront each month: the cycle starts at SIM activation and renews on the same day each month ([SMARTY-TC] 5.20, 5.21; help 952716, 4227332). A month without that day starts its cycle on its last day (bill day 31 → 30 April and 28 or 29 February). SMARTY says that a Renewal Date on the 29th–31st falls earlier in a shorter month, but not whether it returns to that day in a longer month, so the clamp is an inference to verify at the first short-month renewal; activating the SIM on a day up to the 28th avoids it (M2a). A failed auto-renewal that is retried and taken later moves the cycle start to the day payment was taken ([SMARTY-PG] p3); the operator then records the new bill day (`sim set-bill-day`, M5). Recording it leaves every `QuotaExceeded{cycle_start}` as it was (`SuspendReason`): the record of which cycle was exceeded. Whether a suspension for quota still holds is read from when it was made (`UserStatus::Suspended.since`) against the cycle the current bill day gives: one made at or after that cycle's start holds, whichever way the edit moved the start, and one made before it has lapsed (`daemon-core`'s `quota_suspension_holds`, §15.3). SMARTY states no time of day or time zone for the renewal, so a cycle starts at UTC midnight *(inference)*. `cycle_start` and `next_cycle_start` compute the boundaries. Version 1's `CycleDay` (1..=28) maps to the same bill day.
+- `BudgetPercent`: 1..=100 (`InvalidBudgetPercent`). `SimFactor`: SIM bytes per served byte in thousandths, at least 1000, because every served byte crosses the SIM at least once (`InvalidSimFactor`); `SimFactor::SAME_AS_EXIT_ESTIMATE` is §3's 2100.
+- `WallClockTime`: exactly `HH:MM` with ASCII digits, 00:00..=23:59 (`InvalidWallClockTime`), stored as minutes since midnight. `WallClockZone` has one value, `EuropeLondon` (`tz_name()` is `Europe/London`).
+- `CalendarDate`: exactly `YYYY-MM-DD`, a real day of the proleptic Gregorian calendar between 1970-01-01 and 9999-12-31.
+- `PublicAlias`: two groups of four lowercase base32 characters joined by a hyphen (40 random bits drawn by `mooring-keys`), so it never looks like a `UserId`. It is made only from random bytes (`from_random_bytes`) or decoded from a stored alias: there is no `FromStr` or `TryFrom<String>`, so no command can take an alias typed by the operator. Any 40 bits are a valid alias, so only the random source keeps it from spelling a name.
 - `LanSubnet` (the subnet in an `InterfaceSelector`): canonical, and wholly inside one private LAN class of `SPECIAL_V4` (`LAN_CLASSES`: 10/8, 100.64/10, 169.254/16, 172.16/12, 192.168/16). The Mac exit's `SPECIAL_V4` reject (§8.7) therefore always covers the M7 and home LANs.
 - `LinuxIfName`: the kernel's rule (`dev_valid_name`, Linux v6.12 `net/core/dev.c`): 1..=15 bytes of printable ASCII, not `.` or `..`, without `/`, `:` or whitespace. It is exactly agent-proto's `IfName`, so a name `Hello` reports converts both ways.
 - `Uuid`: canonical lowercase, non-nil, version 4, RFC 9562 variant. Every UUID is a credential, so `Uuid` has no `Serialize`, `Deserialize` or `Display`, its `Debug` is redacted, and it is zeroized on drop. A test stops compiling if it ever gains either serde trait.
 - The REALITY ClientHello is export's `ClientHello { Chrome, ChromeX25519Mlkem768 }` (§9.2), not a model type.
 
-**Missing keys are decode errors.** Every `Option` in the state (`sim.hard_stop_bytes`, `reality.target`) must be present: an explicit `null` means none, and a missing key fails to decode. A lost key therefore never silently disables the SIM hard stop or drops a target.
+**Missing keys are decode errors.** Every `Option` in the state (`sim.plan`, `plan.speed_cap_mbps`, `exit.uplink_baseline`, `capacity.max_active_users`, `deployment.auto_quota`, `deployment.alerting`, `reality.target`, `user.alias`, `user.agreement`, `policy.expires_at`, `policy.quota`; version 1's `sim.hard_stop_bytes`), and the `viewers` list, must be present: an explicit `null` means none, and a missing key fails to decode. A lost key therefore never silently drops a plan, a target or a policy.
 
 **`Lab` variants.** Lab addresses exist only behind `cfg(feature = "lab")`, which arrives with the lab lanes (M5); M1 has no `lab` feature. There is no runtime "private address in release" error. Instead, the release verifier asserts that `cargo tree -e features -p mooringctl` contains no `lab`, and that no shipped binary contains the lab marker string.
 
@@ -603,18 +739,21 @@ pub enum SecretRef {
   - `RetirementShutDown{node}` moves a `Retiring` node to `RetiredPendingProviderDeletion` and drops every user's credentials on it (§13.4).
 - Only that record sets a confirmed generation. A configuration change (`update_config`, `update_config_with_secrets`) is refused with `AppliedEdited{node}` if, after the closure, any node holds an `AppliedConfig` it did not hold before, whether newly set, lowered, raised or with another digest (`crates/store/src/store.rs`, `change_config`); moving a node out of `Applied` (to retire it) is allowed, since it only withdraws a confirmation and exports then refuse the node. A closure therefore cannot forge a confirmation, even at the generation the store is about to stamp.
 - Exports refuse a node whose applied generation is older than the deployment's (`NodeNotApplied{Stale}`, §9.2), so an export always matches what every node in it has confirmed. Any generation bump, including one with no VPS-visible effect, therefore needs a `node apply` of each node a user holds credentials on before that user's file can be exported again.
+- Suspending, resuming and starting a revocation are configuration changes, never bookkeeping: each changes which users the nodes serve, so it bumps the generation and needs a `node apply`. A suspension keeps the user's secrets referenced, so plain `update_config` accepts it, and a resume restores the same credentials and the same export file without delivering anything new into China.
 - The daemon restarts an engine only if the digest of that engine's rendered config changes. Adding a user changes the VPS bundle but not `mooring-exit`'s config, so it does not drop the exit.
-- **Note for the daemon (M5):** a `Bookkeeping` record changes `state.json` while keeping both counters, so neither `config_generation` nor `runtime_revision` alone detects every state change.
+- **Note for the daemon (M5):** a `Bookkeeping` record changes `state.json` while keeping both counters, so neither `config_generation` nor `RuntimeIntent.revision` alone detects every state change.
 
 **`State` holds no `Secret` fields,** so no secret can be written to disk by construction: neither `Secret<T>` nor `Uuid` implements `Serialize`. Secrets are written before any state that references them. On deletion, state is updated before the secrets are removed. The store enforces this order by structure (`crates/store/src/ordered.rs`):
 - `update_config` and `record` refuse any change to the set of referenced secrets (`SecretRefsChanged`).
 - `update_config_with_secrets` requires the supplied secrets to be exactly the newly referenced ones (`SecretPlanMismatch`, `DuplicateSecret`) before anything is written. It writes them (a failure leaves the state unchanged: `SecretWrite`), commits the state, and then deletes the dropped secrets while still holding the lock. A failed deletion is reported as `SecretCleanup{committed, failures}`: the state is committed, and every other deletion is still attempted.
 - `record_with_secrets` commits a `Bookkeeping` record and then deletes the secrets it stopped referencing, in the same way.
+- No operation replaces a secret that the committed state still references: a reference held before and after a change cannot be supplied (`SecretPlanMismatch{unreferenced}`). The two planned commands that replace secrets, `user reissue` and `alert rotate-topic` (§12, §15.3), get their path in M5.
 
 The model's `SecretEntry` (one variant per `SecretRef`) pairs each reference with the right kind of material, and both `SecretSnapshot::insert` and `SecretStore::put` take it. `mooringctl doctor` lists orphaned keychain items.
 
 **Migrations.**
-- `store::migrate` is a chain of pure functions (`V1 → V2 → …`), each golden-tested. V1 is the only version, so the chain has no steps yet.
+- `store::migrate` is a chain of pure functions (`V1 → V2 → …`), each golden-tested. The store reads the version first, refuses a newer one, decodes the document with its own version's schema (version 1 with the frozen types in `crates/model/src/v1.rs`, which check the version-1 invariants), then lifts it.
+- `V1 → V2` invents nothing: the cycle day becomes the same bill day, the hard stop becomes `StopPolicy::HardStop` at the same byte count, the plan stays unrecorded (`plan: None`; version 1 kept no plan record), and users get `UserPolicy::NONE`, no alias and no agreement record; the deployment gets no cap (`CapacityPolicy::UNLIMITED`), no automatic quotas, no alert channels and no viewers, and the exit no uplink baseline. A version-1 SIM policy lifts by one rule (revision 6): every explicit hard stop is kept, at any value, and only a missing one is refused, `MigrationFailed{from: 1, to: 2, source: StopPolicyUnchosen}`, leaving the document untouched. With the plan unrecorded there is no line to check a stop against; revision 5 also refused a stop at or above EE's fair-use line, and that rule left with EE. Version 1's `null` was chosen before the plan's line was recorded, so it cannot stand for `AcceptDeprioritisation`, which needs a recorded plan with a fair-use line (critique C-10). The version-1 format was never released (§22, "Format note"), so no such document exists outside the goldens, and Mooring ships no repair tool for one.
 - A read lifts an older document in memory only and never writes. The first write after lifting writes `state.json.bak-<from>-<to>` durably, then the migrated state.
 - An unknown newer version is refused with `DowngradeRefused{found, newest}`.
 
@@ -639,12 +778,12 @@ IPv6 is refused entirely in v1.
 ### 8.1 Principles
 
 **Pure functions.** Rendering is four pure functions (`crates/render/src/`):
-- `render::vps::bundle(&Deployment, &NodeId, &SecretSnapshot, &EngineCatalog) -> VpsBundle { node, config_generation, files, host_profile: HostProfileVersion, engines: EngineSet, site: NodeSite, digest }`. The node must be `Adopted` or `Applied` with a target. `files` holds all five `ManagedFile`s (`xray.json`, `hy2.json`, `wgexit.conf`, `nftables.conf`, `watch.json`), none optional, each a `RenderedFile`: exact-capacity zeroizing bytes plus their SHA-256, which is that engine's config digest. `EngineCatalog` holds the amd64 and arm64 artifacts, and the node's recorded architecture picks one. `VpsBundle::header(&hello)` builds the `Apply` header from the recorded site plus the unrecorded facts of the `Hello` just before it (§11.2).
+- `render::vps::bundle(&Deployment, &NodeId, &SecretSnapshot, &EngineCatalog) -> VpsBundle { node, config_generation, files, host_profile: HostProfileVersion, engines: EngineSet, site: NodeSite, digest }`. The node must be `Adopted` or `Applied` with a target. `files` holds all six `ManagedFile`s (`xray.json`, `hy2.json`, `wgexit.conf`, `nftables.conf`, `watch.json` and, since revision 6, `viewer_authorized_keys`), none optional, each a `RenderedFile`: exact-capacity zeroizing bytes plus their SHA-256, which is that engine's config digest. `EngineCatalog` holds the amd64 and arm64 artifacts, and the node's recorded architecture picks one. `VpsBundle::header(&hello)` builds the `Apply` header from the recorded site plus the unrecorded facts of the `Hello` just before it (§11.2).
 - `render::vps::cloud_init(&Deployment, &NodeId, &CloudInitKeys) -> UserData` (§8.9).
 - `render::mac::exit(&Deployment, &ResolvedInterfaces, &SecretSnapshot) -> ExitConfig`
 - `render::mac::prober(&Deployment, &ResolvedInterfaces, &SecretSnapshot) -> ProberConfig`
 
-**The bundle digest** is the SHA-256 of a documented, length-prefixed encoding (`docs/engines.md`, "Digests") of the host-profile version, the architecture, the uplink interface, VPS4, the ephemeral range, the four engine digests and the five files in `ManagedFile::ALL` order. It includes the engines and the host-profile version, so an `Apply` after an engine or host-profile upgrade is never answered `Unchanged`. It excludes the generation, so a generation bump with no VPS-visible change is `Unchanged`.
+**The bundle digest** is the SHA-256 of a documented, length-prefixed encoding (`docs/engines.md`, "Digests") of the host-profile version, the architecture, the uplink interface, VPS4, the ephemeral range, the four engine digests and the six files in `ManagedFile::ALL` order. It includes the engines and the host-profile version, so an `Apply` after an engine or host-profile upgrade is never answered `Unchanged`. It excludes the generation, so a generation bump with no VPS-visible change is `Unchanged`.
 
 **Mac renders are tied to the exit site.** `ResolvedInterfaces` can only be built by `ExitSite::resolve`, which checks the egress and a separate uplink against their selectors (`InterfaceNotSelected`), the uplink mode against the configured one (`UplinkModeMismatch`) and that a separate uplink is another interface (`UplinkEqualsEgress`). Both Mac renders first call `ExitSite::require_resolved` (`InterfacesForOtherSite`), so a `SameAsExit` site can never bind the tunnel to a home uplink. The Mac configs cover `Applied` nodes only (`NoAppliedNodes` when there is none): a `Retiring` node loses its endpoint and probes, but its address stays denied.
 
@@ -668,6 +807,13 @@ The key table in `docs/engines.md` is documentation only. It maps every rendered
 - On the Mac side, every outbound and endpoint type has a mandatory `BindInterface`.
 - The log-level types have no Info or Debug variant: Xray's has only `none`, sing-box's only `fatal`.
 - The VPS-side names (`wgexit`, the nft table, set and counters, the engine Unix users, routing table 77 and rule priority 10000) come from one definition in `crates/agent-proto/src/vps.rs`, which the renderer writes and the agent acts on.
+
+**Credentials are distinct per node** (`crates/render/src/vps/served.rs`). Before a bundle is rendered, every identity holding credentials on the node is compared with every other: each user with credentials there, whether active, suspended or pending revocation, and the probe. Two that share a VLESS UUID, a loopback UUID or a Hysteria2 password are refused with `DuplicateCredential{node, kind, first, second}`, which names both holders (opaque user ids or the probe, in the order they are checked) so the operator can find them without reading the Keychain. The comparison follows the engines:
+- Xray keys a VLESS client by its UUID with bytes 6 and 7 cleared (`ProcessUUID`, v26.9.30 `proxy/vless/validator.go:21-25`) and keeps the last client with a given key (`:35-43`), so UUIDs equal outside those bytes are refused, and `xray run -test` would never notice the overwrite;
+- sing-quic keeps the last Hysteria2 user with a given password (`hysteria2/service.go:151-157` at the pinned v0.7.1-0.20260924092235), so passwords are compared whole;
+- the two UUID kinds belong to different inbounds, each with its own client table, so they are compared within their kind.
+
+A suspended or revoking user is included because its client still holds the credential: were it equal to a served identity's, it would keep working as that identity. Its secrets are therefore required to render, as `required_secrets` already lists them. Exports read only one user's credentials and are covered through the generation rule: every node in a file has confirmed the current generation, whose bundle passed this check.
 
 ### 8.2 `xray.json` (v26.9.30 syntax; every key re-verified against the pinned source in M1)
 
@@ -744,10 +890,10 @@ Placeholders: `<uid>` is a user's opaque id (§7) and `<reflector>` a node's ref
 - **No `disableFallback`.** With no domain-scoped servers, `disableFallback` leaves only the first server ever used: 1.0.0.1 is never queried, and every lookup logs a WARNING containing the domain (Xray `app/dns/dns.go:321-344`). Without it, both addresses of the one operator are queried in parallel, and no WARNING is logged.
 - **`statsUserOnline` removed.** It makes Xray keep per-user client IP lists, readable through the unauthenticated StatsService (`GetStatsOnlineIpList`). Accounting does not need it.
 - **Target and camouflage destinations are IPv4 literals,** resolved and verified by `TargetCheck` (§11.7). Xray therefore never uses the system resolver on `eth0`, and the owner guard (§8.5) can list the exact target address. If the target's DNS changes, the change is detected as `TargetDegraded` and handled by re-running `TargetCheck` and re-applying.
-- **Node IPs.** Only the probe identities may reach node IPs, and only the reflector port. This blocks a user from chaining a node through itself (a sing-box `detour`, or Clash `dialer-proxy`, which CFM maps to a detour), which would multiply SIM usage. It also blocks users from reaching VPS4:22 from the EE IP. In lab builds the node IP is private, and rule 4 still admits the probe because it precedes the SPECIAL_V4 deny.
+- **Node IPs.** Only the probe identities may reach node IPs, and only the reflector port. This blocks a user from chaining a node through itself (a sing-box `detour`, or Clash `dialer-proxy`, which CFM maps to a detour), which would multiply SIM usage. It also blocks users from reaching VPS4:22 from the carrier IP. In lab builds the node IP is private, and rule 4 still admits the probe because it precedes the SPECIAL_V4 deny.
 - **`domainStrategy: AsIs`.** The final inbound rule matches every user flow, so `IPIfNonMatch` would never trigger. IP rules therefore apply to IP-literal destinations. Domain destinations are protected by the DoH `unexpectedIPs` filter and, authoritatively, by the Mac's check on final IPs.
 - **`ForceIPv4`, as `streamSettings.sockopt.domainStrategy`.** It errors on DNS failure; `UseIPv4` would fall back to the system resolver (`transport/internet/dialer.go:251-262`; freedom takes its strategy from the sockopt, `proxy/freedom/freedom.go:55-58,293-302`). The freedom `settings.targetStrategy` form logs a WARNING at load in v26.9.30 ("The `freedom.domainStrategy` setting is deprecated…", `infra/conf/xray.go:362-368`), because it fills the same deprecated field (`infra/conf/freedom.go:62-66`), and an outbound-level `targetStrategy` warns too (`:363-364`). Either would break the zero-WARN validation gate, so `exit` has no `settings`.
-- **DoH.** It keeps the EE leg from tampering with DNS.
+- **DoH.** It keeps the mobile leg from tampering with DNS.
 - **Camouflage** uses `userLevel 1`, with short idle and one-way timeouts, plus the per-source nft limits. Both the tunnel inbounds and the freedom outbounds carry it: freedom applies its own level's policy (`proxy/freedom/freedom.go:210-211`), so without it the outbound side would keep level 0's 300 s idle timeout.
 - **Identities** are `<uid>@reality` and `<uid>@hy2`, built with agent-proto's `StatsEmail`, so accounting parses exactly what was rendered; the probe is `probe@reality` and `probe@hy2`.
 - **Sniffing** with `routeOnly: true` feeds routing decisions only, and never rewrites the destination.
@@ -888,13 +1034,13 @@ What the guard also does:
 - WireGuard's encrypted packets are unbound and leave via `eth0`, so closing the gate never stops tunnel liveness, which is what reopens it.
 - An nft reject is used instead of a route `unreachable`, because device-bound sockets take the on-link branch past unreachable routes *(inference from `route.c`; L4 tests both)*.
 
-**Flow cap.** `$FLOW_CAP` is sized from the CGNAT port-ceiling estimate made in M2, minus headroom. Its purpose is to keep exit flows from exhausting EE's port allocation, which would also break the tunnel's own mappings and the probes. Hits are counted and surface as `ExitFlowCapHit`.
+**Flow cap.** `$FLOW_CAP` is sized from the CGNAT port-ceiling estimate made in M2, minus headroom. Its purpose is to keep exit flows from exhausting the carrier's port allocation, which would also break the tunnel's own mappings and the probes. Hits are counted and surface as `ExitFlowCapHit`.
 
 ### 8.6 Host profile (versioned, owned by the agent)
 
 `HostProfile{version}` holds the host constants. They are compiled into the agent and converged idempotently in every transaction (§11.2). `Hello` reports `host_profile_version`, and `node apply` refuses a node whose version is older than the bundle requires until the converging transaction commits.
 
-`HostProfile::CURRENT` (version 1) is data plus the exact file text, defined once in `crates/agent-proto/src/profile.rs` for the agent and the renderer. Its files are `/etc/sysctl.d/60-mooring.conf`, `/etc/modules-load.d/mooring.conf`, `/etc/ssh/sshd_config.d/10-mooring.conf`, `/etc/systemd/journald.conf.d/60-mooring.conf`, `/etc/tmpfiles.d/mooring.conf` and `/etc/apt/apt.conf.d/52mooring-unattended-upgrades`. The systemd units and chrony are not part of the profile data. The unattended-upgrades text and the effective `sshd -T` spellings that `Hello` compares are *(inference until L2/L5)*.
+`HostProfile::CURRENT` (version 2 since revision 6; version 1 was never installed on a node) is data plus the exact file text, defined once in `crates/agent-proto/src/profile.rs` for the agent and the renderer. Version 2 adds the remote viewer's account, `ViewerAccount { name: VIEWER_ACCOUNT ("mooring-view"), home: "/nonexistent", shell: "/bin/sh" }`, which the agent converges (M4), and its sshd `Match` block (below). The shell must be a real one, because sshd runs the forced command through the login shell and `nologin` would refuse it. Which group lets the account read the status, usage and report files is decided in M4 with those files' modes. The other five host files keep their text; only the version number in their header changes. Its files are `/etc/sysctl.d/60-mooring.conf`, `/etc/modules-load.d/mooring.conf`, `/etc/ssh/sshd_config.d/10-mooring.conf`, `/etc/systemd/journald.conf.d/60-mooring.conf`, `/etc/tmpfiles.d/mooring.conf` and `/etc/apt/apt.conf.d/52mooring-unattended-upgrades`. The systemd units and chrony are not part of the profile data. The unattended-upgrades text and the effective `sshd -T` spellings that `Hello` compares are *(inference until L2/L5)*.
 
 **`/etc/sysctl.d/60-mooring.conf`:**
 - `net.core.default_qdisc=fq`, `net.ipv4.tcp_congestion_control=bbr`
@@ -908,8 +1054,31 @@ What the guard also does:
 - **sshd** `/etc/ssh/sshd_config.d/10-mooring.conf` (it must sort before `50-cloud-init.conf`):
   - `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin forced-commands-only`, `AuthenticationMethods publickey`
   - `AllowTcpForwarding no`, `AllowAgentForwarding no`, `AllowStreamLocalForwarding no`, `PermitTunnel no`, `X11Forwarding no`
-  - `MaxAuthTries 3`, `AllowUsers root`
-- **`authorized_keys`**: one line per role, each with `restrict,command="… serve-ssh --role <bootstrap|ops>"`. The agent refuses requests its role does not permit (`RoleNotPermitted`).
+  - `MaxAuthTries 3`, `AllowUsers root mooring-view`
+  - then, since host profile 2, a `Match` block for the viewer account. The exact file:
+    ```
+    # Managed by Mooring host profile 2. Local changes are overwritten.
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitRootLogin forced-commands-only
+    AuthenticationMethods publickey
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    PermitTunnel no
+    X11Forwarding no
+    MaxAuthTries 3
+    AllowUsers root mooring-view
+    Match User mooring-view
+    	AuthorizedKeysFile /etc/mooring/current/viewer_authorized_keys
+    	ForceCommand /usr/local/lib/mooring/agent/current serve-ssh --role viewer
+    ```
+  - The keys file is root-owned and inside the transactional generation directory, so the viewer account cannot edit its own keys, and a rollback restores the matching viewer set. `ForceCommand` holds even for a key line without `command=`.
+  - **The `Match` block ends at the end of the included file.** OpenSSH saves the match state before an `Include` and restores it after each included file (`servconf.c`, `V_10_0_P1`, the version Debian 13 ships). On 2026-10-09 `sshd -T -C user=…` with this Mac's OpenSSH 10.3p1, on the drop-in above followed by Debian-like main-file lines and a later `50-cloud-init.conf` with `PasswordAuthentication yes`, showed: for `mooring-view`, the viewer keys file and the forced command; for `root` and any other account, the default `AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys2` and no `ForceCommand`; and the main file's later lines and the later drop-in applying to every account, with `PasswordAuthentication no` kept (first match wins). So a viewer key is never read for `root`, and no redesign without `Match` is needed. L2/L5 repeat this on Debian's build with `sshd -T -C user=mooring-view,…` and `-C user=root,…`.
+  - **sshd reads the keys file as `mooring-view`, not as root.** OpenSSH drops to the logging-in user before opening `AuthorizedKeysFile` (`auth2-pubkey.c`, `user_key_allowed2`), and with StrictModes checks that the file and every directory above it, the `current` link resolved (`/etc/mooring/gen-<N>`, `/etc/mooring`, `/etc`, `/`), are owned by root or the user and writable by neither group nor others. So the file must also be readable, and the directories searchable, by `mooring-view`: M4 installs `viewer_authorized_keys` 0644 `root:root` and creates `/etc/mooring` and each `gen-<N>` 0755 `root:root`; the secret-bearing files beside it keep their own 0600 or 0640 modes (§8.2, §12), so the directory modes expose no secret. A keys file staged 0600 or 0640 like its neighbours, or a 0750 generation directory, would refuse every viewer login, which `sshd -t` and `sshd -T` cannot see, so L5 checks it with a real login as `mooring-view`.
+  - `Hello`'s `sshd_mismatches` compares the profile with `sshd -T` through `sshd_effective_lines`, which yields one `allowusers <user>` line per user (`allowusers root`, `allowusers mooring-view`) and one line for every other directive (OpenSSH dumps a list one element per line; seen with 10.3p1's `sshd -T`, L2/L5 on Debian's build). **`AllowUsers` is not first-match-wins**: every `AllowUsers` line of every included file adds to the list (`servconf.c`), so a provider image's later drop-in with `AllowUsers debian` admits that account too, and `sshd -T` then prints `allowusers debian` as a third line (seen with 10.3p1 on 2026-10-09). The comparison for `AllowUsers` is therefore equality of the exact multiset of `allowusers` lines, never inclusion: an extra line is drift and is reported. `SshdDirective` gains no variant, because `HelloInfo` is frozen (§11.1), so drift inside the `Match` block is not reported by `Hello`; M4 adds a check request if it is needed.
+- **`authorized_keys`** (root's): one line per role, each with `restrict,command="… serve-ssh --role <bootstrap|ops>"`. The agent refuses requests its role does not permit (`RoleNotPermitted`).
+- **`viewer_authorized_keys`** (`ManagedFile::ViewerKeys`, `/etc/mooring/current/viewer_authorized_keys`), rendered by `crates/render/src/vps/viewers.rs` into every node's bundle: one line per viewer in key order, `Role::Viewer.authorized_keys_options()` (`restrict,command="/usr/local/lib/mooring/agent/current serve-ssh --role viewer"`), a space, then the key's `ssh-ed25519` form; zero bytes with no viewer. The Mac-only label is never written. Installed 0644 `root:root` (above). `docs/engines.md` maps its options to OpenSSH's sources. The golden `contract/golden/<fixture>/vps-<node>-viewer_authorized_keys.snap` exists for every fixture node, and only `2-nodes-3-users`, whose deployment has one viewer, is non-empty.
 - **journald**: `Storage=persistent`, `SystemMaxUse=200M`, `MaxRetentionSec=14day`.
 - **unattended-upgrades**: security origin only (`origin=Debian,codename=${distro_codename}-security,label=Debian-Security`), with automatic reboot at 20:00 in the host's time zone, assumed UTC.
 - **chrony**: on.
@@ -939,7 +1108,7 @@ What the guard also does:
 
 There is one endpoint per `Applied` node, and every rule lists every endpoint tag in `inbound`. Node addresses cover every node whose VM still exists (`Retiring` and `RetiredPendingProviderDeletion` included). The reflector allow rule uses each node's own `PortPlan` reflector port, grouped by port (27900 by default). The TCP/25 reject follows `TrafficPolicy.deny_smtp25`, as the Xray rule does; with the default policy the output is exactly the above.
 
-**These rules are the Level 2 boundary.** They check the **final destination IP** of every flow, so DNS rebinding cannot race them. They protect the M7 admin page, the home LAN, EE's CGNAT range and the Mac's loopback; `LanSubnet` (§7) guarantees that every configured LAN lies inside a rejected `SPECIAL_V4` class. Node IPs are reachable only on the reflector port, matching Xray's rule.
+**These rules are the Level 2 boundary.** They check the **final destination IP** of every flow, so DNS rebinding cannot race them. They protect the M7 admin page, the home LAN, the carrier's CGNAT range and the Mac's loopback; `LanSubnet` (§7) guarantees that every configured LAN lies inside a rejected `SPECIAL_V4` class. Node IPs are reachable only on the reflector port, matching Xray's rule.
 
 **Why the 127/8 and 224/4 rejects are load-bearing.**
 - Traffic to the endpoint's own address is rewritten to 127.0.0.1 before routing (`protocol/wireguard/endpoint.go:231-240`).
@@ -1112,6 +1281,7 @@ A user export is also refused when the user is not `Active` (`UserNotActive`), h
   - iMessage;
   - an AES-256 encrypted disk image (`hdiutil create -encryption AES-256`; CFM users are on macOS), sent over any channel, with the passphrase given by voice.
 - **Forbidden:** plain WeChat, QQ or email.
+- **Pending F9 (revision 5).** iCloud for Apple IDs in mainland China is operated by GCBD (Apple HT208352, 15 Apr 2025). The recommended default removes iMessage for recipients with mainland-China accounts. It also makes `user export` require an `AgreementRecord` (§7), which version 2 can already record; the export does not check for it yet. Until F9 is decided, both rules above stand as written.
 - Import by file only. CFM's paste field is single-line (CFM `app.js:2071`).
 - Exports are rendered on demand and never cached.
 
@@ -1147,6 +1317,8 @@ Each tick does the following:
    - Direct probes run every 30 s, and immediately after any route change.
    - In-chain probes run every 300 s, and 10 s after any start, wake, interface change or config change.
 5. **SIM meter.** It takes deltas of `if_data64` on the egress interface and accumulates them per billing cycle in `usage/sim-<cycle>.json`, detecting counter resets. It is accurate only if the M7's Wi-Fi and offloading are off (M2 checklist); otherwise it is a lower bound.
+   - Cycles start on `SimPolicy.bill_day` (§7), at UTC midnight, because SMARTY states no time of day or time zone for its renewal *(inference)*. The M7's own data-usage reset date is set to the same day (manual p. 65).
+   - Traffic the M7 generates itself, such as its firmware checks, never reaches the Mac's counters *(inference)*. The meter is therefore reconciled against the M7's own counter and the operator's reading of SMARTY's dashboard or app usage history (§15.3), which counts in binary units per full MB, re-sent packets included ([SMARTY-PG] p23). Whether that view shows the GB used on an Unlimited plan, and how fresh it is, is not stated; M2a records it.
 6. **Latches and status.**
    - Violation latches persist in `run/latch.json`, so they survive daemon restarts.
    - Status is written atomically to `status.json` (a snapshot for diagnosis) and pushed to `status --follow` subscribers.
@@ -1155,6 +1327,9 @@ Each tick does the following:
 - The CLI is the only client.
 - The Swift UI calls the CLI.
 - No signals or pid files are used for control.
+- Revision 5 plans two more requests for the console *(M5)*:
+  - `PollNow` polls the nodes at once, when the app or the CLI wants fresh figures;
+  - `Events{since}` reads the Mac's event journal (§15.7).
 
 ### 10.2 Preflight, probes and verdicts
 
@@ -1162,7 +1337,7 @@ Each tick does the following:
 
 | Probe | Path | Purpose |
 |---|---|---|
-| `direct` | A socket with IP_BOUND_IF on the egress interface → each node's VPS4:27900 | The EE public IP as the internet sees it |
+| `direct` | A socket with IP_BOUND_IF on the egress interface → each node's VPS4:27900 | The carrier's public IP as the internet sees it |
 | `uplink` (`Separate` only) | The same, bound to the uplink interface | The home IP, which must differ |
 | `in-chain` per node × {reality, hy2} | 127.0.0.1:4710x → `mooring-probe` → VPS → Xray `exit` → `wgexit` → `mooring-exit` → `egress` → VPS4:27900 | Proves the export shape, the live server, the tunnel, the Mac exit binding and the egress IP together |
 
@@ -1170,9 +1345,29 @@ Each tick does the following:
 - the egress interface resolves;
 - at least one `direct` probe succeeds;
 - the returned IP is inside `carrier_prefixes` (otherwise `OutsideCarrierPrefixes`) and is not any node's IP;
-- in `Separate` mode, `uplink` succeeds and returns a different IP.
+- in `Separate` mode, `uplink` succeeds and returns a different IP;
+- *(revision 5; plan, M5)* the Mac is attached to no foreign network (P0-2, below). Otherwise the result is `Down(ForeignNetworkAttached{findings})`, every finding with its interface (`daemon-core`'s `foreign_networks`, built). A network is foreign when any of these holds (critique D-11):
+  - an interface other than the egress, `lo0` and CFM's `utun*` holds a non-link-local IPv4 address or a global IPv6 address;
+  - a default route does not go via the egress;
+  - macOS Instant Hotspot has joined the operator's iPhone.
+
+  The check is a pure `daemon-core` function over a typed snapshot of interfaces and routes, unit- and property-tested on this Mac. The `macsys` adapter that takes the snapshot is checked live in L8/M8. Lab builds exempt `bridge100` through `cfg(feature = "lab")`.
+- *(revision 6; plan, M5)* the SIM plan is recorded. A state lifted from version 1 has none (§7, P0-1), and the exit stays down, with a typed reason, until `sim set-plan` records it.
 
 Any failure keeps the engine stopped, with a typed reason.
+
+**The exit Mac and the university network (P0-2, revision 5).** Durham University's Student IT Regulations v2.5 apply to every student who connects to or uses University IT facilities, network access included (regulation 1.1). The document's publication date is left as "xxx"; it was read on 2026-10-08.
+- Regulation 5.1 forbids doing any of the following without authorisation:
+  - operating a service that redistributes access to others, including connecting equipment that routes, bridges, switches or repeats traffic from other devices or networks, or any device (such as a PC or server) configured to do so;
+  - connecting to the University network any device that offers a service to others.
+- Regulation 2.3 forbids unsanctioned commercial activity on University IT facilities. That matters only if payment ever happens, and it supports F3.
+
+This is a reading of the regulations, not a ruling by the University. Hence:
+- **From M2b on**, when the Mac first runs a WireGuard test exit that routes flows the VPS starts, the exit Mac joins no Durham network (campus Wi-Fi forgotten, no eduroam, no campus Ethernet) while any exit or test tunnel runs. The console review first put the cutover at M8 at the latest, which was too late (critique C-2).
+- **In M2a** nothing routes, but measurements still run with Wi-Fi off. A new USB-C Ethernet adapter normally ranks above Wi-Fi in the service order *(inference)*, and background traffic hopping between interfaces would spoil the byte baseline (critique C-3).
+- **Operator monitoring and control traffic never crosses Janet.** That covers management SSH, which is dial-bound to the uplink (§10.5), and any remote view (§15.9) (critique C-1). The operator decided on 2026-10-08 (F15) that no operator traffic crosses Janet or eduroam, push alerts and viewer sessions included: the phone receives alerts and views the nodes on mobile data, with Wi-Fi off on campus.
+- **The Mac's own traffic then goes over the SMARTY line** and is counted by the SIM meter: macOS updates, iCloud and development sessions. Turn off iCloud Photos and Drive sync on the exit Mac. Do large downloads before cutover: macOS updates, Xcode, toolchains (critique D-7). The SIM forecast shows a line for the operator's own use (§15.3).
+- The rules of the college or accommodation on running equipment in a room were not researched.
 
 **Running checks.**
 - **Every direct probe** re-checks the carrier prefixes. A violation stops the engine within 30 s, which covers the M7 switching its WAN to Wi-Fi or Ethernet offload.
@@ -1205,7 +1400,7 @@ There is no automatic retry. The latch clears only on Retry, a `config_generatio
 
 This is the only signal that a node may be blocked in China. Nothing happens automatically.
 
-**WatchStale.** If a node's watch status is older than 30 s at a `Status` poll, the node is `Degraded(WatchStale)`.
+**WatchStale.** If a node's watch status is older than `WATCH_STALE_SECS` (30 s, agent-proto `watch.rs`) at a `Status` poll, the node is `Degraded(WatchStale)`. The node's own dead-man rule uses the same bound (§15.8).
 
 ### 10.3 Power and sleep
 
@@ -1224,9 +1419,21 @@ This is the only signal that a node may be blocked in China. Nothing happens aut
 
 **Did wake:** re-resolve interfaces → preflight → start → probes. **Target: `Serving` within 10 s of wake.**
 
-**Lid closed.** Clamshell sleep without an external display is unknown on macOS 27; M2 and M7 measure it. The documented options are closed-display mode on AC, or the operator's own `pmset` choice.
+**Lid closed.** Clamshell sleep without an external display is unknown on macOS 27; M2 and M7 measure it. The documented options are closed-display mode on AC, or the operator's own `pmset` choice. Until it is measured, the lid stays open.
 
 **A crashed daemon** closes the helper's stdin, and the assertions are released.
+
+**This Mac as a server (facts, 2026-10-08; revision 5).**
+- `pmset -g cap` on this MacBookPro18,2 (macOS 27.0, 26A428) lists no `autorestart` and no `acwake` capability. `pmset` therefore cannot set this Mac to power on, or to wake, when mains returns, and advice to run `pmset -a autorestart 1` does not apply here (critique A-30).
+- `pmset -g custom` shows `sleep 0` and `displaysleep 0` on both AC and battery. With these settings the Mac never sleeps on battery either, so `Degraded(OnBattery)` does not lead to sleep as this section assumes. A screen lock tied to display sleep also never triggers (critique C-5, C-14). Mooring never changes these settings (§18). The operator's choice is F19, and `pmset -g` and `pmset -g cap` are recorded in `docs/measurements/M2.md`.
+- **Charge Limit** (80–100 %) exists on Apple silicon from macOS 26.4. A Mac with a limit set still charges to 100 % occasionally (Apple support 102338, 9 Apr 2026). For a Mac on AC around the clock, set it to 80 %.
+- From macOS 26.1, **Background Security Improvements** install whatever the Software Update settings say (eclecticlight.co, 6 Nov 2025). Whether they force a restart is unverified. A restart leaves the exit down until someone logs in, because FileVault needs a physical login (§5.1).
+
+**Power cuts (critique C-5).** On a mains failure the Mac switches to battery and becomes `Degraded(OnBattery)`; it does not lose power. The M7 in Plugged-In mode has no battery and drops at once, so a UPS on the M7 is what keeps the exit up through a short cut (F8). FileVault matters only after a restart or a drained battery.
+
+Whether the M7 powers itself on when mains returns is unknown. The manual says only that connecting a computer's USB cable powers on a switched-off hotspot (p. 22), and it describes powering on with the Power button (p. 15). The M2a drill records what happens.
+
+A SIM PIN, if enabled, must be entered at every power-on (manual p. 62), which defeats unattended recovery. That trade-off is F17.
 
 ### 10.4 CFM coexistence
 
@@ -1254,9 +1461,12 @@ The L7 lab cannot prove the bypass, because a VM subnet is a connected route tha
   - `GateSet` on a sleep drain or a violation;
   - `Shutdown` on `EgressIsNodeAddress`;
   - `ClearHold` on Retry;
-  - a `Status`/`Usage` poll every 10 minutes.
+  - a `Status`/`Usage` poll every 10 minutes;
+  - *(revision 5; plan, M5)* with that poll, or on `PollNow`, an incremental `UsageSeries` pull from the last stored bin and an `Events{since}` read from the last stored event (§11.1, §15);
+  - *(revision 6; plan, M5)* with that poll, a `PutMacReport` push of the remote viewer's report to each node (F5, §15.9), and, once M4 adds the request, the notices the Mac rendered (§15.8).
 
   Everything else is an explicit CLI action.
+- Every call leaves through the uplink-bound dialler, never over Wi-Fi or Janet (P0-2, §10.2).
 
 ---
 
@@ -1273,11 +1483,13 @@ The L7 lab cannot prove the bypass, because a VM subnet is a connected route tha
 - `Request` is `PutBlob{sha256, len} | Line(LineRequest)`. On the wire the split is invisible, but `write_request` takes only a `LineRequest` and only `write_put_blob` writes a `PutBlob`, with its payload, so a `PutBlob` without its bytes cannot be expressed.
 - A malformed frame is `ReadError::Malformed{cause, line, column}`. It carries no decoder text, so a hostile reply cannot put VPS-supplied names or control characters into a Mac-side error.
 
-**Roles.** The forced command passes `--role bootstrap|ops` (`Role::permits`, which names every request kind).
+**Roles.** The forced command passes `--role bootstrap|ops|viewer` (`Role::permits`, which names every request kind).
 - The bootstrap role may send only `Bootstrap`.
-- Everything else, `RevokeBootstrap` included, is `ops`-only.
+- The viewer role (decision F5, 2026-10-08; §15.9) may send `Status`, `Usage`, `UsageSeries`, `Events`, `MacReport` and `GateSet`, and `GateSet` only with the Operator reason: its emergency stop. It can never reopen the gate, clear a hold, apply, halt or resume, so resuming is done from the Mac. Its key logs in as the unprivileged `mooring-view` account (§8.6), never as root.
+- Everything else, `RevokeBootstrap` and `PutMacReport` included, is `ops`-only. The ops role may send every request except `Bootstrap`.
+- `Request::authorize` checks the kind first (`RoleNotPermitted{role, request}`), then, for a `GateSet`, the reason with `Role::may_close_gate_for` (`GateReasonNotPermitted{role, reason}`). That rule is an exhaustive match over every role and every reason, so a new role or reason cannot compile without a decision, and a test proves it agrees with `permits`: a role may send `GateSet` exactly when it may close the gate for some reason. A typed subset of requests for the agent's viewer handler is an M4 addition, made when that handler exists.
 
-**Frozen upgrade core.** `Hello`, `HaveBlobs`, `PutBlob`, `ActivateAgent` and `Confirm`, **and their success replies** (`Hello(HelloInfo)`, `Blobs{present}`, `BlobStored{sha256}`, `AwaitingConfirm{generation}`, `Confirmed{generation}`), never change across protocol versions: a newer Mac decoding with `deny_unknown_fields` must parse an older agent's replies. Through `HelloInfo` this also freezes the shapes of `HostFacts`, `Holds`, `Halt`, `SshdDirective` and `AcceptLocal`; a later protocol adds a request rather than changing them. Requests and replies have byte-exact wire goldens in `contract/agent-proto-golden/`, and a cross-version test runs against the previous release's agent binary, which is kept as a fixture (M4). `AgentError` is not frozen: a Mac that meets an error variant it does not know reports a protocol mismatch.
+**Frozen upgrade core.** `Hello`, `HaveBlobs`, `PutBlob`, `ActivateAgent` and `Confirm`, **and their success replies** (`Hello(HelloInfo)`, `Blobs{present}`, `BlobStored{sha256}`, `AwaitingConfirm{generation}`, `Confirmed{generation}`), never change across protocol versions: a newer Mac decoding with `deny_unknown_fields` must parse an older agent's replies. Through `HelloInfo` this also freezes the shapes of `HostFacts`, `Holds`, `Halt`, `SshdDirective` and `AcceptLocal`; a later protocol adds a request rather than changing them. Requests and replies have byte-exact wire goldens in `contract/agent-proto-golden/`, and a cross-version test runs against the previous release's agent binary, which is kept as a fixture (M4). The same directory pins the protocol-1 frames the console reads (`Status`, `UsageSeries`, `Events`) and, since revision 6, the Mac-report frames (`PutMacReport`, `MacReport`), request and reply, marked as not frozen; a test requires the directory to hold exactly the pinned frames. `AgentError` is not frozen: a Mac that meets an error variant it does not know reports a protocol mismatch.
 
 **Requests:**
 - **`Hello`** returns `HelloInfo`:
@@ -1293,12 +1505,16 @@ The L7 lab cannot prove the bypass, because a VM subnet is a connected route tha
 - **`Apply(BundleHeader{config_generation, digest, host_facts, host_profile_version, files, engines})`** returns `TxnLaunched{generation}`, or `Unchanged{generation}` (§11.2). `files` is `BundleFiles`, every `ManagedFile` mandatory; its JSON equals a `ManagedFile` → SHA-256 map. Then `TxnStatus{generation}` returns `TxnStatus{generation, state}`, `Confirm{generation}` returns `Confirmed{generation}`, and `Rollback` returns `Reverted{generation}`.
 - **`ActivateAgent{sha}`** returns `AwaitingConfirm{generation}` (§11.2).
 - **`Status`**, **`Usage{month}`**, **`TargetCheck{host}`** return `StatusV1`, `UsageV1` and `TargetFacts` (§11.7).
-- **`GateSet{reason: MacDrain | EgressViolation | Operator}`** only closes the gate and records the hold; no request opens it. It returns `GateClosed{holds}`. **`ClearHold{hold: EgressViolation | Operator}`** returns `HoldCleared{holds}`, whether or not the hold was present.
+  - `StatusV1` also carries `accounting_at` (the latest accounting poll, `null` before the first), `last_active` (per accounting email, the latest poll at which its counters grew), `engines` (per engine unit: `NRestarts` and `Inactive | Active{uptime_secs, go_heap_bytes}`, where `go_heap_bytes` is Xray's Go runtime heap from `statssys`, not RSS, and `null` for Hysteria2), `host` (uptime, one-minute load in thousandths, available memory, free disk, journal size, reboot required, last unattended upgrade, chrony synchronised) and `transfer` (the uplink's bytes this UTC month from persisted deltas, the resets detected, and the time counting began).
+- **`UsageSeries{from, to, resolution: FiveMin | Hour | Day}`** returns `UsageSeriesV1{range, bins}`: per bin, the bytes of every accounting email whose counters grew, and no other entry or bin. The range is whole bins of at most 144 five-minute, 168 hour or 35 day bins (`ValueError::RangeTooLarge` on construction and receipt). The model bounds no user count, so a reply is bounded by entries instead: at most 9,600, which with the longest emails and counters is at most `MAX_USAGE_SERIES_REPLY_BYTES` (1,034,713 bytes), a compile-time assertion below the 1 MiB frame. A full range fits for up to 27 users active in every bin; a range holding more entries is refused with `SeriesTooLarge{fitting_bins}`, and a range the agent does not hold completely with `SeriesNotRecorded{recorded}`, never answered with zeros.
+- **`Events{since}`** returns `EventsV1{events, end}`: at most 4,096 journal events numbered `since` or later, each `{seq, at, kind}` (condition raised or cleared, gate opened or closed, hold recorded or cleared, halted, resumed, committed, engine restarted, host booted), and the number the next event will get. Events are paged by number because many can share a second. The journal is pruned only from its oldest end, so a page's numbers are consecutive and a gap inside one is refused (`ValueError::Events`); a first number above `since` shows pruned events, and an `end` below it a reset journal. A change in a raised condition's data is not an event; `Status` shows the current data.
+- **`PutMacReport(MacReportV1)`** (ops only; revision 6) stores the Mac's report for remote viewers, replacing the previous one, and returns `MacReportStored{at}`, echoing the report's time. **`MacReport`** (ops and viewer) returns `MacReport(StoredMacReport{received_at, report})`, with the node's receipt time, or `MacReportMissing` when none is stored, never a default (§15.9). A report holds at most `MAX_REPORT_USERS` (1024) users and `MAX_REPORT_ALERTS` (256) alerts, so its encoding is at most `MAX_MAC_REPORT_BYTES` (178,874 bytes; the band number is a `ReportBandNumber`, 1..=999, at most three digits), and compile-time assertions keep both the request and the reply inside their 1 MiB frames.
+- **`GateSet{reason: MacDrain | EgressViolation | Operator}`** only closes the gate and records the hold; no request opens it. It returns `GateClosed{holds}`, and only once both are true: the ops role records the hold and closes the gate itself. The viewer role may send only `GateSet{Operator}` (roles, above), which the watch carries out (§11.3), so it is answered `GateClosed` only after the handler has read the Operator hold back and found the gate closed, and otherwise, after at most `VIEWER_STOP_WAIT_SECS` (15 s, three watch ticks), `GateStopUnconfirmed{waited_secs}`: a stop that was only queued is never reported as done. **`ClearHold{hold: EgressViolation | Operator}`** returns `HoldCleared{holds}`, whether or not the hold was present.
 - **`Shutdown{reason: EgressIsNodeAddress | Operator | Retire}`** returns `Halted(Halt)`, and **`Resume{config_generation}`** returns `Resumed{generation}`. Each response answers exactly one request kind, and the Mac treats any other pairing as a protocol error.
 
-**Paths never appear in requests.** `ManagedFile` is a closed enum: `XrayConfig`, `Hy2Config`, `WgConf`, `Nftables`, `WatchConfig`. The agent maps each variant to a fixed path (`/etc/mooring/current/…`; `wgexit.conf` and `nftables.conf` are reached through `/etc/wireguard/wgexit.conf` and `/etc/nftables.conf`).
+**Paths never appear in requests.** `ManagedFile` is a closed enum: `XrayConfig`, `Hy2Config`, `WgConf`, `Nftables`, `WatchConfig` and, since revision 6, `ViewerKeys` (`/etc/mooring/current/viewer_authorized_keys`, which sshd reads for `mooring-view`, §8.6). The agent maps each variant to a fixed path (`/etc/mooring/current/…`; `wgexit.conf` and `nftables.conf` are reached through `/etc/wireguard/wgexit.conf` and `/etc/nftables.conf`). `BundleFiles` carries the new file's digest as `ViewerKeys`; `Apply` is not frozen, so its header may change.
 
-**One definition of the VPS names.** `crates/agent-proto/src/vps.rs` defines `WG_INTERFACE` (`wgexit`), `NFT_TABLE` (`mooring`), `NFT_GATE_SET` (`exit_closed`), `NftCounter` (`xray_guard`, `hy2_guard`, `flow_cap`), `EngineUser` (`mooring-xray`, `mooring-hy2`), `EXIT_ROUTE_TABLE` (77) and `EXIT_RULE_PRIORITY` (10000). The renderer writes them and the agent acts on them, so neither side can rename one alone.
+**One definition of the VPS names.** `crates/agent-proto/src/vps.rs` defines `WG_INTERFACE` (`wgexit`), `NFT_TABLE` (`mooring`), `NFT_GATE_SET` (`exit_closed`), `NftCounter` (`xray_guard`, `hy2_guard`, `flow_cap`), `EngineUser` (`mooring-xray`, `mooring-hy2`), `VIEWER_ACCOUNT` (`mooring-view`), `EXIT_ROUTE_TABLE` (77) and `EXIT_RULE_PRIORITY` (10000). The renderer writes them and the agent acts on them, so neither side can rename one alone.
 
 **Blobs** are content-addressed in `/var/lib/mooring/blobs/<sha256>`, and each hash is verified on receipt (Level 1).
 
@@ -1371,6 +1587,9 @@ The header's host facts are the node's recorded site (uplink, VPS4, arch, port r
 | `EgressViolation{at, generation}` | `ClearHold{EgressViolation}` arrives (the Mac's Retry) |
 | `Operator{at}` | `ClearHold{Operator}` arrives |
 
+**The viewer's emergency stop** (decision F5; plan, M4). A viewer's `GateSet{Operator}` is handled by the agent running as the unprivileged `mooring-view`, which cannot write `holds.json` or the nft set. It hands the request to the watch through a narrow request file under `gate.lock`, and the watch records the Operator hold and closes the gate. Only the ops role clears the hold, so resuming is done from the Mac.
+- **The reply is the watch's result, never the hand-off.** After writing the request, the handler re-reads `holds.json` and the gate's state until it finds an Operator hold recorded at or after the request's time and `wgexit` in `exit_closed`, and only then answers `GateClosed{holds}`. If that has not happened within `VIEWER_STOP_WAIT_SECS` (15 s, three `WATCH_TICK_SECS` ticks), it answers `GateStopUnconfirmed{waited_secs}` and leaves the request in place for the watch. The phone then shows that the stop is not confirmed, so the operator knows the node may still be serving (a hung watch that is still running, so `ExecStopPost` has not closed the gate, or a watch between restarts) and stops it another way: from the Mac (`GateSet` or `Shutdown` with the ops key) or the provider's console. A stop that was only queued is never answered as success.
+
 **Halt.** `Shutdown{reason}` works in this order:
 1. It writes `/var/lib/mooring/halted.json` atomically, without taking `txn.lock`.
 2. It closes the gate.
@@ -1390,6 +1609,12 @@ The engine units' `ExecCondition=agent halted-check` then prevents any restart: 
 3. Any failure to read WireGuard state closes the gate and records `WgReadFailed`. An `nft` failure is fatal; the unit restarts, without limit, and `ExecStopPost` closes the gate.
 4. Every 60 s, accounting runs (§11.5). Every hour, the target check runs: `xray tls ping`, the h2 check, and re-resolving the target name. A failure, or an IP change, records `TargetDegraded`.
 5. Write `/var/lib/mooring/status.json` atomically, with a timestamp the Mac uses for `WatchStale`.
+6. *(Revision 5; built in M4.)* Evaluate the liveness and host-health conditions of §14, and append every transition to the event journal that `Events{since}` serves (§11.1). The thresholds are the console spec's and stay *(inference)* until M4/M8:
+   - `MacSilent` once the handshake is older than `MAC_SILENT_SECS` (600 s) and no Operator hold is set. An Operator hold therefore suppresses it, and the alert rules warn when such a hold has lasted more than 24 h (§15.8; critique D-4);
+   - `DiskLow` under `DISK_LOW_FREE_BYTES` (1 GiB) or `DISK_LOW_FREE_PERCENT` (10 %);
+   - `ClockUnsynced` and `RebootPending`.
+
+   The uplink transfer counters reset at the nightly 20:00 UTC unattended-upgrades reboot (§5.2), so `StatusV1.transfer` is kept as persisted deltas with reset detection. DigitalOcean also pools transfer per team (critique D-8).
 
 ### 11.4 Reflector (`mooring-reflect`)
 
@@ -1406,8 +1631,28 @@ The reflector answers every source on purpose (§1.3). The visible IP-echo servi
 - Deltas are monotonic, and an Xray restart is detected when uptime decreases.
 - Bytes are recorded per opaque email (`<uid>@reality`, `<uid>@hy2`; the probe's `probe@…` separately) into `/var/lib/mooring/usage/<YYYY-MM>.json`, written atomically. Xray keys the counters `user>>>EMAIL>>>traffic>>>uplink|downlink` and keeps the email's case, so agent-proto's `StatsEmail`, which the renderer also uses to write the emails, is case-sensitive.
 - No destinations and no IPs are stored. Up to one poll interval can be lost on a crash.
+- The same polls feed the time series that `UsageSeries` serves (five-minute, hour and day bins of non-zero growth) and `StatusV1.last_active`. How long the agent keeps bins is an operator decision (F7) still open; whatever it keeps, it refuses a range it does not hold completely (`SeriesNotRecorded`) rather than report missing bins as zero. Xray adds spliced REALITY downloads to a counter only when the connection closes, so bins and `last_active` lag long downloads.
 - The Mac merges usage from all nodes next to the SIM meter.
-- **Quotas** are enforced by revocation.
+- **Quotas** are records, not revocations (revision 5). `UserPolicy` (§7) holds a quota and an expiry.
+  - A user over quota or past expiry is moved to `Suspended{QuotaExceeded | Expired}`. Suspension keeps the credentials, so a later resume delivers nothing new into China.
+  - The move is an explicit action, by the operator or by the daemon's apply job (M5). Automatic quotas were decided on 2026-10-08 (F4): from 6 users sharing the cycle's budget, a user's own quota overriding the automatic one. The users sharing it are those active now and those suspended for quota in the current cycle, so the quota is latched per cycle (decided 2026-10-09): a suspension for quota never switches it off or changes anyone's share within the cycle. Any other departure, a suspension for another reason or a revocation, still lowers the count (§15.3). A suspension for quota made before the current cycle's start no longer counts, and the apply job resumes it, within the cap, at the first apply of the new cycle (§13.6). Under the cap of 5 the automatic quota stays dormant unless users suspended for quota this cycle bring the count to six (§15.3).
+  - Revision 4 enforced quotas by revocation. That forced new credentials into China and broke the user's history.
+
+**Accuracy** (Xray v26.9.30 `b26a91de`, re-read 2026-10-08):
+- **Vision splice.** REALITY+Vision TCP flows to `freedom` switch to splice copy: the VLESS XRV branch sets `CanSpliceCopy = 2` (`proxy/vless/inbound/inbound.go:554-556`), and freedom sets 1 (`proxy/freedom/freedom.go:260`).
+  - Splice runs only on linux and android (`proxy/proxy.go:737-739`), which includes the VPS.
+  - Spliced downlink bytes are added to the user counter only when `tc.ReadFrom` returns, that is when the connection closes (`proxy/proxy.go:761-783`). The uplink is never spliced (`:273-275`, a commented-out TODO).
+  - A long REALITY download therefore shows no growth until it closes, and an Xray crash loses the in-flight spliced bytes.
+  - Hysteria2 handoff flows have an empty flow (§8.2) and never splice (`inbound.go:591-592`). Their counts are current.
+  - What this does to the console is in §15.4.
+- **Counters are registered at first dispatch.** A user's counters appear when its first connection is dispatched (`app/dispatcher/default.go:161-180`). A missing counter means no connection since Xray started, and reads as zero.
+- **`statsUserOnline` would not help even if enabled.** Its online map drops 127.0.0.1 and `[::1]` (`app/stats/online_map.go:9-12,35-38`), so it could never see a Hysteria2 user, who arrives over loopback. "Active" is derived from counter deltas instead (`StatusV1.last_active`), and no IPs are kept (§8.2).
+- **`statssys`** reports uptime and the Go runtime's `Alloc` and `Sys`, not process RSS (`app/stats/command/command.go:186-206`).
+- **Accounting canary (critique C-11).** Reading an absent counter as zero would hide a stats policy rendered off or mismatched emails, and quotas would then never fire. After a successful in-chain probe, `probe@reality` and `probe@hy2` must exist and grow; otherwise the watch raises `AccountingCanaryMissing{inbounds}` (§14), one condition naming every inbound whose canary is missing, since a stats policy rendered off misses both at once.
+  - The VPS cannot see by itself that an in-chain probe succeeded. Two ways to give it that evidence are open, an nft counter of probe flows or the in-chain probe interval in `watch.json`, and both change render goldens. M4 settles it.
+- M10's per-user source addresses on `wgexit` would give exact live per-user counts from kernel counters, which would remove the splice lag *(inference)*.
+
+**Retention (revision 5).** `usage/<YYYY-MM>.json` and the bins on the VPS have no deletion rule yet. Per-user records are pseudonymous personal data: the Mac's labels re-identify the opaque ids (UK GDPR recital 26). How long each host keeps them is decision F7. Its recommended default keeps bins on the VPS only until the Mac has pulled them (about 48 h), with the history on the Mac (critique C-12).
 
 ### 11.6 Host-profile convergence
 
@@ -1461,6 +1706,9 @@ A stored `TargetSpec` re-checks the attestation when decoded, but not the deny l
 | Mac exit deny list | 2 (a security boundary) | A VPS or user reaching the M7 admin page, LAN, CGNAT range or loopback | Mac engine rules (authoritative), Xray rules and the owner guard (defence in depth) |
 | VPS owner guard | 2 | User traffic leaving from the VPS IP; reaching VPS-local services | nftables |
 | Accounting and status | 0 | — | Plain files |
+| M7 admin password (`SecretRef::RouterAdmin`; only if M2a shows a login is needed, §7) | 2: it controls offload, APN, port forwarding and Wi-Fi | Someone turning on offload or a Wi-Fi radio, or forwarding ports, on the exit's router | Keychain. Sent only in the M7 login `POST` body over the Mac's wired link, after the identity check (§15.6). Never in a URL, an argv, a log or a fixture |
+| The deployment's one ntfy topic (`SecretRef::AlertTopic`, account `alert/topic`: `Password` material, 32 random bytes as 43 base64url characters, so 256 bits against F6's 128) and each channel node's two Healthchecks check UUIDs (`NodeDeadManCheck`, `NodeMacAliveCheck`: `Uuid` material) (F6) | 1: a leaked topic lets someone read Level-0 alert text and post spam or forged notices; a leaked check UUID lets someone ping the check and hide an outage. Every channel node and the operator's phone hold the topic, so a compromised node or a lost phone leaks it for the whole deployment, and retiring the node or removing the phone's viewer key does not revoke it. Replacing it takes two configuration changes, because the store replaces no secret the state still references (§7): removing every node's channels, after whose commit the topic and the check items are deleted, then setting them up again with a new topic and the same check UUIDs. Every channel node then needs `node apply`, and the phone one new subscription. M5's `alert rotate-topic` does this (§15.3), after a node that may be compromised is retired (§13.4) and after a phone is lost (§15.9) | — | Keychain; on each channel node, the alert unit's credentials file via `LoadCredential=` (M4, §15.8) |
+| Viewer key (F5) | 2 | A stolen phone reading Level-0 status and closing a gate | Private half generated on the phone and never written on the Mac; public half in `viewer_authorized_keys` on each node, 0644 `root:root` (a public key, readable by `mooring-view`, writable only by root) and read by sshd as the unprivileged `mooring-view` (§8.6, §15.9) |
 
 **Keychain.**
 - `kSecUseDataProtectionKeychain`, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, `kSecAttrSynchronizable=false`, access group `<TEAM>.com.bill.mooring.secrets`. These are the same attributes as CFM's `CredentialVaultStorage.swift:133-150`.
@@ -1532,16 +1780,18 @@ The Mac and VPS engines change independently, because the WireGuard wire format 
 4. The operator deletes the VM and confirms → `Retired`, which removes the address from the deny lists (a configuration change).
 
 **With a healthy standby (the normal case).** Precondition: the standby's last `node apply` reported `AppliedVerified`, and its probes are `Verified`. Otherwise follow the procedure for two blocked nodes.
-1. Retire the blocked node (lon1) first. It carries no China traffic anyway, and the standby serves the users meanwhile. A `Retiring` node still counts as active, so the next step needs lon1 to have reached `RetiredPendingProviderDeletion` (retirement step 3); deleting its VM can wait.
-2. `node new lon2`, then adopt, set the target, apply.
+1. Retire the blocked node (lon1) first. It carries no China traffic anyway, and the standby serves the users meanwhile. A `Retiring` node still counts as active, so the next step needs lon1 to have reached `RetiredPendingProviderDeletion` (retirement step 3); deleting its VM can wait. If lon1 is the only channel node, run `alert setup` on the standby before retiring lon1 (below).
+2. `node new lon2`, then `alert setup lon2` if alerting is set up, adopt, set the target, apply.
 3. Apply the standby as well: its Xray rules list every node address, so its bundle changed, and exports refuse a node that has not confirmed the current generation (`NodeNotApplied{Stale}`).
 4. Re-export every user with the new node plus the standby, and deliver the files out of band.
 
-**With a single node and no standby,** the order is reversed: `node new lon2`, adopt, set the target, apply lon2 and re-apply lon1, re-export and deliver every user's file, and only then retire lon1.
+**With a single node and no standby,** the order is reversed: `node new lon2`, `alert setup lon2` if lon1 has channels, adopt, set the target, apply lon2 and re-apply lon1, re-export and deliver every user's file, and only then retire lon1.
 
-**With both nodes blocked,** users have no working node anyway: retire one, provision its replacement (new, adopt, target, apply, export), then retire the other and provision its replacement the same way.
+**With both nodes blocked,** users have no working node anyway: retire one, provision its replacement (new, `alert setup` if alerting is set up, adopt, target, apply, export), then retire the other and provision its replacement the same way.
 
 Every step that changes the configuration bumps `config_generation`, so `node apply` runs on every node a user holds credentials on before that user's file is exported (§7). **Target: 20 minutes or less hands-on (M9).**
+
+**Alert channels and viewers follow the node (revision 6).** Retirement drops the retired node's alert channels and its two Healthchecks Keychain items (§7). The deployment's one ntfy topic stays while another node has channels, and is deleted after the commit that leaves no channel node; the next `alert setup` then draws a new topic, which the phone must subscribe to. So, while alerting is set up, the replacement or the standby gets its channels with `alert setup <node>` (M5), which stores its Healthchecks checks, **before** the last channel node is retired. A planned node can hold channels (§7), so `alert setup` can follow `node new` at once, and the node's first `node apply` carries them. The node then sends to the same topic, and the phone's ntfy subscription needs no step; the store test `the_alert_topic_is_shared_and_outlives_one_channel_node` follows that order. M5's `node retire` refuses, unless the operator confirms it, to retire the last channel node while another active node has none. The phone's viewer keys need no step either: every node's bundle carries every viewer (§8.6), but the phone needs the new node's address and host-key fingerprint (`viewer new` prints it, §15.9). A node retired because it may be compromised, not merely blocked, leaves the topic with whoever holds its disk: replace the topic after the retirement (`alert rotate-topic`, §12).
 
 ### 13.5 Revocation
 
@@ -1558,10 +1808,12 @@ A failing node stays in `per_node`, and the operator retries it explicitly.
 
 User changes re-render the VPS configs and restart the engines. Existing connections drop for a few seconds; restarts are scheduled for 03:00–06:00 China time. `mooring-exit` restarts only if its own rendered digest changed.
 
+Nothing schedules them yet (revision 5): `node apply` is manual, and the daemon never sends `Apply` (§10.5). The plan for M5 is `mooringctl apply --pending`, run by a launchd calendar job at about 19:15 UTC. That is inside the window and before the VPS's 20:00 UTC unattended-upgrades reboot (§5.2). It applies every node whose confirmed generation is older than the deployment's, and carries out the suspensions that users' effective quotas (their own, or the automatic one of F4) and expiry records call for (`daemon-core`'s `policy::evaluate`, §11.5, §15.3). A suspension for quota lasts for the rest of its cycle and keeps counting among the users who share that cycle's budget, so it never changes the others' shares (§15.3). The job records each suspension it carries out with `since` set to the `now` of the evaluation that proposed it, so the instant lies in the cycle its `QuotaExceeded{cycle_start}` names. At the first apply of a new billing cycle the job resumes the users whose suspension for quota has lapsed: those suspended `QuotaExceeded` at an instant (`since`) before the current cycle's start, whatever start the suspension records, exactly the ones `daemon-core`'s `quota_suspension_holds` does not hold, so M5 lists them with that predicate, and a suspension for quota is always either counted or due for resume (§15.3). A suspension for quota made after the run's `now` can only come from a clock that stepped back or a corrupt record; it is `QuotaSuspensionAfterNow` from the predicate, and from `evaluate` whenever an `AutoQuotaPolicy` is recorded (dormant or not), never read as held or lapsed. `evaluate` then fails as a whole, so the run carries out none of its proposals (expiry suspensions and suspensions for a user's own quota included) and no resume that depends on that record, and reports the error until the clock passes that instant or the operator resumes the user; node applies, separate changes, still run. `evaluate` proposes no action for a suspended user, so the resume is the apply job's own step, and until it runs such a user counts for nobody's share. The cap still binds: it counts only active users (§7), so the operator may have admitted a user while another was suspended for quota, and a resume past `capacity.max_active_users` is refused with `TooManyActiveUsers`. The job therefore resumes lapsed users one configuration change each, the earliest suspension (`since`) first and then by `UserId`, only while fewer than `max_active_users` users are active (with no cap, every one). A user the cap holds back stays suspended and shares nothing; the job reports them (its `--json` outcome and the console) and the operator decides, and it is not a failure: no refused resume blocks the run's suspensions or node applies, which are separate changes. `apply --now` does the same at once, for example in an abuse case. The console shows each node's pending apply and how long it has waited (§15.3).
+
 ### 13.7 Recovery runbooks
 
 - **`console-recovery.md`.** The provider's rescue boot is used when SSH is lost despite commit-confirm. The steps: mount the disk, restore `authorized_keys` and `/etc/nftables.conf` from `gen-<N-1>`, and reboot.
-- **`mac-loss.md`.** Keychain items are `ThisDeviceOnly`, and the operations key is excluded from backups. Losing or replacing the Mac therefore means rotating every node and reissuing every user file. Theft needs the same response in any case. This is the accepted recovery model.
+- **`mac-loss.md`.** Keychain items are `ThisDeviceOnly`, and the operations key is excluded from backups. Losing or replacing the Mac therefore means rotating every node and reissuing every user file. Theft needs the same response in any case. This is the accepted recovery model. An encrypted backup would change it (an `hdiutil` AES-256 image of the state, the Keychain secrets and the SSH material, with the passphrase kept offline). That change to the security posture is the pending operator decision F18 (critique C-13), so until then no backup exists.
 
 ---
 
@@ -1573,24 +1825,37 @@ The CLI maps errors to `{"error":{"kind","detail"}}` with a stable exit code, fi
 
 | Domain | Variants | Handled by | Retry | User sees |
 |---|---|---|---|---|
-| model | One variant per newtype rule (`InvalidAddress{addr,class}`, `InvalidShortId`, `InvalidDnsName`, `InvalidHopInterval`, `InvalidHy2Listener`, `InvalidKeepalive`, `InvalidInterfaceName`, …) and per cross-entity invariant (`PortPlanConflict{conflict}`, `UnknownNode`, `UnknownUser`, `DuplicateId`, `TooManyNodes`, `GenerationAhead`, `GenerationRegressed`, `TargetNotSet`, `NodeNotDeployable`, `NotRevoking`, `RevokePendingWithoutCredentials`, …); interface resolution: `InterfaceNotSelected`, `UplinkModeMismatch`, `UplinkEqualsEgress`, `InterfacesForOtherSite`. Target qualification fails separately with `TargetRejected{reasons}`, every failed rule listed (§11.7) | CLI | no | the exact field |
+| model | One variant per newtype rule (`InvalidAddress{addr,class}`, `InvalidShortId`, `InvalidDnsName`, `InvalidHopInterval`, `InvalidHy2Listener`, `InvalidKeepalive`, `InvalidInterfaceName`, …) and per cross-entity invariant (`PortPlanConflict{conflict}`, `UnknownNode`, `UnknownUser`, `DuplicateId`, `TooManyNodes`, `GenerationAhead`, `GenerationRegressed`, `TargetNotSet`, `NodeNotDeployable`, `NotRevoking`, `RevokePendingWithoutCredentials`, `DuplicateAlias`, `TooManyActiveUsers`, `SimThresholdAbovePlan`, `DeprioritisationNeedsFairUseLine` (revision 5's `DeprioritisationNeedsUnlimitedPlan`, renamed in revision 6), `AlertChannelsOnInactiveNode`, `DigestTimeTooEarly{at,earliest}` (a digest time before 02:00 in Europe/London, §15.8), …; `DuplicateId` names a viewer as `EntityId::Viewer`); revision 6's newtypes: `InvalidBudgetPercent`, `InvalidSimFactor`, `InvalidWallClockTime`; a fresh deployment, or a change that edits the SIM policy, without a recorded plan: `PlanNotRecorded`; user transitions: `UserNotActive`, `UserNotSuspended`, `RevocationAlreadyStarted`; the version-1 lift: `StopPolicyUnchosen`; interface resolution: `InterfaceNotSelected`, `UplinkModeMismatch`, `UplinkEqualsEgress`, `InterfacesForOtherSite`. Target qualification fails separately with `TargetRejected{reasons}`, every failed rule listed (§11.7) | CLI | no | the exact field |
 | keys | `Entropy`, `MaterialRejected` (a model constructor refused an all-zero draw: a broken source), `CertValidity{now}`, `CertBuild{step}`, `InvalidSshComment` | CLI | no | fatal |
-| store | `StoreError`: `Io{op,path}`, `Lock{path}`, `NotInitialized`, `AlreadyInitialized`, `StateCorrupt{path}`, `DowngradeRefused{found,newest}`, `MigrationFailed{from,to}`, `Encode`, `GenerationConflict{expected,found}`, `RevisionConflict{expected,found}`, `CounterOverflow`, `GenerationEdited`, `AppliedEdited{node}`, `InvalidChange`, `SecretRefsChanged`, `SecretPlanMismatch`, `DuplicateSecret`, `SecretWrite{secret_ref}`, `SecretCleanup{committed,failures}`. `SecretStoreError`: `SecretMissing{secret_ref}`, `Keychain{op,status}`. `ChangeError<E>`: `Store` or the caller's `Refused(E)` | CLI, daemon | `GenerationConflict`/`RevisionConflict`: the user re-runs | yes |
+| store | `StoreError`: `Io{op,path}`, `Lock{path}`, `NotInitialized`, `AlreadyInitialized`, `StateCorrupt{path}`, `DowngradeRefused{found,newest}`, `MigrationFailed{from,to}`, `Encode`, `GenerationConflict{expected,found}`, `RevisionConflict{expected,found}`, `CounterOverflow`, `GenerationEdited`, `AppliedEdited{node}`, `UserStatusEdited{user,from,to}` (a status changed outside the user transitions, or a user who is not revoked removed; §7), `InvalidChange` (a change, or the initial deployment, breaks a model invariant: `Store::init` with an unrecorded plan is `InvalidChange{PlanNotRecorded}` and creates no file, and so is a change that edits the SIM policy and leaves it unrecorded, §7), `SecretRefsChanged`, `SecretPlanMismatch`, `DuplicateSecret`, `SecretWrite{secret_ref}`, `SecretCleanup{committed,failures}`. `SecretStoreError`: `SecretMissing{secret_ref}`, `Keychain{op,status}`. `ChangeError<E>`: `Store` or the caller's `Refused(E)` | CLI, daemon | `GenerationConflict`/`RevisionConflict`: the user re-runs | yes |
 | export | `UserNotActive`, `NothingToExport`, `NodeNotApplied{node, Stage \| Stale}`, `CapabilityUnsupported{line,cap}`, `CertUnparseable`, `CertKeyUnsupported`, `CertNotCurrent`, `CertSanMismatch`, `CertEkuMissing`, `InvalidTag`, `Model`, `Secret`, `Encode` | CLI | no | yes |
-| render | `NoAppliedNodes`, `AddressNotOnUplink`, `TargetFactsForOtherHost`, `NodeNotPlanned`, `HostKeyNotPinned`, `InvalidHostKey{rule}`, `WireValue{field}` (a drift between the model and wire rules, unreachable by construction), `Model`, `Secret`, `Export`, `Encode` | CLI, daemon | no | yes |
+| render | `NoAppliedNodes`, `DuplicateCredential{node,kind,first,second}` (two identities on a node, both named, share a VLESS UUID, a loopback UUID or a Hysteria2 password, as the engines key them; §8.1), `AddressNotOnUplink`, `TargetFactsForOtherHost`, `NodeNotPlanned`, `HostKeyNotPinned`, `InvalidHostKey{rule}`, `WireValue{field}` (a drift between the model and wire rules, unreachable by construction), `Model`, `Secret`, `Export`, `Encode` | CLI, daemon | no | yes |
 | ssh | `Spawn`, `HostKeyMismatch{node}`, `AuthFailed`, `Transport{stderr_tail}`, `Timeout`, `ProtocolMismatch`, `Decode`, `ResponseTooLarge`, `ForcedCommandNotActive` | CLI, daemon | `Transport`/`Timeout`: user or next poll; `HostKeyMismatch`: **never** | yes; `HostKeyMismatch` as a security alert |
-| agent (remote) | `BlobHash{expected,actual}`, `BlobMissing{sha256}`, `BlobTruncated{expected,received}`, `TrailingInput`, `StageValidation{tool,stderr_tail}`, `Apt{stderr_tail}`, `Systemd{unit,op}`, `HealthGate{failed}`, `RolledBack{generation,cause}`, `RollbackFailed{generation,cause}`, `RevertedUnconfirmed{generation}`, `AgentSelfTestFailed{stderr_tail}`, `AgentShaMismatch{expected,actual}`, `Busy{generation}`, `GenerationNotNewer{current}`, `GenerationMismatch{current}`, `NotAwaitingConfirm`, `UnknownTransaction{generation}`, `NodeHalted`, `NotHalted`, `HostFactsChanged{field}`, `HostFactUnavailable{field}`, `PortPlanConflict{recorded,live}`, `TargetFactsUnavailable{tool,stderr_tail}`, `NoUsageRecorded{month}`, `GateCloseFailed{stderr_tail}`, `Io{op,errno}`, `RoleNotPermitted{role,request}`, `UnknownRequest`, `RequestTooLarge`. Not frozen (§11.1) | CLI shows; the VPS stays at last-good or stopped | idempotent re-apply | yes |
-| daemon: preflight | `EgressInterfaceAbsent{selector}`, `EgressAmbiguous{matches}`, `EgressNoIpv4{bsd}`, `EgressSubnetMismatch`, `UplinkAbsent`, `UplinkEqualsEgress`, `DirectProbeFailed{node,stage}`, `OutsideCarrierPrefixes{ip}`, `SecretsUnavailable`, `AgentNotEnabled{status}` | daemon | on interface events or the next tick | menu and notification |
+| agent (remote) | `BlobHash{expected,actual}`, `BlobMissing{sha256}`, `BlobTruncated{expected,received}`, `TrailingInput`, `StageValidation{tool,stderr_tail}`, `Apt{stderr_tail}`, `Systemd{unit,op}`, `HealthGate{failed}`, `RolledBack{generation,cause}`, `RollbackFailed{generation,cause}`, `RevertedUnconfirmed{generation}`, `AgentSelfTestFailed{stderr_tail}`, `AgentShaMismatch{expected,actual}`, `Busy{generation}`, `GenerationNotNewer{current}`, `GenerationMismatch{current}`, `NotAwaitingConfirm`, `UnknownTransaction{generation}`, `NodeHalted`, `NotHalted`, `HostFactsChanged{field}`, `HostFactUnavailable{field}`, `PortPlanConflict{recorded,live}`, `TargetFactsUnavailable{tool,stderr_tail}`, `NoUsageRecorded{month}`, `SeriesTooLarge{fitting_bins}`, `SeriesNotRecorded{recorded}`, `GateCloseFailed{stderr_tail}`, `Io{op,errno}`, `RoleNotPermitted{role,request}`, `GateReasonNotPermitted{role,reason}` (revision 6: a `GateSet` reason the role may not set), `GateStopUnconfirmed{waited_secs}` (revision 6: the watch did not confirm a viewer's stop within `VIEWER_STOP_WAIT_SECS`; the gate may still be open, §11.3), `MacReportMissing` (revision 6: no report stored), `UnknownRequest`, `RequestTooLarge`. Not frozen (§11.1). Values that fail their rule on receipt are `ValueError`s; revision 6 adds `NodeName`, `ReportUserId`, `ReportBandNumber{number}` (a band number outside 1..=999), `MacReport{rule: TooManyUsers \| TooManyAlerts \| UsageMismatch}`, `NoticeTitle` and `NoticeBody` | CLI shows; the VPS stays at last-good or stopped | idempotent re-apply | yes |
+| daemon: preflight | `EgressInterfaceAbsent{selector}`, `EgressAmbiguous{matches}`, `EgressNoIpv4{bsd}`, `EgressSubnetMismatch`, `UplinkAbsent`, `UplinkEqualsEgress`, `DirectProbeFailed{node,stage}`, `OutsideCarrierPrefixes{ip}`, `SecretsUnavailable`, `AgentNotEnabled{status}`, `ForeignNetworkAttached{findings}` (revision 5, P0-2, §10.2; the check is built in `daemon-core`, the preflight is plan, M5) | daemon | on interface events or the next tick | menu and notification |
+| daemon: router (revision 5; plan, M5 after M2a; read only, §15.6) | `RouterUnreachable`, `RouterAuthFailed`, `RouterUnsupported{model,firmware}` (no JSON interface; HTML is never scraped), `RouterMalformed{field}` (a missing or ill-typed allowlisted field; never the raw bytes), `RouterIdentityMismatch{expected,found}` (the gateway is not the M7 recorded in M2; no password is sent). Their kinds are the status's `RouterUnavailableReason` (`Unreachable`, `AuthFailed`, `Unsupported`, `Malformed`, `IdentityMismatch`, already in `daemon-core`), which adds `NotConfigured` for an adapter not set up; the payloads stay in the CLI's error, the status carries the kind only. A value outside its bounds is `RouterValueError` (`SignalOutOfRange`, `TemperatureOutOfRange`, `BatteryPercentOutOfRange`, `InvalidText{field}`, never echoing the text), which the adapter reports as `RouterMalformed` | daemon → status | next poll; `RouterIdentityMismatch`: none until the operator acts | router panel. None of them stops the exit; the carrier check does (§10.2) |
 | daemon: engine | `EngineSpawn{io}`, `EngineConfigRejected{stderr_tail}`, `EngineStartFailed{stderr_tail}`, `EngineCrashLoop{n,window}`, `StaleEngine{pid}` | daemon | backoff only for post-health crashes | yes |
 | daemon: verify | Violations (engine stopped and latched): `EgressMismatch{d1,d2,observed}`, `EgressIsNodeAddress{node}` (+ `Shutdown`), `EgressEqualsUplink`, `OutsideCarrierPrefixes{ip}`. Degraded: `NodeProbeFailed{node,proto,stage}`, `ReachabilitySuspect{node}`, `WatchStale{node}` | daemon | violations: none until Retry, a config change or an interface change | red, with notification |
-| daemon: budget and power | `SimWarn{used}`, `SimCapReached{used,limit}` (engine stopped until the cycle resets), `OnBattery`, `PowerHelperExited`, `DrainTimedOut`, `DrainFailed{ssh}` | daemon | per rule | yes |
-| watch (VPS) | `WgReadFailed` (gate closes), `NftFailed` (unit restarts; gate closed by `ExecStopPost`), `StatsQueryFailed`, `TargetDegraded`, `ExitFlowCapHit{count}`, `StateWrite{io}` | watch → status | next tick | `node status`, menu |
+| daemon: budget and power | `SimWarn{cycle_start}`, `SimCapReached{cycle_start}` (engine stopped until the cycle resets; the bytes and the thresholds are in the status's SIM meter beside it), `OnBattery`, `PowerHelperExited`, `DrainTimedOut`, `DrainFailed{ssh}` | daemon | per rule | yes |
+| daemon: console core (`daemon-core`, built) | `ForecastError` (`NoBins`, `NothingElapsed`, `BinOutsideCycle`, `BinsOutOfOrder`, `MissingDay`, `CounterOverflow`, `Model`): a missing day is never read as zero. `UsageError` (`LedgerGap`, `DuplicateLedger`, `MissingLedger{node}`, `LedgerForUnknownNode{node}`, `PeriodBeforeLedger`, `NotCoveredThrough`, `BinStraddlesThrough`, `PrincipalNotAUser`, `UnknownUser`, `CounterOverflow`, `Model`): every node that may have counted traffic needs a ledger. `FigureError` (`ShareAboveWhole`, `SharesNotWhole`, `SplitMismatch`, `DerivedMismatch`): a decoded usage row contradicts its own figures. `AlertError` (`ClockWentBackwards`, `DuplicateCondition`), `PolicyError` (`UsageForOtherCycle`, `UsageAfterNow`, `UsageMissing`, `AutomaticQuotaZero{budget_bytes, sharing}` (revision 6: a share that rounds down to zero is an error, never "no quota"; `sharing` is N, the users sharing the budget), `QuotaSuspensionAfterNow{user, since, now}` (a suspension for quota made after `now`: the Mac's clock stepped back or the record is corrupt, so whether it holds cannot be told), `Model`), `CapacityError`, `RouterValueError`, `StatusError` (`UnsupportedVersion`, `UnknownNode`, `UsageMismatch`, `AlertsNotOrdered`); revision 6: `NotifyError` (`Text`: a rendered notice broke the notice grammar, a renderer bug; `Model`: a time past the year 9999) and `ReportError` (`Wire`: the projection broke a report rule) | daemon → status (the forecast's and usage's kinds are what the status shows instead of figures) | next poll | the panel that lacks figures says why |
+| watch (VPS) | `WgReadFailed` (gate closes), `NftFailed` (unit restarts; gate closed by `ExecStopPost`), `StatsQueryFailed`, `TargetDegraded`, `ExitFlowCapHit{count}`, `StateWrite{io}`, `MacSilent{since}` (handshake older than 600 s, no operator hold), `DiskLow{free}` (under 1 GiB or 10 %), `ClockUnsynced`, `RebootPending{since}`, `AccountingCanaryMissing{inbounds}` (critique C-11; every inbound whose canary is missing, in one condition; its evidence is settled with the watch in M4) | watch → status | next tick | `node status`, menu |
 
 ---
 
-## 15. Observability and logging
+## 15. Observability, the operator console and logging
 
-**Status stream.** `StatusV1` is emitted by `mooringctl status --follow --json` and snapshotted in `status.json`. It contains:
+Revision 5 turns this section into the design of the operator console. The operator asked for a console that shows each user's usage and the router's state and lets him act. What needs no decision is designed here. Revision 6 records the operator's decisions of 2026-10-08 on automatic quotas (F4), remote viewing (F5) and the alert channels (F6); retention (F7) is still pending and marked. Built so far: the protocol-1 frames the console reads from a node (the `StatusV1` additions, `UsageSeries` and `Events`, §11.1), the model records it shows (§7), and, in revision 6, the automatic quota (§15.3), the push notices, digest and dead-man rule (§15.8), and the remote viewer's role, report and keys file (§15.9). Everything else in this section is plan, for M4 (agent), M5 (daemon and CLI) and M7 (app).
+
+### 15.1 Shape
+
+- **The truth stays on the exit Mac.** `mooringctl daemon` merges each node's `StatusV1`, `UsageSeries` and `Events` with the SIM meter, the probes, the read-only router adapter (§15.6) and its own event journal (§15.7).
+- **The CLI is the only API.** `Mooring.app` renders `mooringctl status --follow --json`, and calls `mooringctl … --json` for history and actions. It never reads secrets or daemon files (§5.1).
+- **No web panel and no new listener**, on the Mac or on a node (§18).
+- **Naming.** Revision 4 called the Mac's stream `StatusV1`, which collides with agent-proto's `StatusV1` (`crates/agent-proto/src/status.rs`), a node's status. The Mac's type is **`MacStatusV1`**, defined in `daemon-core` (§6.1). A node's status keeps its name.
+
+### 15.2 `MacStatusV1`
+
+`MacStatusV1` is emitted by `mooringctl status --follow --json` and snapshotted in `status.json`. Revision 4's contents:
 - `exit_state` with its reason and `since`;
 - `egress{bsd, lladdr, ipv4}` and the uplink;
 - per engine: `{pid, restarts, last_exit}`;
@@ -1600,15 +1865,225 @@ The CLI maps errors to `{"error":{"kind","detail"}}` with a stable exit code, fi
 - per-user bytes;
 - power state.
 
-Swift decodes the stream through a Codable mirror, tested against Rust-generated fixtures in `contract/status-fixtures/`.
+Revision 5 adds (the type is built in `daemon-core`; the daemon that emits it is plan, M5):
+- the egress link's speed and state;
+- per node:
+  - the deployment's current generation beside the applied one, and how long an apply has been pending;
+  - the node's own `StatusV1` additions: `accounting_at`, `last_active`, `engines`, `host`, `transfer` and the watch conditions;
+- in the SIM figures:
+  - the model's `SimThresholds`: the warning, `stop` following the stop policy (§7) in place of `hard_stop`, and the plan's line with its kind (`fair_use` or `allowance`), checked on decode as the policy is;
+  - the received and sent bytes;
+  - a `SimForecast`: the cycle-to-date daily average, the cycle's bytes projected linearly from it, and the day each threshold was or is projected to be crossed. The average over the whole cycle so far is a deliberate simplification *(inference)*: a burn over the last 7 days would follow a change of use sooner, and is a refinement for M8 data;
+- per user, and per node × protocol: bytes for today, the SIM cycle, the calendar month and lifetime, and the last active time; "active now" is `active`, `idle` or `unknown` (a node serving the user has no fresh accounting poll), never a guess. Every node that may have counted traffic must be covered, or usage is shown as unavailable with its reason (`MissingLedger`), never as zeros; a decoded row whose figures contradict each other is refused (`FigureError`);
+- router status (§15.6), capacity (§15.3), foreign networks (§10.2) and open alerts (§15.8).
 
-**Logs:**
+Swift decodes the stream through a Codable mirror, tested against Rust-generated fixtures in `contract/status-fixtures/`: three scenario documents (`serving`, `degraded`, `down`) and `variants.json`, which holds one value of every variant of every enum a status carries, so the mirror has a fixture for each variant. Each is pinned byte for byte, and every object in them refuses an unknown key. `degraded` runs the 20-user fixture without a cap, so 18 users are active, beyond the pilot's cap of 5 (F3): it exercises the app at the scale the model allows, and its SIM is accordingly forecast to pass the warning the next day, with the `SimForecastCrossing` alert open.
+
+### 15.3 What the console shows
+
+Sources: **X** Xray's counters, read by the node's watch; **A** the node's `StatusV1`, `UsageSeries` and `Events`; **D** the Mac daemon (interfaces, probes, latches, SIM meter, power helper, journal); **S** `state.json`; **R** the router adapter (§15.6).
+
+| Screen | Shows | Sources |
+|---|---|---|
+| Overview | Exit state; each node's gate and verdict; SIM gauge and forecast; the router's radio access type, band, signal bars and thermal level; capacity now (uplink use, loaded RTT); users active now; open alerts | D, A, R |
+| Users | One row per user: label (Mac only); opaque id and optional public alias; status (`Active`, `Suspended{reason, since}`, `RevokePending`, `Revoked`); client line; nodes held; active now and last seen, per protocol and node; up and down for today, the SIM cycle, the calendar month and lifetime; shares of the cycle's served bytes by node and protocol; estimated SIM cost (the cycle's served bytes × the measured SIM factor, §15.4); quota used, limit, state and action, marked as the automatic quota or the user's own override (F4), and the expiry, when set; the agreement version accepted, when recorded (F9). "Up" is client → destination (Xray's uplink), "down" destination → client | S, X via A, D |
+| User detail | A per node × protocol table; an hourly chart over 7 days, daily over 35 days and monthly over 13 months, within whatever F7 keeps; a rotation tracker (bytes on a newly applied node, which also shows that a re-delivered file was imported); actions | S, A |
+| Nodes | Role, stage, address; applied against current generation, and how long an apply has been pending; gate, holds, halted; handshake and watch age; the last in-chain verdict per protocol (time, verdict, latency); engines (active, uptime, Go heap, restarts); watch conditions; the REALITY target and its last hourly check; host health (uptime, load, memory, disk, journal, reboot required, last upgrade, clock sync); the uplink's transfer this month against the provider's allowance; `ReachabilitySuspect`; probe bytes | S, A, D |
+| Exit | Exit state, reason and since; violation latches with their evidence (`d1`, `d2`, observed, time); the egress's name, link-layer address and M7-side IPv4, link speed and state; the carrier check (egress public IP, inside `carrier_prefixes` or not, pairing, `verified_at`); `mooring-exit` and `mooring-probe` (pid, restarts, last exit); power (AC or battery, assertions held, last sleep and wake, `DrainTimedOut`); foreign networks (§10.2); pending applies | D, S |
+| SIM | The plan (carrier, kind, line or "no line", speed cap, terms URL and date) or "not recorded"; the bill day; cycle bytes received, sent and in total, against the warning, the stop policy and the plan's line; accuracy; daily burn and forecast, with a line for the operator's own use (§10.2); a reconciliation over the cycle (below) | D, S, R |
+| Router | §15.6 | R, D |
+| Capacity | Egress tx and rx now (1-minute average) and over 24 h; uplink use = tx rate ÷ `UplinkBaseline.p50` (§7), with the observed 7-day p95 tx rate beside it; loaded latency = direct-probe RTT − its 24 h idle p10; who is using it now (per-user rates from the latest deltas, plus an "unattributed" line labelled with the splice caveat); a China-evening heatmap (hourly, Asia/Shanghai) of served bytes and saturated minutes; served bytes this cycle against the served budget (the SIM budget × 1000 ÷ the recorded `SimFactor` in ‰, about 143e9 at the pilot's stop) | D, S, X via A |
+| Events | The Mac's journal and the nodes' journals; daily availability; the 72 h `Verified` percentage that M8 accepts on (§15.7) | D, A |
+
+- **Reconciliation** sets the SIM meter's bytes against: Σ users' served bytes × the factor; the probe bytes; the M7's own counter, if §15.6 can read it; and the operator's weekly reading of SMARTY's dashboard or app usage history. SMARTY counts in binary units (1 GB = 1024 MB) per full MB, re-sent packets and flow-control overhead included ([SMARTY-PG] p23), so its figure is converted before comparing; whether it shows the GB used on an Unlimited plan, and how fresh it is, is not stated and is recorded in M2a. The unattributed remainder is WireGuard, keepalive and probe overhead, plus macOS's own traffic.
+- **Automatic quotas (decision F4, 2026-10-08; latched per cycle, decided 2026-10-09; built: `daemon-core`'s `policy::automatic_quota`).** While the deployment has an `AutoQuotaPolicy` and at least `from_active_users` (6) users share the cycle's budget, each user's cycle quota is `budget × 1000 × budget_percent ÷ (sim_factor ‰ × 100 × N)` served bytes, rounded down in one step, where the budget is `SimThresholds::budget_bytes()` (the 300e9 hard stop). N, and the threshold, count the users `Active` now plus the users suspended for quota (`QuotaExceeded`) during the billing cycle being evaluated: their suspension was made (`since`) at or after the cycle's start, UTC midnight of its first day. The instant decides, not the recorded `cycle_start`, which names the cycle as the bill day gave it at the suspension: an edit of the bill day can move the current cycle's start back past a recorded start, or forward past it as SMARTY's late renewal does (§7, `BillDay`), and either way a suspension made since the current start counts and one made before it has lapsed (`quota_suspension_holds`; `a_quota_suspension_counts_after_the_bill_day_moves_the_cycle_start_back`, `a_quota_suspension_counts_after_the_bill_day_moves_the_cycle_start_forward`, `a_forward_edit_of_the_bill_day_keeps_the_share_enforced`). A suspension for quota made after `now`, which only a clock that stepped back or a corrupt record can leave, is `QuotaSuspensionAfterNow`, never read as held until its own cycle ends nor as lapsed (`a_quota_suspension_after_now_is_an_error`). `automatic_quota(&Deployment, now)` takes the cycle `now` is in; `policy::evaluate(&Deployment, &CycleUsage, now)` computes that cycle once and uses it both to check the usage and for the quota. Users suspended for any other reason (`Operator`, `Expired`, `AbuseReview`), revoking and revoked users do not count, nor does a suspension for quota made before the cycle's start, which has lapsed and which the apply job resumes, within the cap, at the first apply of the new cycle (§13.6); `evaluate` proposes nothing for any suspended user. A user with an override does count, and an override does not reduce the shared budget. With the pilot values and N = 6 that is 300e9 × 1000 × 80 ÷ (2100 × 100 × 6) = 19,047,619,047 bytes. The quota warns at 80 % and suspends at 100 % (`SuspendReason::QuotaExceeded{cycle_start}`). A user's own `UserPolicy.quota` wins, larger or smaller (`effective_quota`); a share of zero bytes is `AutomaticQuotaZero{budget_bytes, sharing}`, never "no quota"; `evaluate` applies the effective quota of every active user, and one with a quota but no usage entry is `UsageMissing`.
+  - *Latched per cycle.* A suspension for quota changes neither N nor anyone's share within its cycle, so it never switches the quota off: of six users, the first suspended for quota leaves the other five at the N = 6 share, and the next to reach it is suspended in turn (`a_quota_suspension_keeps_every_share_for_the_cycle`). A suspension for quota made in the cycle before does not count (`a_quota_suspension_from_an_earlier_cycle_does_not_count`), nor does any other suspension (`other_suspensions_do_not_count`).
+  - *Other departures still lower N* (decided with the latch on 2026-10-09): a suspension at expiry, which `evaluate` itself proposes, by the operator or for an abuse review, and a revocation. Each raises every remaining share at once, and when N was at the threshold it switches the quota off for the rest of the cycle (`other_suspensions_do_not_count` pins the switch-off); only the hard stop then bounds the SIM. So at any moment the shares of the users sharing the budget sum to at most 80 % of the served budget, but a cycle's served bytes can exceed that by what users who left the count for another reason had used before they left, and by what users suspended for quota used beyond their share before the suspension was applied (§13.6). The hard stop bounds the SIM regardless.
+  - *Admission still shrinks every share at once* (F4's "÷ N"). Admitting a seventh user mid-cycle lowers the share from 19,047,619,047 to 16,326,530,612 bytes, so a user between the two is suspended at the next evaluation without a warning first (`revoking_users_share_nothing_and_admission_lowers_every_share` pins the share).
+  - *Under the pilot cap of 5.* The cap counts only `Active` users (§7), so the automatic quota stays dormant unless users suspended for quota this cycle bring the count to six. While it is dormant only a user's own quota override with the `Suspend` action can suspend anyone for quota, and the count reaches six only if the operator admits or resumes users into the places those suspensions freed: five active and one suspended, or four and two, and so on. The active users then get the share for that N for the rest of the cycle; in the next cycle those suspensions lapse, the quota is dormant again (`five_active_and_one_suspended_for_quota_this_cycle_share_as_six`), and resuming them is bounded by the cap (§13.6). A property test checks the count over every mix of statuses, with suspension instants on both sides of the cycle's start and recorded starts chosen independently of them, with and without the cap (`the_budget_is_shared_by_the_active_and_this_cycles_quota_suspensions`).
+- **"Saturated"** means uplink use of at least 85 %, or RTT inflation of at least 200 ms, held for at least 10 minutes. Both thresholds are *(inference)*, calibrated in M8. Saturation looks like a uniformly slow VPN while the probes may stay green *(inference)*, which is why the console tracks RTT inflation and not only throughput.
+- **Actions** run through the CLI, from Terminal or the app.
+  - Already designed in §13: `exit enable | disable | retry`, `node apply | status`, `user add | export | revoke`, and rotation.
+  - New: `user suspend | resume | set-quota | set-expiry | reissue | alias`; `apply --pending | --now` (§13.6); `sim set-plan | set-stop | set-bill-day`; `quota set-factor` (re-records `AutoQuotaPolicy.sim_factor` after M8 measures it, and on any uplink-mode change); `viewer new | list | remove`; `alert setup | test | rotate-topic`; `usage [--by user|node|proto] [--period today|cycle|month|day|hour]`; `top`; `events`; `router status | probe`, and `router set-password` only if a login is needed (§15.6); `abuse lookup --at <t> --window <d>`, a lower bound (§15.4).
+  - `user reissue` draws new credentials for a user and keeps its `UserId` and history.
+  - `viewer new` imports a public key generated on the phone through `Ed25519Pub::parse_ssh_authorized_key` and prints each active node's host-key fingerprint (`mooring_keys::ssh::SshPublicKey::fingerprint`), so the phone can pin it (§15.9). `alert setup` stores a node's Healthchecks check UUIDs in the Keychain, and the deployment's ntfy topic as well when it sets up the first channel node, and adds the node to `alerting.channels`; the import refuses any check id that is not a version-4 UUID (`InvalidSecret`), never a fallback. `alert test` sends one test notice. `alert rotate-topic` replaces the ntfy topic (§12) in two configuration changes, because the store replaces no secret the state still references (§7): it removes every node's channels, then sets them up again with a new random topic and the check UUIDs it read from the Keychain first. Every channel node then needs `node apply`, and the phone one new subscription; if it stops between the two changes, no node has channels until `alert setup` is run again with the check UUIDs from Healthchecks, where the checks themselves remain. `backup …` still waits for F18.
+
+### 15.4 Freshness and accuracy limits
+
+The console shows these beside the numbers they affect.
+- **Cadence.** A node's accounting tick is 60 s (`ACCOUNTING_INTERVAL_SECS`). The Mac polls every 10 minutes (§10.5), or at once on `PollNow`.
+- **Splice lag (§11.5).** REALITY+Vision downloads are counted when the connection closes. So (critique C-6):
+  - long downloads appear late, and an Xray crash loses the bytes in flight;
+  - `last_active`, "active now", the rotation tracker and five-minute bins can miss a user who is streaming over REALITY;
+  - `abuse lookup --at T` is a lower bound: it can miss a user who was active at T, or put their bytes in a later bin;
+  - quota enforcement can overshoot. Where the stop policy is a hard stop, the SIM meter remains the real-time backstop (§7).
+
+  M10's per-user source addresses would remove the lag *(inference)*.
+- **Counters** live in Xray's memory. A restart is detected from `statssys` uptime (§11.5), and a missing counter means no connection since that restart. The accounting canary catches counters that never appear at all (§11.5).
+- **The SIM meter** is exact only with the M7's Wi-Fi radio and offloads off (D-4), and it never sees the M7's own traffic (§10.1).
+- **Per-user figures** are proxied payload bytes. The SIM factor the console shows is measured (SIM bytes ÷ Σ served bytes, probes included), never assumed. The automatic quotas (§15.3) need a factor before M8 can measure one, so they use the recorded `AutoQuotaPolicy.sim_factor`, §3's estimate of 2100 ‰ until then; the operator re-records it after M8, and on any uplink-mode change (`Separate` is about 1.04×, so a stale 2.1× merely makes the quotas conservative).
+- **Time.** Bins are stored by UTC hour. The UK and China are whole-hour offsets from UTC, so "today" converts exactly into Europe/London (the operator) or Asia/Shanghai (the users).
+
+### 15.5 What is deliberately not recorded
+
+Mooring never models, stores or sends any of the following. Anything that leaves the Mac carries opaque ids or aggregates only.
+- **Destinations**: domains, IPs, SNI, DNS queries, URLs, and any per-connection or access log.
+  - Xray runs with `access:none` and `loglevel:none` (§8.2), and the sing-box instances at `fatal`.
+  - Xray's routing-stats stream stays off: its `RoutingContext` carries source IPs, target IPs and the target domain (`app/router/command/command.proto:15-31`).
+  - sing-box's Clash API stays off: its `/connections` exposes source IP, destination IP and host (v1.14.2 `experimental/clashapi/connections.go:85-95`).
+  - Abuse complaints are answered from time bins only (§15.4).
+- **Users' IP addresses**: China IPs, online-IP lists, device fingerprints, request-IP history. `statsUserOnline` stays off (§8.2), for three reasons:
+  - safety: a record linking people's IPs and times to a circumvention service could harm them if the Mac or a VPS is seized or compromised *(inference)*;
+  - UK GDPR: IP addresses can be personal data (ICO, "What are identifiers and related factors?"), and the household exemption covers only purely personal or household activity (ICO, "A guide to the data protection exemptions", updated 8 Mar 2024), so data minimisation and storage limitation apply (UK GDPR Art. 5(1)(c) and (e));
+  - they would be useless: Hysteria2 users arrive from 127.0.0.1, which Xray's online map ignores (§11.5), and Chinese mobile CGNAT makes IP counts a poor proxy for devices *(inference)*.
+- **M7 identifiers**: cell ID, IMEI, ICCID, IMSI, phone number, serial number, GPS position, connected clients' link-layer addresses and host names, SSIDs, and WWAN addresses. The router allowlist has no field for any of them (§15.6).
+- **SMS text**: never read. The allowlist keeps only an unread count, and the operator reads messages himself in the M7's web UI.
+- **Real names**: they exist only on the Mac (§7).
+- **Ids in alerts.** Opaque ids and aliases are pseudonymous personal data, because the Mac's labels re-identify them (UK GDPR recital 26). Alert and digest bodies therefore carry aggregates only, never an id or an alias (critique C-12).
+
+What is recorded:
+- bytes per opaque user × node × protocol, in time bins;
+- last-active times;
+- lifecycle events and operator actions.
+
+Retention is decision F7. Users would get a short notice about it with their file, as part of the agreement (F9). "Usage" (用网情况) in the console therefore means bytes and times, never destinations; the operator confirmed on 2026-10-08 that this is what he wants (F16).
+
+### 15.6 Router status (the M7, read only)
+
+**Always available**, with or without an interface on the M7 (source D):
+- Ethernet link state and speed;
+- the M7 gateway's reachability and RTT;
+- direct-probe RTT and loss to each node;
+- the carrier's public IP and the carrier check;
+- egress rates.
+
+**From the M7 itself**, if M2a finds a JSON interface on the MR7450 *(unverified)*. Reverse-engineered clients of other NETGEAR hotspots read `GET /api/model.json` or `/model.json` (eternalegypt and others). The field paths come from those devices, and are fixed only from the M2a capture. The allowlist:
+- model, firmware version, and a "firmware changed" flag;
+- connection state and radio access type (LTE, NR NSA, NR SA);
+- band and carrier name (what the M7 shows for a SMARTY SIM is recorded in M2a; the status fixtures assume `SMARTY` *(inference)*);
+- RSRP, RSRQ, SINR and RSSI. A generic RSRP may mirror the LTE value on some firmware;
+- device temperature, and the thermal level if the M7 exposes it. The manual's levels in Plugged-In mode: level 1 limits 4G and 5G to fewer bands; level 2 limits 4G to one band and stops 5G; level 3 shuts the device down (manual p. 74);
+- power mode;
+- the M7's own data counter;
+- time connected and device uptime, to detect reboots and reconnects;
+- offload state and Wi-Fi radio state;
+- the connected-client count (expected: 1, the Mac);
+- the unread-SMS count.
+
+**Rules:**
+1. **Allowlist parsing.** On the NETGEAR devices eternalegypt supports, `model.json` carries the admin password (`webd.adminpassword`), the Wi-Fi passphrases, `session.secToken`, and SMS bodies with their senders (`sms.msgs[].text`, `sender`). The source is eternalegypt's `information()`, read 2026-10-08 (critique A-35, C-7).
+   - `parse_netgear_model_json(&[u8]) -> Result<RouterStatus, RouterParseError>` in `daemon-core` copies only allowlisted leaves into typed fields.
+   - Everything else is dropped before anything is logged, stored, or put into status, the journal or a fixture.
+   - A raw response is never logged, not even inside an error: a parse error names the field, never the bytes.
+2. **Missing fields are typed errors**, never defaults. With no JSON interface the result is `RouterUnsupported{model, firmware}`; HTML is never scraped.
+3. **Read only.** The adapter sends only `GET`, plus one login `POST` if M2a shows that the fields need a login, and never a settings form.
+   - Anonymous reads are preferred if they show enough.
+   - The password goes only in that `POST` body, never in a URL or a log. It is `SecretRef::RouterAdmin` in the Keychain, set with `mooringctl router set-password` from a no-echo prompt or stdin, never from argv (critique C-15).
+4. **Identity binding (critique C-8).** The client's sockets are bound to the egress interface. The login is sent only when the gateway's link-layer address equals the M7's, as `fieldkit env` recorded it in M2. Any other gateway gets `RouterIdentityMismatch` and no password.
+5. **Exactly one endpoint.** M2a chooses one path, `/api/model.json` or `/model.json`, and the adapter uses only that one. Trying the other at run time would be a silent fallback.
+6. **Fixtures** come from the M2a capture through an allowlist redactor (`fieldkit router capture`). The raw capture stays outside the repository. Fixture tests carry an SMS-body canary and an admin-password canary, which must never reach status, the journal or a log (§16 L1).
+7. **Bounded.** Timeouts are bounded, and failures are typed: `RouterUnreachable`, `RouterAuthFailed`, `RouterUnsupported`, `RouterMalformed`, `RouterIdentityMismatch` (§14). On the device, a 60 s poll for 24 h must not lock out the M7's admin session (M5 acceptance).
+8. **Advisory only.** The adapter never stops the exit; the carrier check does (§10.2). It names a cause earlier: offload or a Wi-Fi radio switched on is reported before `OutsideCarrierPrefixes` fires.
+
+NETGEAR Insight Pro, the cloud management service that lists the MR7450, is not used: it would give a cloud service a control path to the exit's uplink.
+
+### 15.7 Event journal and availability (plan: Mac in M5, nodes in M4)
+
+- **The Mac's journal** appends events: exit transitions and verdicts, gate changes, engine starts and exits, SIM and power changes, router changes, user lifecycle changes, apply results and operator actions. Entries are Level 0, with opaque ids and no destinations. The journal survives `kill -9` of the daemon (M5 acceptance).
+- **Each node's journal** holds the watch's condition transitions, gate and hold changes, halts, resumes, commits, engine restarts and boots. The Mac reads it with `Events{since}` (§11.1).
+- **Availability** is a daily record of serving, degraded, down and paused seconds. M8 accepts on at least 99 % `Verified` samples over 72 h (§22), and that figure is computed from this record; today nothing durable records those samples.
+- Retention is F7.
+
+### 15.8 Alerting (the machine is built; the channels were decided on 2026-10-08, F6)
+
+What exists today: macOS notifications on the exit Mac (§5.1, §10.2). The channels below are decided; their rendering and the dead-man rule are built, and their sending is M4 (agent) and M5 (daemon).
+
+**The machine** (built: `daemon-core`'s `AlertMachine`) runs on the Mac only, as the single debouncer. A node's watch does not run it: `mooring-agent` may depend on `agent-proto` only (§6.1), and the machine's types are the model's. The watch reports its conditions in `StatusV1` (`WatchError`) and journals their transitions (`Events{since}`), and the Mac's machine turns those, with the Mac's own conditions, into notices. The Mac renders each notice to text and a node sends it (below), so the VPS never renders and the machine's debouncing holds for every push notice. Only the dead-man pings are decided on the node.
+- It fires on transitions only, deduplicated by (kind, subject). A key is as fine as the facts that can hold at once: an engine's crash loop is about that engine, and several latched violations, degraded reasons or missing canaries are one alert's set, so one observation never holds two conditions with one key.
+- Critical alerts repeat every 6 h while active. Warnings are debounced for 15 minutes, a few kinds longer (below). A "resolved" message follows when an alert clears.
+- A condition whose source dates its start (a pending reboot, a pending apply, an operator hold, an unreachable node) is held from that start, so a daemon restart does not restart a 24 or 48 h hold.
+- Bodies are Level 0 aggregates: a node id and counts, never a label, opaque id, alias, IP address, M7 identifier or SMS text (§15.5).
+- Every threshold below is *(inference)* until M8 calibrates it.
+
+**Critical:**
+- `MacSilent` (§11.3). It covers the Mac asleep or crashed, the Mac waiting at the FileVault login after a reboot, the M7 without power or signal, and a carrier outage.
+- An exit violation, latched (§10.2).
+- Router offload active, or the M7's Wi-Fi radio on.
+- `SimCapReached`.
+- `NodeHalted`, `RollbackFailed` or `GateCloseFailed`.
+- `EngineCrashLoop`, on the Mac or a node.
+- `HostKeyMismatch`.
+- A node gone silent: its agent has failed every poll for 10 minutes, one status-poll interval, from the first failure (`NodeUnreachable`; one lost poll over the lossy uplink is not reported).
+- Router thermal level 2 or above, or a router reboot or shutdown.
+- `DiskLow` on a node.
+- `AccountingCanaryMissing`.
+
+**Warning:**
+- `SimWarn`, and a forecast crossing before the end of the cycle (once per cycle).
+- The exit `Degraded` for more than 15 minutes.
+- `ReachabilitySuspect` and `TargetDegraded`.
+- Router: no service; on LTE for more than 30 minutes; thermal level 1 for more than 30 minutes; RSRP below −110 dBm, sustained; firmware changed (re-run the D-4 checklist); unread SMS; the M7's counter and the SIM meter more than 5 % apart over a day.
+- Users, as counts only: at 80 % of quota, suspended, expiring within 3 days, expired.
+- Capacity saturated for 30 minutes or more in the China evening.
+- `ExitFlowCapHit` growing.
+- `ClockUnsynced`; `RebootPending` for more than 24 h; an apply pending for more than 48 h.
+- An Operator hold active for more than 24 h, because it suppresses `MacSilent` (critique D-4).
+- `ForeignNetworkAttached`.
+
+**Channels (decision F6, 2026-10-08).** The operator chose the default that revision 5 recommended:
+- **Push through ntfy** (`https://ntfy.sh`), on one random topic for the deployment, random because ntfy's docs say topic names are public. The topic is `SecretRef::AlertTopic` (Keychain account `alert/topic`): `Password` material, 32 random bytes as 43 base64url characters, so 256 bits against F6's minimum of 128. It is assumed to fit ntfy's topic rule `[-_A-Za-z0-9]{1,64}` *(inference from the ntfy server's topic pattern; verified in M4)*. The operator's phone subscribes to it, and every channel node sends to it, so a second node needs no new subscription, and neither does a rotation that gives the replacement or the standby its channels before the last channel node is retired (§13.4). The deployment references it while at least one node has channels: it is written before the state that adds the first channel node and deleted only after the commit that leaves none (§7). A rotation in the other order, or replacing the topic after a compromise or a lost phone (§12, `alert rotate-topic`), therefore needs one new subscription.
+- **Healthchecks.io dead-man checks** on the free plan, whose account the operator creates himself: per node, a node check and a `MacAlive` check, each a `Uuid` Keychain item (`NodeDeadManCheck`, `NodeMacAliveCheck`) taken from its ping URL `https://hc-ping.com/<uuid>`. Healthchecks' check codes are assumed to be version-4 UUIDs *(inference from its `Check.code` default)*; `alert setup` refuses any other form (§15.3). Healthchecks alerts by its own e-mail when pings stop, so Mac loss is reported even if ntfy fails (critique D-3). Two nodes use four of the free plan's 20 checks.
+- **The dead-man rule** (built: agent-proto's `dead_man_pings`, `crates/agent-proto/src/deadman.rs`). A node decides from its own `StatusV1` alone, so the rule lives where the agent can use it while the Mac is gone. It pings `Node` while the watch is healthy: its latest tick is at most `WATCH_STALE_SECS` (30 s) old and no active condition stops its work (`WgReadFailed`, `NftFailed` or `StateWrite`; an exhaustive match decides every watch condition, and the others are reported by push notices instead). It pings `MacAlive` while the Mac's handshake is at most `HANDSHAKE_MAX_AGE_SECS` (180 s) old, the gate's own freshness rule; an Operator hold does not stop it. A clock that stepped back, or no handshake, pings nothing for that check: silence is what makes Healthchecks alert.
+- **A daily digest at 09:00 UK time** (`AlertSettings { digest_at: 09:00, digest_zone: EuropeLondon }`), rendered on the Mac and sent by the node's timer, `OnCalendar=*-*-* 09:00:00 Europe/London` (M4). A digest time must be 02:00 or later (`WallClockZone::earliest_daily_time`; `DigestTimeTooEarly` otherwise): the UK's clocks change at 01:00 UTC, so 01:00 to 01:59 does not occur on the last Sunday of March and occurs twice on the last Sunday of October, and from 00:00 to 00:59 in summer the UTC date, which titles the digest, is still the day before. From 02:00 to 23:59 a time occurs once every day, on the date the digest names, whatever systemd does with a skipped or repeated local time.
+- **Level 0 only**: node ids, counts, kinds, byte totals, dates and UTC times, never a label, opaque user id, alias, IP address, M7 identifier or SMS text (§15.5, critique C-12).
+
+**The notices** (built: `daemon-core`'s `notify::alert_message(&AlertNotice)` and `notify::digest_message(&MacStatusV1)`, each returning agent-proto's `NtfyMessage { title, body, priority, tag }` or a typed `NotifyError`).
+- **The grammar** (`crates/agent-proto/src/notice.rs`), shared by the Mac that renders and the node that sends: a `NoticeTitle` is 1–128 bytes of ASCII letters, digits, spaces and `, : ; ( ) / % + < > = -`; a `NoticeBody` is 1–2048 bytes of the same plus line feeds, with no line feed or space at either end and no empty line. It has no `.`, `@`, `_`, quote, `#`, `*` or non-ASCII character, so a dotted IPv4 address, a domain name, an e-mail address or a name in another script cannot be written; a renderer that tried would fail with `NotifyError::Text`, never send.
+- **An alert notice:** the title `Mooring {critical|warning} {raised|reminder}: {Kind}` or `Mooring resolved: {Kind}`; the body is the alert's key (`NodeHalted on lon1`), a payload line for the kinds that carry more than their key (counts, a projected date, a thermal level, an RSRP in whole dBm rounded down, so never above the reading, free disk, a start time), and `active since {time}` or `cleared at {time}, active since {time}`. Times are UTC minutes (`2026-10-12 08:15 UTC`), because the core has no time-zone database. A critical alert is raised at priority `Max` and reminded at `High` with tag `RotatingLight`; a warning is `Default` with `Warning`; a resolution is `Low` with `WhiteCheckMark` *(the tag names are ntfy emoji short codes, an inference verified in M4)*.
+- **The digest** (priority `Low`, tag `BarChart`): the title `Mooring digest {UTC date}`, then one line each for the exit's phase and since when; the SIM bytes used against the hard stop (or, without one, the fair-use line), the warning and the cycle's first day, marked `lower bound` when the meter may miss bytes; the forecast and the first threshold projected to be crossed; users active, suspended and revoking; bytes served this cycle; open alerts by severity and kind; and nodes by count (every node row, retired ones included), how many are behind the current generation and how many are unreachable. Amounts are decimal and rounded down to the largest unit they reach (`42 GB`). It names no user and no node.
+- Tests render every alert condition for every notice event through the grammar and pin exact texts. A canary test checks that no notice or digest rendered from the status scenarios holds any of their user ids, aliases, IPv4 or link-layer addresses, the router's carrier name or firmware, a label of any fixture deployment, or a run of five or more digits.
+
+**Transport (open, M4).** The Mac report carries no text by design (§15.9), so the rendered notices need their own ops request (`PutNotices`) and an outbox on the node, which `mooring-alert.service` drains (§5.2). The Mac re-renders the digest with each report push, and the node's 09:00 timer sends the newest. Still open for M4: which node sends the Mac's own notices (sending from both duplicates them), and the fixed Level-0 line a node sends when the Mac's digest is stale, which must not make the VPS render. The unit needs no owner-guard change: the output chain's policy is accept, and the guard constrains only the two engine users (§8.5). Mooring's Rust code has no TLS stack (§6.3), so the node sends with curl, as `TargetCheck` already does (§11.7).
+
+### 15.9 Remote viewing (decision F5, 2026-10-08)
+
+The operator decided on 2026-10-08 to adopt remote viewing as proposed here: a viewer role on each node for the operator's phone, read-only plus an emergency stop.
+
+**Constraints:**
+- no inbound connection to the Mac (§1.2, §18);
+- no web panel and no new listener (§18);
+- never over Janet or eduroam (P0-2, §10.2; F15). A remote client runs on a non-university path: the phone on mobile data with Wi-Fi off, or the research computer tethered to that phone (critique C-1).
+
+**The role** (built: `Role::Viewer`, `crates/agent-proto/src/role.rs`; §11.1):
+- The viewer reads `Status`, `Usage`, `UsageSeries`, `Events` and `MacReport`.
+- It may close a gate with an Operator hold, as an emergency stop, but never reopen it: `GateSet` is accepted from it only with the Operator reason (`Role::may_close_gate_for`; otherwise `GateReasonNotPermitted`). `ClearHold`, `Apply`, `Shutdown`, `Resume` and every other request stay ops-only, so resuming is done from the Mac.
+- **An unprivileged account** (critique C-9). The bootstrap and ops roles are lines in root's `authorized_keys`, so a viewer key there would run the agent as root from a phone. The viewer instead logs in as `mooring-view` (host profile 2, §8.6): its keys are in `viewer_authorized_keys`, root-owned inside the generation directory, and sshd forces `serve-ssh --role viewer` for it. In M4 its handler reads the status, usage and report files and hands `GateSet{Operator}` to the watch through a narrow request file under `gate.lock` (§11.3).
+- **The key pair is generated on the phone**, and only its public key is imported, through `Ed25519Pub::parse_ssh_authorized_key` (`crates/model/src/keys.rs`), into a `Viewer` record (§7). No private key is written to a file that must then reach the phone. Phone apps export `ssh-ed25519 <base64> <comment>`, and that parser refuses a comment, so M5 needs an explicit, comment-aware import, never silent stripping *(open, M5)*.
+- **`viewer new` prints each active node's host-key fingerprint**, so the phone can pin it (§15.3).
+- **A lost or seized phone:** `viewer remove` its key, which every node's next `node apply` drops, and replace the ntfy topic the phone is subscribed to (`alert rotate-topic`, §12).
+
+**The report** (built: agent-proto's `MacReportV1`, `crates/agent-proto/src/report.rs`; the projection `daemon-core`'s `report::project(&MacStatusV1)`). The Mac pushes it to each node with `PutMacReport` on the ops role, and the viewer reads it back with `MacReport` (§11.1).
+- **It holds:** the exit's phase and since when; the SIM meter (cycle start and end, received and sent bytes, accuracy, the warning, the hard stop, the plan's line, and the forecast's daily average and projected total); the router's radio (access type, band, RSRP, RSRQ, SINR and RSSI in tenths) and temperature, or when it was last polled; the uplink's rates and saturation; every user who is not revoked, by user id, with status, cycle bytes and last activity; and the open alerts by kind (`MacAlertKind`, the 39 names of the Mac's alert kinds, mapped by an exhaustive match), severity, node and start.
+- **What the grammars refuse, and what keeps the rest out.** The report has no free-text field: every string in it is a closed-enum name, a `ReportUserId` (exactly the model's `UserId` rule, 10 lowercase base32 characters, so an IMEI or ICCID cannot pose as one) or a `NodeName` (exactly the model's `NodeId` rule), and its band number is a `ReportBandNumber`, 1..=999 (exactly the router's `BandNumber` rule, compared value by value in `daemon-core`), so a physical cell id above 999 or a tracking-area code cannot pose as a band. So text with a space, a capital, a `.`, a `@` or a non-ASCII character cannot be decoded into any slot: canary tests put an IPv4 address, a domain, an IMEI, an ICCID, a name with a space, a CJK name and an SMS text into every string slot of a valid report, map keys included, and numbers from 0 and 1000 up into the band slot, and every decode fails. The grammars are not the whole guarantee: a lowercase one-word string (a label such as `phone`, a carrier name written in lowercase) fits a `NodeName` slot, a ten-letter base32 word fits a `ReportUserId` key, and a small number fits a numeric slot. Those are kept out by the projection, which fills every slot from a typed value of the same meaning, never from text, and whose tests plant such canaries (`alicesmith`, `phone`, `phone0`) in the carrier name, the firmware and the interface name and find none in the report. Labels never reach a `MacStatusV1`, which has no field for one.
+- **Dropped by construction (the redaction list):** latches and violation evidence (addresses); the egress facts (interface name, link-layer address, LAN address); the carrier check (the line's public address); engine processes; power and sleep; foreign networks; the details of a degraded or down exit; the router's carrier name, firmware, data counter, clients, SMS count, power and uptime; users' aliases, node sets, quota and expiry states, per-node activity, day, month and lifetime figures and shares; revoked users; and the node rows (a viewer reads a node's own `Status`).
+- **Invariants** (`MacReportRule`, checked on construction and on decode): at most 1024 users (`TooManyUsers`) and 256 alerts (`TooManyAlerts`), and every user's cycle bytes present exactly when usage is available (`UsageMismatch`).
+- **Not in it yet:** the "last 50 events" of the proposal, which wait for the Mac's journal (M5). `MacReportV1` will change before protocol 1 ships. A node also receives the other node's per-user cycle totals, which F5 accepted.
+
+**Open (M5):** whether one JSON request line over SSH works from a phone client, for example an iOS Shortcut that reads JSON, is unverified; a text mode may be wanted.
+
+**Rejected:**
+- Tailscale, ZeroTier and reverse SSH tunnels: each creates an inbound path to the Level-3 Mac.
+- A Telegram bot: it puts data and a credential on Telegram. Existing panels show the risk: 3x-ui (v3.9.0) keeps clients' IPs in a database table, and its bot sends database and config backups to the admin chat; Marzban's login report sends the attempted password and the client IP to Telegram (`app/telegram/handlers/report.py:196-210`).
+- Anything over the campus network.
+
+### 15.10 Logs
+
 - **Xray:** `access:"none"`, `loglevel:"none"`, `dnsLog:false`, `maskAddress:"full"` at run time. `none` turns off both the error and the access log (Xray v26.9.30 `infra/conf/log.go:57-59`). At `warning`, Xray would log failed DoH lookups and resolutions at ERROR with the queried domain (§8.2), and `maskAddress` masks IPs only. Removing `disableFallback` also removes the per-lookup domain warning, and the L4 canary includes domain names. Start-up failures still reach stdout (`main/run.go:84,95`). The L2 and stage-validation copies run forced to `warning` (§11.2 step 3), so configuration warnings still fail validation.
 - **All three sing-box instances:** `fatal`. Validation uses warn-level copies (§11.2, L2).
 - **journald:** persistent, 200 MB, 14 days.
 - **Daemon:** JSON lines in `~/Library/Logs/Mooring/daemon.log`, rotated at 2 × 5 MiB. Secret types render as `<redacted>`; destinations are never logged; engine stderr is kept in a 200-line in-memory ring for crash diagnosis and scrubbed as described in §12.
 
-**Not included:** metrics servers, dashboards, remote log shipping, and automated reachability probing from China.
+**Not included:** metrics servers, dashboards, and automated reachability probing from China. Remote log shipping stays excluded. Beyond each node's own accounting, the only operator data that leaves the Mac is the report of §15.9 and the Level-0 notices of §15.8, which F5 and F6 adopted on 2026-10-08; their sending is M4 and M5.
 
 ---
 
@@ -1626,16 +2101,16 @@ Every new invariant test is mutation-checked:
 | Lane | Where | Content |
 |---|---|---|
 | **L0 static** | hosted CI (ubuntu, macos) and local | `cargo xtask ci`: fmt, clippy, deny, graph-check, kinds-coverage, deny-skips (the exact-skip check), acceptance (§9.3), nextest, doc tests; plus govulncheck, `xcodebuild`, `xcrun swift test` |
-| **L1 unit/property** | same | newtype bounds (proptest); RFC 7748 X25519 vectors; key encodings; OpenSSH encoder against `/usr/bin/ssh-keygen -y -f` and `-l`, and certificate properties, DER and SPKI against `/usr/bin/openssl` at test time (these tool checks compile only on macOS); render invariants and goldens; export goldens; YAML round-trip (saphyr); acceptance file = shape enumeration × client line, and manifest client lines = enumerated client lines (xtask unit tests; `cargo xtask acceptance` in L0); agent-proto framing, limits and frozen-core goldens; watch gate, holds and drain logic (including a handshake inside the drain window and in the same second); daemon-core state machine with a fake clock, engines, probes and power (wake then sleep within 3 s, Dark Wake transitions, EE IP changing between probes, Retry after a violation, latch persistence across restart); SIM arithmetic across counter resets; store CAS, atomicity and migrations; error → UI mapping |
+| **L1 unit/property** | same | newtype bounds (proptest); RFC 7748 X25519 vectors; key encodings; OpenSSH encoder against `/usr/bin/ssh-keygen -y -f` and `-l`, and certificate properties, DER and SPKI against `/usr/bin/openssl` at test time (these tool checks compile only on macOS); render invariants and goldens; export goldens; YAML round-trip (saphyr); acceptance file = shape enumeration × client line, and manifest client lines = enumerated client lines (xtask unit tests; `cargo xtask acceptance` in L0); agent-proto framing, limits, reply-size bounds, frozen-core goldens and protocol-1 goldens; watch gate, holds and drain logic (including a handshake inside the drain window and in the same second); daemon-core state machine with a fake clock, engines, probes and power (wake then sleep within 3 s, Dark Wake transitions, the carrier IP changing between probes, Retry after a violation, latch persistence across restart); SIM arithmetic across counter resets; store CAS, atomicity and migrations; error → UI mapping; *(revision 5, M5)* the router-status parser on the redacted M2a fixtures, whose SMS-body and admin-password canaries never reach `MacStatusV1`, the journal or `daemon.log` (§15.6); the foreign-network check over typed snapshots of interfaces and routes (§10.2), tested here because L6's `bridge100` is the lab egress and is exempt; the alert machine's debounce, repeat and deduplication with a fake clock; the SIM forecast and bill-day cycles |
 | **L2 engine-check** | CI, plus a Debian 13 VM locally | `xray run -test` (warn-level copies) and `xray convert pb -debug -type` semantic assertions; `mooring-hy2 check` (warn-level copies); `nft -c -f`; `wg-quick strip`; `cloud-init schema` inside Debian 13; `xray x25519 -i <priv>` equals the Rust public key; `sing-box check` of every sing-box JSON export under upstream and CFM-patched 1.14.1 and 1.14.2 (the `support_x25519mlkem768` shapes only under CFM-patched 1.14.2, §9.3); provenance via `go version -m`; **negative controls that must trip each gate:** a REALITY serverName containing "apple" (Xray warns, v26.9.30 `infra/conf/transport_security.go:163-169`), a deprecated sing-box field, a stale golden, a shape missing from the acceptance file, an undeclared crate edge |
-| **L4 netns e2e** | hosted ubuntu amd64; Lima Debian 13 arm64 on this Mac | Namespaces: `cn` (CFM-patched clients fed the exports verbatim, plus Clash JSON twins); `vps` (Xray, Hysteria2, kernel `wgexit`, nft, watch, reflector); `vps2` (a second node, for isolation); `mac` (Linux build of `mooring-exit`/`mooring-probe` driven by the real `daemon-core`; `ee0` egress, plus a `home0` decoy holding the default route); `inet` (routing, a TLS 1.3 + h2 target, echo servers, a DoH stand-in whose test CA reaches Xray only through `SSL_CERT_FILE`); `prober` (active probing); `tc netem` for impairments. Cases are listed below. |
+| **L4 netns e2e** | hosted ubuntu amd64; Lima Debian 13 arm64 on this Mac | Namespaces: `cn` (CFM-patched clients fed the exports verbatim, plus Clash JSON twins); `vps` (Xray, Hysteria2, kernel `wgexit`, nft, watch, reflector); `vps2` (a second node, for isolation); `mac` (Linux build of `mooring-exit`/`mooring-probe` driven by the real `daemon-core`; `cell0` egress, plus a `home0` decoy holding the default route); `inet` (routing, a TLS 1.3 + h2 target, echo servers, a DoH stand-in whose test CA reaches Xray only through `SSL_CERT_FILE`); `prober` (active probing); `tc netem` for impairments. Cases are listed below. |
 | **L4-ablation** | same | Permanent matrix; each entry names the test that must fail: drop the gate rule; unscope the hop redirect; delete table 77; remove `accept_local`; unbind `exit`; remove the owner guard; remove each deny class in each layer; raise the engine log level to info (the canary must fire) |
 | **L5 vm-agent (release)** | hosted CI: QEMU/KVM amd64 (`test -c /dev/kvm` or fail), Debian 13 genericcloud with a NoCloud seed made from the **rendered** user-data, and the exact shipped linux-amd64 artifacts | adopt (including host-key regeneration and proof of the forced command), apply, unchanged re-apply, confirm, rollback, reboot (gate closed until live); failure injection listed below |
 | **L5-lab** | this Mac: Lima `vz` arm64 VM with `vzNAT` and the lab agent build (the lab host profile keeps Lima's own SSH user; the release profile is tested only in CI L5) | the same flows on arm64; a host for L6/L7 |
 | **L6 host-mac (lab)** | this Mac | Topology: the Mac's egress and uplink are both `bridge100`, the host side of the vzNAT network, which does not hold the default route. The node address and lab "internet" /32s are allowed only through the typed `cfg(feature="lab")` `LabAllowance{vps4, internet: Vec<Ipv4>}`, applied identically in the Xray render, the Mac render, preflight (`carrier_prefixes` = the lab /24) and export. The darwin `mooring-exit` re-asserts every other SPECIAL_V4 class. Checks: selector resolution; IP_BOUND_IF probes; `Verified` verdicts; `kill -9` of the daemon → launchd restart with no orphaned engine and the latch intact; stopping the VM (which removes `bridge100`) → `Down(EgressInterfaceAbsent)` within 4 s; data-protection Keychain read after reboot and login; sandbox spike; **T-deny-mac on darwin** (VM root originates over `wgexit`; a canary listener on the Mac's 127.0.0.1 records zero accepts); handling of the Local Network privacy prompt *(inference that it appears)* |
 | **L6-bypass** | this Mac, **user present** (CFM prompts, `sudo tcpdump`) | Wi-Fi `en0` stands in for the physical interface: `curl --interface en0` and bound probes to a public host with CFM's TUN on, in system-proxy mode, and with both off; utun shows zero packets |
 | **L7 lab-cfm** | this Mac, **driven by the user**. CFM 0.4, then 0.5, sequentially; the user is warned before every step that opens windows or raises prompts | Import every lab-feature shape by file. Run CFM → VM → `wgexit` → the real daemon → `bridge100`. Record `cfm-acceptance.toml`, including build numbers and the importer digest. This lane does **not** prove the TUN bypass (§10.4). |
-| **L8 field** | the real M7, EE and a London VPS | measurements, a 72 h soak, peak-hour acceptance by a trusted user in China, and an offload drill (enable M7 Wi-Fi offload → `OutsideCarrierPrefixes` and the engine stops within 30 s) |
+| **L8 field** | the real M7, the SMARTY line and a London VPS | measurements, a 72 h soak, peak-hour acceptance by a trusted user in China, and an offload drill (enable M7 Wi-Fi offload → `OutsideCarrierPrefixes` and the engine stops within 30 s) |
 
 L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user), never unsigned dev builds, so the entitlement, Keychain and sandbox paths are the shipped ones.
 
@@ -1643,15 +2118,15 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 
 | Test | Assertion |
 |---|---|
-| T-reality / T-hy2 (TCP and UDP) | Both client versions get through. The echo server sees the `ee0` address, never `home0` or a VPS address. Hysteria2 hopping is proven by at least 2 distinct server destination ports in conntrack over a run longer than 30 s. |
-| T-large | 200 MB in each direction, sha256 equal, with the `ee0` path MTU set to 1340 |
+| T-reality / T-hy2 (TCP and UDP) | Both client versions get through. The echo server sees the `cell0` address, never `home0` or a VPS address. Hysteria2 hopping is proven by at least 2 distinct server destination ports in conntrack over a run longer than 30 s. |
+| T-large | 200 MB in each direction, sha256 equal, with the `cell0` path MTU set to 1340 |
 | T-deny | Refused through the clients: 192.168.1.1, 127.0.0.1, 10.77.k.2, 10.77.k.1:22, 10.77.k.1:10443, a domain resolving to 10.77.k.1, 100.64.0.1, 224.0.0.1, an IPv6 literal, tcp/25, a domain resolving to 10.x, every node IP (including a two-layer detour chain through the same node) |
 | T-deny-mac | From the `vps` namespace as root, originating directly over `wgexit` and bypassing Xray: each SPECIAL_V4 class; 10.77.k.2:<port> with a canary listener on 127.0.0.1 in `mac` (zero accepts); 224.0.0.1; tcp/25; more than `udp_nat_max` UDP flows (bound enforced) |
 | T-deny-vps | A test-only render with the Mac deny list removed proves the Xray layer and the owner guard on their own |
 | T-no-leak | An exact counter (`meta skuid mooring-xray`, oif eth0, destination = echo servers) stays **0** for the whole suite, including variants with table 77 deleted, `ip link del wgexit` while serving, and Xray started before `wgexit` exists |
 | T-fail-closed | Stop `mooring-exit`. Within 3 × keepalive plus one tick, new connections to IP literals fail within the measured bound (about 1.0–1.5 s plus RTT); the cold-cache domain bound is recorded; the leak counter stays 0 |
 | T-drain | `GateSet` → flows that send get RST within 1 s. The gate reopens only after a handshake that changes the recorded value. |
-| T-reflector | In-chain probes return the `ee0` address. Negative controls: unbound VPS exit → `EgressIsNodeAddress` plus `Shutdown`; Mac egress on `home0` (outside the carrier prefix) → `OutsideCarrierPrefixes`; Mac egress on a second `ee0` pool address (Paired) → `EgressMismatch`; without `accept_local` → `NodeProbeFailed` (mutation check) |
+| T-reflector | In-chain probes return the `cell0` address. Negative controls: unbound VPS exit → `EgressIsNodeAddress` plus `Shutdown`; Mac egress on `home0` (outside the carrier prefix) → `OutsideCarrierPrefixes`; Mac egress on a second `cell0` pool address (Paired) → `EgressMismatch`; without `accept_local` → `NodeProbeFailed` (mutation check) |
 | T-nat | Profiles: (a) SNAT address swap between the direct and in-chain probes → inconclusive, then `Verified` or `CarrierAddressUnstable`, never a violation; (b) conntrack UDP timeout below the keepalive; (c) two-address arbitrary pooling (expected verdict stated for Paired and Unpaired); (d) 200 s of 100% loss, then recovery; (e) a SNAT port remap → traffic resumes within 2 × keepalive |
 | T-wg-port | A new WireGuard tuple on 27820 is never redirected to Hysteria2 |
 | T-camo / T-reality-fallback / T-hy2-silence | Bytes on port 80 and UDP/443 match the target's, unchanged while the Mac is down. An unauthenticated client or wrong shortId gets the target's real certificate chain. Random UDP, and QUIC without salamander, to 61000-62999 and 27820 get zero bytes back. |
@@ -1706,7 +2181,7 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 | Rendering and keys | One renderer on the Mac; the VPS receives bytes (its SSH host key excepted) | **Key generation and rendering on the VPS:** two renderers, no gain. |
 | Credentials | Per user and per node | **Shared across nodes:** one compromised provider could use them on the other. |
 | Egress check | Mandatory carrier prefixes, plus Paired brackets, plus a self-hosted reflector | **Paired only:** passes when the M7 offloads to home Wi-Fi. **Cloudflare trace:** an undocumented third-party dependency. |
-| Reflector exposure | Open, with a per-source limit | **Restricting to EE prefixes:** offload would become an ambiguous probe failure. |
+| Reflector exposure | Open, with a per-source limit | **Restricting to the carrier's prefixes:** offload would become an ambiguous probe failure. |
 | Gate | Single owner (`mooring-watch`), persisted holds, a halted marker honoured by systemd | **Three writers and in-memory holds:** reopen races, and the kill switch would be undone by a reboot. |
 | Transactions | Commit-confirm for every Apply and every agent activation | **Health checks run only on the VPS:** they cannot detect that the operator has been locked out. |
 | Ports | Fixed ports below the ephemeral range, hop ranges above it, a model invariant | **47820/47900:** inside 32768-60999; bind conflicts. |
@@ -1723,6 +2198,13 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 | Provider API | None in v1 | A token that could create and destroy servers. |
 | Shaping | Deferred until data justifies it (M10) | cake/IFB in v1 would add complexity before evidence. |
 | Uplink | `SameAsExit` by default; `Separate` explicit | **Automatic switching:** a runtime fallback. |
+| M7 attachment (revision 5) | Plugged-In mode, data over the 2.5GbE port through a USB-C Ethernet adapter (§2) | **USB tethering:** the only USB-C port powers the M7 in Plugged-In mode, and computer ports supply less current. **Battery-powered and always plugged in:** the manual advises against it. |
+| Console (revision 5) | The CLI's JSON as the only API; `MacStatusV1` rendered by the app; nothing but opaque ids and aggregates leaves the Mac (§15) | **A web panel or public admin API:** a new listener and a new fingerprint (§18). **IP-based "online" lists (`statsUserOnline`):** personal data, blind to Hysteria2 over loopback. |
+| Router status (revision 5) | Read only; an allowlist parser over one endpoint chosen in M2a; login bound to the M7's link-layer address (§15.6) | **HTML scraping:** brittle and untyped. **Trying a second path at run time:** a silent fallback. **Insight Pro:** a cloud control path to the uplink. **Logging raw responses:** they can carry the admin password, Wi-Fi keys and SMS bodies. |
+| Quotas and expiry (revision 5) | Records; enforcement by reversible suspension (§7, §11.5) | **Revocation (revision 4):** new credentials into China for every quota event, and a broken history. |
+| SIM stop on a plan without a line (revision 6) | A mandatory, explicitly recorded hard stop, with no model ceiling (§7) | **A ceiling constant:** SMARTY publishes no volume, so any number would be invented; revision 5's ceiling was EE's line. |
+| Alert sending (revision 6) | The Mac renders every notice into agent-proto's Level-0 grammar; the node only sends it, and decides its dead-man pings with agent-proto's `dead_man_pings` (§15.8) | **The rule or the renderer in `daemon-core`, run by the node:** it would need a `mooring-agent` → `daemon-core` edge, which §6.1 forbids, and the VPS would render. **One ntfy topic per node (as first built in revision 6):** the phone would subscribe once per node and again after every rotation, which F6's single topic does not ask for; it would confine a node's leak to its own topic and retire it with the node, but the topic is Level 1, and the one topic is replaced in two changes after a compromise (§12). |
+| Remote viewer (revision 6) | An unprivileged `mooring-view` account with its own keys file and `Match` block, and a request-level rule for `GateSet` (§8.6, §11.1) | **A viewer line in root's `authorized_keys`:** a phone key would run the agent as root. **A kind-only role table:** it cannot limit `GateSet` to the Operator hold. |
 | Active nodes and rotation | At most 2 active nodes; with a healthy standby, rotation retires the blocked node first (§13.4, D-8) | **A third active node during rotation:** the Mac exit would need a third WireGuard endpoint and a wider probe port span. |
 | CFM acceptance check | In `xtask` (`cargo xtask acceptance`, a `ci` step) with the `toml` crate and xtask → `mooring-export`, `mooring-model` edges; the release gate `require_accepted` is `cargo xtask release-acceptance`, run by release verification (D-9). Cost: every xtask command compiles the two product crates first, so `rm -rf target` replaces `cargo xtask clean` while they do not build (§6.1) | **The two hand-written TOML-subset readers M1 first built** (the acceptance reader in `mooring-export`, the `deny.toml` reader in xtask): duplicated parsing, one of them in the public API of a crate the shipped binary links (review finding F16). |
 
@@ -1733,13 +2215,22 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 - Inbound connections to the Mac; Hysteria Realm; China-facing servers on the Mac.
 - Subscription URLs, QR codes, URIs, a web panel, a public admin API, provider-API automation.
 - IPv6 entry or exit.
-- Automatic switching between tunnels, uplinks, exits or egress-check modes.
-- Per-user rate limits; live API user changes; multiple Macs or exits.
-- A second carrier (for example O2 beside EE). The MR7450 has one nano-SIM slot and no eSIM (manual 202-12721-02, "Install or replace a SIM card"); NETGEAR has said eSIM may come to the M7 Pro but has not confirmed it. Even dual-SIM hotspots run one modem, so only one SIM is active at a time. If M2/M8 data show EE is inadequate at the exit site, first compare carriers by swapping the SIM in the same M7. A second cellular device with a typed, measured switching policy is a later decision, not v1 (each carrier would need its own `carrier_prefixes`, SIM meter and exit-IP change handling).
+- Automatic switching between tunnels, uplinks, exits, carriers or egress-check modes. This stays a non-goal in revision 5.
+- Per-user rate limits in the engines; live API user changes; multiple Macs or exits. Revision 5 restatement: if per-user fairness is ever needed, it lives in the VPS kernel (M10: per-user source addresses and cake on `wgexit`), never in the engines.
+- Writing the M7's settings. Mooring reads the M7's status and never writes its settings (§15.6). Offload, Wi-Fi, Ethernet, UPnP and firmware are the operator's manual checklist (M2a, D-4).
+- A second carrier beside SMARTY. The MR7450 has one nano-SIM slot and no eSIM (manual 202-12721-02, "Install or replace a SIM card"); NETGEAR has said eSIM may come to the M7 Pro but has not confirmed it. Even dual-SIM hotspots run one modem, so only one SIM is active at a time. If M2/M8 data show the SMARTY line is inadequate at the exit site, first compare carriers by swapping the SIM in the same M7 (EE needs a credit check the operator currently fails, F12). A second cellular device with a typed, measured switching policy is a later decision, not v1 (each carrier would need its own `carrier_prefixes`, SIM meter and exit-IP change handling).
+  - Revision 5: the operator asked to use the better of two carriers. Choosing by measurement is already allowed: swap the SIM in the same M7 at the real spot and compare 24 h `fieldkit uplink` runs, p10 during the China evening. Revision 6: SMARTY, on Three's network, became the line (F1), so the comparison of F12 is superseded; EE could be compared only later, by a SIM swap. O2 is unsuitable: its unlimited SIMs must be used in devices that do not need to be plugged in, which rules out Plugged-In mode (§19).
+  - A second carrier or a second exit running at the same time is planned as a **static P2 design, gated on M8 data**. It would need a second M7: NETGEAR's UK page lists the MR7450 at £749.99 (undated, read 2026-10-08). Each exit would have its own `SimPlan`, `EgressCheck` and meter, with users pinned to an exit by hand. Automatic switching stays a non-goal.
 - In-house protocol implementations, C++, or Xray prerelease features (XHTTP, VLESS encryption, `finalRules`).
 - Modifying CFM. Extracting its importer and changing its ML-KEM client handling are separate CFM tasks.
 - Running without a logged-in session; changing system power, firewall or network settings.
-- Inspecting traffic or logging destinations; automated reachability probing from China.
+- Inspecting traffic or logging destinations; automated reachability probing from China. Revision 5 makes the console's side explicit (§15.5). Mooring never models, stores or sends:
+  - destinations, or any per-connection or access log;
+  - users' IP addresses;
+  - M7 identifiers: cell ID, IMEI, ICCID, phone number and the rest;
+  - SMS text.
+
+  Passive China-reachability counters (counts only, no IPs) are a P1 option, not probing.
 
 ---
 
@@ -1747,11 +2238,26 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 
 | Risk or unknown | Impact | Mitigation, or where it is resolved |
 |---|---|---|
-| Carrier terms: UK consumer SIMs are personal and non-commercial, and all exit traffic is attributed to the SIM holder | Throttling, suspension, legal exposure | A few trusted users; tcp/25 and BitTorrent blocked; SIM hard stop. **D-1: the user accepts this explicitly.** |
-| WireGuard (UDP) unusable on EE | No tunnel | The M2 gate. A redesign is the user's decision, never a runtime fallback. |
-| EE pooling or prefix behaviour | False stops | M2 fixes the pairing and the prefixes. A new EE prefix stops the exit until the operator adds it with RIPE evidence. |
-| EE CGNAT port ceiling | Flow failures | M2 estimate; `FlowCap` |
-| Uplink capacity, variability and modem thermal throttling | About 5 Mbps on bad days | `Separate` mode; M10 |
+| Carrier terms: UK consumer SIMs are personal and non-commercial, and all exit traffic is attributed to the SIM holder | Throttling, suspension, legal exposure | A few trusted users; tcp/25 and BitTorrent blocked; SIM hard stop. **D-1: accepted by the user on 2026-10-08 for a pilot of at most 5 active users, with F20 pending.** §19.1 and the next three rows record SMARTY's terms in detail |
+| **SMARTY volume terms** (§19.1): no published volume, no fair-use line and no speed restriction ([SMARTY-PG] p11; help 1155178), but no use of content of excessive size, quantity or frequency, after which SMARTY will contact the customer (TC 5.5(d)); a Data Only plan is not a permanent long-term alternative to home broadband (TC 5.15); continuing excessive use may be suspended (TC 8.1(b)), and use inconsistent with ordinary consumer use may end the line at once (TC 9.4(d)) | Contact from SMARTY, then restriction, suspension or termination of the line, with charges forfeited (TC 9.2). There is no deprioritisation step to fall back on. Forum posts claim cut-offs near 100 GB; no SMARTY page says so *(unverified)* | The 300e9 hard stop (F2), mandatory because the plan has no line (§7); the 5-user cap (F3, D-1); one tethered client, the Mac; no money; the SIM forecast and the weekly reconciliation against SMARTY's usage view (§15.3). If SMARTY contacts the operator about volume, the operator decides whether to lower the stop |
+| **SMARTY personal-use terms** (§19.1): personal, non-commercial use with no resale or commercial exploitation (TC 5.4(b)); the agreement is personal to the customer, who stays responsible for the SIM's use even when others use the device (TC 2.2); Data Only plans are for SIM-enabled tablets, laptops and portable mobile Wi-Fi devices, and regularly tethering more than 8 devices is given as unlikely to be legitimate personal use (TC 5.15) | Suspension (TC 8.1(b)) or immediate termination (TC 9.4(d)), with charges forfeited (TC 9.2). SMARTY can see hundreds of GB with near-symmetric up and down volume, and a constant UDP flow to one VPS *(inference)* | A dedicated line on a rolling monthly plan with no minimum term, never the operator's own number (F1). No money, gifts or cost-sharing from users (F3). No advertising. At most 5 active users (F3). The M7 is a portable mobile Wi-Fi device with one client, the Mac. D-1 accepts the rest explicitly. This covers contract terms only and is not legal advice |
+| **Plan fit** (§19.1): a speed-capped plan, a capped allowance, a carrier whose terms exclude the M7, or terms changed later | A speed cap silently caps the whole service. A capped plan's slowdown looks like a carrier outage. SMARTY may change its terms or prices on 30 days' notice (TC 3.1–3.3) | The plan record, with its speed cap and terms and their date (§7). F1 chose SMARTY Unlimited Data Only, with no speed cap ([SMARTY-PG] p11). A notice of change means re-reading the terms and recording the plan again. O2 is unsuitable |
+| **SMARTY billing** (§19.1): a failed auto-renewal taken later moves the cycle start ([SMARTY-PG] p3); a Renewal Date on the 29th–31st falls earlier in a shorter month, and whether it returns is not stated (TC 5.21) | Mooring's cycle and SMARTY's diverge, so the forecast, the stop and the quotas reset on another day than SMARTY's | Activate the SIM on a day up to the 28th (M2a); keep the payment card funded; after a moved renewal the operator records the new bill day (`sim set-bill-day`, M5); the weekly reconciliation (§15.3) |
+| **SMARTY's renewal time of day and time zone are not stated** | Each cycle boundary may be skewed by up to a day *(inference)* | Cycles start at UTC midnight *(inference)*; the first renewals are checked against SMARTY's usage history |
+| **No volume ceiling in the model.** Without a line, the model accepts any explicit hard stop, `u64::MAX` included (§7) | A mistyped stop removes the volume guard | The stop is mandatory and recorded only by `exit init` and an explicit `sim set-stop` (M5), which refuses a stop above `PILOT_SIM_HARD_STOP_BYTES` without an explicit confirmation (an M5 acceptance item with its own test, §22) |
+| **Operator's exposure under PRC law** (§20.1) | Personal legal exposure for an operator who may travel to China | Recorded under D-1. Not legal advice |
+| **Durham Student IT Regulations v2.5**: regulation 5.1 (devices that route traffic or offer services to others on the University network) and regulation 2.3 (unsanctioned commercial activity) (§10.2) | Disciplinary exposure; Janet records linking the VPS to a Durham address *(inference)* | P0-2: from M2b, no Durham network on the exit Mac while any exit or test tunnel runs, and no operator traffic over Janet (§10.2). Not legal advice |
+| **VPS terms and transfer.** DigitalOcean's AUP (updated 20 Mar 2026) bans "open proxies" and activity intended to withhold or cloak identity. Each served byte enters and leaves the VPS, so the pilot's about 143 GB served per cycle (§3) means about 300 GB of transfer, with the tunnel's overhead, about half of it outbound *(inference)*. DigitalOcean's $6 1 GiB Droplet includes 1,000 GiB of transfer (pricing page, read 2026-10-08), and inbound is free (bandwidth docs, last verified 14 Sep 2026). Mythic Beasts' VPS 1 has 500 GB and VPS 2 1 TB | Account termination; overage charges | Ask both providers in writing before renting, and size transfer from these figures (F13, D-2) |
+| **M7 unattended operation** (manual 202-12721-02; §2, §10.3). Firmware updates need a tap, restart the device, and may restore default settings (pp. 26, 47). Thermal levels 1–3 cut bands, then stop 5G, then shut the device down; the ambient range is 0–35 °C (p. 74). A SIM PIN, if set, is asked at every power-on (p. 62). Whether the M7 powers on by itself after a cut is unknown | An update can switch the Wi-Fi radio or offload back on. Heat cuts 5G, or the device. A PIN or a missed power-on keeps the exit down | Firmware by hand only, then the D-4 checklist again. The router adapter flags a firmware change (§15.6), and the carrier check stops the exit on offload (§10.2). Plugged-In mode, ventilation and the M2a thermal run. SIM PIN: F17. A UPS on the M7 (F8), and the M2a power-cut drill |
+| **This Mac unattended** (§10.3): no `autorestart` or `acwake` capability; FileVault needs a physical login after any restart; Background Security Improvements may install by themselves from macOS 26.1; `sleep 0` and `displaysleep 0` today | The exit stays down after a restart until someone logs in | A UPS, the lid open, Charge Limit 80 %. The alerting machine and the `MacAlive` dead-man check (§15.8; F6) make the outage visible. An absence runbook. Battery and display-lock settings: F19 |
+| **The M7's status document can carry secrets.** On other NETGEAR hotspots `model.json` returns the admin password, Wi-Fi keys and SMS bodies (§15.6) | A log, a status file or a fixture leaks the router's admin password or users' SMS | Allowlist parsing, never logging raw bytes, canary tests, allowlist-redacted fixtures, and a login bound to the M7's link-layer address (§15.6) |
+| **Accounting accuracy.** Vision splice counts REALITY downloads at connection close (§11.5) | Live rates, `last_active`, five-minute bins and abuse lookups lag or under-count, and quota enforcement can overshoot | Labelled in the console (§15.4). The SIM hard stop as the real-time backstop. The accounting canary. M10's per-user source addresses |
+| **Lane conflict.** L5-lab and L6 run a Lima VM on this Mac, while D-7 moves every VM lane off it. L6 and L7 need the user-signed lab bundle | M5's lab acceptance cannot run here as written | Pure `daemon-core` tests on this Mac (§16 L1). Resolve D-7 against L5-lab and L6 before M5's lab lanes (critique, section D) |
+| **UK law not researched**: whether a closed-group relay is a "public electronic communications service", and whether the ICO data-protection fee applies once the household exemption is lost | Unknown | Open. Nothing in this design implies either question is settled |
+| WireGuard (UDP) unusable on the line | No tunnel | The M2b gate. A redesign is the user's decision, never a runtime fallback. |
+| The carrier's pooling or prefix behaviour (Three's core; Vodafone's radio under VodafoneThree sharing) | False stops | M2b fixes the pairing and the prefixes. A new carrier prefix stops the exit until the operator adds it with RIPE evidence. |
+| The carrier's CGNAT port ceiling | Flow failures | M2b estimate; `FlowCap` |
+| Uplink capacity, variability and modem thermal throttling | About 5 Mbps on bad days | `Separate` mode; M10. M2a measures placement, the antenna and a 1 h thermal run (§22) |
 | Kernel behaviour: the `oif` rule with bound sockets, the on-link branch, `accept_local`, unprivileged SO_BINDTODEVICE, owner-guard and `ct count` semantics | Leak, slow failure, broken probes | L4 on two architectures, L4-ablation, L5. The owner guard makes leak prevention independent of the steering inferences. |
 | Narrow guard residual: a flow to the target IP:80/443 while `wgexit` is gone | A small VPS-IP leak | `BindsTo`; measured by the T-no-leak variants |
 | Interface-bound sockets not bypassing CFM's TUN | A loop, or capture | L6-bypass and M2; in production the carrier check stops the exit |
@@ -1770,21 +2276,149 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 | Rendered `nftables.conf`, `wgexit.conf` and cloud-init syntax, and Xray's semantic reading of `xray.json`, are covered only by goldens and Rust-side read-back until L2 runs | A config a tool or engine rejects, or reads differently | L2 on the research computer (`nft -c`, `wg-quick strip`, `cloud-init schema`, `xray convert pb`) before the M3 lanes depend on them |
 | An app upgrade (§13.3) with no configuration change re-applies a node at its current generation with a new bundle digest. The agent answers that with `GenerationNotNewer` when it already runs that generation (it stays at its older generation only after an `Unchanged` reply, §11.2), while the model records a new digest at an equal generation (§7) | An engine or host-profile upgrade cannot reach a node without a configuration change | Settle the rule when the agent's transactions (M4) and `node apply` (M5) are built |
 
+### 19.1 Carrier and plan facts (revision 6; read 2026-10-08)
+
+The sources' URLs are in §21, item 12. SMARTY is the decided line (F1). EE's facts follow as history, kept for the record: EE declined the operator's Data SIM order at its credit check on 2026-10-08, so EE is not the line.
+
+#### SMARTY (the decided line, F1)
+
+Sources, all read on 2026-10-08: **[SMARTY-TC]**, SMARTY Terms and Conditions V33, 30 July 2026; **[SMARTY-PG]**, SMARTY Price Guide V42, 25 August 2026; and SMARTY help-centre articles, cited by article id with the page date where it was recorded.
+
+**The order.** SMARTY Unlimited Data Only, £20 a month, rolling monthly with no minimum term, a physical SIM. Ordered on 2026-10-08, due about 12–13 October 2026, and not yet activated. SMARTY's plan page (undated) lists no credit check.
+
+**Operator and network.**
+- Hutchison 3G UK Limited trading as SMARTY (TC 1.1), on Three's network.
+- Since August 2025 SMARTY customers are moved onto combined Three and Vodafone coverage (VodafoneThree network sharing), automatically and with the same SIM (help 10235435, 5 May 2026).
+- 5G at no extra cost (help 5877334; PG p3): 5G on 3.5 GHz (n78); 4G on 700, 800, 1400, 1800 and 2100 MHz (B28, B20, B32, B3, B1) (help 4670061, 9 Dec 2025). Whether its 5G is standalone or non-standalone is not stated.
+- APN `mob.asm.net`, IPv4, with no username or password (help 1155220, 18 Mar 2026).
+- Three's national 5G upload median is 20.2 Mbps against EE's 16 Mbps (Opensignal via ISPreview, 29 Jan 2026). This was not re-verified.
+
+**Volume.**
+- No numeric fair-use line in the UK and no data-speed restriction on the Unlimited plans (PG p11; help 1155178, "no shaping or throttling", 27 Apr 2023). An Unlimited SMARTY plan therefore has no fair-use line and no deprioritisation step (`PlanKind::Unlimited`, §7).
+- The limits are qualitative:
+  - TC 5.5(d): no content of excessive size, quantity or frequency; SMARTY will contact the customer if use is excessive;
+  - TC 5.15: Data Only plans are for SIM-enabled tablets, laptops and portable mobile Wi-Fi devices, and are not a permanent long-term alternative to home broadband; regularly tethering more than 8 devices is given as an example of use unlikely to be legitimate personal use;
+  - TC 8.1(b): suspension for continuing excessive use;
+  - TC 9.4(d): immediate termination, among other cases, for use not consistent with the ordinary use of a consumer;
+  - TC 9.2: charges remaining on the account are forfeited when SMARTY ends the agreement for the customer's conduct.
+- So past the operator's own budget the risk is contact, then restriction, suspension or termination of the line, not deprioritisation. SMARTY publishes no volume. Forum posts claim cut-offs near 100 GB; no SMARTY page says so *(unverified)*.
+
+**Personal use.**
+- TC 5.4(b): personal, non-commercial use only, with no resale or commercial exploitation.
+- TC 2.2: the agreement is personal to the customer, who cannot pass it to anyone else and stays responsible for the SIM's use, even when others use the device.
+- TC 3.1–3.3: SMARTY may change its terms or prices on 30 days' notice.
+
+**Billing.**
+- Paid upfront each month. The renewal cycle starts at SIM activation and renews on the same day each month, the Renewal Date (TC 5.20, 5.21; help 952716, 4227332).
+- If paid on the 29th–31st, the Renewal Date falls earlier in a shorter month (TC 5.21). Whether it returns to the 29th–31st in a longer month is not stated.
+- A failed auto-renewal that is retried and taken later moves the cycle start to the day payment was taken (PG p3).
+- The time of day and the time zone of the renewal are not stated anywhere.
+- To cancel, auto-renew is turned off at least 24 h before the Renewal Date (TC 9.1).
+- Operator practice that follows: activate the SIM on a day up to the 28th, so the bill day never clamps; keep the payment card funded, because a failed renewal moves the bill day, which the operator then records again (`BillDay`, §7).
+
+**Usage counting** (PG p23): binary units (1 kB = 1024 bytes, 1 MB = 1024 kB, 1 GB = 1024 MB), counting re-sent packets and flow-control overhead, charged per full MB. Usage is shown in the dashboard and the app with a usage history; whether an Unlimited plan shows the GB used, and how fresh the figure is, is not stated (M2a records it).
+
+#### Other carriers
+
+- No UK consumer carrier permits this use. O2 and Vodafone restrict use to private or personal purposes, and SMARTY to personal, non-commercial use.
+- **O2 is unsuitable.** Its unlimited SIMs may be used only in devices that do not need to be plugged in to work (O2 Unlimited Tariff Terms 3.3, undated), which rules out Plugged-In mode.
+
+#### EE (history: EE declined the order at its credit check on 2026-10-08; not the line)
+
+Revision 5 recorded these facts while EE was the candidate line. EE's Data SIM order was declined at EE's credit check on 2026-10-08 (a thin UK credit file), so none of them applies to the line. They stay for the record, and for a later comparison by SIM swap (F12, superseded).
+
+**Fair use.**
+- Every current EE unlimited guide treats use above 600 GB a month as non-personal use. EE may then deprioritise the line at busy times, or move it to a business plan. Sources: the EE SIM Only Pay Monthly Plan Terms and Price Guide (from 7 Aug 2025, updated 5 Mar 2026), p. 2, and the EE Data SIM guide (from 29 Aug 2024, updated 25 Mar 2026).
+- EE defines 1 KB = 1024 bytes, 1 MB = 1024 KB and 1 GB = 1024 MB. It counts upstream and downstream together, including flow-control and re-sent packets (SIM-only guide, "What do you mean by data usage?").
+  - So 600 GB is 644,245,094,400 bytes, assuming EE measures fair use in those units *(inference)*. Revision 5 held it as `EE_FAIR_USE_600_GIB` and as the unrecorded-plan ceiling; revision 6 removed both, and tests that need a fair-use line keep the value as `TEST_FAIR_USE_BYTES` (§7).
+- Deprioritisation moves the line's QCI from 8 to 9, only on congested cells, until the end of the bill cycle (EE Traffic Management KFI, April 2022). EE told the ASA it affects about 4 % of sites, with no extra charge and no suspension (ASA ruling on EE Ltd, 21 May 2025).
+- The "12 or more regularly tethered devices" clause appears in the 2021 Unlimited terms and the 7 Aug 2025 handset terms. It is absent from the current SIM-only, Data SIM and WiFi terms and from the 20 Aug 2026 handset terms. Mooring would not trip it anyway: the M7 has one client, the Mac.
+
+**Personal use and the network terms.**
+- Unlimited plans are for personal, non-commercial use, and may not be used to sell access to EE's network (plan guides, p. 1).
+- The EE Mobile Pay Monthly Network Terms v11 (16 Jan 2026) add:
+  - 4.7.11: no device that routes or re-routes voice, data or other services on, from or to the network;
+  - 4.7.12: no fraudulent or unlawful purpose, and no direct financial gain, revenue share or benefit in kind;
+  - 4.7.13: no selling, or providing commercial services, to third parties without EE's express prior written consent;
+  - 6.2: EE may suspend, disconnect or terminate without warning on a breach of any point in 4.7 (6.2.3), or of any other agreement with EE or its group companies (6.2.1);
+  - 6.3: after such a termination, everything owed is payable, including any cancellation charge.
+
+**EE plans.**
+- **EE SIM-only, 30-day Essentials Unlimited:** £38 list, 100 Mbps cap, +£2.50 each 31 March (SIM-only guide). Its terms speak of use "from your phone".
+- **EE Data SIM, 30-day Essentials Unlimited:** £35, +£1.50 each 31 March. Its terms speak of a "device".
+- **The EE Student Discount** (v2, 21 Apr 2026): 20 % off SIM-only plans; a single-use code per person and per account; online only. Its terms say SIM-only prices rise £1.50 each 31 March, against the guide's £2.50. The order confirmation decides.
+- **Excluded:** No Frills (10 Mbps cap) and PAYG (25 Mbps cap, phone only).
+- **5G standalone** needs All Rounder or Full Works, and EE's 5G+ device list names no NETGEAR hotspot (EE help page, updated 24 Apr 2026).
+
 ---
 
 ## 20. Decisions needed from the user
 
 | ID | Decision | Recommendation |
 |---|---|---|
-| D-1 | Accept the carrier-terms and attribution exposure of serving third parties through a consumer EE SIM | Required before M8 |
+| D-1 | Accept the carrier-terms and attribution exposure of serving third parties through a consumer SIM, now SMARTY's (F1). Revision 5 added the facts behind it (§19.1) and the operator's exposure under PRC law (§20.1). This is not legal advice | **Accepted 2026-10-08 by the user, at a reduced scale: carrier terms accepted for a pilot of at most 5 active users; F20 pending.** The user accepted the carrier-terms exposure after being shown SMARTY's clauses (§19.1, §20.1) and chose to start with 3–5 users, with no money, cost-sharing or gifts. F20 (the PRC-law exposure) was not asked and stays pending; it is part of D-1, so M8 still waits for it |
 | D-2 | Rent the VPS(es): an hourly London VPS for M2, then a primary and a standby | Primary on a less popular UK network (Mythic Beasts if its console path works); standby on DigitalOcean LON1 |
 | D-3 | **Resolved 2026-10-08 by the user:** Xray v26.9.30 built with `replace github.com/xtls/reality => e1986a4` (§4.2). | Done; gated by L2/L4 |
 | D-4 | Keep the M7's Wi-Fi offload and Ethernet offload off (and its Wi-Fi radio off, for an exact SIM meter) | Yes |
 | D-5 | Whether to schedule the separate CFM tasks: importer extraction, and shipping the ML-KEM opt-in | Independent of Mooring v1 |
 | D-6 | Signing identity and provisioning profile for the app. The user performs the signing. | Use the user's Apple team; no notarization unless the app is distributed |
 | D-7 | **Resolved 2026-10-08 by the user:** this Mac becomes the dedicated exit server, so it must not accumulate build caches. Rust work (M0/M1 pure crates) runs here in the single repository `target/`, which `cargo xtask clean` removes at the end of every milestone. Go engine builds, govulncheck and every VM lane (Lima/QEMU) run on the research computer or in hosted CI. The exit Mac only runs signed release artifacts. | Done |
-| D-8 | **Decided 2026-10-08 for the M1 close-out (review finding F24), recorded as the operator's decision; the repository keeps no record of the user's own wording, so the user confirms it with the M1 commit:** `MAX_ACTIVE_NODES` stays 2, because the Mac exit carries at most two WireGuard endpoints and the probe port span is sized for two nodes. Rotation with a healthy standby therefore retires the blocked node before `node new` (§13.4). | Implemented in M1; the user confirms it with the M1 commit |
-| D-9 | **Decided 2026-10-08 for the M1 close-out (review finding F16), recorded as the operator's decision; the user confirms it with the M1 commit, as for D-8:** CFM acceptance checking lives in `xtask` (`cargo xtask acceptance`, a `ci` step), reading `contract/cfm-acceptance.toml` and `contract/cfm-manifest.toml` with the `toml` crate (xtask-only; `deny-skips` reads `deny.toml` with it too) and the shapes and SHA-256 values through xtask → `mooring-export` and `mooring-model` edges; the release gate `require_accepted` is `cargo xtask release-acceptance`, which release verification runs (§6.1, §6.3, §9.3). Accepted cost: every xtask command compiles those crates first (§6.1). | Implemented in M1; the user confirms it with the M1 commit |
+| D-8 | **Decided 2026-10-08 for the M1 close-out (review finding F24), recorded as the operator's decision; the repository keeps no record of the user's own wording, so the user confirms it with the M1 commit:** `MAX_ACTIVE_NODES` stays 2, because the Mac exit carries at most two WireGuard endpoints and the probe port span is sized for two nodes. Rotation with a healthy standby therefore retires the blocked node before `node new` (§13.4). | Implemented in M1. **Confirmed 2026-10-08:** the user approved the M1 commit 4a95ee0, which this entry named as the confirmation |
+| D-9 | **Decided 2026-10-08 for the M1 close-out (review finding F16), recorded as the operator's decision; the user confirms it with the M1 commit, as for D-8:** CFM acceptance checking lives in `xtask` (`cargo xtask acceptance`, a `ci` step), reading `contract/cfm-acceptance.toml` and `contract/cfm-manifest.toml` with the `toml` crate (xtask-only; `deny-skips` reads `deny.toml` with it too) and the shapes and SHA-256 values through xtask → `mooring-export` and `mooring-model` edges; the release gate `require_accepted` is `cargo xtask release-acceptance`, which release verification runs (§6.1, §6.3, §9.3). Accepted cost: every xtask command compiles those crates first (§6.1). | Implemented in M1. **Confirmed 2026-10-08:** the user approved the M1 commit 4a95ee0, which this entry named as the confirmation |
+
+### 20.1 D-1 in detail (revision 6; not legal advice)
+
+D-1 asks the operator to accept two exposures. Revision 5 recorded what each rests on; revision 6 re-points the carrier terms to SMARTY, the decided line. On 2026-10-08 the user accepted the carrier-terms exposure for a pilot of at most 5 active users; the PRC-law exposure (F20) was not asked and stays pending.
+
+**The carrier terms** (SMARTY, §19.1, read 2026-10-08):
+- Personal, non-commercial use only, with no resale or commercial exploitation (TC 5.4(b)); the agreement is personal to the customer, who stays responsible for the SIM's use (TC 2.2).
+- Data Only plans are for tablets, laptops and portable mobile Wi-Fi devices, not a permanent long-term alternative to home broadband, and regularly tethering more than 8 devices is given as unlikely to be legitimate personal use (TC 5.15).
+- No content of excessive size, quantity or frequency; SMARTY will contact the customer about excessive use (TC 5.5(d)). There is no fair-use line and no deprioritisation step.
+- Suspension for continuing excessive use (TC 8.1(b)); immediate termination for use not consistent with the ordinary use of a consumer (TC 9.4(d)); charges forfeited when SMARTY ends the agreement for the customer's conduct (TC 9.2).
+- Terms and prices may change on 30 days' notice (TC 3.1–3.3).
+- EE's terms, which revision 5 recorded here, are history in §19.1. O2 is unsuitable, because its unlimited SIMs are for devices that need no plug.
+
+**The operator's exposure under PRC law:**
+- The PRC Interim Provisions Governing the International Networking of Computer Information Networks (State Council Order 195, amended 20 May 1997; www.cac.gov.cn, read 2026-10-08):
+  - Art. 6 requires international connections to use the channels the state provides;
+  - Art. 14 allows a warning and a fine of up to 15,000 yuan for a breach.
+- Providers of paid circumvention services have been prosecuted in China: in Shanghai Baoshan in 2018, a 3-year suspended sentence; in Hangzhou in 2019, an arrest in a case involving 29,000 users. The design-gaps review cited these, and they were not re-verified here.
+- Payment, scale and visibility aggravate the exposure *(inference)*. An operator who may travel to China carries it personally.
+
+**The constraints that follow:**
+- no payment, cost-sharing or gifts (F3);
+- no advertising;
+- a cap on active users (F3: at most 5);
+- no administration from inside China with identifiable accounts.
+
+F20 asks the operator to accept the PRC exposure as part of D-1. It was not asked on 2026-10-08 and is still pending.
+
+### 20.2 Operator decisions from the console review (revision 5; F1–F6, F12, F15 and F16 decided in revision 6)
+
+The console review of 2026-10-08 raised twenty decisions, F1–F20. They are not the M1 review findings F16 and F24 cited in D-8 and D-9. On 2026-10-08 the operator decided F1–F6, F12 (superseded), F15 and F16; their right-hand column gives the decision, in the operator's terms, and where the code records it. Two points that the review of 2026-10-09 found open inside F4 and F6, whom N counts and whether the ntfy topic is one or one per node, were decided on 2026-10-09 by the recommended default, following F4/F6 as stated; the F4 and F6 rows mark them as such, and they are not the operator's own words. The rest are pending: F7, F8, F9, F10, F11, F13, F14, F17, F18, F19 and F20, with D-2, D-4, D-5 and D-6 above. For those the right-hand column is a recommended default, not a decision. Nothing built presumes a pending one: where the code touches one, it is either absent (F18), or a record whose default is "not recorded" or "off" (expiry, and agreement records for F9, §7). The others are operating choices outside the code.
+
+| ID | Decision | Decision taken (decided), or recommended default (pending) |
+|---|---|---|
+| F1 | Line and plan (cost). Needs D-1 first | **Decided 2026-10-08: SMARTY Unlimited Data Only**, £20 a month, rolling monthly, a physical SIM. Ordered on 2026-10-08, due about 12–13 October 2026, not yet activated. EE's Data SIM order was declined at EE's credit check on 2026-10-08 (a thin UK credit file), so EE is not the line. O2 stays unsuitable (§19.1). Recorded as `Carrier::Smarty`, `PlanKind::Unlimited`, no speed cap, terms [SMARTY-PG] (§7). Revision 5's recommendation was an EE Data SIM (§19.1, history) |
+| F2 | Stop policy (user-visible) | **Decided 2026-10-08: a hard stop at 300 GB of SIM bytes, with a warning at 240 GB** (decimal: 300,000,000,000 and 240,000,000,000; `PILOT_SIM_HARD_STOP_BYTES`, `PILOT_SIM_WARN_BYTES`). Users lose service for the rest of the cycle at the hard stop. That is about 140 GB served, since each served byte crosses the SIM about twice (§3: about 143e9 at 2.1×). `AcceptDeprioritisation` cannot apply, because the plan has no fair-use line (§7) |
+| F3 | Admission and payment (user-visible) | **Decided 2026-10-08: at most 5 active users** for now (`PILOT_MAX_ACTIVE_USERS`, `CapacityPolicy::PILOT`). The user first said 10, then narrowed it to 3–5 after reading SMARTY's terms. No money, cost-sharing or gifts |
+| F4 | Per-user quotas (user-visible) | **Decided 2026-10-08: automatic quotas from 6 active users.** Each user's cycle quota is 0.8 × the served budget ÷ N, with a warning at 80 % and a reversible suspension (`SuspendReason::QuotaExceeded`) at 100 %; per-user overrides are allowed (`AutoQuotaPolicy::PILOT`, §15.3). At the pilot's stop the served budget is about 142.9e9 bytes, so 6 users would get 19,047,619,047 bytes each. **What N counts: decided 2026-10-09 by the recommended default, following F4/F6 as stated (latched per cycle).** Read literally, N and the 6-user threshold would count only the users active now, so at exactly 6 the first suspension for quota would turn the quotas off for everyone else for the rest of the cycle, and one heavy user could then run the SIM into the 300e9 hard stop that F4 exists to prevent. N and the threshold therefore count the users active now plus those suspended for quota in the current cycle: a suspension for quota never changes anyone's share within the cycle, admitting a user still lowers every share (F4's ÷ N), and other suspensions, revoked users and suspensions for quota from an earlier cycle (resumed by the apply job at the new cycle, within the cap, §13.6) do not count (§15.3). Whether a suspension for quota counts is decided by when it was made, not by the cycle start it records: one made during the current cycle counts and one made before its start has lapsed, so an edit of the bill day in either direction, a late SMARTY renewal moving the start forward included, never drops a suspension made in the current cycle; one made after now is an error, never read as either (review fixes of 2026-10-09). The other departures still lower N mid-cycle: at exactly the threshold an expiry, which `evaluate` itself proposes, an operator or abuse-review suspension or a revocation switches the quotas off for the rest of the cycle, and only the hard stop then bounds the SIM (§15.3). Under the cap of 5 the quotas stay dormant unless suspensions for quota this cycle bring the count to six; while they are dormant only a user's own quota can cause one |
+| F5 | Remote viewing through a viewer role on the VPS, with an emergency stop from a phone | **Decided 2026-10-08: yes**, per §15.9: a viewer role on the VPS for the operator's phone, read-only plus an emergency stop (`GateSet` with the Operator hold only); `ClearHold`, `Apply`, `Shutdown` and `Resume` stay ops-only, so resuming is done from the Mac; an unprivileged `mooring-view` account (critique C-9); the key generated on the phone and only its public key imported; `viewer new` prints the node's host-key fingerprint; never over Janet or eduroam |
+| F6 | Alert channels (third parties see Level-0 text; cost £0) | **Decided 2026-10-08: yes**, per §15.8's default: ntfy with a random topic of at least 128 bits, the Healthchecks.io free plan with a node check and a `MacAlive` check per node (the operator creates the account himself), and a daily digest at 09:00 UK time. Aggregates only, Level 0: node ids and counts, never a label, opaque user id, alias, IP address, M7 identifier or SMS text. Revision 5's alternative, Pushover ($4.99 once per platform), was not taken. **One topic for the deployment: decided 2026-10-09 by the recommended default, following F4/F6 as stated.** Revision 6 had first built one topic per channel node, which made the phone subscribe once per node and again after every rotation. F6 names one topic, so the code now keeps one deployment-level topic (`SecretRef::AlertTopic`), required while at least one node has channels; the Healthchecks checks stay per node, because a dead-man check watches one node (§7, §15.8). The phone's one subscription survives a rotation when the replacement or the standby gets its channels before the last channel node is retired (§13.4); replacing the topic after a compromise or a lost phone takes two configuration changes and one new subscription (§12) |
+| F7 | Retention, per host (user-visible through the notice) | Five-minute bins for 7 days, hourly for 35 days, daily and monthly totals for 13 months, lifetime totals until 13 months after a user is revoked, all on the Mac. The VPS keeps bins only until the Mac has pulled them (about 48 h), and its monthly usage files get a deletion rule (§11.5) |
+| F8 | Hardware (cost; prices not researched) | A USB-C 2.5GbE adapter (needed for Plugged-In mode, §2). A UPS for the M7, which is essential because Plugged-In mode has no battery, and for the Mac. A high-gain antenna only if the survey shows fewer than 2 bars. Pending; on 2026-10-08 the user said he is buying a USB-C Ethernet adapter, and the UPS is undecided |
+| F9 | Agreement before export, and the delivery rules (user-visible) | Require an `AgreementRecord` before `user export`. No iMessage to mainland-China accounts (§9.4). The agreement, in Simplified Chinese, covers: no payment or resale; no sharing the file; no unlawful use or P2P; what the operator sees and how long it is kept; what to do when blocked |
+| F10 | Client scope for v1 (user-visible) | macOS CFM only, stated in the user guide. The guide also says that Chinese sites must go direct in CFM's rules, because the nodes deny `geoip:cn` and `geosite:cn` (§8.2) |
+| F11 | Config update channel (user-visible) | No subscription URL. Every user holds both nodes, and files are re-delivered on rotation |
+| F12 | Carrier comparison (cost) | **Superseded 2026-10-08:** SMARTY, on Three's network, is the line (F1). EE could be compared only later, by a SIM swap in the same M7, and needs a credit check the operator currently fails. Revision 5's default compared SMARTY against EE's measured uplink. Never O2 |
+| F13 | VPS rental (D-2; cost) | As D-2, with transfer sized from §19 and the proxy question asked of both providers in writing |
+| F14 | Beyond one line (cost and user-visible; after M8) | Cap users rather than add a second exit, a split exit or a relocation |
+| F15 | Whether operator traffic (a viewer session, push alerts) may ever cross Janet or eduroam | **Decided 2026-10-08: no** operator traffic over Janet or eduroam (§10.2, §15.9) |
+| F16 | Confirm that the console shows bytes and times only, never destinations (§15.5) | **Decided 2026-10-08: yes**, bytes and times only |
+| F17 | SIM PIN on the M7 | Off, with the M7 in a physically secured place, because a PIN asked at every power-on defeats unattended recovery (§10.3) |
+| F18 | Backup escrow (changes §13.7's accepted model) | An `hdiutil` AES-256 image of the state, the Keychain secrets and the SSH material, with the passphrase kept offline, never in iCloud and never in a chat app. Until decided, no backup exists |
+| F19 | Serving on battery, and the Mac's sleep and display-lock settings | Keep §10.3's behaviour on battery. Set display sleep to about 10 minutes with a password required immediately, so the screen locks; Mooring's assertions keep the system awake |
+| F20 | Accept the PRC-law exposure as part of D-1 | The operator's own call. Nothing in this design can reduce it below the constraints listed under D-1. Pending: not asked on 2026-10-08, when D-1 was accepted for the carrier terms |
 
 ---
 
@@ -1826,6 +2460,55 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
     - macOS 27.0 (26A428), MacBookPro18,2, Xcode 27.0, Swift 6.4, rustc 1.98.1, OpenSSH_10.3p1, Lima 2.1.2, Parallels `prlctl` present.
     - No Go on PATH. No QEMU. No `cargo-mutants`.
     - No M7 interface attached: the default route is Wi-Fi `en0`.
+    - Revision 5: `pmset -g cap` lists `displaysleep`, `disksleep`, `sleep`, `womp`, `standby`, `powernap`, `ttyskeepawake`, `hibernatemode`, `hibernatefile`, `tcpkeepalive`, `lowpowermode` and `highpowermode`, with no `autorestart` and no `acwake`. `pmset -g custom` shows `sleep 0` and `displaysleep 0` on both AC and battery (§10.3).
+11. **Xray v26.9.30 `b26a91de`, re-read for revision 5:**
+    - `proxy/proxy.go:273-275` (uplink splice commented out), `:737-739` (splice on linux and android only), `:761-783` (spliced bytes counted when `ReadFrom` returns)
+    - `proxy/vless/inbound/inbound.go:554-556` (XRV sets `CanSpliceCopy = 2`), `:591-592` (empty flow sets 3); `proxy/freedom/freedom.go:260`
+    - `app/dispatcher/default.go:161-180` (user counters registered at dispatch); `app/stats/online_map.go:9-12,35-38` (loopback ignored); `app/stats/command/command.go:186-206` (`statssys`: uptime, Go `Alloc`/`Sys`)
+    - `app/router/command/command.proto:15-31` (`RoutingContext`: source IPs, target IPs, target domain)
+    - sing-box v1.14.2 `experimental/clashapi/connections.go:85-95` (`/connections`: source IP, destination IP, host)
+12. **Console-review sources (revision 5; SMARTY's added in revision 6).** All were read on 2026-10-08 unless another date is given. Text extracts are in the session scratchpad, not in the repository.
+    - **SMARTY (the decided line, §19.1):**
+      - [SMARTY-TC]: [SMARTY Terms and Conditions V33](https://sundaecdn.blob.core.windows.net/files/SMARTY-Terms-And-Conditions.pdf), 30 Jul 2026: 1.1 (Hutchison 3G UK Limited trading as SMARTY), 2.2, 3.1–3.3, 5.4(b), 5.5(d), 5.15, 5.20, 5.21, 8.1(b), 9.1, 9.2, 9.4(d).
+      - [SMARTY-PG]: [SMARTY Price Guide V42](https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf), 25 Aug 2026: p3 (5G included; a late renewal payment moves the cycle), p11 (no fair-use line, no speed restriction), p23 (binary units, re-sent packets, per full MB). The `SimPlan` record cites it as its terms (§7).
+      - Help-centre articles at `http://help.smarty.co.uk/en/articles/<id>`, with the page date where recorded: 10235435 (VodafoneThree network sharing; 5 May 2026), 1155178 (no shaping or throttling; 27 Apr 2023), 5877334 (5G), 952716 and 4227332 (renewal and billing), 4670061 (5G and 4G bands; 9 Dec 2025), 1155220 (APN; 18 Mar 2026).
+      - The [plan page](https://smarty.co.uk/plans/unlimited), undated: £20 on a one-month rolling plan, with no credit check.
+      - Unverified forum claims of cut-offs near 100 GB appear on no SMARTY page and are not cited as fact.
+    - **EE (history; EE is not the line, §19.1):**
+      - [SIM Only Pay Monthly Plan Terms and Price Guide](https://ee.co.uk/content/dam/help/terms-and-conditions/price-plans/mobile/pay-monthly-price-plans/ee-simo-plan-tncs-from-7-august-2025.pdf), from 7 Aug 2025, updated 5 Mar 2026: p. 1 personal use and no selling of access; p. 2 the 600 GB clause; "What do you mean by data usage?" (units, both directions); 30-day Essentials £38; +£2.50 each 31 March.
+      - [Data SIM guide](https://ee.co.uk/content/dam/help/terms-and-conditions/price-plans/mobile/ee-data-sim-plans-tncs-29082024.pdf), from 29 Aug 2024, updated 25 Mar 2026: 30-day Essentials £35; +£1.50 each 31 March.
+      - [Mobile Pay Monthly Network Terms v11](https://ee.co.uk/content/dam/help/terms-and-conditions/mobile/pay-monthly/network/ee-mobile-paym-network-terms-160126-a.pdf), 16 Jan 2026: 4.7.11–4.7.13, 6.2, 6.3.
+      - [Traffic Management KFI](https://ee.co.uk/content/dam/help/terms-and-conditions/broadband/network-traffic-management/traffic-management-key-facts-indicator-april-2022-final-version.pdf), April 2022: QCI 8 → 9 on congested cells, until the end of the billing cycle.
+      - [Student Discount v2](https://ee.co.uk/content/dam/help/terms-and-conditions/offers-promotions/ee-student-discount/EE%20Student%20Discount%20Terms%20and%20Conditions%20-%20from%2021%20April%202026.pdf), 21 Apr 2026.
+      - The "12 or more tethered devices" clause, in the [Unlimited T&Cs](https://ee.co.uk/content/dam/ee-help/Termsandconditions/Unlimited%20Terms%20and%20Conditions.pdf) (18 Jan 2021) and the [handset terms of 7 Aug 2025](https://ee.co.uk/content/dam/help/terms-and-conditions/price-plans/mobile/ee-pay-monthly-plan-t-and-cs-from-7-august-2025.pdf); absent from the [handset terms of 20 Aug 2026](https://ee.co.uk/content/dam/help/terms-and-conditions/price-plans/mobile/pay-monthly-price-plans/EE%20pay%20monthly%20plan%20T_Cs%20-%20from%2020%20August%202026.pdf).
+      - [5G standalone help page](https://ee.co.uk/help/mobile/manage-use/using-phone-features/5G-standalone), updated 24 Apr 2026.
+    - **ASA:** [ruling on EE Ltd](https://www.asa.org.uk/rulings/ee-ltd-a24-1253564-ee-ltd.html), 21 May 2025.
+    - **Other carriers:**
+      - [O2 Unlimited Tariff Terms](https://www.o2.co.uk/termsandconditions/mobile/unlimited-tariff-terms), undated: 3.2–3.5.
+      - [Vodafone Consumer AUP](https://binaries.vodafone.co.uk/gbnnsauqav4t/73kvRsdntiDauH0KUyhwu3/ac6a07014b341bc907436c49c7d47561/acceptable-use-policy-april-2025.pdf), 8 Apr 2025.
+      - Opensignal via [ISPreview](https://www.ispreview.co.uk/index.php/2026/01/ee-wins-big-in-opensignal-study-of-best-4g-and-5g-uk-mobile-networks.html), 29 Jan 2026. Re-fetching returned HTTP 429.
+    - **NETGEAR:**
+      - Nighthawk M7 Pro/Ultra user manual 202-12721-02 (June 2025), cited by printed page: 9 (ports), 12–14 (charging, Plugged-In mode), 15 (power on), 22 (USB tethering powers it on; Ethernet off by default), 26 and 47 (firmware updates), 47–48 (Ethernet port), 62 (SIM PIN), 65 (data-usage reset date), 74 (thermal levels, 0–35 °C), 76 (external antenna).
+      - [MR7450 UK page](https://www.netgear.com/uk/mobile-wifi/hotspots/mr7450/), undated.
+      - [eternalegypt](https://github.com/amelchio/eternalegypt/blob/master/eternalegypt/eternalegypt.py), `information()`: the `model.json` leaves it reads and the four it drops.
+    - **Durham University:** [Student IT Regulations v2.5](https://dur.ac.uk/media/durham-university/professional-services/cis/Student-IT-Regulations-2.5---approved.pdf) (publication date "xxx"): regulations 1.1, 2.3 and 5.1.
+    - **PRC:** [Interim Provisions Governing the International Networking of Computer Information Networks](https://www.cac.gov.cn/1996-02/02/c_126468621.htm), State Council Order 195, amended 20 May 1997: Art. 6, Art. 14.
+    - **Apple and macOS:**
+      - [Apple support 102338](https://support.apple.com/en-gb/102338), 9 Apr 2026 (Charge Limit).
+      - [Apple HT208352](https://support.apple.com/HT208352), 15 Apr 2025 (iCloud in mainland China operated by GCBD).
+      - [eclecticlight.co](https://eclecticlight.co/2025/11/06/how-tahoe-26-1-has-enabled-automatic-security-updates/), 6 Nov 2025 (Background Security Improvements).
+    - **UK data protection:**
+      - [ICO, identifiers](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/personal-information-what-is-it/what-is-personal-data/what-are-identifiers-and-related-factors/).
+      - [ICO, exemptions](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/exemptions/a-guide-to-the-data-protection-exemptions/), updated 8 Mar 2024.
+      - UK GDPR [Art. 5](https://www.legislation.gov.uk/eur/2016/679/article/5) and [recital 26](https://www.legislation.gov.uk/eur/2016/679/introduction).
+    - **Providers:**
+      - DigitalOcean: [AUP](https://www.digitalocean.com/legal/acceptable-use-policy), 20 Mar 2026; [Droplet pricing](https://www.digitalocean.com/pricing/droplets); [bandwidth billing](https://docs.digitalocean.com/platform/billing/bandwidth/), last verified 14 Sep 2026.
+      - [Mythic Beasts VPS pricing](https://www.mythic-beasts.com/order/vps).
+    - **Alerting:**
+      - [ntfy docs](https://docs.ntfy.sh/): "topic names are public".
+      - [Healthchecks.io pricing](https://healthchecks.io/pricing/): Hobbyist, $0, 20 checks.
+      - [Pushover pricing](https://pushover.net/pricing).
+    - **Existing panels:** [3x-ui](https://github.com/MHSanaei/3x-ui) v3.9.0 (released 2026-10-03); [Marzban](https://github.com/Gozargah/Marzban) `app/telegram/handlers/report.py:196-210`.
 
 ---
 
@@ -1836,18 +2519,19 @@ Every milestone ends with zero errors and zero warnings in each lane it touches,
 | # | Milestone | Needs |
 |---|---|---|
 | M0 | Repository, toolchains, pinned engines | Rust skeleton on this Mac (bounded `target/`; done); engine builds on the research computer (D-7; open) |
-| M1 | Pure core | This Mac (bounded `target/`, cleaned at the end): **complete, pending the operator's commit**; L2 engine checks on the research computer (open) |
-| M2 | Field spike | The M7, an EE SIM, an hourly London VPS (D-2), the user present |
+| M1 | Pure core | This Mac (bounded `target/`, cleaned at the end): **complete and committed (4a95ee0, 2026-10-08)**; the revision-5 console foundations and the revision-6 code built on it are pending the operator's commit; L2 engine checks on the research computer (open) |
+| M2a | Field spike, part 1: the M7 alone | The M7; the SMARTY SIM (F1) for every radio, placement, antenna, band, thermal-under-load and byte step, once it arrives (about 12–13 October) and is activated, with only the SIM-less steps before then (the operator has no other SIM for the M7); a USB-C 2.5GbE adapter; the user present; no VPS. From 2026-10-09 |
+| M2b | Field spike, part 2 | An hourly London VPS (D-2), the SMARTY line (F1), the user present |
 | M3 | Netns e2e | Research computer (Lima) and hosted CI (D-7) |
 | M4 | VPS agent and VM lanes | Hosted CI (KVM) and the research computer (D-7) |
 | M5 | Mac daemon and lab lanes | This Mac today; L6-bypass needs the user |
 | M6 | Real CFM in the lab | This Mac today, driven by the user |
 | M7 | Swift app, power helper, release lane | This Mac today; signing by the user |
-| M8 | First London VPS and pilot | The M7, EE, a VPS, a trusted user in China, D-1 |
+| M8 | First London VPS and pilot | The M7, the SMARTY line, a VPS, a trusted user in China, D-1 with F20 |
 | M9 | Operations | Two VPSs |
 | M10 | Shaping and placement (optional) | Field data from M8 |
 
-M2 can run in parallel with M3–M7 as soon as the hardware is attached. Its recorded values (keepalive, `EgressCheck`, `InterfaceSelector`, `FlowCap`) are inputs to M8, not blockers for M3–M7, which use lab values.
+M2 (M2a and M2b) can run in parallel with M3–M7 as soon as the hardware is attached. Its recorded values (keepalive, `EgressCheck`, `InterfaceSelector`, `FlowCap`, `UplinkBaseline`, and the router endpoint and identity) are inputs to M5 and M8, not blockers for M3–M7, which use lab values.
 
 ### M0 — Repository, toolchains, pinned engines (Rust here; engines on the research computer, D-7)
 
@@ -1890,7 +2574,7 @@ xcrun swift build --package-path apple/Packages/MooringKit && xcrun swift test -
 
 ### M1 — Pure core: model, keys, export, render, agent-proto types, store (this Mac, bounded target/)
 
-**Status at revision 4 (2026-10-08): complete, pending the operator's commit.** The repository has no commits yet. `cargo xtask clean` (D-7) runs once the work is committed.
+**Status (revision 6): complete and committed as 4a95ee0 on 2026-10-08.** The user approved that commit, which also confirmed D-8 and D-9 (§20). Revision 4 recorded M1 as pending the commit. `cargo xtask clean` (D-7) runs once the work built on M1 is committed.
 
 **Delivered:**
 - **`model`:** every type in §7, with the revision-4 changes recorded there; the `SPECIAL_V4`, `PortPlan`, `EgressCheck` and cross-entity invariants; `Bookkeeping`; `target::qualify`; verdict precedence.
@@ -1924,29 +2608,193 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
                         # all negative controls trip
   ```
   Until it runs, the rendered syntax of `nftables.conf`, `wgexit.conf` and cloud-init, and Xray's semantic reading of `xray.json`, remain *(inference)*.
-- graph-check's `x86_64-unknown-linux-gnu` build of the pure crates: with `daemon-core` (M3).
+- graph-check's `x86_64-unknown-linux-gnu` build of the pure crates: with the Linux e2e lane (M3, research computer or hosted CI); this Mac has no such target (§6.1).
 - The `lab` feature and `NodeAddress::Lab`: M5.
 - The macOS-gated `ssh-keygen` and `openssl` cross-checks have run only on macOS. A Linux run of equivalent checks is unverified.
 
-**Format note.** The V1 `state.json` shape changed during M1, before any release (certificate-only `Hy2Server`, unit `RevokePending`, required `hard_stop_bytes` and `target` keys, no serialised `Uuid`), without a version bump. A `state.json` written by an earlier development build does not decode. From the operator's commit on, the V1 golden files pin the format.
+**Format note.** The V1 `state.json` shape changed during M1, before any release (certificate-only `Hy2Server`, unit `RevokePending`, required `hard_stop_bytes` and `target` keys, no serialised `Uuid`), without a version bump. A `state.json` written by an earlier development build does not decode. From the operator's commit on, the V1 golden files pin the format. Version 2 is in the same position: it has been neither committed nor released, so revision 6 extended it in place and regenerated its goldens rather than adding a version 3; the V2 goldens pin the format from its commit on.
 
-### M2 — Field spike (needs the M7, the EE SIM and an hourly London VPS; user present)
+**Console foundations (revision 5, 2026-10-08).** These were built on top of M1 on this Mac. They are not in 4a95ee0 and are pending the operator's commit. All of it is pure Rust and was decision-neutral when built.
+- **`model` and `store`:**
+  - state version 2 (§7), with a real V1 → V2 migration, the new goldens `state-v2.json` and `state-v2-every-variant.json`, and the V1 goldens unchanged;
+  - `CalendarDate`, `BillDay`, `SimPlan`, `StopPolicy`, `SimThresholds` with the unrecorded-plan ceiling, `EE_FAIR_USE_600_GIB`, `UplinkBaseline` (revision 6 removed the ceiling and `EE_FAIR_USE_600_GIB` with EE);
+  - `UserStatus::Suspended`, `UserPolicy`, `PublicAlias` (drawn by `mooring-keys`; no text constructor), `AgreementRecord`, `CapacityPolicy`, `NonEmptySet`;
+  - the frozen version-1 types (`crates/model/src/v1.rs`), checked with the version-1 cross-entity rules only;
+  - the store's transition guard (`UserStatusEdited`, §7).
+- **`render`:** `DuplicateCredential{node, kind, first, second}` (§8.1).
+- **`agent-proto`:**
+  - `UsageSeries`, `Events` (consecutive numbers per page), the `StatusV1` additions, the new watch conditions (`AccountingCanaryMissing{inbounds}`) and the new agent errors (§11.1, §14);
+  - six protocol-1 goldens in `contract/agent-proto-golden/`; every contract file that existed before them is byte-identical.
+- **`daemon-core`** (§6.1, §15): `MacStatusV1`, usage aggregation over every node that may have counted traffic and activity from fresh polls only, the SIM forecast, the capacity monitor, the alert machine, quota and expiry evaluation, the router-status types and the foreign-network check; `contract/status-fixtures/` holds the three scenario documents and `variants.json`.
+- **Verification run** on this Mac (2026-10-08), after the review fixes of the same day:
+  - `cargo xtask ci` passed all 9 steps: fmt; clippy with `-D warnings`; deny (advisories, bans, licenses, sources); graph-check (9 crates match the table); kinds-coverage (all 386 variants of 36 `Kind` enums are named by tests); deny-skips; acceptance (10 shapes recorded, 0 accepted, 10 pending); nextest (716 of 716 passed); doc tests.
+  - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` passed with no warnings.
+- **Mutation checks.** Every new invariant test was mutation-checked by hand: 49 mutants for the state work, 48 for the render and protocol work, 116 for `daemon-core`, and 51 for the review fixes. All were stopped, by a failing test or by a compile-time check; the few that survived a first run had their tests strengthened and now fail.
+- **Still open:** `fieldkit`, and everything in §15 that is marked plan. The D-7 `cargo xtask clean` still runs once the work is committed.
+
+**Revision 6: the operator's decisions in code (2026-10-08).** Built on this Mac on top of the console foundations, pure Rust, and pending the same commit. No new dependency and no new crate edge.
+- **`model`, `store` and `mooring-fixtures`** (§7):
+  - `Carrier::Smarty` (EE removed); `PlanKind::{Unlimited, UnlimitedFairUse { fair_use_bytes }, Capped}`, with `line()` now an `Option`; the stop rules without a line, `SimThresholds::budget_bytes()`, and the removal of `UNRECORDED_PLAN_CEILING` and `EE_FAIR_USE_600_GIB`;
+  - the pilot constants `PILOT_SIM_WARN_BYTES`, `PILOT_SIM_HARD_STOP_BYTES`, `PILOT_MAX_ACTIVE_USERS`, `CapacityPolicy::PILOT`, `AutoQuotaPolicy::PILOT`, `PILOT_DIGEST_AT` and `AlertSettings::pilot()`;
+  - P0-1: `SimPolicy::new` takes a plan, `DeploymentInit`, `Deployment::new` returning `PlanNotRecorded`, and `Store::init(DeploymentInit)`, which validates before touching any file;
+  - the F4, F5 and F6 records (`quota.rs`, `viewer.rs`, `alerting.rs`), their invariants, the alert `SecretRef`s (since 2026-10-09 one deployment-level topic and two checks per channel node), and retirement dropping a node's channels;
+  - the single V1 lift rule (every explicit stop kept, a missing one refused);
+  - the fixtures run the SMARTY plan at the pilot thresholds with no cap, no automatic quotas and no alert channels, and `2-nodes-3-users` has one viewer.
+- **`agent-proto` and `render`** (§8.6, §11.1, §15.8, §15.9): `Role::Viewer` with `Role::may_close_gate_for`; `PutMacReport` and `MacReport` with `MacReportV1`, `ReportUserId` and `NodeName`; the notice grammar and `NtfyMessage`; `dead_man_pings` and `WATCH_STALE_SECS`; host profile 2 with `mooring-view` and `sshd_effective_lines`; `ManagedFile::ViewerKeys` and its render.
+- **`daemon-core`** (§15.3, §15.8, §15.9): `automatic_quota`, `effective_quota` and `evaluate` over the deployment; `notify::alert_message` and `notify::digest_message`; `report::project`; the conversions to the report's names in `wire.rs`; a forecast test for a plan without a line (warning and hard stop only).
+- **Goldens and contract files.** Every golden and contract file that existed before revision 6 is byte-identical except these:
+  - the two V2 state goldens in `crates/store/src/tests/golden/`, regenerated (`state-v2.json` SHA-256 `fed6e86b…`, `state-v2-every-variant.json` `8ff37ce9…`); the V1 goldens keep `9d264466…` (`state-v1.json`) and `180d2efa…` (`state-v1-every-variant.json`), unchanged since 4a95ee0;
+  - the four status fixtures, regenerated for the pilot thresholds and the line-less plan; all of them show the router's carrier name as `SMARTY` *(inference until the M2a capture)*, `variants.json` since the review fixes below, and `degraded.json` also holds the SIM forecast alert since then.
+  - New: the `put_mac_report` and `mac_report` request and reply goldens in `contract/agent-proto-golden/`, and a `vps-<node>-viewer_authorized_keys.snap` for every fixture node. The frozen-core goldens and the console frames are byte-identical.
+- **Verification run** on this Mac (2026-10-09), after the three parts were built:
+  - `cargo xtask ci` passed all 9 steps: fmt; clippy with `-D warnings`; deny (advisories, bans, licenses, sources); graph-check (9 crates match the table); kinds-coverage (all 446 variants of 39 `Kind` enums are named by tests); deny-skips; acceptance (10 shapes recorded, 0 accepted, 10 pending); nextest (802 of 802 passed, up from 716); doc tests.
+  - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` passed with no warnings.
+- **Mutation checks.** The new invariant tests were mutation-checked by hand, each file restored and checked by SHA-256: 47 mutants for the model and store work, 35 for the protocol and render work, and 32 for `daemon-core`. All of those were stopped. Two survived a first run: one exposed a random bound test, which became an exhaustive test over its whole domain (`BudgetPercent`, `SimFactor`, `WallClockTime`), and the other was an equivalent mutant. Those runs did not reach every arm of the report projection (`exit_phase` beyond three phases, the radio, saturation and plan-line mappings) nor the digest without a hard stop; the review of 2026-10-09 found that, and the fixes below add a test and a mutant for each.
+- **Review fixes (2026-10-09).** Four reviews (architecture, implementation, tests, security) of revision 6 found no P0 or P1 defect; their P2 and P3 findings were fixed as follows, each behaviour defect first reproduced by a failing test:
+  - P0-1 after init: `change_config` refuses a change that edits the SIM policy and leaves its plan unrecorded (`InvalidChange{PlanNotRecorded}`, §7), so a recorded plan cannot be un-recorded; `init_refuses_an_unrecorded_plan` now requires the store directory to stay empty, `state.lock` included.
+  - The report: `ReportBandNumber` (1..=999, exactly the router's `BandNumber`, compared for every `u16`) replaces the bare `u16` band number, which shrinks `MAX_MAC_REPORT_BYTES` to 178,874; every arm of the projection has an exact test (every exit phase, also in the digest; every radio access, band system and reading slot; every saturation with its time; both plan lines; the router's poll time), and a canary test plants grammar-shaped text (`alicesmith`, `phone`, `phone0`) in the fields the report drops; §15.9 now says what the grammars enforce and what only the projection does.
+  - The viewer's stop: `GateStopUnconfirmed{waited_secs}` and `VIEWER_STOP_WAIT_SECS` (15 s) make a stop the watch has not confirmed an error, never a `GateClosed` (§11.3).
+  - The digest time must be 02:00 or later in Europe/London (`DigestTimeTooEarly`, §15.8); a weak-signal notice shows RSRP rounded down; the digest without a hard stop is tested.
+  - Host profile 2 keeps its `Match` block: OpenSSH's sources and `sshd -T` with 10.3p1 show the block ends with the drop-in and `root` keeps the default keys file (§8.6). §8.6, `ManagedFile::ViewerKeys` and `sshd_effective_lines` now state that sshd reads the keys file as `mooring-view` (0644 `root:root`, directories 0755) and that `AllowUsers` drift is an exact multiset comparison; `docs/engines.md` has a `viewer_authorized_keys` section.
+  - Tests: the per-byte id agreement in `wire_rules.rs` now starts each rule from an id it accepts; the degraded scenario raises its SIM forecast alert and documents its 18 uncapped users; `variants.json` and its router builder say `SMARTY`.
+  - Held for the operator at that point, and decided on 2026-10-09 (below): F4's meaning of N (§15.3, §20 F4) and F6's single topic against the per-node topics first built (§20 F6, §13.4). Recorded without a code change: the model admits any explicit stop on a plan without a line, guarded by an M5 acceptance item (§7, §22 M5).
+  - Golden and contract changes: `contract/status-fixtures/degraded.json` (the forecast alert) and `variants.json` (`EE` → `SMARTY`, two lines); no state, protocol or render golden changed, the V1 and V2 state goldens included.
+  - Gates on the final tree: `cargo xtask ci` passed all 9 steps (nextest 816 of 816; kinds-coverage all 449 variants of 39 `Kind` enums), and the doc build passed with no warnings. 41 hand mutants against the new tests (store 4, model 3, protocol and render 7, `daemon-core` 27), each recorded with the tests that must stop it, were all stopped by those tests (one first written did not compile and was rewritten), each file restored and checked by SHA-256.
+- **Decisions of 2026-10-09.** The two points held above were decided on 2026-10-09 by the recommended default, following F4/F6 as stated (§20 F4, F6). No state type or encoding changed, and no golden or contract file did; what changed in version 2 is a meaning and a Keychain name: `auto_quota.from_active_users` now counts this cycle's suspensions for quota beside the users active now, and the topic's Keychain account is `alert/topic`, not `node/<n>/alert-topic`. Version 2 is unreleased, so no stored state or Keychain holds the old form.
+  - F4, latched per cycle: `policy::automatic_quota(&Deployment, now)` counts N, and the threshold, over the users `Active` now and those suspended `QuotaExceeded{cycle_start}` in the current cycle; `evaluate` reuses the cycle it computes once; `AutomaticQuotaZero` names the users sharing the budget (`sharing`). Reproduced first: the old test, set to expect the N = 6 share after one suspension for quota, failed with `Ok(None)`. It is replaced by `a_quota_suspension_keeps_every_share_for_the_cycle`, `a_quota_suspension_from_an_earlier_cycle_does_not_count`, `other_suspensions_do_not_count` and `five_active_and_one_suspended_for_quota_this_cycle_share_as_six`; the property test `the_budget_is_shared_by_the_active_and_this_cycles_quota_suspensions` replaces `the_pilot_cap_keeps_automatic_quotas_dormant`, and `only_active_users_count` became `revoking_users_share_nothing_and_admission_lowers_every_share` (§15.3).
+  - F6, one topic: `SecretRef::AlertTopic` (account `alert/topic`) replaces the per-node `NodeAlertTopic`; `SecretRef::node` returns an `Option`, `None` only for the topic; `SecretEntry::AlertTopic` and `SecretSnapshot::alert_topic()` follow; `required_secrets` lists the topic while `alerting.channels` is not empty. The store's ordered writes needed no change. New tests: `the_alert_topic_is_required_iff_a_channel_node_exists`, `only_the_alert_topic_belongs_to_no_node` and the retirement test (model); `the_alert_topic_is_shared_and_outlives_one_channel_node` and `the_alert_topic_is_deleted_after_the_commit_that_leaves_no_channel_node` (store); `alert_channel_secrets_reach_no_rendered_file` (render).
+  - This document: the operator has no EE SIM, so M2a does the SIM-less steps until the SMARTY SIM is active (§22 M2a); §7 names `RuntimeIntent.revision` as the code does.
+  - Gates on the final tree: `cargo xtask ci` passed all 9 steps (nextest 823 of 823, up from 816; kinds-coverage all 449 variants of 39 `Kind` enums), and the doc build passed with no warnings. 28 hand mutants against the new and changed tests (`daemon-core` 11, model 14, store 3), each recorded with the tests that must stop it, were all stopped by those tests, each file restored and checked by SHA-256.
+- **Review of the decisions (2026-10-09).** Four reviews (architecture, implementation, tests, security) of the decisions above found no P0 or P1 defect; their P2 and P3 findings were fixed as follows:
+  - F4 after an edit of the bill day: a suspension for quota counted only while its `cycle_start` equalled the current cycle's start, so an edit that moved that start back left a suspension made inside the current cycle neither counted nor lapsed, and the quota switched itself off again. Reproduced first: `a_quota_suspension_counts_after_the_bill_day_moves_the_cycle_start_back` failed with `Ok(None)`. That first fix compared the recorded start with the current cycle's (`>=`); the independent verification found that it still failed for a forward move, the direction of SMARTY's own late renewal (§7, `BillDay`), and counted a start recorded after now until that date. Reproduced first: `a_quota_suspension_counts_after_the_bill_day_moves_the_cycle_start_forward` (bill day 5 → 8) and `a_forward_edit_of_the_bill_day_keeps_the_share_enforced` (28 → 1) failed with `Ok(None)`, and the evaluation then proposed nothing (`Ok([])`) for a user over the N = 6 share. One private predicate, `quota_suspension_holds`, now decides between held and lapsed on when the suspension was made (`UserStatus::Suspended.since` at or after the current cycle's start), not on the start it records, which stays the record of the cycle exceeded; the evaluation's time and its cycle are computed together (`Moment`), so they cannot disagree. A suspension for quota made after `now` is the new `PolicyError::QuotaSuspensionAfterNow{user, since, now}`, by the rule that already makes usage past `now` `UsageAfterNow`, rather than held until its own cycle ends (`a_quota_suspension_after_now_is_an_error`). The M5 resume is to list lapsed users with the same predicate, and the apply records each suspension at its evaluation's `now` (§7, §13.6, §15.3, §20 F4, M5). The property test varies the instant on both sides of the cycle's start and the recorded start independently of it.
+  - `automatic_quota` refusing a time outside the calendar is now tested itself, with and without a policy (`the_automatic_quota_refuses_a_cycle_outside_the_calendar`), not only through `evaluate`.
+  - This document: a rotation keeps the ntfy topic only if the replacement or the standby gets its channels before the last channel node is retired, which §13.4's procedures now do, with M5's `node retire` refusing to drop the topic unless confirmed (§13.4, §15.8, §20 F6); replacing the topic takes two configuration changes, M5's `alert rotate-topic`, after a node that may be compromised is retired or a phone is lost (§1.2, §7, §12, §15.3, §15.9); the resume at the cycle boundary stays within the cap, one change per user, earliest suspension first, and never blocks the run (§13.6, M5 acceptance); other departures still lower N and can switch the quota off, and the 80 % bound is stated as it holds (§15.3, §20 F4); the cap wording (§15.3, `policy.rs`) and the state-version wording above.
+  - A nextest LEAK: one full CI run of these fixes reported `mooring-store`'s `init_refuses_an_unrecorded_plan` as leaky (passed, its output pipe still open 100 ms after it exited). The test starts no process or thread and writes only to its temporary directory. Alone under nextest it passed 200 runs without a leak; 100 runs of the whole `mooring-store` suite (6,700 test processes) had 9 leaks spread over 8 different tests, in-memory ones included, and 60 runs of the same suite with `--test-threads 1` (4,020) had none. A scratch probe outside the repository, 300 tests that each list their own descriptors, found 153 of 18,000 test processes holding pipe descriptors they never opened, and each of its 51 runs with a leak had such a process. The cause is in the runner on macOS, not in this repository: the Rust standard library there creates a pipe and only then marks it close-on-exec (macOS has no `pipe2`), and `posix_spawn` passes every descriptor not yet so marked, so a test the runner starts from another thread in that window keeps another test's output pipe open after that test exits. No retry, timeout or leak setting was added; the final CI run had no leak.
+  - Golden and contract changes: none; the V1 goldens keep `9d264466…` and `180d2efa…`, the V2 goldens `fed6e86b…` and `8ff37ce9…`.
+  - Gates on the final tree: `cargo xtask ci` passed all 9 steps (nextest 828 of 828, up from 823, with no leak; kinds-coverage all 450 variants of 39 `Kind` enums, `PolicyErrorKind::QuotaSuspensionAfterNow` the new one), and the doc build passed with no warnings. 7 hand mutants against the first fixes (`daemon-core` 7: the recorded-start predicate 4, the calendar error 2, the test helper 1) and 13 against the instant predicate (`daemon-core` 13: what decides held or lapsed 4, the error after `now` and its scope 6, the bill day of the cycle 1, the cycle a proposed suspension records 1, the error kind 1) were all stopped by the tests recorded for them, each file restored and checked by SHA-256.
+
+### M2 — Field spike (in two parts since revision 5; user present)
+
+Revision 5 splits M2 in two:
+- **M2a** needs only the M7, and starts on 2026-10-09.
+- **M2b** needs an hourly London VPS (D-2).
+
+`fieldkit` does not exist yet, and every `fieldkit` measurement needs a VPS sink, so M2a uses tools built into macOS and the M7's own web UI.
 
 **Deliverables:**
-- `docs/measurements/M2.md` with the raw logs.
-- `fieldkit`, a dev-only darwin and linux-musl tool.
+- `docs/measurements/M2.md` with the raw logs. Raw M7 captures stay outside the repository (§15.6).
+- `fieldkit`, a dev-only darwin and linux-musl tool, for M2b. Its VPS-side sink is built on the research computer or in CI, because this Mac has only the `aarch64-apple-darwin` target and no musl linker (critique, section D). Its darwin loopback self-tests run here.
 
 **Recorded decisions:**
-- keepalive;
-- `EgressCheck{carrier_prefixes (RIPE inetnum evidence), pairing}`;
-- `InterfaceSelector` variant;
-- `FlowCap`;
-- the go/no-go for UDP over EE.
+- **M2a:**
+  - the M7's attachment: the Ethernet adapter's BSD name, and the M7 gateway's link-layer address, which is the router identity of §15.6;
+  - the router endpoint (exactly one path, or "no JSON interface") and whether a login is needed;
+  - the placement and the antenna, on the SMARTY SIM;
+  - the thermal and power-cut results;
+  - *(revision 6)* the SMARTY SIM's activation date, which is the bill day (§7); the APN the M7 uses; the bands and radio access types it attaches with; the carrier name it displays; and what SMARTY's usage view shows for an Unlimited plan.
+- **M2b:**
+  - keepalive;
+  - `EgressCheck{carrier_prefixes (RIPE inetnum evidence), pairing}`, on the SMARTY line;
+  - `InterfaceSelector` variant;
+  - `FlowCap`;
+  - `UplinkBaseline` (p10, p50);
+  - the go/no-go for UDP over the SMARTY line.
 
-**Checklist:**
+**Checklist (both parts):**
 - M7 Wi-Fi offload and Ethernet offload off; M7 Wi-Fi radio off (D-4).
+- External antenna A/B: the operator owns NETGEAR's MIMO antenna accessory for the M7's two TS-9 ports. The manual warns that with more than 2 bars an external antenna can reduce reception, and that TS-9 connectors are delicate (202-12721-02, "Improve reception with an external antenna"). Run `fieldkit uplink` and record RSRP/RSRQ/SINR, band and network type for the internal antennas and for each antenna placement (window side, aimed at the nearest Three or Vodafone site). Keep whichever measures better; the choice is recorded with the raw logs.
+  - Revision 5: M2a runs a first pass with `networkQuality` (step 5 below), and M2b repeats it with `fieldkit uplink`.
+  - Revision 6: the line is SMARTY on Three's network, with Vodafone masts shared (VodafoneThree, §19.1), so the nearest site is chosen by the band and RSRP the M7 reports. The A/B runs on the SMARTY SIM only, because the operator has no other SIM for the M7 (M2a, The SIM).
 
-**Verification commands** (the Mac is attached to the M7 over USB-C or 2.5GbE; `<bsd>` is that interface):
+#### M2a — The M7 alone (from 2026-10-09; no VPS)
+
+**Preconditions:**
+- **The SIM.** The SMARTY SIM (F1) was ordered on 2026-10-08 and is due about 12–13 October. The operator has no other SIM for the M7: EE declined its order on 2026-10-08, so there never was an EE SIM, and the operator's phone SIM (Lebara, on Vodafone's network, moving to an O2 eSIM) does not go in the M7. Until the SMARTY SIM arrives and is activated, M2a does the SIM-less steps only:
+  - Plugged-In mode, the admin password, the Wi-Fi radio, both offloads and UPnP off, and the Ethernet port on (step 1);
+  - the Mac's Ethernet interface discovery (step 2);
+  - the router endpoint discovery and capture (step 3);
+  - the power-cut drill (step 8), whose time until data flows again is timed once the SMARTY SIM is in.
+
+  Every radio, placement, antenna, band, thermal-under-load and byte step (steps 4–7 and 9) waits for the SMARTY SIM, as do the SIM PIN record of step 1 and step 10's check that all traffic flows with Wi-Fi off. Carrier prefixes and the meter's calibration are measured on the SMARTY line in M2b.
+- **The SMARTY SIM** (revision 6; facts in §2 and §19.1):
+  - **Activate it on a day of the month up to the 28th.** The activation day becomes the Renewal Date, and a Renewal Date on the 29th–31st falls earlier in a shorter month (TC 5.21). Record the activation date as the bill day (`BillDay`, §7), and set the M7's data-usage reset date to the same day (manual p. 65).
+  - **Keep the payment card funded.** A failed renewal taken later moves the cycle start ([SMARTY-PG] p3); the operator then records the new bill day.
+  - **APN:** `mob.asm.net`, IPv4, with no username or password (help 1155220). Record whether the M7 selects it by itself; set it by hand in the M7's web UI only if it does not (Mooring never writes the M7's settings, §18).
+  - **Bands:** 5G n78 (3.5 GHz); 4G B1, B3, B20, B28 and B32 (2100, 1800, 800, 700 and 1400 MHz) (help 4670061). Steps 4 and 6 record which band and radio access type the M7 attaches with, and whether 5G is ever standalone.
+  - **VodafoneThree sharing:** since August 2025 SMARTY uses combined Three and Vodafone coverage on the same SIM (help 10235435), so the best spot may attach to a Vodafone mast. Record the band, the radio access type and the signal at each spot, never the cell id (§15.5).
+  - **Usage reconciliation:** SMARTY's dashboard and app usage history counts in binary units (1 GB = 1024 MB), per full MB, including re-sent packets and flow-control overhead ([SMARTY-PG] p23). Step 9 compares it, converted, with the Mac's and the M7's counters, and records whether an Unlimited plan shows the GB used and how fresh the figure is.
+  - Record the carrier name the M7 displays for the SIM; the status fixtures assume `SMARTY` *(inference)*.
+- **Hardware.** A USB-C 2.5GbE adapter (F8).
+- **Wi-Fi off on the Mac** for steps 4–9, so that background traffic cannot hop between interfaces (§10.2, critique C-3).
+
+**Steps:**
+1. **Set up the M7.** Path: M7 RJ45 → USB-C 2.5GbE adapter → Mac.
+   - Plugged-In mode with the official adapter: battery out, cover off (§2).
+   - Change the admin password.
+   - Turn off the Wi-Fi radio, both offloads, and UPnP (manual p. 70).
+   - Enable the Ethernet port. That restarts the M7 (pp. 47–48).
+   - Record the firmware version, and whether a SIM PIN is set (F17).
+2. **The Mac's side.**
+   - Record the interface and the service order.
+   - Record the gateway's link-layer address.
+   - Record the USB class, for the record only.
+   - Record `pmset -g` and `pmset -g cap` (§10.3).
+3. **M7 interface discovery** (§15.6).
+   - Send anonymous `GET`s of `/api/model.json` and `/model.json`, bound to the Ethernet interface. Record only the status code, the content type and the top-level keys, plus whether an anonymous response contains `webd.adminpassword` (critique C-7).
+   - Then the operator logs in through the web UI himself, typing the password, and saves one capture.
+   - The raw responses and the capture stay outside the repository. Fixtures are made from them later, by the allowlist redactor.
+   - Choose exactly one endpoint, or record "no JSON interface".
+4. **Placement survey** at 3–5 spots: desk, window, a higher floor.
+   - At each spot, read the M7's Diagnostics page: band, LTE or NR, RSRP, SINR, temperature (manual p. 56).
+   - Then run `networkQuality` bound to the interface. Each run costs a few hundred MB *(inference)*.
+5. **Antenna A/B** at the best spot: the internal antennas against the owned NETGEAR antenna (checklist above), with the same `networkQuality` run.
+6. **Band setting.** Compare the M7's band region "4G" against "4G + 5G": which radio carries the uplink, and whether the SIM ever attaches in 5G SA. On the SMARTY SIM, record which of n78 and B1/B3/B20/B28/B32 the M7 uses.
+7. **Thermal.**
+   - Run one hour of upload-only saturation in Plugged-In mode, logging the M7's temperature and the throughput every 5 minutes.
+   - Let the M7 cool to ambient. Then repeat with the battery in, to compare (critique C-4).
+8. **Power-cut drill** (§10.3, critique C-5).
+   - Remove mains from both the M7 and the Mac for at least 60 s.
+   - For the M7, record whether it powers on unattended, the time until data flows again, and whether the Ethernet, offload and Wi-Fi settings persist.
+   - For the Mac, record what it does on battery and when AC returns. It has no `acwake`.
+   - Then reboot the Mac and record the FileVault behaviour.
+   - The daemon's own behaviour can be tested only after M5 and M7.
+9. **Byte baseline.** Run `netstat -I <bsd> -b` before and after a fixed transfer, and compare with the M7's own data counter and, on the SMARTY SIM, with SMARTY's usage history (binary units, re-sent packets included).
+10. **Mac settings.** Lid open; Charge Limit 80 %. Confirm that all traffic flows with Wi-Fi off.
+
+**Commands.** `<bsd>` is the USB-C Ethernet adapter's interface. `<m7>` is the M7's address: the manual's web UI address is `http://192.168.1.1` (p. 55).
+```
+networksetup -listallhardwareports ; ifconfig <bsd> ; networksetup -listnetworkserviceorder
+route -n get default ; arp -n <m7>                    # the M7 gateway's link-layer address: the router identity (§15.6)
+ioreg -p IOUSB -l -w0 | grep -iE "bInterfaceClass|Netgear"   # the M7's USB class, for the record only (224 = RNDIS)
+pmset -g ; pmset -g cap                               # recorded in M2.md (§10.3)
+curl -sS --interface <bsd> -o <outside the repo>/api.json -w '%{http_code} %{content_type}\n' http://<m7>/api/model.json
+curl -sS --interface <bsd> -o <outside the repo>/root.json -w '%{http_code} %{content_type}\n' http://<m7>/model.json
+networkQuality -I <bsd> -s -M 30 -c <spot>.json       # per spot and per antenna; -c is given a file name, so it cannot take the next flag
+networkQuality -I <bsd> -d -M 300 -c up-<n>.json      # upload only, in a loop for 1 h: the thermal run
+netstat -I <bsd> -b                                   # before and after a fixed transfer; compare with the M7's counter
+```
+
+**Reading the results** *(inference; thresholds from the capacity review)*. M2a's `networkQuality` runs are a first reading; the 24 h `fieldkit uplink` in M2b decides.
+- Best-spot p50 ≥ 15 Mbps and p10 ≥ 5 Mbps on the SMARTY SIM: the capacity review's estimate is that v1 could carry about 10 users; the pilot is capped at 5 (F3).
+- p50 of 8–15 Mbps: fix the placement or the antenna first.
+- p50 < 8 Mbps or p10 < 2 Mbps: the placement and antenna first; changing the carrier would be a new decision, because F12 is superseded (§20.2).
+- Loaded RTT rising by more than 200 ms (M2b): bring M10's cake forward before adding users.
+- A thermal step-down within the hour: Plugged-In mode and ventilation are mandatory, and the location changes.
+
+#### M2b — With an hourly London VPS (D-2)
+
+From M2b on, the Mac joins no Durham network while any exit or test tunnel runs (P0-2, §10.2).
+
+Measurements added in revision 5, beside the commands below:
+- the loaded RTT to the VPS while the uplink is saturated;
+- real-path goodput through WireGuard with 1, 4 and 16 flows;
+- the China-evening windows: 13:00–17:00 BST until 25 Oct 2026, then 12:00–16:00 GMT;
+- the SIM-factor reconciliation;
+- a three-client fairness check (Jain index).
+
+`fieldkit env` records the M7 gateway's link-layer address, which the router adapter binds its login to (§15.6).
+
+**Verification commands** (the Mac is attached to the M7's 2.5GbE port through the USB-C adapter; `<bsd>` is that interface):
 ```
 fieldkit env --json                                   # NET_RT_IFLIST2 lladdr/gateway lladdr, stability across replug and reboot
 fieldkit udp-nat-timeout --bind <bsd> --echo <vps4>:27950 --min 10 --max 300
@@ -1956,13 +2804,13 @@ fieldkit port-ceiling --bind <bsd> --target <vps4>:27960 --max 8192
 ping -b <bsd> -D -s 1312 -c 20 <vps4>                 # outer path MTU ≥ 1340 (1312 + 28)
 fieldkit uplink --bind <bsd> --sink <vps4>:27970 --duration 24h --interval 15m          # p10/p50/p90
 fieldkit rtt --bind <bsd> --targets <candidate provider IPs>
-# WireGuard over EE: VPS kernel wg (ListenPort 27820) + mooring-exit from M0 with a test config (no egress rules):
+# WireGuard over the SMARTY line: VPS kernel wg (ListenPort 27820) + mooring-exit from M0 with a test config (no egress rules):
 wg show wgexit latest-handshakes                      # on the VPS: handshake < 180 s, stable for 1 h across idle periods
 # CFM coexistence (user enables CFM TUN; prompts appear):
-nc -b <bsd> <vps4> 27900 ; sudo tcpdump -ni <cfm utun> host <vps4>   # prints the EE IP; zero packets on utun
+nc -b <bsd> <vps4> 27900 ; sudo tcpdump -ni <cfm utun> host <vps4>   # prints the carrier IP; zero packets on utun
 pmset -g log | grep -E "Sleep|Wake|DarkWake"          # clamshell on AC, with a NetworkClientActive test assertion held
 ```
-**Stop rule:** if UDP over EE fails, stop. A redesign is the user's decision.
+**Stop rule:** if UDP over the SMARTY line fails, stop. A redesign is the user's decision.
 
 ### M3 — Netns e2e (this Mac via Lima, and hosted CI)
 
@@ -1992,7 +2840,22 @@ Order: REALITY and the tunnel first; then `accept_local` and the reflector; then
   - single-owner gate, persisted holds, halt and `ExecCondition`;
   - the watch loop, reflector, accounting and `TargetCheck`, including the handshake sampler for p95 latency and first-flight size (`TargetTool::HandshakeSampler`, §11.7);
   - host-profile convergence;
-  - stderr scrubbing.
+  - stderr scrubbing;
+  - *(revision 5)* the console's node side (§11.3, §11.5, §15.7):
+    - five-minute, hour and day bins, kept as F7 decides;
+    - `last_active`, host health, and the uplink transfer counters with reset detection;
+    - `MacSilent`, suppressed by an Operator hold;
+    - the event journal behind `Events{since}`;
+    - the accounting canary's evidence;
+  - *(revision 6)* the decided F5 and F6 node side (§5.2, §11.3, §15.8, §15.9):
+    - host profile 2's convergence, including the `mooring-view` account;
+    - the viewer handler, which runs as `mooring-view`, serves only the viewer's reads, and writes the stop-request file under `gate.lock` that the watch turns into an Operator hold, then answers `GateClosed` only after reading the hold back with the gate closed, and `GateStopUnconfirmed` after `VIEWER_STOP_WAIT_SECS` otherwise (§11.3);
+    - staging `viewer_authorized_keys` 0644 `root:root` in `/etc/mooring` and `gen-<N>` directories that are 0755 `root:root`, so sshd can read it as `mooring-view` (§8.6);
+    - the `sshd_mismatches` comparison, which for `AllowUsers` compares the exact multiset of `allowusers` lines (§8.6);
+    - storing and serving the Mac report (`PutMacReport`, `MacReport`);
+    - `PutNotices` and the node's outbox;
+    - `mooring-alert.service` and its 09:00 Europe/London timer, with the alert secrets delivered as a credentials file;
+    - the Healthchecks pings that `dead_man_pings` selects.
 - QEMU/KVM CI lane with a NoCloud seed.
 - Lima lab VM profile.
 - The cross-version agent test with the previous agent fixture.
@@ -2007,6 +2870,18 @@ cargo xtask lane l1 -p mooring-agent-proto  # frozen-core wire goldens
 - An unchanged re-apply restarts nothing.
 - Xray runs with `CAP_NET_BIND_SERVICE` only.
 - Shutdown survives a reboot.
+- *(Revision 5, in the L5 VM lane.)*
+  - Stopping the peer's handshakes raises `MacSilent` after 600 s.
+  - Filling a tmpfs raises `DiskLow`.
+  - Restarting Xray mid-stream keeps the deltas monotonic.
+  - A range the agent does not fully hold is refused with `SeriesNotRecorded`.
+- *(Revision 6, in the L5 VM lane.)*
+  - A node converges to host profile 2 (version 1 was never installed, so only `HostProfile::CURRENT` exists), and `sshd -T -C user=mooring-view,…` shows the viewer's keys file and forced command, while `-C user=root,…` does not.
+  - A real SSH login as `mooring-view` with a viewer key succeeds on the staged generation (the keys file and its directories readable by that account under StrictModes, §8.6), and the same key is refused for `root`.
+  - A viewer key reads `Status` and `MacReport` and closes the gate with the Operator hold; every other request, and `GateSet` with any other reason, is refused, and the gate stays closed until the ops role clears the hold.
+  - With the watch stopped, a viewer's `GateSet{Operator}` is answered `GateStopUnconfirmed` after `VIEWER_STOP_WAIT_SECS`, never `GateClosed`.
+  - A drop-in that adds `AllowUsers debian` after Mooring's is reported by `Hello` as `AllowUsers` drift.
+  - The alert unit sends a test notice to ntfy and pings both Healthchecks checks; stopping the watch stops the node check's pings, and stopping the peer's handshakes stops the `MacAlive` pings.
 
 ### M5 — Mac daemon, CLI, prober and lab lanes (this Mac, today)
 
@@ -2019,6 +2894,25 @@ cargo xtask lane l1 -p mooring-agent-proto  # frozen-core wire goldens
 - The data-protection Keychain from the bundled helper, as the Keychain `SecretStore` implementation (moved from M1).
 - A minimal signed lab bundle (`xtask release --lab`, signed by the user) for the Keychain and sandbox checks; M7 completes the release lane.
 - Spikes: the sandbox and the Secure Enclave key, with decisions recorded.
+- *(Revision 5)* The console's Mac side (§15):
+  - `MacStatusV1`, the Mac usage store, and incremental `UsageSeries` and `Events` pulls;
+  - the event and action journals, and availability;
+  - the alert machine, rendering its notices and the daily digest for the nodes to send (§15.8), beside the local notifications;
+  - the read-only router adapter (after M2a) and the capacity monitor;
+  - the SIM forecast, and reconciliation inputs;
+  - the `ForeignNetworkAttached` preflight;
+  - `PollNow`;
+  - `apply --pending` (a launchd calendar job, §13.6) and `apply --now`;
+  - the CLI commands of §15.3.
+- *(Revision 6)* The decided pilot (§7, §15):
+  - `exit init` records the pilot values: the SMARTY plan, `PILOT_SIM_WARN_BYTES` and a hard stop at `PILOT_SIM_HARD_STOP_BYTES`, `CapacityPolicy::PILOT`, `AutoQuotaPolicy::PILOT` and `AlertSettings::pilot()`;
+  - `sim set-plan | set-stop | set-bill-day` (with a confirmation for a stop above `PILOT_SIM_HARD_STOP_BYTES`), `quota set-factor`, `viewer new | list | remove` (with a comment-aware import of the phone's key) and `alert setup | test | rotate-topic` (§12);
+  - `node retire` refusing, unless the operator confirms it, to retire the last channel node while another active node has none (§13.4);
+  - the apply job's suspensions, each recorded at its evaluation's `now`, and its resume of lapsed suspensions for quota, listed with `daemon-core`'s `quota_suspension_holds` (made public for it) and bounded by the cap (§13.6);
+  - the daemon refuses to serve while the plan is unrecorded (§10.2);
+  - the `PutMacReport` push with each poll (§10.5).
+
+  Only commands that presume F18 (`backup …`) wait for that decision.
 
 **Verification:**
 ```
@@ -2028,6 +2922,19 @@ cargo xtask lane l6-bypass                   # user present: CFM TUN on/system p
 mooringctl doctor --keychain --json          # entitled helper self-check: data-protection items readable after reboot + login
 ```
 **Acceptance:** a data-protection Keychain read works after reboot and login.
+- *(Revision 5.)*
+  - The foreign-network check refuses every case of §10.2 in its unit and property tests on this Mac, rather than through L6's `bridge100`, which is the lab egress (critique, section D).
+  - The journal survives `kill -9`.
+  - A quota crossing on a user with a `Suspend` quota suspends them at the next apply window, or at once with `--now`.
+  - The router adapter passes a loopback stub server for 200, 401, a slow response and a truncated body.
+  - On the device, a 60 s router poll for 24 h causes no admin-session lockout, and turning offload on is reported before `OutsideCarrierPrefixes`.
+  - `status --follow` fixtures are regenerated, and the Swift decoding of them passes.
+- *(Revision 6.)*
+  - `sim set-stop` refuses a hard stop above `PILOT_SIM_HARD_STOP_BYTES` unless the operator confirms that stop explicitly, and a test pins it: 3e12 (a typo for 3e11) is refused without the confirmation, 3e11 is accepted (§7: the model alone admits any explicit stop).
+  - With the plan unrecorded (a lifted state), the daemon does not serve, and says why; `sim set-plan` lets it serve.
+  - Under the pilot cap, with five users active and one suspended for quota in the cycle before, the first apply of the new cycle resumes nobody, reports the user it held back, and still carries out that run's suspensions and node applies; with a place free it resumes the earliest suspension first, one change per user (§13.6).
+  - After `sim set-bill-day` moves the cycle's start forward or back, the next apply keeps a user suspended for quota since the new start suspended and counted, and resumes one suspended before it; a suspension for quota recorded after the run's `now` is reported as `QuotaSuspensionAfterNow`, and while it stands `evaluate` fails as a whole, so none of its proposals (expiry suspensions and suspensions for a user's own quota included) and no resume that depends on that record is carried out, while node applies still run (§13.6).
+  - `alert rotate-topic` ends with a new topic, the same check UUIDs and every channel node pending `node apply`; stopped between its two changes, it leaves no channel node and no topic, never a half-replaced one (§12).
 
 ### M6 — Real CFM in the lab (this Mac, user-driven)
 
@@ -2049,6 +2956,7 @@ cargo xtask ci                  # shape gate now passes against the recorded imp
 - `mooring-power` with NetworkClientActive and PreventUserIdleSystemSleep.
 - `xtask release`, with signing performed by the user (D-6).
 - `xtask release-verify`: no `lab` feature or marker; engine provenance; unsigned byte identity; entitlements.
+- *(Revision 5)* The console screens of §15.3, rendered from `contract/status-fixtures/`. Every action calls the CLI, and Swift never touches a secret: the router password, if one is needed, is set with `mooringctl router set-password` in Terminal.
 
 **Verification:**
 ```
@@ -2066,7 +2974,7 @@ pmset -g log | grep -E "Sleep|Wake"           # behavioural: on AC, display off,
 - Wake → `Serving` within 10 s.
 - `.requiresApproval` produces `AgentNotEnabled`.
 
-### M8 — First London VPS and pilot (needs the M7, EE, a VPS and a trusted user in China; D-1)
+### M8 — First London VPS and pilot (needs the M7, the SMARTY line, a VPS and a trusted user in China; D-1 with F20)
 
 **Deliverables:**
 - A provisioned primary node: `node new`, `adopt`, `target`, `apply`.
@@ -2075,11 +2983,18 @@ pmset -g log | grep -E "Sleep|Wake"           # behavioural: on AC, display off,
 
 **Verification and acceptance:**
 - a 72 h soak with at least 99% `Verified` samples while awake on AC;
-- the SIM meter within 3% of EE's usage page (with M7 Wi-Fi off);
+- the SIM meter within 3% of SMARTY's usage view, converted from its binary units (with M7 Wi-Fi off);
 - per-user totals within 2% of WireGuard-derived totals;
 - the offload drill: `OutsideCarrierPrefixes` and the engine stopped within 30 s;
 - a trusted user in China succeeds on both protocols at peak on their carrier;
-- the provider choice is recorded.
+- the provider choice is recorded;
+- *(revision 5)*:
+  - the 72 h figure is computed from the availability record (§15.7);
+  - the SIM meter is within 3 % of the M7's own counter, read by the router adapter or by hand if M2a found no JSON interface;
+  - the exit Mac joins no Durham network (P0-2);
+  - pulling the M7's power is reported by the alerting within 15 minutes, and so is stopping the VPS, through the F6 channels (an ntfy notice, or Healthchecks' own e-mail when the node itself is gone);
+  - *(revision 6)* the viewer works from the operator's phone off campus, on mobile data (F5, F15), and its emergency stop closes the gate until the Mac clears the hold;
+  - *(revision 6)* the daily digest arrives at 09:00 UK time with Level-0 text only.
 
 Commands:
 ```
@@ -2093,6 +3008,7 @@ mooringctl exit status --follow --json
 **Deliverables:**
 - A standby node on a second ASN.
 - Runbooks: `rotate`, `revoke`, `retire`, `incident`, `console-recovery`, `mac-loss`, `delivery`.
+- *(Revision 5)* The runbooks listed in §6. `exit-host`, `power-cut` and `sim-plan` are needed before M8, and are drafted from the M2a results.
 
 **Verification and acceptance:**
 - A rotation drill at 20 minutes or less hands-on.

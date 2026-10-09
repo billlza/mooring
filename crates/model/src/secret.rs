@@ -281,9 +281,21 @@ impl SecretMaterial {
     }
 }
 
-/// Names one keychain item (design §7).
+/// Names one keychain item (design §7). Every reference but one belongs to
+/// a node ([`SecretRef::node`]); the deployment's ntfy topic belongs to no
+/// node.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SecretRef {
+    /// The deployment's one ntfy topic (design §15.8, decision F6): the
+    /// operator's phone subscribes to it, and every channel node sends its
+    /// notices to it, so it is referenced while at least one node has its
+    /// alert channels set up, and is replaced only through a change that
+    /// leaves none (design §12). `Password` material, 32 random bytes
+    /// whose 43 base64url characters are the topic name, above F6's 128
+    /// bits. That those characters fit ntfy's topic rule
+    /// (`[-_A-Za-z0-9]{1,64}`) is an inference from ntfy's server source,
+    /// checked in M4.
+    AlertTopic,
     /// The node's REALITY private key.
     NodeRealityPrivate(NodeId),
     /// The VPS side of the node's WireGuard tunnel.
@@ -296,6 +308,14 @@ pub enum SecretRef {
     NodeHy2Obfs(NodeId, ListenerIdx),
     /// The one-time SSH bootstrap key, deleted at adoption.
     NodeSshBootstrapPrivate(NodeId),
+    /// The UUID of the node's own Healthchecks check, the one its ping URL
+    /// ends in (design §15.8, decision F6). Healthchecks issues version-4
+    /// UUIDs (an inference from its source, checked in M4); any other form
+    /// is refused as `InvalidSecret`, never accepted some other way.
+    NodeDeadManCheck(NodeId),
+    /// The UUID of the node's Healthchecks check that is pinged while the
+    /// Mac's handshake is fresh (`MacAlive`, design §15.8, decision F6).
+    NodeMacAliveCheck(NodeId),
     /// A user's VLESS UUID on one node.
     UserVlessUuid(UserId, NodeId),
     /// A user's Hysteria2 password on one node.
@@ -318,49 +338,62 @@ impl SecretRef {
             Self::NodeRealityPrivate(_) => SecretKind::RealityPrivateKey,
             Self::NodeWgVpsPrivate(_) | Self::NodeWgMacPrivate(_) => SecretKind::WgPrivateKey,
             Self::NodeHy2Key(_) => SecretKind::Hy2PrivateKey,
-            Self::NodeHy2Obfs(..) | Self::UserHy2Password(..) | Self::ProbeHy2Password(_) => {
-                SecretKind::Password
-            }
+            Self::AlertTopic
+            | Self::NodeHy2Obfs(..)
+            | Self::UserHy2Password(..)
+            | Self::ProbeHy2Password(_) => SecretKind::Password,
             Self::NodeSshBootstrapPrivate(_) => SecretKind::Ed25519Seed,
-            Self::UserVlessUuid(..)
+            Self::NodeDeadManCheck(_)
+            | Self::NodeMacAliveCheck(_)
+            | Self::UserVlessUuid(..)
             | Self::UserLoopUuid(..)
             | Self::ProbeVlessUuid(_)
             | Self::ProbeLoopUuid(_) => SecretKind::Uuid,
         }
     }
 
-    /// The node this secret belongs to.
+    /// The node this secret belongs to, or `None` for the one that
+    /// belongs to no node: the deployment's ntfy topic
+    /// ([`SecretRef::AlertTopic`]).
     #[must_use]
-    pub const fn node(&self) -> &NodeId {
+    pub const fn node(&self) -> Option<&NodeId> {
         match self {
+            Self::AlertTopic => None,
             Self::NodeRealityPrivate(node)
             | Self::NodeWgVpsPrivate(node)
             | Self::NodeWgMacPrivate(node)
             | Self::NodeHy2Key(node)
             | Self::NodeHy2Obfs(node, _)
             | Self::NodeSshBootstrapPrivate(node)
+            | Self::NodeDeadManCheck(node)
+            | Self::NodeMacAliveCheck(node)
             | Self::UserVlessUuid(_, node)
             | Self::UserHy2Password(_, node)
             | Self::UserLoopUuid(_, node)
             | Self::ProbeVlessUuid(node)
             | Self::ProbeHy2Password(node)
-            | Self::ProbeLoopUuid(node) => node,
+            | Self::ProbeLoopUuid(node) => Some(node),
         }
     }
 }
 
 /// The stable text form, used as the keychain account name:
-/// `node/<node>/<item>`, `node/<node>/hy2-obfs/<listener>`,
+/// `alert/topic` for the deployment's ntfy topic, `node/<node>/<item>`
+/// (a channel node's checks included: `node/<node>/dead-man-check`,
+/// `node/<node>/mac-alive-check`), `node/<node>/hy2-obfs/<listener>`,
 /// `user/<user>/<node>/<item>` or `probe/<node>/<item>`.
 impl fmt::Display for SecretRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AlertTopic => f.write_str("alert/topic"),
             Self::NodeRealityPrivate(node) => write!(f, "node/{node}/reality-private"),
             Self::NodeWgVpsPrivate(node) => write!(f, "node/{node}/wg-vps-private"),
             Self::NodeWgMacPrivate(node) => write!(f, "node/{node}/wg-mac-private"),
             Self::NodeHy2Key(node) => write!(f, "node/{node}/hy2-key"),
             Self::NodeHy2Obfs(node, listener) => write!(f, "node/{node}/hy2-obfs/{listener}"),
             Self::NodeSshBootstrapPrivate(node) => write!(f, "node/{node}/ssh-bootstrap-private"),
+            Self::NodeDeadManCheck(node) => write!(f, "node/{node}/dead-man-check"),
+            Self::NodeMacAliveCheck(node) => write!(f, "node/{node}/mac-alive-check"),
             Self::UserVlessUuid(user, node) => write!(f, "user/{user}/{node}/vless-uuid"),
             Self::UserHy2Password(user, node) => write!(f, "user/{user}/{node}/hy2-password"),
             Self::UserLoopUuid(user, node) => write!(f, "user/{user}/{node}/loop-uuid"),
@@ -379,6 +412,7 @@ impl FromStr for SecretRef {
         let node = |text: &str| NodeId::parse(text).map_err(|_| ModelError::InvalidSecretRef);
         let user = |text: &str| UserId::parse(text).map_err(|_| ModelError::InvalidSecretRef);
         match parts.as_slice() {
+            ["alert", "topic"] => Ok(Self::AlertTopic),
             ["node", n, "reality-private"] => Ok(Self::NodeRealityPrivate(node(n)?)),
             ["node", n, "wg-vps-private"] => Ok(Self::NodeWgVpsPrivate(node(n)?)),
             ["node", n, "wg-mac-private"] => Ok(Self::NodeWgMacPrivate(node(n)?)),
@@ -388,6 +422,8 @@ impl FromStr for SecretRef {
                 Ok(Self::NodeHy2Obfs(node(n)?, index))
             }
             ["node", n, "ssh-bootstrap-private"] => Ok(Self::NodeSshBootstrapPrivate(node(n)?)),
+            ["node", n, "dead-man-check"] => Ok(Self::NodeDeadManCheck(node(n)?)),
+            ["node", n, "mac-alive-check"] => Ok(Self::NodeMacAliveCheck(node(n)?)),
             ["user", u, n, "vless-uuid"] => Ok(Self::UserVlessUuid(user(u)?, node(n)?)),
             ["user", u, n, "hy2-password"] => Ok(Self::UserHy2Password(user(u)?, node(n)?)),
             ["user", u, n, "loop-uuid"] => Ok(Self::UserLoopUuid(user(u)?, node(n)?)),
@@ -419,6 +455,8 @@ pub struct SecretKindMismatch {
 /// compared, for material read back as an untyped [`SecretMaterial`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretEntry {
+    /// See [`SecretRef::AlertTopic`].
+    AlertTopic(Password),
     /// See [`SecretRef::NodeRealityPrivate`].
     NodeRealityPrivate(NodeId, RealityPrivateKey),
     /// See [`SecretRef::NodeWgVpsPrivate`].
@@ -431,6 +469,10 @@ pub enum SecretEntry {
     NodeHy2Obfs(NodeId, ListenerIdx, Password),
     /// See [`SecretRef::NodeSshBootstrapPrivate`].
     NodeSshBootstrapPrivate(NodeId, Ed25519Seed),
+    /// See [`SecretRef::NodeDeadManCheck`].
+    NodeDeadManCheck(NodeId, Secret<Uuid>),
+    /// See [`SecretRef::NodeMacAliveCheck`].
+    NodeMacAliveCheck(NodeId, Secret<Uuid>),
     /// See [`SecretRef::UserVlessUuid`].
     UserVlessUuid(UserId, NodeId, Secret<Uuid>),
     /// See [`SecretRef::UserHy2Password`].
@@ -457,6 +499,7 @@ impl SecretEntry {
         let expected = secret_ref.kind();
         let found = material.kind();
         Ok(match (secret_ref, material) {
+            (R::AlertTopic, M::Password(topic)) => Self::AlertTopic(topic),
             (R::NodeRealityPrivate(node), M::RealityPrivateKey(key)) => {
                 Self::NodeRealityPrivate(node, key)
             }
@@ -469,6 +512,8 @@ impl SecretEntry {
             (R::NodeSshBootstrapPrivate(node), M::Ed25519Seed(seed)) => {
                 Self::NodeSshBootstrapPrivate(node, seed)
             }
+            (R::NodeDeadManCheck(node), M::Uuid(uuid)) => Self::NodeDeadManCheck(node, uuid),
+            (R::NodeMacAliveCheck(node), M::Uuid(uuid)) => Self::NodeMacAliveCheck(node, uuid),
             (R::UserVlessUuid(user, node), M::Uuid(uuid)) => Self::UserVlessUuid(user, node, uuid),
             (R::UserHy2Password(user, node), M::Password(password)) => {
                 Self::UserHy2Password(user, node, password)
@@ -493,6 +538,7 @@ impl SecretEntry {
     #[must_use]
     pub fn secret_ref(&self) -> SecretRef {
         match self {
+            Self::AlertTopic(_) => SecretRef::AlertTopic,
             Self::NodeRealityPrivate(node, _) => SecretRef::NodeRealityPrivate(node.clone()),
             Self::NodeWgVpsPrivate(node, _) => SecretRef::NodeWgVpsPrivate(node.clone()),
             Self::NodeWgMacPrivate(node, _) => SecretRef::NodeWgMacPrivate(node.clone()),
@@ -501,6 +547,8 @@ impl SecretEntry {
             Self::NodeSshBootstrapPrivate(node, _) => {
                 SecretRef::NodeSshBootstrapPrivate(node.clone())
             }
+            Self::NodeDeadManCheck(node, _) => SecretRef::NodeDeadManCheck(node.clone()),
+            Self::NodeMacAliveCheck(node, _) => SecretRef::NodeMacAliveCheck(node.clone()),
             Self::UserVlessUuid(user, node, _) => {
                 SecretRef::UserVlessUuid(user.clone(), node.clone())
             }
@@ -526,11 +574,14 @@ impl SecretEntry {
                 SecretMaterial::WgPrivateKey(key)
             }
             Self::NodeHy2Key(_, key) => SecretMaterial::Hy2PrivateKey(key),
-            Self::NodeHy2Obfs(_, _, password)
+            Self::AlertTopic(password)
+            | Self::NodeHy2Obfs(_, _, password)
             | Self::UserHy2Password(_, _, password)
             | Self::ProbeHy2Password(_, password) => SecretMaterial::Password(password),
             Self::NodeSshBootstrapPrivate(_, seed) => SecretMaterial::Ed25519Seed(seed),
-            Self::UserVlessUuid(_, _, uuid)
+            Self::NodeDeadManCheck(_, uuid)
+            | Self::NodeMacAliveCheck(_, uuid)
+            | Self::UserVlessUuid(_, _, uuid)
             | Self::UserLoopUuid(_, _, uuid)
             | Self::ProbeVlessUuid(_, uuid)
             | Self::ProbeLoopUuid(_, uuid) => SecretMaterial::Uuid(uuid),
@@ -607,6 +658,20 @@ fn insert_new<K: Ord, V>(
     }
 }
 
+/// Fills `slot`, which holds the one secret of its reference, if it is
+/// empty (`Duplicate` otherwise, keeping the first value).
+fn insert_once<V>(
+    slot: &mut Option<V>,
+    value: V,
+    secret_ref: SecretRef,
+) -> Result<(), SecretSnapshotError> {
+    if slot.is_some() {
+        return Err(SecretSnapshotError::Duplicate { secret_ref });
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
 fn lookup<'a, K: Ord, V>(
     map: &'a BTreeMap<K, V>,
     key: &K,
@@ -624,12 +689,15 @@ fn lookup<'a, K: Ord, V>(
 /// its kind, so insertion can only fail with `Duplicate`.
 #[derive(Debug, Default)]
 pub struct SecretSnapshot {
+    alert_topic: Option<Password>,
     reality: BTreeMap<NodeId, RealityPrivateKey>,
     wg_vps: BTreeMap<NodeId, WgPrivateKey>,
     wg_mac: BTreeMap<NodeId, WgPrivateKey>,
     hy2_key: BTreeMap<NodeId, Hy2KeyPem>,
     hy2_obfs: BTreeMap<(NodeId, ListenerIdx), Password>,
     ssh_bootstrap: BTreeMap<NodeId, Ed25519Seed>,
+    dead_man_check: BTreeMap<NodeId, Secret<Uuid>>,
+    mac_alive_check: BTreeMap<NodeId, Secret<Uuid>>,
     user_vless: BTreeMap<(UserId, NodeId), Secret<Uuid>>,
     user_hy2: BTreeMap<(UserId, NodeId), Password>,
     user_loop: BTreeMap<(UserId, NodeId), Secret<Uuid>>,
@@ -650,6 +718,7 @@ impl SecretSnapshot {
         use SecretEntry as E;
         let reference = entry.secret_ref();
         match entry {
+            E::AlertTopic(topic) => insert_once(&mut self.alert_topic, topic, reference),
             E::NodeRealityPrivate(node, key) => insert_new(&mut self.reality, node, key, reference),
             E::NodeWgVpsPrivate(node, key) => insert_new(&mut self.wg_vps, node, key, reference),
             E::NodeWgMacPrivate(node, key) => insert_new(&mut self.wg_mac, node, key, reference),
@@ -659,6 +728,12 @@ impl SecretSnapshot {
             }
             E::NodeSshBootstrapPrivate(node, seed) => {
                 insert_new(&mut self.ssh_bootstrap, node, seed, reference)
+            }
+            E::NodeDeadManCheck(node, uuid) => {
+                insert_new(&mut self.dead_man_check, node, uuid, reference)
+            }
+            E::NodeMacAliveCheck(node, uuid) => {
+                insert_new(&mut self.mac_alive_check, node, uuid, reference)
             }
             E::UserVlessUuid(user, node, uuid) => {
                 insert_new(&mut self.user_vless, (user, node), uuid, reference)
@@ -726,6 +801,29 @@ impl SecretSnapshot {
         })
     }
 
+    /// The deployment's ntfy topic.
+    pub fn alert_topic(&self) -> Result<&Password, SecretSnapshotError> {
+        self.alert_topic
+            .as_ref()
+            .ok_or(SecretSnapshotError::Missing {
+                secret_ref: SecretRef::AlertTopic,
+            })
+    }
+
+    /// The UUID of the node's own Healthchecks check.
+    pub fn dead_man_check(&self, node: &NodeId) -> Result<&Secret<Uuid>, SecretSnapshotError> {
+        lookup(&self.dead_man_check, node, || {
+            SecretRef::NodeDeadManCheck(node.clone())
+        })
+    }
+
+    /// The UUID of the node's `MacAlive` Healthchecks check.
+    pub fn mac_alive_check(&self, node: &NodeId) -> Result<&Secret<Uuid>, SecretSnapshotError> {
+        lookup(&self.mac_alive_check, node, || {
+            SecretRef::NodeMacAliveCheck(node.clone())
+        })
+    }
+
     /// A user's VLESS UUID on a node.
     pub fn user_vless_uuid(
         &self,
@@ -784,6 +882,7 @@ impl SecretSnapshot {
     #[must_use]
     pub fn refs(&self) -> Vec<SecretRef> {
         let mut refs: Vec<SecretRef> = Vec::with_capacity(self.len());
+        refs.extend(self.alert_topic.iter().map(|_| SecretRef::AlertTopic));
         refs.extend(
             self.reality
                 .keys()
@@ -803,6 +902,18 @@ impl SecretSnapshot {
                 .keys()
                 .cloned()
                 .map(SecretRef::NodeSshBootstrapPrivate),
+        );
+        refs.extend(
+            self.dead_man_check
+                .keys()
+                .cloned()
+                .map(SecretRef::NodeDeadManCheck),
+        );
+        refs.extend(
+            self.mac_alive_check
+                .keys()
+                .cloned()
+                .map(SecretRef::NodeMacAliveCheck),
         );
         refs.extend(
             self.user_vless
@@ -844,12 +955,15 @@ impl SecretSnapshot {
     /// The number of secrets held.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.reality.len()
+        usize::from(self.alert_topic.is_some())
+            + self.reality.len()
             + self.wg_vps.len()
             + self.wg_mac.len()
             + self.hy2_key.len()
             + self.hy2_obfs.len()
             + self.ssh_bootstrap.len()
+            + self.dead_man_check.len()
+            + self.mac_alive_check.len()
             + self.user_vless.len()
             + self.user_hy2.len()
             + self.user_loop.len()
@@ -878,11 +992,14 @@ impl SecretSnapshot {
             .chain(self.wg_mac.values().map(WgPrivateKey::expose_text))
             .chain(self.hy2_obfs.values().map(Password::expose_text))
             .chain(self.ssh_bootstrap.values().map(Ed25519Seed::expose_text))
+            .chain(self.alert_topic.iter().map(Password::expose_text))
             .chain(self.user_hy2.values().map(Password::expose_text))
             .chain(self.probe_hy2.values().map(Password::expose_text))
             .chain(
-                self.user_vless
+                self.dead_man_check
                     .values()
+                    .chain(self.mac_alive_check.values())
+                    .chain(self.user_vless.values())
                     .chain(self.user_loop.values())
                     .chain(self.probe_vless.values())
                     .chain(self.probe_loop.values())
@@ -936,7 +1053,10 @@ mod tests {
             SecretRef::UserLoopUuid(u, n.clone()),
             SecretRef::ProbeVlessUuid(n.clone()),
             SecretRef::ProbeHy2Password(n.clone()),
-            SecretRef::ProbeLoopUuid(n),
+            SecretRef::ProbeLoopUuid(n.clone()),
+            SecretRef::AlertTopic,
+            SecretRef::NodeDeadManCheck(n.clone()),
+            SecretRef::NodeMacAliveCheck(n),
         ]
     }
 
@@ -985,6 +1105,25 @@ mod tests {
             SecretRef::NodeHy2Obfs(node("lon1"), ListenerIdx::FIRST).to_string(),
             "node/lon1/hy2-obfs/0"
         );
+        // The alert channels' account names and kinds (design §12): the
+        // deployment's one topic and each channel node's two checks.
+        for (reference, text, kind) in [
+            (SecretRef::AlertTopic, "alert/topic", SecretKind::Password),
+            (
+                SecretRef::NodeDeadManCheck(node("lon1")),
+                "node/lon1/dead-man-check",
+                SecretKind::Uuid,
+            ),
+            (
+                SecretRef::NodeMacAliveCheck(node("lon1")),
+                "node/lon1/mac-alive-check",
+                SecretKind::Uuid,
+            ),
+        ] {
+            assert_eq!(reference.to_string(), text);
+            assert_eq!(text.parse::<SecretRef>().unwrap(), reference, "{text}");
+            assert_eq!(reference.kind(), kind, "{text}");
+        }
         for bad in [
             "",
             "node/lon1",
@@ -995,6 +1134,18 @@ mod tests {
             "node/lon1/hy2-obfs/+1",
             "user/abc/lon1/vless-uuid",
             "probe/lon1/reality-private",
+            "probe/lon1/alert-topic",
+            "node/lon1/alert-topic",
+            "node/lon1/alert-topic/0",
+            "alert",
+            "alert/",
+            "alert/topic/",
+            "alert/topic/lon1",
+            "alert/lon1/topic",
+            "Alert/topic",
+            "alert/Topic",
+            "node/lon1/deadman-check",
+            "user/abcdefghij/lon1/mac-alive-check",
         ] {
             assert_eq!(
                 bad.parse::<SecretRef>(),
@@ -1029,10 +1180,28 @@ mod tests {
             .collect()
     }
 
+    /// The ntfy topic is the deployment's, not a node's: it is the one
+    /// reference without a node, and every other names the node it belongs
+    /// to in its text.
+    #[test]
+    fn only_the_alert_topic_belongs_to_no_node() {
+        for reference in every_ref() {
+            match reference.node() {
+                None => assert_eq!(reference, SecretRef::AlertTopic),
+                Some(node) => {
+                    assert_ne!(reference, SecretRef::AlertTopic);
+                    assert_eq!(node.as_str(), "lon1", "{reference}");
+                    assert!(reference.to_string().contains("/lon1/"), "{reference}");
+                }
+            }
+        }
+        assert!(!SecretRef::AlertTopic.to_string().contains("lon1"));
+    }
+
     #[test]
     fn insert_and_typed_lookup() {
         let snapshot = full_snapshot();
-        assert_eq!(snapshot.len(), 12);
+        assert_eq!(snapshot.len(), 15);
         assert_eq!(snapshot.refs(), {
             let mut all = every_ref();
             all.sort();
@@ -1073,6 +1242,15 @@ mod tests {
             &[11; 32]
         );
         assert!(snapshot.probe_loop_uuid(&n).is_ok());
+        assert_eq!(snapshot.alert_topic().unwrap().expose_bytes(), &[13; 32]);
+        assert_eq!(
+            snapshot.dead_man_check(&n).unwrap(),
+            &Secret::new(Uuid::from_random_bytes([14; 16]))
+        );
+        assert_eq!(
+            snapshot.mac_alive_check(&n).unwrap(),
+            &Secret::new(Uuid::from_random_bytes([15; 16]))
+        );
         // Same id, different slot: the VLESS and loopback UUIDs are distinct.
         assert_ne!(
             snapshot.user_vless_uuid(&u, &n).unwrap(),
@@ -1093,11 +1271,41 @@ mod tests {
         let err = snapshot.probe_loop_uuid(&n).unwrap_err();
         assert_eq!(err.kind(), SecretSnapshotErrorKind::Missing);
         assert_eq!(err.to_string(), "secret probe/ams1/loop-uuid is missing");
+        for (err, reference) in [
+            (snapshot.alert_topic().unwrap_err(), SecretRef::AlertTopic),
+            (
+                snapshot.dead_man_check(&n).unwrap_err(),
+                SecretRef::NodeDeadManCheck(n.clone()),
+            ),
+            (
+                snapshot.mac_alive_check(&n).unwrap_err(),
+                SecretRef::NodeMacAliveCheck(n.clone()),
+            ),
+        ] {
+            assert_eq!(
+                err,
+                SecretSnapshotError::Missing {
+                    secret_ref: reference
+                }
+            );
+        }
         assert!(snapshot.is_empty());
     }
 
     #[test]
     fn duplicate_inserts_are_rejected_and_the_first_value_is_kept() {
+        let mut topics = SecretSnapshot::new();
+        let topic = |byte| SecretEntry::new(SecretRef::AlertTopic, password(byte)).unwrap();
+        topics.insert(topic(1)).unwrap();
+        assert_eq!(
+            topics.insert(topic(2)),
+            Err(SecretSnapshotError::Duplicate {
+                secret_ref: SecretRef::AlertTopic
+            })
+        );
+        assert_eq!(topics.alert_topic().unwrap().expose_bytes(), &[1; 32]);
+        assert_eq!(topics.refs(), [SecretRef::AlertTopic]);
+        assert_eq!(topics.len(), 1);
         let mut snapshot = SecretSnapshot::new();
         let reference = SecretRef::NodeWgMacPrivate(node("lon1"));
         let entry = |byte| {

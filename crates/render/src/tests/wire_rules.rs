@@ -11,7 +11,7 @@ use std::net::Ipv4Addr;
 use mooring_agent_proto as wire;
 use mooring_model::dns::DnsName;
 use mooring_model::error::ModelError;
-use mooring_model::ids::UserId;
+use mooring_model::ids::{NodeId, UserId};
 use mooring_model::iface::LinuxIfName;
 use mooring_model::keys::{Ed25519Pub, PublicKeyKind};
 use mooring_model::node::NodeAddress;
@@ -77,6 +77,23 @@ proptest! {
     fn every_user_id_is_an_opaque_accounting_name(bits in any::<u64>()) {
         let user = UserId::from_low_bits(bits);
         prop_assert!(wire::OpaqueUserId::new(user.as_str()).is_ok());
+        prop_assert!(wire::ReportUserId::new(user.as_str()).is_ok());
+    }
+
+    /// The Mac report names nodes by the model's node id rule.
+    #[test]
+    fn node_ids_and_node_names_accept_the_same_text(
+        name in prop_oneof![text(14), long('a'), "[a-z][a-z0-9]{0,12}", "[a-z0-9]{0,14}"]
+    ) {
+        prop_assert_eq!(NodeId::parse(&name).is_ok(), wire::NodeName::new(name.clone()).is_ok(), "{:?}", name);
+    }
+
+    /// The Mac report names users by the model's user id rule.
+    #[test]
+    fn user_ids_and_report_user_ids_accept_the_same_text(
+        name in prop_oneof![text(12), long('a'), "[a-z2-7]{9,11}", "[a-z0-9]{10}"]
+    ) {
+        prop_assert_eq!(UserId::parse(&name).is_ok(), wire::ReportUserId::new(name.clone()).is_ok(), "{:?}", name);
     }
 
     #[test]
@@ -89,6 +106,61 @@ proptest! {
             prop_assert_eq!(ssh_ed25519_pub(&line).unwrap(), key);
         }
     }
+}
+
+/// Both id rules have a length bound; every length around them agrees,
+/// and so does every byte in every position of an otherwise valid id.
+#[test]
+fn node_and_user_id_rules_agree_at_every_length_and_byte() {
+    for len in 0..=14 {
+        for first in ['a', '7'] {
+            let name: String = std::iter::once(first)
+                .chain(std::iter::repeat('a'))
+                .take(len)
+                .collect();
+            assert_eq!(
+                NodeId::parse(&name).is_ok(),
+                wire::NodeName::new(name.clone()).is_ok(),
+                "{name:?}"
+            );
+            assert_eq!(
+                UserId::parse(&name).is_ok(),
+                wire::ReportUserId::new(name.clone()).is_ok(),
+                "{name:?}"
+            );
+        }
+    }
+    // Each rule from a base it accepts, so every byte in every position is
+    // tried against a valid id; both outcomes must occur.
+    let mut node_outcomes = BTreeSet::new();
+    let mut user_outcomes = BTreeSet::new();
+    for byte in 0..=0x7f_u8 {
+        for at in 0..10 {
+            let with_byte = |base: &[u8; 10]| {
+                let mut name = *base;
+                name[at] = byte;
+                String::from_utf8(name.to_vec()).unwrap()
+            };
+            let node = with_byte(b"lon1aaaaaa");
+            let accepted = NodeId::parse(&node).is_ok();
+            assert_eq!(
+                accepted,
+                wire::NodeName::new(node.clone()).is_ok(),
+                "{node:?}"
+            );
+            node_outcomes.insert(accepted);
+            let user = with_byte(b"aaaaaaaaaa");
+            let accepted = UserId::parse(&user).is_ok();
+            assert_eq!(
+                accepted,
+                wire::ReportUserId::new(user.clone()).is_ok(),
+                "{user:?}"
+            );
+            user_outcomes.insert(accepted);
+        }
+    }
+    assert_eq!(node_outcomes, BTreeSet::from([false, true]));
+    assert_eq!(user_outcomes, BTreeSet::from([false, true]));
 }
 
 #[test]

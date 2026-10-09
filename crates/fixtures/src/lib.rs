@@ -13,7 +13,10 @@
 //!
 //! The four fixtures are [`one_node_one_user`], [`one_node_three_users`],
 //! [`two_nodes_three_users`] and [`two_nodes_twenty_users`]; [`all`] builds
-//! them in that order.
+//! them in that order. Each runs the decided line (SMARTY Unlimited, decision
+//! F1) with the pilot's SIM thresholds (F2), no cap on active users (the
+//! 20-user fixture would break the pilot's cap of 5), no automatic quotas
+//! and no alert channels; [`two_nodes_three_users`] also has one viewer.
 
 #![deny(missing_docs)]
 
@@ -26,13 +29,13 @@ use std::net::Ipv4Addr;
 use mooring_model::cert::{CertPins, CertificatePem, Hy2Sni};
 use mooring_model::collections::NonEmpty;
 use mooring_model::counters::{ConfigGeneration, RuntimeRevision};
-use mooring_model::deployment::{Deployment, DeploymentParts};
+use mooring_model::date::CalendarDate;
+use mooring_model::deployment::{CapacityPolicy, Deployment, DeploymentParts};
 use mooring_model::digest::{Sha256Digest, SpkiSha256};
 use mooring_model::dns::DnsName;
 use mooring_model::error::ModelError;
 use mooring_model::exit::{
-    CycleDay, EgressCheck, ExitSite, FlowCap, Pairing, ProbePolicy, SimPolicy, TrafficPolicy,
-    Uplink,
+    EgressCheck, ExitSite, FlowCap, Pairing, ProbePolicy, TrafficPolicy, Uplink,
 };
 use mooring_model::ids::{LocalLabel, NodeId, ShortId, UserId, Uuid};
 use mooring_model::iface::{
@@ -50,15 +53,20 @@ use mooring_model::secret::{
     Hy2KeyPem, Password, RealityPrivateKey, Secret, SecretEntry, SecretSnapshot,
     SecretSnapshotError, WgPrivateKey,
 };
-use mooring_model::state::{RuntimeIntent, StateV1};
+use mooring_model::sim::{
+    BillDay, Carrier, EvidenceRef, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES, PlanKind,
+    SimPlan, SimPolicy, StopPolicy,
+};
+use mooring_model::state::{RuntimeIntent, StateV2};
 use mooring_model::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
     TargetAttestation, TargetFacts, TargetRejected, TlsHandshake, TlsOutcome, TlsVersion, qualify,
 };
 use mooring_model::time::UnixTime;
 use mooring_model::user::{
-    Capability, ClientLine, ClientProfile, User, UserNodePublic, UserStatus,
+    Capability, ClientLine, ClientProfile, User, UserNodePublic, UserPolicy, UserStatus,
 };
+use mooring_model::viewer::Viewer;
 use mooring_model::wg::{Keepalive, WgIndex, WgLink};
 
 use material::{AMS1, CERT_NOT_BEFORE, LON1, NodeMaterial};
@@ -84,8 +92,8 @@ pub struct Fixture {
 impl Fixture {
     /// The fixture as a state document, with the exit enabled.
     #[must_use]
-    pub fn state(&self) -> StateV1 {
-        StateV1 {
+    pub fn state(&self) -> StateV2 {
+        StateV2 {
             deployment: self.deployment.clone(),
             runtime: RuntimeIntent {
                 exit_enabled: true,
@@ -174,22 +182,22 @@ impl From<SecretSnapshotError> for FixtureError {
 
 /// Fixture (a): lon1 (primary) and one user.
 pub fn one_node_one_user() -> Result<Fixture, FixtureError> {
-    build("1-node-1-user", &[&LON1], 1)
+    build("1-node-1-user", &[&LON1], 1, Vec::new())
 }
 
 /// Fixture (b): lon1 (primary) and three users.
 pub fn one_node_three_users() -> Result<Fixture, FixtureError> {
-    build("1-node-3-users", &[&LON1], 3)
+    build("1-node-3-users", &[&LON1], 3, Vec::new())
 }
 
-/// Fixture (c): lon1 (primary), ams1 (standby) and three users.
+/// Fixture (c): lon1 (primary), ams1 (standby), three users and one viewer.
 pub fn two_nodes_three_users() -> Result<Fixture, FixtureError> {
-    build("2-nodes-3-users", &[&LON1, &AMS1], 3)
+    build("2-nodes-3-users", &[&LON1, &AMS1], 3, vec![viewer()?])
 }
 
 /// Fixture (d): lon1 (primary), ams1 (standby) and twenty users.
 pub fn two_nodes_twenty_users() -> Result<Fixture, FixtureError> {
-    build("2-nodes-20-users", &[&LON1, &AMS1], 20)
+    build("2-nodes-20-users", &[&LON1, &AMS1], 20, Vec::new())
 }
 
 /// Every fixture, (a) to (d).
@@ -279,9 +287,43 @@ fn exit_site() -> Result<ExitSite, ModelError> {
             carrier_prefixes: NonEmpty::new("31.120.0.0/14".parse::<CarrierPrefix>()?),
             pairing: Pairing::Paired,
         },
-        sim: SimPolicy::with_defaults(CycleDay::new(1)?),
+        sim: SimPolicy::new(
+            BillDay::new(1)?,
+            sim_plan()?,
+            PILOT_SIM_WARN_BYTES,
+            StopPolicy::HardStop {
+                bytes: PILOT_SIM_HARD_STOP_BYTES,
+            },
+        )?,
         probe: ProbePolicy::default(),
         flow_cap: FlowCap::new(4096)?,
+        uplink_baseline: None,
+    })
+}
+
+/// The decided line (F1): SMARTY Unlimited, with no fair-use line and no
+/// speed cap, recorded from SMARTY's Price Guide V42 (25 August 2026).
+fn sim_plan() -> Result<SimPlan, ModelError> {
+    Ok(SimPlan {
+        carrier: Carrier::Smarty,
+        kind: PlanKind::Unlimited,
+        speed_cap_mbps: None,
+        terms: EvidenceRef {
+            url: EvidenceUrl::parse(
+                "https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf",
+            )?,
+            dated: CalendarDate::parse("2026-08-25")?,
+        },
+    })
+}
+
+/// The viewer of [`two_nodes_three_users`]: a literal public key (no
+/// private half exists), labelled as the operator's phone.
+fn viewer() -> Result<Viewer, ModelError> {
+    Ok(Viewer {
+        key: Ed25519Pub::from_bytes(*b"mooring-fixture-viewer-key-00001")?,
+        label: LocalLabel::parse("Operator phone")?,
+        added_on: CalendarDate::parse("2026-10-08")?,
     })
 }
 
@@ -412,6 +454,9 @@ fn user(number: u8, nodes: &[&NodeMaterial]) -> Result<User, ModelError> {
         client: client(number),
         status: UserStatus::Active,
         per_node,
+        policy: UserPolicy::NONE,
+        alias: None,
+        agreement: None,
     })
 }
 
@@ -472,7 +517,12 @@ fn insert_user_secrets(
     Ok(())
 }
 
-fn build(name: &'static str, nodes: &[&NodeMaterial], users: u8) -> Result<Fixture, FixtureError> {
+fn build(
+    name: &'static str,
+    nodes: &[&NodeMaterial],
+    users: u8,
+    viewers: Vec<Viewer>,
+) -> Result<Fixture, FixtureError> {
     let mut node_list = Vec::with_capacity(nodes.len());
     let mut secrets = SecretSnapshot::new();
     let mut next_wg_index = WgIndex::FIRST;
@@ -498,6 +548,10 @@ fn build(name: &'static str, nodes: &[&NodeMaterial], users: u8) -> Result<Fixtu
         config_generation: ConfigGeneration::INITIAL,
         exit: site,
         policy: TrafficPolicy::default(),
+        capacity: CapacityPolicy::UNLIMITED,
+        auto_quota: None,
+        alerting: None,
+        viewers,
         nodes: node_list,
         users: user_list,
         next_wg_index,
@@ -567,6 +621,71 @@ mod tests {
                 .next_wg_index()
                 .get(),
             2
+        );
+    }
+
+    /// Every fixture runs the pilot's thresholds on the decided SMARTY
+    /// plan, and leaves the cap, automatic quotas, alert channels and every
+    /// per-user record off.
+    #[test]
+    fn the_sim_policy_is_the_pilot_on_the_smarty_plan() {
+        for fixture in all().unwrap() {
+            let sim = &fixture.deployment.exit().sim;
+            assert_eq!(sim.bill_day().get(), 1);
+            let plan = sim.plan().unwrap();
+            assert_eq!(plan.carrier, Carrier::Smarty);
+            assert_eq!(plan.kind, PlanKind::Unlimited);
+            assert_eq!(plan.speed_cap_mbps, None);
+            assert_eq!(
+                plan.terms.url.as_str(),
+                "https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf"
+            );
+            assert_eq!(plan.terms.dated.to_string(), "2026-08-25");
+            assert_eq!(sim.warn_bytes(), PILOT_SIM_WARN_BYTES);
+            assert_eq!(
+                sim.stop(),
+                StopPolicy::HardStop {
+                    bytes: PILOT_SIM_HARD_STOP_BYTES
+                }
+            );
+            assert_eq!(sim.thresholds().plan_line(), None);
+            assert_eq!(fixture.deployment.exit().uplink_baseline, None);
+            assert_eq!(fixture.deployment.capacity(), CapacityPolicy::UNLIMITED);
+            assert_eq!(fixture.deployment.auto_quota(), None);
+            assert_eq!(fixture.deployment.alerting(), None);
+            for user in fixture.deployment.users().values() {
+                assert_eq!(user.policy, UserPolicy::NONE);
+                assert_eq!((user.alias.as_ref(), user.agreement), (None, None));
+            }
+        }
+    }
+
+    /// Only the two-node, three-user fixture has a viewer, so a viewer
+    /// golden exists beside fixtures without one.
+    #[test]
+    fn one_fixture_has_a_viewer() {
+        let viewers: Vec<(&str, usize)> = all()
+            .unwrap()
+            .iter()
+            .map(|fixture| (fixture.name, fixture.deployment.viewers().len()))
+            .collect();
+        assert_eq!(
+            viewers,
+            vec![
+                ("1-node-1-user", 0),
+                ("1-node-3-users", 0),
+                ("2-nodes-3-users", 1),
+                ("2-nodes-20-users", 0),
+            ]
+        );
+        let fixture = two_nodes_three_users().unwrap();
+        let viewer = fixture.deployment.viewers().values().next().unwrap();
+        assert_eq!(viewer.key.as_bytes(), b"mooring-fixture-viewer-key-00001");
+        assert_eq!(viewer.label.as_str(), "Operator phone");
+        assert_eq!(viewer.added_on.to_string(), "2026-10-08");
+        assert_eq!(
+            Ed25519Pub::parse_ssh_authorized_key(&viewer.key.ssh_authorized_key()).unwrap(),
+            viewer.key
         );
     }
 

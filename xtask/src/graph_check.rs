@@ -63,6 +63,14 @@ pub(crate) const ALLOWED_EDGES: &[AllowedEdges] = &[
         normal: &["mooring-model"],
         dev: &[],
     },
+    // The console core: pure over model and wire types. The design's
+    // `render` and `export` edges join with the daemon wiring that needs
+    // them (M5).
+    AllowedEdges {
+        krate: "mooring-daemon-core",
+        normal: &["mooring-model", "mooring-agent-proto"],
+        dev: &["mooring-fixtures"],
+    },
     AllowedEdges {
         krate: "xtask",
         normal: &["mooring-export", "mooring-model"],

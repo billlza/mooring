@@ -11,20 +11,37 @@ use std::num::NonZeroU16;
 use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
-use crate::{TargetHost, ValueError};
+use crate::{InboundSet, TargetHost, UnixTime, ValueError};
 
 /// Seconds between watch ticks (§11.3).
 pub const WATCH_TICK_SECS: u64 = 5;
+/// The age, in seconds, of the watch's latest tick beyond which the watch
+/// is stale: the Mac marks the node `WatchStale` (design §11.3), and the
+/// node stops pinging its dead-man check ([`crate::dead_man_pings`]).
+pub const WATCH_STALE_SECS: u64 = 30;
 /// The oldest WireGuard handshake, in seconds, that still lets the gate open.
 pub const HANDSHAKE_MAX_AGE_SECS: u64 = 180;
 /// The gate opens only if rx grew within this many keepalive intervals.
 pub const RX_GROWTH_KEEPALIVES: u64 = 3;
+/// The longest, in seconds, a viewer's `GateSet{Operator}` waits for the
+/// watch to record the Operator hold and close the gate (three ticks) before
+/// it is answered with [`crate::AgentError::GateStopUnconfirmed`]; it is
+/// never answered `GateClosed` before both are seen (design §11.3).
+pub const VIEWER_STOP_WAIT_SECS: u64 = 3 * WATCH_TICK_SECS;
 /// Seconds between re-reads of [`crate::NFT_GATE_SET`] membership with `nft -j`.
 pub const GATE_SET_REREAD_SECS: u64 = 60;
 /// Seconds between accounting polls (§11.5).
 pub const ACCOUNTING_INTERVAL_SECS: u64 = 60;
 /// Seconds between target checks.
 pub const TARGET_CHECK_INTERVAL_SECS: u64 = 3600;
+/// The handshake age, in seconds, beyond which the watch reports
+/// [`WatchError::MacSilent`] unless an operator hold explains the silence.
+pub const MAC_SILENT_SECS: u64 = 600;
+/// [`WatchError::DiskLow`] is raised below this many free bytes (1 GiB) …
+pub const DISK_LOW_FREE_BYTES: u64 = 1 << 30;
+/// … or below this percentage of the filesystem free, whichever is
+/// reached first.
+pub const DISK_LOW_FREE_PERCENT: u8 = 10;
 
 /// `watch.json`: the per-generation settings of `mooring-watch`. Constants
 /// that never vary between generations are the `const`s of this module.
@@ -87,11 +104,58 @@ pub enum WatchError {
         #[serde(deserialize_with = "Option::deserialize")]
         errno: Option<i32>,
     },
+    /// The Mac peer's handshake is older than [`MAC_SILENT_SECS`] and no
+    /// operator hold is set: the Mac is asleep, crashed or waiting at the
+    /// login window after a reboot, or the M7 or the carrier has lost
+    /// service. The gate is closed by the handshake rule already; this
+    /// condition is what reports it.
+    #[error("no handshake from the Mac for over {MAC_SILENT_SECS} s")]
+    MacSilent {
+        /// The Mac peer's latest handshake; `None` when none has completed
+        /// since the interface came up.
+        #[serde(deserialize_with = "Option::deserialize")]
+        since: Option<UnixTime>,
+    },
+    /// The filesystem holding the agent's state has less than
+    /// [`DISK_LOW_FREE_BYTES`] or [`DISK_LOW_FREE_PERCENT`] free, so
+    /// accounting and state writes are about to fail.
+    #[error("only {free} bytes are free on the agent's filesystem")]
+    DiskLow {
+        /// The bytes available, as of the watch's latest tick.
+        free: u64,
+    },
+    /// The clock is not synchronised by NTP. REALITY refuses a client
+    /// whose clock differs by more than 60 s (design §8.2), so a drifting
+    /// node clock locks every user out.
+    #[error("the clock is not synchronised by NTP")]
+    ClockUnsynced,
+    /// An upgrade asked for a reboot (`/run/reboot-required`) that has not
+    /// happened yet; the nightly reboot window (§5.2) normally takes it.
+    #[error("a reboot has been required since {since}")]
+    RebootPending {
+        /// When the reboot became required.
+        since: UnixTime,
+    },
+    /// The probe identity's accounting counter on each of `inbounds` is
+    /// missing or did not grow although the Mac's in-chain probes reached
+    /// the node through that inbound (critique C-11): Xray is not counting
+    /// what the bundle routes through it (the stats policy or the
+    /// accounting emails are wrong), so every user's usage on this node
+    /// would read zero. One condition holds every inbound concerned, so
+    /// both can be reported at once (the likely case when the stats policy
+    /// is off). The evidence the watch uses for the probes, and its window,
+    /// are settled with the watch (M4); the Mac can make the same check
+    /// from [`crate::StatusV1::last_active`] and its own probe results.
+    #[error("the probe's traffic on {inbounds} is not being counted")]
+    AccountingCanaryMissing {
+        /// The inbounds whose probe counters are missing.
+        inbounds: InboundSet,
+    },
 }
 
 closed_enum! {
     /// The variant of a [`WatchError`], without its data.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub enum WatchErrorKind {
         /// [`WatchError::WgReadFailed`].
         WgReadFailed,
@@ -105,6 +169,16 @@ closed_enum! {
         ExitFlowCapHit,
         /// [`WatchError::StateWrite`].
         StateWrite,
+        /// [`WatchError::MacSilent`].
+        MacSilent,
+        /// [`WatchError::DiskLow`].
+        DiskLow,
+        /// [`WatchError::ClockUnsynced`].
+        ClockUnsynced,
+        /// [`WatchError::RebootPending`].
+        RebootPending,
+        /// [`WatchError::AccountingCanaryMissing`].
+        AccountingCanaryMissing,
     }
 }
 
@@ -118,13 +192,19 @@ impl WatchError {
             Self::TargetDegraded => WatchErrorKind::TargetDegraded,
             Self::ExitFlowCapHit { .. } => WatchErrorKind::ExitFlowCapHit,
             Self::StateWrite { .. } => WatchErrorKind::StateWrite,
+            Self::MacSilent { .. } => WatchErrorKind::MacSilent,
+            Self::DiskLow { .. } => WatchErrorKind::DiskLow,
+            Self::ClockUnsynced => WatchErrorKind::ClockUnsynced,
+            Self::RebootPending { .. } => WatchErrorKind::RebootPending,
+            Self::AccountingCanaryMissing { .. } => WatchErrorKind::AccountingCanaryMissing,
         }
     }
 }
 
 /// The conditions active at the watch's latest tick, at most one of each
-/// kind. On the wire it is a list in [`WatchErrorKind::ALL`] order; a list
-/// that repeats a kind is rejected.
+/// kind (a condition about several inbounds holds them all). On the wire it
+/// is a list in [`WatchErrorKind::ALL`] order; a list that repeats a kind
+/// is rejected.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "Vec<WatchError>", into = "Vec<WatchError>")]
 pub struct WatchConditions(BTreeMap<WatchErrorKind, WatchError>);
@@ -175,6 +255,7 @@ impl From<WatchConditions> for Vec<WatchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Inbound;
 
     #[test]
     fn conditions_hold_one_per_kind_in_kind_order() {
@@ -203,6 +284,55 @@ mod tests {
             })
         );
         assert!(serde_json::from_str::<WatchConditions>(r#"["NftFailed","NftFailed"]"#).is_err());
+    }
+
+    /// Both inbounds' canaries can be missing at once (the stats policy
+    /// rendered off, or wrong accounting emails, critique C-11): one
+    /// condition holds every such inbound, so the one-per-kind rule never
+    /// drops one.
+    #[test]
+    fn one_canary_condition_holds_every_inbound_it_concerns() {
+        let both = InboundSet::of(Inbound::Reality).with(Inbound::Hy2);
+        let conditions = WatchConditions::new([
+            WatchError::AccountingCanaryMissing { inbounds: both },
+            WatchError::MacSilent { since: None },
+        ])
+        .unwrap();
+        let json = serde_json::to_string(&conditions).unwrap();
+        assert_eq!(
+            json,
+            r#"[{"MacSilent":{"since":null}},{"AccountingCanaryMissing":{"inbounds":["Reality","Hy2"]}}]"#
+        );
+        assert_eq!(
+            serde_json::from_str::<WatchConditions>(&json).unwrap(),
+            conditions
+        );
+        assert_eq!(both.iter().collect::<Vec<_>>(), Inbound::ALL);
+        assert!(both.contains(Inbound::Hy2));
+        let hy2 = InboundSet::of(Inbound::Hy2);
+        assert!(!hy2.contains(Inbound::Reality));
+        assert_eq!(hy2.with(Inbound::Hy2), hy2);
+        assert_eq!(
+            WatchError::AccountingCanaryMissing { inbounds: both }.to_string(),
+            "the probe's traffic on reality, hy2 is not being counted"
+        );
+        // On the wire a set is a non-empty list in inbound order, each once.
+        for bad in [
+            r#"[]"#,
+            r#"["Hy2","Reality"]"#,
+            r#"["Hy2","Hy2"]"#,
+            r#"["Vless"]"#,
+        ] {
+            assert!(serde_json::from_str::<InboundSet>(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            InboundSet::try_from(Vec::new()),
+            Err(ValueError::InboundSet)
+        );
+        assert_eq!(
+            serde_json::from_str::<InboundSet>(r#"["Reality","Hy2"]"#).unwrap(),
+            both
+        );
     }
 
     #[test]

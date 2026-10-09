@@ -7,7 +7,8 @@
 use std::fmt::Debug;
 
 use mooring_agent_proto::{
-    AgentError, Generation, Holds, IoOp, MacDrainHold, RollbackCause, TargetFacts, TlsProbe,
+    AgentError, AgentErrorKind, EngineHealth, EngineRun, Generation, Holds, IoOp, MacDrainHold,
+    MacReportV1, ReportRouter, ReportUsage, RollbackCause, TargetFacts, TlsProbe, UnixTime,
     WatchError,
 };
 use serde::Serialize;
@@ -49,8 +50,89 @@ fn absent_holds_must_be_spelled_out() {
 fn hello_and_status_options_must_be_spelled_out() {
     assert_required(&fixtures::hello_info(), &["halted"]);
     let status = fixtures::status();
-    for field in ["halted", "latest_handshake", "applied"] {
+    for field in ["halted", "latest_handshake", "applied", "accounting_at"] {
         assert_required(&status, &[field]);
+    }
+    assert_required(&status, &["host", "last_unattended_upgrade"]);
+    assert_required(
+        &status,
+        &["engines", "xray", "run", "Active", "go_heap_bytes"],
+    );
+    let mut never = status.clone();
+    never.accounting_at = None;
+    never.host.last_unattended_upgrade = None;
+    for path in [&["accounting_at"][..], &["host", "last_unattended_upgrade"]] {
+        assert_required(&never, path);
+    }
+}
+
+#[test]
+fn health_options_must_be_spelled_out() {
+    let mut engines: EngineHealth = fixtures::engine_health();
+    engines.xray.run = EngineRun::Active {
+        uptime_secs: 5,
+        go_heap_bytes: None,
+    };
+    assert_required(&engines, &["xray", "run", "Active", "go_heap_bytes"]);
+    assert_required(&fixtures::host_health(), &["last_unattended_upgrade"]);
+}
+
+#[test]
+fn series_and_condition_options_must_be_spelled_out() {
+    for since in [None, Some(UnixTime::from_secs(9))] {
+        assert_required(&WatchError::MacSilent { since }, &["MacSilent", "since"]);
+    }
+    let recorded = fixtures::agent_error(AgentErrorKind::SeriesNotRecorded);
+    assert_required(&recorded, &["SeriesNotRecorded", "recorded"]);
+    let none = AgentError::SeriesNotRecorded { recorded: None };
+    assert_required(&none, &["SeriesNotRecorded", "recorded"]);
+}
+
+/// Every optional field of a report, present and absent.
+#[test]
+fn report_options_must_be_spelled_out() {
+    let report = fixtures::mac_report();
+    for path in [
+        &["sim", "hard_stop_bytes"][..],
+        &["sim", "line"],
+        &["sim", "forecast"],
+        &["capacity"],
+        &["router", "Available", "radio", "Attached", "rsrp_tenths"],
+        &["router", "Available", "radio", "Attached", "rsrq_tenths"],
+        &["router", "Available", "radio", "Attached", "sinr_tenths"],
+        &["router", "Available", "radio", "Attached", "rssi_tenths"],
+        &["users", "fxuseraaab", "cycle"],
+        &["users", "fxuseraaab", "last_seen"],
+        &["users", "fxuseraaac", "last_seen"],
+    ] {
+        assert_required(&report, path);
+    }
+    for alert in &report.parts().alerts {
+        assert_required(alert, &["node"]);
+    }
+
+    let mut parts = report.into_parts();
+    parts.sim.hard_stop_bytes = None;
+    parts.sim.line = None;
+    parts.sim.forecast = None;
+    parts.capacity = None;
+    parts.usage = ReportUsage::Unavailable;
+    for user in parts.users.values_mut() {
+        user.cycle = None;
+    }
+    let mut unavailable = parts.clone();
+    unavailable.router = ReportRouter::Unavailable {
+        last_polled_at: None,
+    };
+    for (parts, path) in [
+        (&parts, &["sim", "hard_stop_bytes"][..]),
+        (&parts, &["sim", "line"]),
+        (&parts, &["sim", "forecast"]),
+        (&parts, &["capacity"]),
+        (&parts, &["users", "fxuseraaab", "cycle"]),
+        (&unavailable, &["router", "Unavailable", "last_polled_at"]),
+    ] {
+        assert_required(&MacReportV1::new(parts.clone()).unwrap(), path);
     }
 }
 

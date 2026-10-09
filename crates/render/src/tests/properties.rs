@@ -14,7 +14,7 @@ use mooring_model::ports::{
     PortRange,
 };
 use mooring_model::secret::SecretEntry;
-use mooring_model::user::UserStatus;
+use mooring_model::user::{SuspendReason, UserStatus};
 use proptest::prelude::*;
 
 use crate::mac::exit::ExitRule;
@@ -38,6 +38,7 @@ fn config() -> ProptestConfig {
 #[derive(Debug, Clone, Copy)]
 enum Fate {
     Active,
+    Suspended,
     RevokePending,
     Revoked,
 }
@@ -45,6 +46,7 @@ enum Fate {
 fn fate() -> impl Strategy<Value = Fate> {
     prop_oneof![
         Just(Fate::Active),
+        Just(Fate::Suspended),
         Just(Fate::RevokePending),
         Just(Fate::Revoked)
     ]
@@ -55,7 +57,8 @@ proptest! {
 
     /// Every active user holding credentials on a node appears exactly once
     /// in each place that node's configs list identities, in id order and
-    /// followed by the probe; no other user appears at all.
+    /// followed by the probe; no other user (suspended, pending revocation or
+    /// revoked) appears at all, though a suspended user keeps its credentials.
     #[test]
     fn every_served_identity_appears_exactly_once_per_inbound(
         fates in proptest::collection::vec(fate(), 20)
@@ -67,6 +70,9 @@ proptest! {
             for user in &mut parts.users {
                 match fates[&user.id] {
                     Fate::Active => {}
+                    Fate::Suspended => user
+                        .suspend(SuspendReason::Operator, mooring_fixtures::FIXTURE_NOW)
+                        .unwrap(),
                     Fate::RevokePending => user.status = UserStatus::RevokePending,
                     Fate::Revoked => {
                         user.status = UserStatus::Revoked;
@@ -284,7 +290,7 @@ proptest! {
     /// The bundle digest changes with any single byte of any file.
     #[test]
     fn the_bundle_digest_changes_with_any_byte(
-        file in 0usize..5,
+        file in 0usize..ManagedFile::ALL.len(),
         at in any::<proptest::sample::Index>(),
         flip in 1u8..=255,
     ) {

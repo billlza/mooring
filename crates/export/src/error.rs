@@ -78,7 +78,8 @@ pub enum ExportError {
     /// The secret snapshot lacks a credential the export needs.
     #[error(transparent)]
     Secret(#[from] SecretSnapshotError),
-    /// The user is being revoked or is revoked; only active users are exported.
+    /// The user is suspended, being revoked or revoked; only active users
+    /// are exported.
     #[error("user {user} is not active")]
     UserNotActive {
         /// The user.

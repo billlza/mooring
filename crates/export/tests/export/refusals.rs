@@ -3,16 +3,18 @@
 //! Every refusal of `export_user`, through the public API.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use mooring_export::{ExportError, ExportErrorKind, ExportFormat, NotApplied, export_user};
 use mooring_fixtures::FIXTURE_NOW;
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::{SecretRef, SecretSnapshotError};
 use mooring_model::{
-    Capability, ClientLine, Deployment, LocalLabel, ModelError, NodeLifecycle, UserId, UserStatus,
+    CalendarDate, Capability, ClientLine, Deployment, LocalLabel, ModelError, NodeLifecycle,
+    QuotaAction, SuspendReason, UnixTime, UserId, UserPolicy, UserQuota, UserStatus, WarnPercent,
 };
 
-use crate::support::{edited, first_user, node, profile, two_nodes, with_profile};
+use crate::support::{edited, export, first_user, node, profile, two_nodes, with_profile};
 
 fn refusal(deployment: &Deployment, user: &UserId) -> ExportError {
     let fixture = two_nodes();
@@ -59,11 +61,75 @@ fn inactive_users_are_refused() {
         parts.users[0].status = UserStatus::Revoked;
         parts.users[0].per_node = BTreeMap::new();
     });
-    for deployment in [pending, revoked] {
+    let suspended: Vec<Deployment> = [
+        SuspendReason::Operator,
+        SuspendReason::QuotaExceeded {
+            cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
+        },
+        SuspendReason::Expired,
+        SuspendReason::AbuseReview,
+    ]
+    .into_iter()
+    .map(|reason| {
+        edited(&fixture.deployment, |parts| {
+            parts.users[0].suspend(reason, FIXTURE_NOW).unwrap();
+        })
+    })
+    .collect();
+    for deployment in [pending, revoked].into_iter().chain(suspended) {
         let error = refusal(&deployment, &user);
         assert_eq!(error.kind(), ExportErrorKind::UserNotActive);
         assert!(matches!(error, ExportError::UserNotActive { user: ref u } if *u == user));
     }
+}
+
+/// A suspended user keeps its credentials, so resuming it restores the
+/// exact file it had: nothing new has to be delivered.
+#[test]
+fn resuming_a_suspended_user_restores_its_file() {
+    let fixture = two_nodes();
+    let user = first_user(&fixture);
+    let before = export(
+        &fixture,
+        &fixture.deployment,
+        &user,
+        ExportFormat::SingBoxJson,
+    );
+    let resumed = edited(&fixture.deployment, |parts| {
+        parts.users[0]
+            .suspend(SuspendReason::Operator, FIXTURE_NOW)
+            .unwrap();
+        parts.users[0].resume().unwrap();
+    });
+    let after = export(&fixture, &resumed, &user, ExportFormat::SingBoxJson);
+    assert_eq!(after.expose_bytes(), before.expose_bytes());
+}
+
+/// Export looks only at the status: a user whose expiry has passed is still
+/// exported until an explicit action suspends it (`Suspended { Expired }`),
+/// and a quota changes nothing by itself.
+#[test]
+fn an_expired_or_quota_bound_active_user_is_still_exported() {
+    let fixture = two_nodes();
+    let user = first_user(&fixture);
+    let before = export(
+        &fixture,
+        &fixture.deployment,
+        &user,
+        ExportFormat::SingBoxJson,
+    );
+    let policed = edited(&fixture.deployment, |parts| {
+        parts.users[0].policy = UserPolicy {
+            expires_at: Some(UnixTime::from_secs(FIXTURE_NOW.as_secs() - 1)),
+            quota: Some(UserQuota {
+                cycle_served_bytes: NonZeroU64::new(1).unwrap(),
+                warn_percent: WarnPercent::new(80).unwrap(),
+                action: QuotaAction::Suspend,
+            }),
+        };
+    });
+    let after = export(&fixture, &policed, &user, ExportFormat::SingBoxJson);
+    assert_eq!(after.expose_bytes(), before.expose_bytes());
 }
 
 #[test]

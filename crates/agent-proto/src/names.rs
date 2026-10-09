@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Validated text that crosses the wire: host and interface names, kernel
-//! identifiers, systemd unit names and OpenSSH keys.
+//! Validated text that crosses the wire: host, interface and node names,
+//! kernel identifiers, systemd unit names and OpenSSH keys.
 //!
 //! Every type here accepts only printable ASCII without spaces, so a value
 //! received from a VPS can be displayed or logged without escaping, and none
@@ -87,7 +87,19 @@ text_newtype!(
     is_ssh_ed25519_key
 );
 
+text_newtype!(
+    /// A Mooring node id such as `lon1`: a lowercase ASCII letter followed
+    /// by 1 to 11 lowercase ASCII letters and digits
+    /// (`^[a-z][a-z0-9]{1,11}$`). Exactly the rule of `mooring-model`'s
+    /// `NodeId`, which `mooring-render` tests value by value.
+    NodeName,
+    NodeName,
+    is_node_name
+);
+
 const MAX_IFNAME_BYTES: usize = 15;
+/// The longest [`NodeName`].
+pub(crate) const MAX_NODE_NAME_BYTES: usize = 12;
 const MAX_KERNEL_RELEASE_BYTES: usize = 64;
 const MAX_KERNEL_IDENT_BYTES: usize = 32;
 const MAX_DNS_NAME_BYTES: usize = 253;
@@ -110,6 +122,15 @@ fn is_if_name(text: &str) -> bool {
         && text != "."
         && text != ".."
         && !text.contains(['/', ':'])
+}
+
+fn is_node_name(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    (2..=MAX_NODE_NAME_BYTES).contains(&bytes.len())
+        && bytes.first().is_some_and(u8::is_ascii_lowercase)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
 fn is_kernel_release(text: &str) -> bool {
@@ -242,6 +263,34 @@ mod tests {
         ] {
             assert_eq!(TargetHost::new(bad), Err(ValueError::TargetHost), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn node_names_follow_the_node_id_rule() {
+        for ok in ["lon1", "ab", "a12345678901", "ams", "z9"] {
+            assert_eq!(NodeName::new(ok).unwrap().as_str(), ok);
+        }
+        for bad in [
+            "",
+            "a",
+            "a123456789012",
+            "1lon",
+            "Lon1",
+            "lon-1",
+            "lon_1",
+            "lon.1",
+            "lon 1",
+            "lön1",
+            "203.0.113.7",
+        ] {
+            assert_eq!(NodeName::new(bad), Err(ValueError::NodeName), "{bad:?}");
+        }
+        assert_eq!(MAX_NODE_NAME_BYTES, 12);
+        assert!(serde_json::from_str::<NodeName>("\"LON1\"").is_err());
+        assert_eq!(
+            serde_json::from_str::<NodeName>("\"lon1\"").unwrap(),
+            NodeName::new("lon1").unwrap()
+        );
     }
 
     #[test]

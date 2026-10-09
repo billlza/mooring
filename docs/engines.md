@@ -13,6 +13,7 @@ Every key `mooring-render` writes, mapped to the pinned upstream source that rea
 - Xray decodes its config with a plain `json.NewDecoder` and silently ignores unknown keys (`infra/conf/serial/loader.go:47-55`). L2 runs `xray run -test` on warn-level copies and asserts the semantic protobuf fields with `xray convert pb -debug -type`.
 - sing-box rejects unknown keys (`option/options.go:39-41`, `DisallowUnknownFields`). L2 runs `check` on warn-level copies.
 - `wgexit.conf`, `nftables.conf` and the cloud-init user-data have no pinned tree in this repository. Their syntax is *(inference)* until L2 runs `wg-quick strip`, `nft -c -f` and `cloud-init schema`.
+- `viewer_authorized_keys` is read by OpenSSH's `sshd`, which has no pinned tree here either. Its options are cited to OpenSSH's manual pages and to the OpenSSH 10.0p1 sources (`V_10_0_P1`, the version Debian 13 ships); L2 and L5 check it on a node.
 
 The renderer's types are closed. Every config struct also deserialises with unknown fields rejected, and fixed strings are one-value types. The goldens in `contract/golden/<fixture>/` therefore read back into the same types (`crates/render/src/tests/roundtrip.rs`).
 
@@ -40,7 +41,7 @@ The renderer's types are closed. Every config struct also deserialises with unkn
 | `protocol` = `vless` (inbound) | `infra/conf/xray.go:31` | |
 | `protocol` = `tunnel` | `infra/conf/xray.go:25` | An alias of `dokodemo-door`. |
 | VLESS `settings.decryption` = `none`, `settings.clients` | `infra/conf/vless.go:33-40,46-48,149-155` | `decryption` is mandatory; `none` disables VLESS encryption. |
-| client `id`, `flow` | `proxy/vless/account.pb.go:80,82`; `infra/conf/vless.go:66-79` | The UUID is parsed and re-canonicalised. `flow` is `xtls-rprx-vision` on `reality-in` and `""` on `hy2-loop-in`. |
+| client `id`, `flow` | `proxy/vless/account.pb.go:80,82`; `infra/conf/vless.go:66-79`; `proxy/vless/validator.go:21-25,35-43` | The UUID is parsed and re-canonicalised. `flow` is `xtls-rprx-vision` on `reality-in` and `""` on `hy2-loop-in`. Each inbound keys its clients by the UUID with bytes 6 and 7 cleared (`ProcessUUID`) and keeps the last client with a given key, so the renderer refuses two identities whose UUIDs agree outside those bytes (`DuplicateCredential`, design §8.1). |
 | client `level`, `email` | `common/protocol/user.pb.go:28-29` | `email` keys the traffic counters (`user>>>EMAIL>>>traffic>>>…`), `<id>@reality` or `<id>@hy2`. |
 | `streamSettings.network` = `raw` | `infra/conf/transport_internet.go:16-19,52` | `raw` is the current name of TCP. |
 | `streamSettings.security` = `reality` / `none` | `infra/conf/transport_internet.go:53,91-123` | |
@@ -72,7 +73,7 @@ The renderer's types are closed. Every config struct also deserialises with unkn
 | inbound `type`, `tag` | `option/inbound.go:21-24` | |
 | `listen`, `listen_port` | `option/inbound.go:79-81` | `<VPS4>` and the listener port from `PortPlan`. |
 | `obfs.type` = `salamander`, `obfs.password` | `option/hysteria2.go:21,64-68`; `protocol/hysteria2/inbound.go:60-66` | One salamander password per listener. |
-| `users[].name`, `users[].password` | `option/hysteria2.go:22,115-118`; `protocol/hysteria2/inbound.go:214-222` | The name is the opaque user id, or `probe`. |
+| `users[].name`, `users[].password` | `option/hysteria2.go:22,115-118`; `protocol/hysteria2/inbound.go:214-222`; sing-quic `hysteria2/service.go:151-157` (pinned v0.7.1-0.20260924092235) | The name is the opaque user id, or `probe`. Users are keyed by password, the last one winning, so the renderer refuses two identities with one password (`DuplicateCredential`). |
 | `ignore_client_bandwidth` = `true` | `option/hysteria2.go:23`; `protocol/hysteria2/inbound.go:204` | With no `up_mbps`/`down_mbps` the server replies "auto". |
 | `tls.enabled`, `tls.alpn` = `["h3"]` | `option/tls.go:14,17`; `protocol/hysteria2/inbound.go:49-51` | TLS is mandatory for Hysteria2. |
 | `tls.certificate`, `tls.key` as PEM line lists | `option/tls.go:22,28`; `common/tls/std_server.go:406-416` | Inline, so `check` of a staged generation reads that generation's own material. The lines are joined with `\n`. |
@@ -115,6 +116,21 @@ There is no pinned tree for these in this repository; L2 validates them. The ren
 ## `watch.json`
 
 `mooring_agent_proto::WatchConfig` (`keepalive_secs`, `target.host`, `target.ipv4`), serialised by its own closed type.
+
+## `viewer_authorized_keys` (OpenSSH `sshd`, VPS)
+
+The remote viewers' keys (decision F5, design §8.6 and §15.9), rendered by `crates/render/src/vps/viewers.rs` as the sixth managed file (`ManagedFile::ViewerKeys`). sshd reads it only for the unprivileged `mooring-view` account, through the host profile's drop-in (`HostProfile::render(HostFile::SshdDropIn)`), whose `Match User mooring-view` block sets `AuthorizedKeysFile /etc/mooring/current/viewer_authorized_keys` and `ForceCommand /usr/local/lib/mooring/agent/current serve-ssh --role viewer`.
+
+| Item | Source | Why |
+|---|---|---|
+| One line per viewer, in key order: `restrict,command="/usr/local/lib/mooring/agent/current serve-ssh --role viewer" ssh-ed25519 <base64>`, then `\n` | sshd(8), AUTHORIZED_KEYS FILE FORMAT: each line is options, a key type and the base64 key, the options a comma-separated list | `Role::Viewer.authorized_keys_options()` and the key's `SshEd25519Key` form (`ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI…`). A viewer's label is Mac-only and never written, and no comment follows the key. |
+| `restrict` | sshd(8), AUTHORIZED_KEYS FILE FORMAT | Turns off every forwarding, agent forwarding, X11, the PTY and `~/.ssh/rc` for the key, including any restriction added in a later OpenSSH release. The host profile also sets `AllowTcpForwarding`, `AllowStreamLocalForwarding` and `PermitTunnel` to `no` for every account. |
+| `command="…"` | sshd(8), AUTHORIZED_KEYS FILE FORMAT | Runs the agent's viewer role whatever the client asks to run, subsystems included. `ForceCommand` in the `Match` block (sshd_config(5)) overrides `command=` and holds even for a key line without it, so the two agree by construction (`Role::Viewer.forced_command()`). |
+| No viewer: the file is empty (0 bytes) | sshd(8): a keys file without key lines admits no key | `crates/render/src/tests/viewers.rs` pins the empty file; the snapshot description says so. |
+| `AuthorizedKeysFile` inside `Match User mooring-view` | sshd_config(5), `Match` and `AuthorizedKeysFile`; `servconf.c` restores the match state after each included file (`V_10_0_P1`) | Only `mooring-view` reads this file; `root` keeps the default `.ssh/authorized_keys .ssh/authorized_keys2`, so a viewer key is never accepted for root. Seen with OpenSSH 10.3p1's `sshd -T -C user=…` on 2026-10-09; L2/L5 repeat it on Debian's build. |
+| Modes: the file 0644 `root:root`; `/etc/mooring` and each `gen-<N>` 0755 `root:root` | `auth2-pubkey.c` (`user_key_allowed2`) opens the keys file as the logging-in user; sshd(8) and sshd_config(5) `StrictModes` refuse a file or directory on its path that is group- or world-writable or owned by anyone but root or the user | A keys file that `mooring-view` cannot read, or a generation directory it cannot search, refuses every viewer login. L5 logs in as `mooring-view`. |
+
+The bundle digest covers the file like every other managed file (below), so adding or removing a viewer changes the bundle and is applied, and rolled back, with it.
 
 ## Digests
 

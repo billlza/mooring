@@ -1,0 +1,545 @@
+{
+  "version": 2,
+  "deployment": {
+    "config_generation": 2,
+    "exit": {
+      "egress": {
+        "link_addr": {
+          "lladdr": "02:6d:6f:6f:72:01",
+          "subnet": "192.168.1.0/24"
+        }
+      },
+      "uplink": {
+        "separate": {
+          "gateway_link_addr": {
+            "gw_lladdr": "02:68:6f:6d:65:01",
+            "subnet": "10.0.0.0/24"
+          }
+        }
+      },
+      "egress_check": {
+        "carrier_prefixes": [
+          "31.120.0.0/14"
+        ],
+        "pairing": "unpaired"
+      },
+      "sim": {
+        "bill_day": 31,
+        "plan": {
+          "carrier": "smarty",
+          "kind": "unlimited",
+          "speed_cap_mbps": null,
+          "terms": {
+            "url": "https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf",
+            "dated": "2026-08-25"
+          }
+        },
+        "warn_bytes": 240000000000,
+        "stop": {
+          "hard_stop": {
+            "bytes": 300000000000
+          }
+        }
+      },
+      "probe": {
+        "direct_every": 30,
+        "in_chain_every": 300,
+        "base_port": 47101
+      },
+      "flow_cap": 4096,
+      "uplink_baseline": {
+        "p10_bps": 5000000,
+        "p50_bps": 16000000,
+        "measured_at": 1791331200
+      }
+    },
+    "policy": {
+      "deny_cn": true,
+      "block_quic": false,
+      "deny_smtp25": true,
+      "deny_bittorrent": true,
+      "camo_forward": false
+    },
+    "capacity": {
+      "max_active_users": 5
+    },
+    "auto_quota": {
+      "from_active_users": 6,
+      "budget_percent": 80,
+      "sim_factor": 2100,
+      "warn_percent": 80,
+      "action": "suspend"
+    },
+    "alerting": {
+      "digest_at": "09:00",
+      "digest_zone": "europe_london",
+      "channels": [
+        "lon1"
+      ]
+    },
+    "viewers": [
+      {
+        "key": "bW9vcmluZy1nb2xkZW4tdmlld2VyLWtleS0wMDAwMDE=",
+        "label": "phone",
+        "added_on": "2026-10-08"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "ams1",
+        "role": "standby",
+        "ports": {
+          "wg": 27820,
+          "reflector": 27900,
+          "hy2": [
+            {
+              "port": 61000,
+              "hop": {
+                "start": 61001,
+                "end": 62999
+              },
+              "hop_interval": 30,
+              "obfs": "salamander"
+            }
+          ],
+          "reserved": [
+            {
+              "start": 63000,
+              "end": 64999
+            }
+          ],
+          "ephemeral": {
+            "start": 32768,
+            "end": 60999
+          }
+        },
+        "wg_index": 2,
+        "ssh": {
+          "host_ed25519": "FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQ="
+        },
+        "reality": {
+          "public_key": "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU",
+          "probe_short_id": "a000000000000014",
+          "target": {
+            "host": "www.harbour-target.test",
+            "ipv4": "45.67.89.200",
+            "key_exchange": "x25519",
+            "attestation": {
+              "same_asn": true,
+              "not_cdn": true,
+              "evidence_url": "https://evidence.mooring.test/lon1",
+              "at": 1791417600
+            }
+          }
+        },
+        "hy2": {
+          "certificate": "-----BEGIN CERTIFICATE-----\nMAMCARQ=\n-----END CERTIFICATE-----\n"
+        },
+        "wg": {
+          "vps_pub": "FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY=",
+          "mac_pub": "FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxc=",
+          "keepalive": 10
+        },
+        "lifecycle": {
+          "retiring": {
+            "site": {
+              "address": {
+                "public": "46.78.90.12"
+              },
+              "host_facts": {
+                "uplink_interface": "eth0",
+                "arch": "amd64",
+                "ephemeral_ports": {
+                  "start": 32768,
+                  "end": 60999
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "fra1",
+        "role": "primary",
+        "ports": {
+          "wg": 27820,
+          "reflector": 27900,
+          "hy2": [
+            {
+              "port": 61000,
+              "hop": {
+                "start": 61001,
+                "end": 62999
+              },
+              "hop_interval": 30,
+              "obfs": "salamander"
+            }
+          ],
+          "reserved": [
+            {
+              "start": 63000,
+              "end": 64999
+            }
+          ],
+          "ephemeral": {
+            "start": 32768,
+            "end": 60999
+          }
+        },
+        "wg_index": 4,
+        "ssh": {
+          "host_ed25519": "KCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCg="
+        },
+        "reality": {
+          "public_key": "KSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSk",
+          "probe_short_id": "a000000000000028",
+          "target": null
+        },
+        "hy2": {
+          "certificate": "-----BEGIN CERTIFICATE-----\nMAMCASg=\n-----END CERTIFICATE-----\n"
+        },
+        "wg": {
+          "vps_pub": "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio=",
+          "mac_pub": "KysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKys=",
+          "keepalive": 10
+        },
+        "lifecycle": "retired"
+      },
+      {
+        "id": "lon1",
+        "role": "primary",
+        "ports": {
+          "wg": 27820,
+          "reflector": 27900,
+          "hy2": [
+            {
+              "port": 61000,
+              "hop": {
+                "start": 61001,
+                "end": 62999
+              },
+              "hop_interval": 30,
+              "obfs": "salamander"
+            },
+            {
+              "port": 63000,
+              "hop": {
+                "start": 63001,
+                "end": 64999
+              },
+              "hop_interval": 5,
+              "obfs": "salamander"
+            }
+          ],
+          "reserved": [],
+          "ephemeral": {
+            "start": 32768,
+            "end": 60999
+          }
+        },
+        "wg_index": 1,
+        "ssh": {
+          "host_ed25519": "CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo="
+        },
+        "reality": {
+          "public_key": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws",
+          "probe_short_id": "a00000000000000a",
+          "target": {
+            "host": "www.harbour-target.test",
+            "ipv4": "45.67.89.200",
+            "key_exchange": "x25519",
+            "attestation": {
+              "same_asn": true,
+              "not_cdn": true,
+              "evidence_url": "https://evidence.mooring.test/lon1",
+              "at": 1791417600
+            }
+          }
+        },
+        "hy2": {
+          "certificate": "-----BEGIN CERTIFICATE-----\nMAMCAQo=\n-----END CERTIFICATE-----\n"
+        },
+        "wg": {
+          "vps_pub": "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=",
+          "mac_pub": "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=",
+          "keepalive": 10
+        },
+        "lifecycle": {
+          "applied": {
+            "site": {
+              "address": {
+                "public": "45.67.89.10"
+              },
+              "host_facts": {
+                "uplink_interface": "eth0",
+                "arch": "amd64",
+                "ephemeral_ports": {
+                  "start": 32768,
+                  "end": 60999
+                }
+              }
+            },
+            "applied": {
+              "config_generation": 1,
+              "digest": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+            }
+          }
+        }
+      },
+      {
+        "id": "par1",
+        "role": "primary",
+        "ports": {
+          "wg": 27820,
+          "reflector": 27900,
+          "hy2": [
+            {
+              "port": 61000,
+              "hop": {
+                "start": 61001,
+                "end": 62999
+              },
+              "hop_interval": 30,
+              "obfs": "salamander"
+            }
+          ],
+          "reserved": [
+            {
+              "start": 63000,
+              "end": 64999
+            }
+          ],
+          "ephemeral": {
+            "start": 32768,
+            "end": 60999
+          }
+        },
+        "wg_index": 3,
+        "ssh": {
+          "host_ed25519": "Hh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4="
+        },
+        "reality": {
+          "public_key": "Hx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8",
+          "probe_short_id": "a00000000000001e",
+          "target": null
+        },
+        "hy2": {
+          "certificate": "-----BEGIN CERTIFICATE-----\nMAMCAR4=\n-----END CERTIFICATE-----\n"
+        },
+        "wg": {
+          "vps_pub": "ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA=",
+          "mac_pub": "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE=",
+          "keepalive": 10
+        },
+        "lifecycle": {
+          "retired_pending_provider_deletion": {
+            "address": {
+              "public": "47.1.2.3"
+            }
+          }
+        }
+      }
+    ],
+    "users": [
+      {
+        "id": "aaaaaaaaab",
+        "label": "User 1",
+        "client": {
+          "line": "cfm05",
+          "capabilities": [
+            "reality_mlkem_opt_in"
+          ]
+        },
+        "status": "active",
+        "per_node": {
+          "ams1": {
+            "short_id": "5f1e000000000001"
+          },
+          "lon1": {
+            "short_id": "5f1e000000000001"
+          }
+        },
+        "policy": {
+          "expires_at": 1798761600,
+          "quota": {
+            "cycle_served_bytes": 40000000000,
+            "warn_percent": 80,
+            "action": "warn"
+          }
+        },
+        "alias": "k7qd-m2xa",
+        "agreement": {
+          "version": 1,
+          "accepted_on": "2026-10-08"
+        }
+      },
+      {
+        "id": "aaaaaaaaac",
+        "label": "User 2",
+        "client": {
+          "line": "cfm04",
+          "capabilities": []
+        },
+        "status": "revoke_pending",
+        "per_node": {
+          "ams1": {
+            "short_id": "5f1e000000000002"
+          },
+          "lon1": {
+            "short_id": "5f1e000000000002"
+          }
+        },
+        "policy": {
+          "expires_at": null,
+          "quota": null
+        },
+        "alias": null,
+        "agreement": null
+      },
+      {
+        "id": "aaaaaaaaad",
+        "label": "User 3",
+        "client": {
+          "line": "cfm05",
+          "capabilities": []
+        },
+        "status": "revoked",
+        "per_node": {},
+        "policy": {
+          "expires_at": null,
+          "quota": null
+        },
+        "alias": null,
+        "agreement": null
+      },
+      {
+        "id": "aaaaaaaaae",
+        "label": "User 4",
+        "client": {
+          "line": "cfm05",
+          "capabilities": []
+        },
+        "status": {
+          "suspended": {
+            "reason": "operator",
+            "since": 1791417604
+          }
+        },
+        "per_node": {
+          "ams1": {
+            "short_id": "5f1e000000000004"
+          },
+          "lon1": {
+            "short_id": "5f1e000000000004"
+          }
+        },
+        "policy": {
+          "expires_at": null,
+          "quota": null
+        },
+        "alias": "2b4d-7xqa",
+        "agreement": null
+      },
+      {
+        "id": "aaaaaaaaaf",
+        "label": "User 5",
+        "client": {
+          "line": "cfm05",
+          "capabilities": []
+        },
+        "status": {
+          "suspended": {
+            "reason": {
+              "quota_exceeded": {
+                "cycle_start": "2026-09-30"
+              }
+            },
+            "since": 1791417605
+          }
+        },
+        "per_node": {
+          "ams1": {
+            "short_id": "5f1e000000000005"
+          },
+          "lon1": {
+            "short_id": "5f1e000000000005"
+          }
+        },
+        "policy": {
+          "expires_at": null,
+          "quota": {
+            "cycle_served_bytes": 20000000000,
+            "warn_percent": 90,
+            "action": "suspend"
+          }
+        },
+        "alias": null,
+        "agreement": {
+          "version": 2,
+          "accepted_on": "2026-09-01"
+        }
+      },
+      {
+        "id": "aaaaaaaaag",
+        "label": "User 6",
+        "client": {
+          "line": "cfm05",
+          "capabilities": []
+        },
+        "status": {
+          "suspended": {
+            "reason": "expired",
+            "since": 1791417606
+          }
+        },
+        "per_node": {
+          "ams1": {
+            "short_id": "5f1e000000000006"
+          },
+          "lon1": {
+            "short_id": "5f1e000000000006"
+          }
+        },
+        "policy": {
+          "expires_at": 1791331200,
+          "quota": null
+        },
+        "alias": null,
+        "agreement": null
+      },
+      {
+        "id": "aaaaaaaaah",
+        "label": "User 7",
+        "client": {
+          "line": "cfm05",
+          "capabilities": []
+        },
+        "status": {
+          "suspended": {
+            "reason": "abuse_review",
+            "since": 1791417607
+          }
+        },
+        "per_node": {
+          "ams1": {
+            "short_id": "5f1e000000000007"
+          },
+          "lon1": {
+            "short_id": "5f1e000000000007"
+          }
+        },
+        "policy": {
+          "expires_at": null,
+          "quota": null
+        },
+        "alias": null,
+        "agreement": null
+      }
+    ],
+    "next_wg_index": 5
+  },
+  "runtime": {
+    "exit_enabled": false,
+    "revision": 1
+  }
+}

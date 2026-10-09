@@ -4,17 +4,24 @@
 //! `contract/golden/<fixture>/`: every managed file of every node, the
 //! Mac exit and prober configs, and the cloud-init user-data of a planned
 //! node. A snapshot holds the file without its final newline (insta trims
-//! trailing whitespace), so the single newline is asserted separately.
+//! trailing whitespace), so the single newline is asserted separately. The
+//! one file that may be empty, `viewer_authorized_keys` with no viewer
+//! recorded, has an empty snapshot, and only it may.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
 use mooring_agent_proto::ManagedFile;
+use mooring_fixtures::FIXTURE_NOW;
+use mooring_model::NodeId;
+use mooring_model::secret::SecretRef;
+use mooring_model::user::SuspendReason;
 
 use crate::tests::support::{
-    HOST_PRIVATE, cloud_init_keys, fixtures, mac_exit, mac_prober, node, planned, vps,
+    HOST_PRIVATE, cloud_init_keys, edit, engines, fixtures, mac_exit, mac_prober, node, planned,
+    vps,
 };
-use crate::vps::cloud_init;
+use crate::vps::{bundle, cloud_init};
 
 /// One rendered file and the golden that pins it.
 struct Golden {
@@ -24,6 +31,8 @@ struct Golden {
     name: String,
     /// What the file is, for the snapshot description.
     what: &'static str,
+    /// Whether the file may be empty.
+    empty_allowed: bool,
     bytes: Vec<u8>,
 }
 
@@ -33,33 +42,55 @@ impl Golden {
             directory: directory.to_owned(),
             name,
             what,
+            empty_allowed: false,
             bytes: bytes.to_vec(),
         }
     }
 
-    fn assert(&self) {
-        assert_golden(&self.directory, &self.name, self.what, &self.bytes);
+    fn managed(directory: &str, node: &NodeId, file: ManagedFile, bytes: &[u8]) -> Self {
+        Self {
+            empty_allowed: may_be_empty(file),
+            ..Self::new(
+                directory,
+                format!("vps-{node}-{}", file.file_name()),
+                section(file),
+                bytes,
+            )
+        }
     }
-}
 
-fn assert_golden(directory: &str, name: &str, what: &str, bytes: &[u8]) {
-    let text = std::str::from_utf8(bytes).expect("rendered files are UTF-8");
-    let body = text
-        .strip_suffix('\n')
-        .expect("a rendered file ends with a newline");
-    assert!(
-        !body.ends_with(char::is_whitespace),
-        "{name}: exactly one final newline"
-    );
-    assert!(!text.contains('\r'), "{name}: LF line endings");
-    let mut settings = insta::Settings::clone_current();
-    settings.set_snapshot_path(format!("../../../../contract/golden/{directory}"));
-    settings.set_prepend_module_to_snapshot(false);
-    settings.set_omit_expression(true);
-    settings.set_description(format!(
-        "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render {what}; the file is this text plus one newline."
-    ));
-    settings.bind(|| insta::assert_snapshot!(name, body));
+    fn assert(&self) {
+        let text = std::str::from_utf8(&self.bytes).expect("rendered files are UTF-8");
+        let name = &self.name;
+        let body = if text.is_empty() {
+            assert!(self.empty_allowed, "{name}: a rendered file is not empty");
+            ""
+        } else {
+            let body = text
+                .strip_suffix('\n')
+                .expect("a rendered file ends with a newline");
+            assert!(
+                !body.ends_with(char::is_whitespace),
+                "{name}: exactly one final newline"
+            );
+            body
+        };
+        let ending = if self.empty_allowed {
+            "the file is this text plus one newline, or empty if this text is"
+        } else {
+            "the file is this text plus one newline"
+        };
+        assert!(!text.contains('\r'), "{name}: LF line endings");
+        let mut settings = insta::Settings::clone_current();
+        settings.set_snapshot_path(format!("../../../../contract/golden/{}", self.directory));
+        settings.set_prepend_module_to_snapshot(false);
+        settings.set_omit_expression(true);
+        settings.set_description(format!(
+            "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render {}; {ending}.",
+            self.what
+        ));
+        settings.bind(|| insta::assert_snapshot!(name.as_str(), body));
+    }
 }
 
 const fn section(file: ManagedFile) -> &'static str {
@@ -69,6 +100,20 @@ const fn section(file: ManagedFile) -> &'static str {
         ManagedFile::WgConf => "wgexit.conf (design 8.4)",
         ManagedFile::Nftables => "nftables.conf (design 8.5)",
         ManagedFile::WatchConfig => "watch.json (design 11.3)",
+        ManagedFile::ViewerKeys => "viewer_authorized_keys (design 15.9)",
+    }
+}
+
+/// Whether `file` may render to nothing: only the viewer keys, when no
+/// viewer is recorded.
+const fn may_be_empty(file: ManagedFile) -> bool {
+    match file {
+        ManagedFile::ViewerKeys => true,
+        ManagedFile::XrayConfig
+        | ManagedFile::Hy2Config
+        | ManagedFile::WgConf
+        | ManagedFile::Nftables
+        | ManagedFile::WatchConfig => false,
     }
 }
 
@@ -79,10 +124,10 @@ fn vps_goldens() -> Vec<Golden> {
         for node in fixture.deployment.nodes().keys() {
             let bundle = vps(&fixture, node);
             for (file, rendered) in bundle.files() {
-                goldens.push(Golden::new(
+                goldens.push(Golden::managed(
                     fixture.name,
-                    format!("vps-{node}-{}", file.file_name()),
-                    section(file),
+                    node,
+                    file,
                     rendered.expose_bytes(),
                 ));
             }
@@ -140,6 +185,47 @@ fn mac_goldens_match() {
 #[test]
 fn cloud_init_golden_matches() {
     cloud_init_goldens().iter().for_each(Golden::assert);
+}
+
+/// A suspended user is in no VPS config, yet the state still references
+/// its secrets (design §7). The fixtures derive each user's credentials
+/// from its number alone, so suspending the second and third users of
+/// `1-node-3-users` must render exactly the `1-node-1-user` goldens:
+/// `xray.json` and `hy2.json` lose both users, and the other files, which
+/// list no users, are unchanged.
+#[test]
+fn suspended_users_render_the_goldens_of_a_deployment_without_them() {
+    let three = mooring_fixtures::one_node_three_users().unwrap();
+    let lon1 = node("lon1");
+    let suspended: Vec<_> = three.deployment.users().keys().skip(1).cloned().collect();
+    assert_eq!(suspended.len(), 2);
+    let deployment = edit(&three.deployment, |parts| {
+        for user in parts.users.iter_mut().skip(1) {
+            user.suspend(SuspendReason::Operator, FIXTURE_NOW).unwrap();
+        }
+    });
+    let rendered = bundle(&deployment, &lon1, &three.secrets, &engines()).unwrap();
+    let before = vps(&three, &lon1);
+    for (file, bytes) in rendered.files() {
+        Golden::managed("1-node-1-user", &lon1, file, bytes.expose_bytes()).assert();
+        let lists_users = matches!(file, ManagedFile::XrayConfig | ManagedFile::Hy2Config);
+        assert_eq!(
+            bytes.expose_bytes() == before.file(file).expose_bytes(),
+            !lists_users,
+            "{file:?}"
+        );
+    }
+    let required = deployment.required_secrets();
+    assert_eq!(required, three.deployment.required_secrets());
+    for user in &suspended {
+        for secret_ref in [
+            SecretRef::UserVlessUuid(user.clone(), lon1.clone()),
+            SecretRef::UserLoopUuid(user.clone(), lon1.clone()),
+            SecretRef::UserHy2Password(user.clone(), lon1.clone()),
+        ] {
+            assert!(required.contains(&secret_ref), "{secret_ref}");
+        }
+    }
 }
 
 /// The files of `contract/golden/`, as `(directory, file name)`.

@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
 use crate::{
-    AgentError, BlobLen, BundleHeader, ClearableHold, GateReason, Generation, Role, Sha256Hex,
-    ShutdownReason, SshEd25519Key, TargetHost, UsageMonth,
+    AgentError, BlobLen, BundleHeader, ClearableHold, EventSeq, GateReason, Generation,
+    MacReportV1, Role, SeriesRange, Sha256Hex, ShutdownReason, SshEd25519Key, TargetHost,
+    UsageMonth,
 };
 
 /// One request: the JSON line on the agent's stdin, as the agent reads it.
@@ -98,12 +99,23 @@ pub enum LineRequest {
         /// The month.
         month: UsageMonth,
     },
+    /// Report the usage of every bin of a range ([`crate::UsageSeriesV1`]).
+    /// On the wire the range is `{"from", "to", "resolution"}`.
+    UsageSeries(SeriesRange),
+    /// Report the journal from event `since` on ([`crate::EventsV1`]).
+    Events {
+        /// The first event number wanted: the last one read plus one, or
+        /// [`EventSeq::FIRST`].
+        since: EventSeq,
+    },
     /// Measure a candidate REALITY target ([`crate::TargetFacts`]).
     TargetCheck {
         /// The target's name.
         host: TargetHost,
     },
-    /// Close the gate and record a hold. There is no way to open it.
+    /// Close the gate and record a hold. There is no way to open it. The
+    /// viewer role may send it for [`GateReason::Operator`] only
+    /// ([`Role::may_close_gate_for`]).
     GateSet {
         /// Why.
         reason: GateReason,
@@ -125,6 +137,13 @@ pub enum LineRequest {
         /// The generation the operator expects to be current.
         config_generation: Generation,
     },
+    /// Store the Mac's latest report ([`MacReportV1`]) for remote viewers,
+    /// replacing the one stored before. On the wire it is the report
+    /// itself.
+    PutMacReport(Box<MacReportV1>),
+    /// Report the stored Mac report ([`crate::StoredMacReport`]); with none
+    /// stored the agent answers [`AgentError::MacReportMissing`].
+    MacReport,
 }
 
 closed_enum! {
@@ -155,6 +174,10 @@ closed_enum! {
         Status,
         /// [`LineRequest::Usage`].
         Usage,
+        /// [`LineRequest::UsageSeries`].
+        UsageSeries,
+        /// [`LineRequest::Events`].
+        Events,
         /// [`LineRequest::TargetCheck`].
         TargetCheck,
         /// [`LineRequest::GateSet`].
@@ -165,6 +188,10 @@ closed_enum! {
         Shutdown,
         /// [`LineRequest::Resume`].
         Resume,
+        /// [`LineRequest::PutMacReport`].
+        PutMacReport,
+        /// [`LineRequest::MacReport`].
+        MacReport,
     }
 }
 
@@ -187,13 +214,24 @@ impl Request {
         }
     }
 
-    /// Checks that `role` may send this request (see [`Role::permits`]).
+    /// Checks that `role` may send this request: first its kind
+    /// ([`Role::permits`], else [`AgentError::RoleNotPermitted`]), then,
+    /// for `GateSet`, its reason ([`Role::may_close_gate_for`], else
+    /// [`AgentError::GateReasonNotPermitted`]). The agent applies it before
+    /// acting.
     pub const fn authorize(&self, role: Role) -> Result<(), AgentError> {
         let request = self.kind();
-        if role.permits(request) {
-            Ok(())
-        } else {
-            Err(AgentError::RoleNotPermitted { role, request })
+        if !role.permits(request) {
+            return Err(AgentError::RoleNotPermitted { role, request });
+        }
+        match self {
+            Self::Line(LineRequest::GateSet { reason }) if !role.may_close_gate_for(*reason) => {
+                Err(AgentError::GateReasonNotPermitted {
+                    role,
+                    reason: *reason,
+                })
+            }
+            Self::PutBlob { .. } | Self::Line(_) => Ok(()),
         }
     }
 }
@@ -213,11 +251,15 @@ impl LineRequest {
             Self::Rollback => RequestKind::Rollback,
             Self::Status => RequestKind::Status,
             Self::Usage { .. } => RequestKind::Usage,
+            Self::UsageSeries(_) => RequestKind::UsageSeries,
+            Self::Events { .. } => RequestKind::Events,
             Self::TargetCheck { .. } => RequestKind::TargetCheck,
             Self::GateSet { .. } => RequestKind::GateSet,
             Self::ClearHold { .. } => RequestKind::ClearHold,
             Self::Shutdown { .. } => RequestKind::Shutdown,
             Self::Resume { .. } => RequestKind::Resume,
+            Self::PutMacReport(_) => RequestKind::PutMacReport,
+            Self::MacReport => RequestKind::MacReport,
         }
     }
 }

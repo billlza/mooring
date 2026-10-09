@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
 use crate::{
-    Generation, HostFact, ManagedFile, PortRange, RequestKind, Role, Sha256Hex, StderrTail,
-    UnitName, UsageMonth, WatchErrorKind,
+    GateReason, Generation, HostFact, MAX_EVENTS, MAX_SERIES_ENTRIES, MacReportRule, ManagedFile,
+    PortRange, RequestKind, Resolution, Role, SeriesSpan, Sha256Hex, StderrTail, UnitName,
+    UsageMonth, WatchErrorKind,
 };
 
 /// A wire value that does not satisfy its type's rule. Deserialisation
@@ -72,8 +73,8 @@ pub enum ValueError {
         /// The rejected status.
         status: u16,
     },
-    /// Neither `bootstrap` nor `ops`.
-    #[error("role must be `bootstrap` or `ops`")]
+    /// Not `bootstrap`, `ops` or `viewer`.
+    #[error("role must be `bootstrap`, `ops` or `viewer`")]
     Role,
     /// A bundle file map that lacks a managed file.
     #[error("bundle lacks managed file {file:?}")]
@@ -87,6 +88,60 @@ pub enum ValueError {
         /// The repeated kind.
         kind: WatchErrorKind,
     },
+    /// A usage span that is not whole bins: `from` or `to` off a bin
+    /// boundary, or `from` not before `to`.
+    #[error("not whole bins: from and to must lie on bin boundaries, from before to")]
+    SeriesSpan,
+    /// A `UsageSeries` range longer than its resolution allows
+    /// ([`crate::Resolution::max_bins`]).
+    #[error("{bins} bins of {resolution:?} exceed the {max} one request may span", max = resolution.max_bins())]
+    RangeTooLarge {
+        /// The resolution.
+        resolution: Resolution,
+        /// The bins the range spans.
+        bins: u64,
+    },
+    /// A usage bin that is empty or holds an entry with no traffic.
+    #[error("a usage bin is empty or holds an entry with no traffic")]
+    UsageBin,
+    /// Usage bins out of order, repeated, off a bin boundary, outside the
+    /// range, or holding more than [`MAX_SERIES_ENTRIES`] entries.
+    #[error("usage bins are out of order, outside the range, or over {MAX_SERIES_ENTRIES} entries")]
+    UsageSeries,
+    /// Events not numbered consecutively upwards, numbered at or after the
+    /// journal end, or more than [`MAX_EVENTS`] of them.
+    #[error(
+        "events are not numbered consecutively, are at or after the journal end, or are over {MAX_EVENTS}"
+    )]
+    Events,
+    /// A set of inbounds that is empty, out of [`crate::Inbound::ALL`]
+    /// order, or names an inbound twice.
+    #[error("not a non-empty list of inbounds in order, each at most once")]
+    InboundSet,
+    /// Not a valid [`crate::NodeName`].
+    #[error("not a node name")]
+    NodeName,
+    /// Not a valid [`crate::ReportUserId`].
+    #[error("not a report user id")]
+    ReportUserId,
+    /// A band number outside [`crate::ReportBandNumber`]'s 1..=999.
+    #[error("band number {number} is outside 1..=999")]
+    ReportBandNumber {
+        /// The rejected number.
+        number: u16,
+    },
+    /// A Mac report that breaks one of its rules ([`crate::MacReportV1`]).
+    #[error("the Mac report breaks its rule: {rule}")]
+    MacReport {
+        /// The rule.
+        rule: MacReportRule,
+    },
+    /// Not a valid [`crate::NoticeTitle`].
+    #[error("not a notice title")]
+    NoticeTitle,
+    /// Not a valid [`crate::NoticeBody`].
+    #[error("not a notice body")]
+    NoticeBody,
 }
 
 closed_enum! {
@@ -131,6 +186,30 @@ closed_enum! {
         MissingManagedFile,
         /// [`ValueError::DuplicateWatchCondition`].
         DuplicateWatchCondition,
+        /// [`ValueError::SeriesSpan`].
+        SeriesSpan,
+        /// [`ValueError::RangeTooLarge`].
+        RangeTooLarge,
+        /// [`ValueError::UsageBin`].
+        UsageBin,
+        /// [`ValueError::UsageSeries`].
+        UsageSeries,
+        /// [`ValueError::Events`].
+        Events,
+        /// [`ValueError::InboundSet`].
+        InboundSet,
+        /// [`ValueError::NodeName`].
+        NodeName,
+        /// [`ValueError::ReportUserId`].
+        ReportUserId,
+        /// [`ValueError::ReportBandNumber`].
+        ReportBandNumber,
+        /// [`ValueError::MacReport`].
+        MacReport,
+        /// [`ValueError::NoticeTitle`].
+        NoticeTitle,
+        /// [`ValueError::NoticeBody`].
+        NoticeBody,
     }
 }
 
@@ -157,6 +236,18 @@ impl ValueError {
             Self::Role => ValueErrorKind::Role,
             Self::MissingManagedFile { .. } => ValueErrorKind::MissingManagedFile,
             Self::DuplicateWatchCondition { .. } => ValueErrorKind::DuplicateWatchCondition,
+            Self::SeriesSpan => ValueErrorKind::SeriesSpan,
+            Self::RangeTooLarge { .. } => ValueErrorKind::RangeTooLarge,
+            Self::UsageBin => ValueErrorKind::UsageBin,
+            Self::UsageSeries => ValueErrorKind::UsageSeries,
+            Self::Events => ValueErrorKind::Events,
+            Self::InboundSet => ValueErrorKind::InboundSet,
+            Self::NodeName => ValueErrorKind::NodeName,
+            Self::ReportUserId => ValueErrorKind::ReportUserId,
+            Self::ReportBandNumber { .. } => ValueErrorKind::ReportBandNumber,
+            Self::MacReport { .. } => ValueErrorKind::MacReport,
+            Self::NoticeTitle => ValueErrorKind::NoticeTitle,
+            Self::NoticeBody => ValueErrorKind::NoticeBody,
         }
     }
 }
@@ -344,6 +435,41 @@ pub enum AgentError {
         /// The month asked about.
         month: UsageMonth,
     },
+    /// The `UsageSeries` range holds more entries than one reply carries
+    /// ([`crate::MAX_SERIES_ENTRIES`]); its first `fitting_bins` bins fit,
+    /// so the Mac asks for those. Zero means one bin alone holds more
+    /// entries than a reply carries.
+    #[error(
+        "the range holds more usage entries than one reply carries; its first {fitting_bins} bins fit"
+    )]
+    SeriesTooLarge {
+        /// How many bins from the start of the range fit one reply.
+        fitting_bins: u32,
+    },
+    /// The agent does not hold every bin of the `UsageSeries` range: part
+    /// of it is older than the bins it keeps, or not yet complete. A
+    /// missing bin is never reported as zero traffic.
+    #[error("the agent does not hold every bin of the requested range")]
+    SeriesNotRecorded {
+        /// The span, at the requested resolution, whose every bin the
+        /// agent holds; `None` when it holds none.
+        #[serde(deserialize_with = "Option::deserialize")]
+        recorded: Option<SeriesSpan>,
+    },
+    /// `MacReport` found no stored report: the Mac has not sent one since
+    /// the node was set up. It is never answered with an empty report.
+    #[error("no Mac report is stored")]
+    MacReportMissing,
+    /// A viewer's `GateSet{Operator}` was handed to the watch, which did not
+    /// record the Operator hold and close the gate within
+    /// [`crate::VIEWER_STOP_WAIT_SECS`] (design §11.3): the viewer account
+    /// cannot write either itself. The gate may still be open, so the stop
+    /// is not done; it is never answered as `GateClosed`.
+    #[error("the stop was not confirmed within {waited_secs} s; the gate may still be open")]
+    GateStopUnconfirmed {
+        /// How long the handler waited for the watch.
+        waited_secs: u64,
+    },
     /// `nft` failed while closing the gate.
     #[error("closing the gate failed")]
     GateCloseFailed {
@@ -367,6 +493,16 @@ pub enum AgentError {
         role: Role,
         /// The refused request.
         request: RequestKind,
+    },
+    /// `GateSet` named a reason the role may not close the gate for (see
+    /// [`Role::may_close_gate_for`]): a viewer may close it for the
+    /// operator hold only. Nothing was changed.
+    #[error("role {role} may not close the gate for {reason:?}")]
+    GateReasonNotPermitted {
+        /// The role of the connecting key.
+        role: Role,
+        /// The refused reason.
+        reason: GateReason,
     },
     /// Input that is not a request this agent understands: empty, not
     /// newline-terminated, not JSON, an unknown request or field, or an
@@ -432,12 +568,22 @@ closed_enum! {
         TargetFactsUnavailable,
         /// [`AgentError::NoUsageRecorded`].
         NoUsageRecorded,
+        /// [`AgentError::SeriesTooLarge`].
+        SeriesTooLarge,
+        /// [`AgentError::SeriesNotRecorded`].
+        SeriesNotRecorded,
+        /// [`AgentError::MacReportMissing`].
+        MacReportMissing,
+        /// [`AgentError::GateStopUnconfirmed`].
+        GateStopUnconfirmed,
         /// [`AgentError::GateCloseFailed`].
         GateCloseFailed,
         /// [`AgentError::Io`].
         Io,
         /// [`AgentError::RoleNotPermitted`].
         RoleNotPermitted,
+        /// [`AgentError::GateReasonNotPermitted`].
+        GateReasonNotPermitted,
         /// [`AgentError::UnknownRequest`].
         UnknownRequest,
         /// [`AgentError::RequestTooLarge`].
@@ -474,9 +620,14 @@ impl AgentError {
             Self::PortPlanConflict { .. } => AgentErrorKind::PortPlanConflict,
             Self::TargetFactsUnavailable { .. } => AgentErrorKind::TargetFactsUnavailable,
             Self::NoUsageRecorded { .. } => AgentErrorKind::NoUsageRecorded,
+            Self::SeriesTooLarge { .. } => AgentErrorKind::SeriesTooLarge,
+            Self::SeriesNotRecorded { .. } => AgentErrorKind::SeriesNotRecorded,
+            Self::MacReportMissing => AgentErrorKind::MacReportMissing,
+            Self::GateStopUnconfirmed { .. } => AgentErrorKind::GateStopUnconfirmed,
             Self::GateCloseFailed { .. } => AgentErrorKind::GateCloseFailed,
             Self::Io { .. } => AgentErrorKind::Io,
             Self::RoleNotPermitted { .. } => AgentErrorKind::RoleNotPermitted,
+            Self::GateReasonNotPermitted { .. } => AgentErrorKind::GateReasonNotPermitted,
             Self::UnknownRequest => AgentErrorKind::UnknownRequest,
             Self::RequestTooLarge => AgentErrorKind::RequestTooLarge,
         }

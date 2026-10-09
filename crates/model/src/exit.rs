@@ -14,6 +14,8 @@ use crate::iface::{
 };
 use crate::ipv4::CarrierPrefix;
 use crate::ports::Port;
+use crate::sim::SimPolicy;
+use crate::time::UnixTime;
 
 /// Whether in-chain probes are bracketed by direct probes (design §10.2);
 /// fixed from the M2 pooling measurement.
@@ -64,136 +66,6 @@ impl Uplink {
         match self {
             Self::SameAsExit => UplinkMode::SameAsExit,
             Self::Separate(_) => UplinkMode::Separate,
-        }
-    }
-}
-
-/// The SIM billing cycle start day, 1..=28 so that it exists in every month.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "u8", into = "u8")]
-pub struct CycleDay(u8);
-
-impl CycleDay {
-    /// Accepts 1..=28.
-    pub fn new(day: u8) -> Result<Self, ModelError> {
-        if (1..=28).contains(&day) {
-            Ok(Self(day))
-        } else {
-            Err(ModelError::InvalidCycleDay { day })
-        }
-    }
-
-    /// The day of the month.
-    #[must_use]
-    pub const fn get(self) -> u8 {
-        self.0
-    }
-}
-
-impl TryFrom<u8> for CycleDay {
-    type Error = ModelError;
-
-    fn try_from(day: u8) -> Result<Self, Self::Error> {
-        Self::new(day)
-    }
-}
-
-impl From<CycleDay> for u8 {
-    fn from(day: CycleDay) -> Self {
-        day.0
-    }
-}
-
-/// The design default SIM warning threshold, 450 GB.
-pub const DEFAULT_SIM_WARN_BYTES: u64 = 450_000_000_000;
-/// The design default SIM hard stop, 560 GB.
-pub const DEFAULT_SIM_HARD_STOP_BYTES: u64 = 560_000_000_000;
-
-/// SIM volume accounting.
-///
-/// Invariant: `warn_bytes > 0` and, with a hard stop, `warn_bytes < hard_stop_bytes`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "SimPolicyRepr", into = "SimPolicyRepr")]
-pub struct SimPolicy {
-    cycle_day: CycleDay,
-    warn_bytes: u64,
-    hard_stop_bytes: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SimPolicyRepr {
-    cycle_day: CycleDay,
-    warn_bytes: u64,
-    // Required even when null: a lost key must not silently disable the hard stop.
-    #[serde(deserialize_with = "Option::deserialize")]
-    hard_stop_bytes: Option<u64>,
-}
-
-impl SimPolicy {
-    /// Accepts positive thresholds with the warning below any hard stop.
-    pub fn new(
-        cycle_day: CycleDay,
-        warn_bytes: u64,
-        hard_stop_bytes: Option<u64>,
-    ) -> Result<Self, ModelError> {
-        let ordered = hard_stop_bytes.is_none_or(|stop| warn_bytes < stop);
-        if warn_bytes == 0 || !ordered {
-            return Err(ModelError::InvalidSimThresholds {
-                warn_bytes,
-                hard_stop_bytes,
-            });
-        }
-        Ok(Self {
-            cycle_day,
-            warn_bytes,
-            hard_stop_bytes,
-        })
-    }
-
-    /// The design defaults (450 GB warning, 560 GB hard stop) for `cycle_day`.
-    #[must_use]
-    pub const fn with_defaults(cycle_day: CycleDay) -> Self {
-        Self {
-            cycle_day,
-            warn_bytes: DEFAULT_SIM_WARN_BYTES,
-            hard_stop_bytes: Some(DEFAULT_SIM_HARD_STOP_BYTES),
-        }
-    }
-
-    /// The billing cycle start day.
-    #[must_use]
-    pub const fn cycle_day(&self) -> CycleDay {
-        self.cycle_day
-    }
-
-    /// The usage at which the operator is warned.
-    #[must_use]
-    pub const fn warn_bytes(&self) -> u64 {
-        self.warn_bytes
-    }
-
-    /// The usage at which the exit stops until the cycle resets, if any.
-    #[must_use]
-    pub const fn hard_stop_bytes(&self) -> Option<u64> {
-        self.hard_stop_bytes
-    }
-}
-
-impl TryFrom<SimPolicyRepr> for SimPolicy {
-    type Error = ModelError;
-
-    fn try_from(repr: SimPolicyRepr) -> Result<Self, Self::Error> {
-        Self::new(repr.cycle_day, repr.warn_bytes, repr.hard_stop_bytes)
-    }
-}
-
-impl From<SimPolicy> for SimPolicyRepr {
-    fn from(policy: SimPolicy) -> Self {
-        Self {
-            cycle_day: policy.cycle_day,
-            warn_bytes: policy.warn_bytes,
-            hard_stop_bytes: policy.hard_stop_bytes,
         }
     }
 }
@@ -412,6 +284,77 @@ impl Default for TrafficPolicy {
     }
 }
 
+/// The tunnel uplink's measured capacity (`fieldkit uplink`, design §22
+/// M2): the 10th and 50th percentiles of the upload rate over the
+/// measurement, against which the console reports uplink use.
+///
+/// Invariant: `0 < p10_bps <= p50_bps`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "UplinkBaselineRepr", into = "UplinkBaselineRepr")]
+pub struct UplinkBaseline {
+    p10_bps: u64,
+    p50_bps: u64,
+    measured_at: UnixTime,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UplinkBaselineRepr {
+    p10_bps: u64,
+    p50_bps: u64,
+    measured_at: UnixTime,
+}
+
+impl UplinkBaseline {
+    /// Accepts positive percentiles with `p10_bps <= p50_bps`.
+    pub fn new(p10_bps: u64, p50_bps: u64, measured_at: UnixTime) -> Result<Self, ModelError> {
+        if p10_bps == 0 || p10_bps > p50_bps {
+            return Err(ModelError::InvalidUplinkBaseline { p10_bps, p50_bps });
+        }
+        Ok(Self {
+            p10_bps,
+            p50_bps,
+            measured_at,
+        })
+    }
+
+    /// The 10th percentile of the upload rate, in bit/s.
+    #[must_use]
+    pub const fn p10_bps(&self) -> u64 {
+        self.p10_bps
+    }
+
+    /// The median upload rate, in bit/s.
+    #[must_use]
+    pub const fn p50_bps(&self) -> u64 {
+        self.p50_bps
+    }
+
+    /// When the measurement ended.
+    #[must_use]
+    pub const fn measured_at(&self) -> UnixTime {
+        self.measured_at
+    }
+}
+
+impl TryFrom<UplinkBaselineRepr> for UplinkBaseline {
+    type Error = ModelError;
+
+    fn try_from(repr: UplinkBaselineRepr) -> Result<Self, Self::Error> {
+        Self::new(repr.p10_bps, repr.p50_bps, repr.measured_at)
+    }
+}
+
+impl From<UplinkBaseline> for UplinkBaselineRepr {
+    fn from(baseline: UplinkBaseline) -> Self {
+        Self {
+            p10_bps: baseline.p10_bps,
+            p50_bps: baseline.p50_bps,
+            measured_at: baseline.measured_at,
+        }
+    }
+}
+
 /// The Mac side of the exit.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -422,12 +365,15 @@ pub struct ExitSite {
     pub uplink: Uplink,
     /// The carrier check; changed only by explicit operator action.
     pub egress_check: EgressCheck,
-    /// SIM accounting.
+    /// SIM accounting: the bill day, the plan and the thresholds.
     pub sim: SimPolicy,
     /// Probe cadence and ports.
     pub probe: ProbePolicy,
     /// The node-wide new-flow cap.
     pub flow_cap: FlowCap,
+    /// The uplink's measured capacity, once measured. The key is required.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub uplink_baseline: Option<UplinkBaseline>,
 }
 
 impl ExitSite {
@@ -465,57 +411,53 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
-    fn sim_policy_thresholds() {
-        let day = CycleDay::new(1).unwrap();
-        let defaults = SimPolicy::with_defaults(day);
+    fn uplink_baselines_are_ordered_and_positive() {
+        let at = UnixTime::from_secs(1_791_417_600);
+        let baseline = UplinkBaseline::new(5_000_000, 16_000_000, at).unwrap();
         assert_eq!(
-            SimPolicy::new(
-                day,
-                DEFAULT_SIM_WARN_BYTES,
-                Some(DEFAULT_SIM_HARD_STOP_BYTES)
+            (
+                baseline.p10_bps(),
+                baseline.p50_bps(),
+                baseline.measured_at()
             ),
-            Ok(defaults)
+            (5_000_000, 16_000_000, at)
         );
-        assert!(SimPolicy::new(day, 1, None).is_ok());
-        for (warn, stop) in [(0, None), (0, Some(5)), (5, Some(5)), (6, Some(5))] {
+        assert!(UplinkBaseline::new(1, 1, at).is_ok());
+        for (p10, p50) in [(0, 0), (0, 5), (6, 5)] {
             assert_eq!(
-                SimPolicy::new(day, warn, stop),
-                Err(ModelError::InvalidSimThresholds {
-                    warn_bytes: warn,
-                    hard_stop_bytes: stop
+                UplinkBaseline::new(p10, p50, at),
+                Err(ModelError::InvalidUplinkBaseline {
+                    p10_bps: p10,
+                    p50_bps: p50
                 })
             );
         }
-        for bad in [0, 29, 31] {
-            assert_eq!(
-                CycleDay::new(bad),
-                Err(ModelError::InvalidCycleDay { day: bad })
-            );
-        }
-        let json = serde_json::to_string(&defaults).unwrap();
+        let json = serde_json::to_string(&baseline).unwrap();
         assert_eq!(
             json,
-            r#"{"cycle_day":1,"warn_bytes":450000000000,"hard_stop_bytes":560000000000}"#
+            r#"{"p10_bps":5000000,"p50_bps":16000000,"measured_at":1791417600}"#
         );
-        assert!(serde_json::from_str::<SimPolicy>(&json.replace("560000000000", "1")).is_err());
-    }
-
-    #[test]
-    fn a_missing_hard_stop_key_is_a_decode_error_not_no_hard_stop() {
-        let no_stop: SimPolicy = serde_json::from_str(
-            r#"{"cycle_day":1,"warn_bytes":450000000000,"hard_stop_bytes":null}"#,
-        )
-        .unwrap();
-        assert_eq!(no_stop.hard_stop_bytes(), None);
-        let error =
-            serde_json::from_str::<SimPolicy>(r#"{"cycle_day":1,"warn_bytes":450000000000}"#)
-                .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("missing field `hard_stop_bytes`"),
-            "{error}"
+        assert_eq!(
+            serde_json::from_str::<UplinkBaseline>(&json).unwrap(),
+            baseline
         );
+        for bad in [
+            json.replace("5000000,", "17000000,"),
+            json.replace("5000000,", "0,"),
+            json.replace(r#","measured_at":1791417600"#, ""),
+            json.replace("1791417600", "1791417600,\"p90_bps\":1"),
+        ] {
+            assert!(
+                serde_json::from_str::<UplinkBaseline>(&bad).is_err(),
+                "{bad}"
+            );
+        }
+        // The site's key is required even when there is no baseline yet.
+        let site = serde_json::to_value(crate::testing::exit_site()).unwrap();
+        assert_eq!(site["uplink_baseline"], serde_json::Value::Null);
+        let mut missing = site;
+        missing.as_object_mut().unwrap().remove("uplink_baseline");
+        assert!(serde_json::from_value::<ExitSite>(missing).is_err());
     }
 
     #[test]
@@ -615,11 +557,6 @@ mod tests {
                     prop_assert!((1024..MACOS_EPHEMERAL_START).contains(&port));
                 }
             }
-        }
-
-        #[test]
-        fn cycle_day_bounds(day in any::<u8>()) {
-            prop_assert_eq!(CycleDay::new(day).is_ok(), (1..=28).contains(&day));
         }
     }
 }

@@ -12,7 +12,7 @@ use mooring_model::deployment::DeploymentParts;
 use mooring_model::digest::Sha256Digest;
 use mooring_model::error::{EntityId, ModelError};
 use mooring_model::node::{AppliedConfig, LifecycleStage, NodeLifecycle};
-use mooring_model::user::UserStatus;
+use mooring_model::user::{SuspendReason, UserStatus};
 
 use super::builders::{
     adopted_store, applied_record, initialised, node_id, planned_node, site, user, with_lifecycle,
@@ -493,4 +493,215 @@ fn plain_writes_refuse_to_change_secret_references() {
         assert!(removed.is_empty());
     }
     assert_eq!(state_bytes(&store), on_disk);
+}
+
+/// Suspending and resuming are configuration changes: each bumps the
+/// generation (every node serving the user must apply again) and keeps
+/// every secret referenced, so the plain update accepts them. A transition
+/// the model refuses is a refused change that writes nothing, and a resume
+/// past the cap on active users is an invalid change.
+#[test]
+fn suspension_and_resumption_bump_the_generation_and_keep_the_secrets() {
+    let (_dir, store, before, secrets) = adopted_store();
+    let start = before.deployment.config_generation();
+    let since = mooring_model::time::UnixTime::from_secs(1_791_417_600);
+    let suspended = store
+        .update_config(start, |mut parts| {
+            parts.users[0].suspend(SuspendReason::Operator, since)?;
+            Ok::<_, ModelError>(parts)
+        })
+        .unwrap();
+    assert_eq!(
+        suspended.deployment.config_generation(),
+        start.next().unwrap()
+    );
+    assert!(matches!(
+        suspended.deployment.users().values().next().unwrap().status,
+        UserStatus::Suspended {
+            reason: SuspendReason::Operator,
+            ..
+        }
+    ));
+    assert_eq!(
+        suspended.deployment.required_secrets(),
+        before.deployment.required_secrets()
+    );
+    assert_eq!(secrets.refs(), suspended.deployment.required_secrets());
+    assert_eq!(suspended.runtime, before.runtime);
+
+    let on_disk = state_bytes(&store);
+    let error = store
+        .update_config(suspended.deployment.config_generation(), |mut parts| {
+            parts.users[0].suspend(SuspendReason::Expired, since)?;
+            Ok::<_, ModelError>(parts)
+        })
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ChangeError::Refused(ModelError::UserNotActive { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(state_bytes(&store), on_disk);
+
+    // At a cap of one, a second active user cannot be resumed.
+    let second = store
+        .update_config(suspended.deployment.config_generation(), |parts| {
+            let mut parts = with_user(parts, user(2, &[]));
+            parts.capacity.max_active_users = std::num::NonZeroU16::new(1);
+            Ok::<_, ModelError>(parts)
+        })
+        .unwrap();
+    let error = store_error(
+        store
+            .update_config(second.deployment.config_generation(), |mut parts| {
+                parts.users[0].resume()?;
+                Ok::<_, ModelError>(parts)
+            })
+            .unwrap_err(),
+    );
+    assert!(
+        matches!(
+            &error,
+            StoreError::InvalidChange {
+                source: ModelError::TooManyActiveUsers { active: 2, .. }
+            }
+        ),
+        "{error:?}"
+    );
+    let resumed = store
+        .update_config(second.deployment.config_generation(), |mut parts| {
+            parts.capacity.max_active_users = std::num::NonZeroU16::new(2);
+            parts.users[0].resume()?;
+            Ok::<_, ModelError>(parts)
+        })
+        .unwrap();
+    assert_eq!(
+        resumed.deployment.config_generation(),
+        second.deployment.config_generation().next().unwrap()
+    );
+    assert_eq!(
+        resumed.deployment.users().values().next().unwrap().status,
+        UserStatus::Active
+    );
+}
+
+/// A closure that sets `users[0]`'s status.
+fn set_status(
+    status: UserStatus,
+) -> impl Fn(DeploymentParts) -> Result<DeploymentParts, Infallible> {
+    move |mut parts| {
+        parts.users[0].status = status;
+        Ok(parts)
+    }
+}
+
+/// A closure changes a user's status only along the user transitions
+/// (`User::suspend`, `resume`, `revoke`; design §7): a revocation in
+/// progress settles only through `Bookkeeping` and never goes back, a
+/// suspension is not re-labelled, and a user who still holds credentials
+/// leaves only through revocation. Setting the field directly cannot get
+/// round that, through either write, and a refused change writes nothing.
+#[test]
+fn a_closure_changes_a_status_only_along_the_user_transitions() {
+    let (_dir, store, before, mut secrets) = adopted_store();
+    let user_id = before.deployment.users().keys().next().unwrap().clone();
+    let since = mooring_model::time::UnixTime::from_secs(1_791_417_600);
+    let suspended = |reason| UserStatus::Suspended { reason, since };
+    let refused = |error: StoreError, from: UserStatus, to: Option<UserStatus>| {
+        assert!(
+            matches!(
+                &error,
+                StoreError::UserStatusEdited { user, from: found_from, to: found_to }
+                    if *user == user_id && *found_from == from && *found_to == to
+            ),
+            "{error:?}"
+        );
+        assert_eq!(error.kind(), StoreErrorKind::UserStatusEdited);
+    };
+
+    // Suspended under one reason: not re-labelled, but resumed or revoked.
+    let start = before.deployment.config_generation();
+    let operator = suspended(SuspendReason::Operator);
+    let held = store.update_config(start, set_status(operator)).unwrap();
+    let current = held.deployment.config_generation();
+    let on_disk = state_bytes(&store);
+    let abuse = suspended(SuspendReason::AbuseReview);
+    refused(
+        store_error(store.update_config(current, set_status(abuse)).unwrap_err()),
+        operator,
+        Some(abuse),
+    );
+    assert_eq!(state_bytes(&store), on_disk);
+    let resumed = store
+        .update_config(current, set_status(UserStatus::Active))
+        .unwrap();
+
+    // Revoking: never back to active or suspended, and not removed.
+    let current = resumed.deployment.config_generation();
+    let revoking = store
+        .update_config(current, set_status(UserStatus::RevokePending))
+        .unwrap();
+    let current = revoking.deployment.config_generation();
+    let on_disk = state_bytes(&store);
+    for to in [UserStatus::Active, operator] {
+        refused(
+            store_error(store.update_config(current, set_status(to)).unwrap_err()),
+            UserStatus::RevokePending,
+            Some(to),
+        );
+        refused(
+            store_error(
+                update_config_with_secrets(
+                    &store,
+                    &mut secrets,
+                    current,
+                    Vec::new(),
+                    set_status(to),
+                )
+                .unwrap_err(),
+            ),
+            UserStatus::RevokePending,
+            Some(to),
+        );
+    }
+    let remove = |mut parts: DeploymentParts| {
+        parts.users.clear();
+        Ok::<_, Infallible>(parts)
+    };
+    refused(
+        store_error(
+            update_config_with_secrets(&store, &mut secrets, current, Vec::new(), remove)
+                .unwrap_err(),
+        ),
+        UserStatus::RevokePending,
+        None,
+    );
+    assert_eq!(state_bytes(&store), on_disk);
+
+    // Revoked through the record: never active again; the record may go.
+    store
+        .record(current, applied_record("lon1", current))
+        .unwrap();
+    let commit = Bookkeeping::RevocationCommitted {
+        user: user_id.clone(),
+        node: node_id("lon1"),
+    };
+    let revoked = record_with_secrets(&store, &mut secrets, current, commit).unwrap();
+    assert_eq!(
+        revoked.deployment.users()[&user_id].status,
+        UserStatus::Revoked
+    );
+    let on_disk = state_bytes(&store);
+    for to in [UserStatus::Active, operator] {
+        refused(
+            store_error(store.update_config(current, set_status(to)).unwrap_err()),
+            UserStatus::Revoked,
+            Some(to),
+        );
+    }
+    assert_eq!(state_bytes(&store), on_disk);
+    let removed = store.update_config(current, remove).unwrap();
+    assert!(removed.deployment.users().is_empty());
 }

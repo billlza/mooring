@@ -9,6 +9,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
+use crate::vps::viewer_account;
+use crate::{ManagedFile, Role, VIEWER_ACCOUNT};
 
 /// A host profile version. `Hello` reports the installed one; `Apply`
 /// carries the one a bundle requires.
@@ -194,6 +196,22 @@ impl HostFile {
     }
 }
 
+/// The unprivileged account a remote viewer logs in as (design §15.9,
+/// decision F5, critique C-9). The agent converges it (M4); which group
+/// lets it read the status, usage and report files is decided with those
+/// files' modes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewerAccount {
+    /// The user name, [`VIEWER_ACCOUNT`].
+    pub name: &'static str,
+    /// The home directory, which does not exist: the account keeps no
+    /// files.
+    pub home: &'static str,
+    /// The login shell. sshd runs the forced command through it, so it must
+    /// be a real shell (`nologin` would refuse the command).
+    pub shell: &'static str,
+}
+
 /// The constant host configuration of one profile version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostProfile {
@@ -209,12 +227,16 @@ pub struct HostProfile {
     pub tmpfiles: &'static [TmpfilesEntry],
     /// The unattended-upgrades policy.
     pub unattended_upgrades: UnattendedUpgrades,
+    /// The remote viewer's account.
+    pub viewer: ViewerAccount,
 }
 
 impl HostProfile {
-    /// The profile this build of the agent converges hosts to.
+    /// The profile this build of the agent converges hosts to. Version 2
+    /// adds the viewer account and its sshd `Match` block (decision F5);
+    /// version 1 was never installed on a node.
     pub const CURRENT: Self = Self {
-        version: HostProfileVersion(1),
+        version: HostProfileVersion(2),
         sysctls: &[
             Sysctl {
                 key: "net.core.default_qdisc",
@@ -289,10 +311,16 @@ impl HostProfile {
             origins: &["origin=Debian,codename=${distro_codename}-security,label=Debian-Security"],
             reboot_time: "20:00",
         },
+        viewer: ViewerAccount {
+            name: VIEWER_ACCOUNT,
+            home: "/nonexistent",
+            shell: "/bin/sh",
+        },
     };
 
     /// The value the profile gives `directive`. The match names every
-    /// directive, so the drop-in cannot omit one.
+    /// directive, so the drop-in cannot omit one. `AllowUsers` admits
+    /// `root` (the bootstrap and ops keys) and [`VIEWER_ACCOUNT`].
     pub const fn sshd_value(&self, directive: SshdDirective) -> &'static str {
         match directive {
             SshdDirective::PasswordAuthentication
@@ -305,18 +333,69 @@ impl HostProfile {
             SshdDirective::PermitRootLogin => "forced-commands-only",
             SshdDirective::AuthenticationMethods => "publickey",
             SshdDirective::MaxAuthTries => "3",
-            SshdDirective::AllowUsers => "root",
+            SshdDirective::AllowUsers => concat!("root ", viewer_account!()),
         }
     }
 
-    /// The line `sshd -T` prints for `directive` when the profile is in
-    /// effect: the keyword in lower case, a space and the value.
-    pub fn sshd_effective_line(&self, directive: SshdDirective) -> String {
-        format!(
-            "{} {}",
-            directive.keyword().to_ascii_lowercase(),
-            self.sshd_value(directive)
-        )
+    /// The lines `sshd -T` prints for `directive` when the profile is in
+    /// effect: the keyword in lower case, a space and the value; for
+    /// `AllowUsers`, which holds a list, one such line per user, in the
+    /// profile's order (OpenSSH's `servconf.c` dumps a string array one
+    /// element per line; seen with OpenSSH 10.3p1's `sshd -T` on
+    /// 2026-10-09, and checked on Debian's build in L2/L5).
+    ///
+    /// `AllowUsers` is the one directive here that is not first-match-wins:
+    /// every `AllowUsers` line of every included file adds to the list, so
+    /// a later drop-in (a provider image's `AllowUsers debian`) admits
+    /// another account, and `sshd -T` then prints a third `allowusers`
+    /// line. A drift check must therefore compare the exact multiset of
+    /// `allowusers` lines `sshd -T` prints with these, never only that
+    /// these are present.
+    pub fn sshd_effective_lines(&self, directive: SshdDirective) -> Vec<String> {
+        let keyword = directive.keyword().to_ascii_lowercase();
+        let value = self.sshd_value(directive);
+        match directive {
+            SshdDirective::AllowUsers => value
+                .split(' ')
+                .map(|user| format!("{keyword} {user}"))
+                .collect(),
+            SshdDirective::PasswordAuthentication
+            | SshdDirective::KbdInteractiveAuthentication
+            | SshdDirective::PermitRootLogin
+            | SshdDirective::AuthenticationMethods
+            | SshdDirective::AllowTcpForwarding
+            | SshdDirective::AllowAgentForwarding
+            | SshdDirective::AllowStreamLocalForwarding
+            | SshdDirective::PermitTunnel
+            | SshdDirective::X11Forwarding
+            | SshdDirective::MaxAuthTries => vec![format!("{keyword} {value}")],
+        }
+    }
+
+    /// The sshd drop-in: every directive once, then the `Match` block that
+    /// gives [`VIEWER_ACCOUNT`] its keys file
+    /// ([`ManagedFile::ViewerKeys`], root-owned, inside the committed
+    /// generation) and forces `serve-ssh --role viewer`, which holds even
+    /// for a key line without `command=`. The block ends at the end of the
+    /// included file: OpenSSH restores the match state after each included
+    /// file (`servconf.c`, `V_10_0_P1`). With OpenSSH 10.3p1, `sshd -T -C
+    /// user=…` on 2026-10-09 showed the main file's later lines and a later
+    /// drop-in applying to every account, and `root` and any other account
+    /// keeping the default `AuthorizedKeysFile` and no `ForceCommand`, so a
+    /// viewer key is never read for root; L2/L5 repeat the check on
+    /// Debian's build.
+    fn sshd_drop_in_lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = SshdDirective::ALL
+            .iter()
+            .map(|directive| format!("{} {}", directive.keyword(), self.sshd_value(*directive)))
+            .collect();
+        lines.push(format!("Match User {}", self.viewer.name));
+        lines.push(format!(
+            "\tAuthorizedKeysFile {}",
+            ManagedFile::ViewerKeys.path()
+        ));
+        lines.push(format!("\tForceCommand {}", Role::Viewer.forced_command()));
+        lines
     }
 
     /// The exact contents of `file`, newline-terminated.
@@ -336,10 +415,7 @@ impl HostProfile {
                 .iter()
                 .map(|module| (*module).to_owned())
                 .collect(),
-            HostFile::SshdDropIn => SshdDirective::ALL
-                .iter()
-                .map(|directive| format!("{} {}", directive.keyword(), self.sshd_value(*directive)))
-                .collect(),
+            HostFile::SshdDropIn => self.sshd_drop_in_lines(),
             HostFile::Journald => std::iter::once("[Journal]".to_owned())
                 .chain(
                     self.journald
@@ -395,16 +471,27 @@ mod tests {
 
     const PROFILE: HostProfile = HostProfile::CURRENT;
 
+    const HEADER: &str = "# Managed by Mooring host profile 2. Local changes are overwritten.\n";
+
     #[test]
-    fn the_current_profile_is_version_1() {
-        assert_eq!(PROFILE.version, HostProfileVersion::new(1));
+    fn the_current_profile_is_version_2() {
+        assert_eq!(PROFILE.version, HostProfileVersion::new(2));
+        assert_eq!(
+            PROFILE.viewer,
+            ViewerAccount {
+                name: "mooring-view",
+                home: "/nonexistent",
+                shell: "/bin/sh",
+            }
+        );
+        assert_eq!(PROFILE.viewer.name, VIEWER_ACCOUNT);
     }
 
     #[test]
     fn sysctl_file_carries_the_section_8_6_values() {
         assert_eq!(
             PROFILE.render(HostFile::Sysctl),
-            "# Managed by Mooring host profile 1. Local changes are overwritten.\n\
+            "# Managed by Mooring host profile 2. Local changes are overwritten.\n\
              net.core.default_qdisc = fq\n\
              net.ipv4.tcp_congestion_control = bbr\n\
              net.ipv4.tcp_slow_start_after_idle = 0\n\
@@ -425,11 +512,14 @@ mod tests {
         );
     }
 
+    /// The exact drop-in: every directive once, then the viewer's `Match`
+    /// block (tab-indented) with its root-owned keys file and forced
+    /// command.
     #[test]
     fn sshd_drop_in_sets_every_directive_once() {
         assert_eq!(
             PROFILE.render(HostFile::SshdDropIn),
-            "# Managed by Mooring host profile 1. Local changes are overwritten.\n\
+            "# Managed by Mooring host profile 2. Local changes are overwritten.\n\
              PasswordAuthentication no\n\
              KbdInteractiveAuthentication no\n\
              PermitRootLogin forced-commands-only\n\
@@ -440,18 +530,53 @@ mod tests {
              PermitTunnel no\n\
              X11Forwarding no\n\
              MaxAuthTries 3\n\
-             AllowUsers root\n"
-        );
-        assert_eq!(
-            PROFILE.sshd_effective_line(SshdDirective::PermitRootLogin),
-            "permitrootlogin forced-commands-only"
+             AllowUsers root mooring-view\n\
+             Match User mooring-view\n\
+             \tAuthorizedKeysFile /etc/mooring/current/viewer_authorized_keys\n\
+             \tForceCommand /usr/local/lib/mooring/agent/current serve-ssh --role viewer\n"
         );
         assert!(HostFile::SshdDropIn.path() < "/etc/ssh/sshd_config.d/50-cloud-init.conf");
     }
 
+    /// `sshd -T` prints one `allowusers` line per user and one line for
+    /// every other directive.
+    #[test]
+    fn sshd_effective_lines_list_each_allowed_user() {
+        assert_eq!(
+            PROFILE.sshd_effective_lines(SshdDirective::AllowUsers),
+            ["allowusers root", "allowusers mooring-view"]
+        );
+        assert_eq!(
+            PROFILE.sshd_effective_lines(SshdDirective::PermitRootLogin),
+            ["permitrootlogin forced-commands-only"]
+        );
+        for directive in SshdDirective::ALL {
+            let lines = PROFILE.sshd_effective_lines(*directive);
+            let keyword = directive.keyword().to_ascii_lowercase();
+            let values: Vec<&str> = lines
+                .iter()
+                .map(|line| line.strip_prefix(&format!("{keyword} ")).unwrap())
+                .collect();
+            assert_eq!(
+                values.join(" "),
+                PROFILE.sshd_value(*directive),
+                "{directive:?}"
+            );
+            assert_eq!(
+                lines.len(),
+                if *directive == SshdDirective::AllowUsers {
+                    2
+                } else {
+                    1
+                },
+                "{directive:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_other_files_have_their_fixed_text() {
-        let header = "# Managed by Mooring host profile 1. Local changes are overwritten.\n";
+        let header = HEADER;
         assert_eq!(
             PROFILE.render(HostFile::KernelModules),
             format!("{header}tcp_bbr\n")

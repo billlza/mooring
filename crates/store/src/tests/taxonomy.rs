@@ -6,8 +6,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
-use mooring_model::counters::{ConfigGeneration, CounterKind};
-use mooring_model::error::ModelError;
+use mooring_model::counters::ConfigGeneration;
 
 use crate::error::{ChangeErrorKind, StoreError, StoreErrorKind};
 use crate::secrets::{SecretOp, SecretStoreError, SecretStoreErrorKind};
@@ -30,7 +29,7 @@ fn assert_complete<K: Copy + Ord + Display>(
 
 #[test]
 fn kind_lists_are_complete() {
-    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 19);
+    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 20);
     assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 2);
     assert_complete(ChangeErrorKind::ALL, ChangeErrorKind::name, 2);
     assert_eq!(
@@ -39,24 +38,11 @@ fn kind_lists_are_complete() {
     );
 }
 
-/// `MigrationFailed` is the contract for the first fallible migration step
-/// and `Encode` guards serde_json's fallible API; neither can occur in this
-/// build, so their mapping is checked on constructed values.
+/// `Encode` guards serde_json's fallible API and cannot occur in this build,
+/// so its mapping is checked on a constructed value. (`MigrationFailed` has
+/// a real path: `tests::migration`.)
 #[test]
 fn kinds_without_a_reachable_path_still_map() {
-    let migration = StoreError::MigrationFailed {
-        from: 1,
-        to: 2,
-        source: ModelError::CounterOverflow {
-            counter: CounterKind::ConfigGeneration,
-        },
-    };
-    assert_eq!(migration.kind(), StoreErrorKind::MigrationFailed);
-    assert_eq!(
-        migration.to_string(),
-        "migrating the state from version 1 to 2 failed"
-    );
-
     let encode = StoreError::Encode {
         source: serde_json::from_str::<u8>("x").unwrap_err(),
     };
