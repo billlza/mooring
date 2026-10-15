@@ -173,6 +173,9 @@ pub(crate) fn secrets_where(
             SecretRef::AlertTopic => {
                 SecretMaterial::Password(secrets.alert_topic().unwrap().clone())
             }
+            SecretRef::RouterAdmin => {
+                SecretMaterial::RouterAdminPassword(secrets.router_admin().unwrap().clone())
+            }
             SecretRef::NodeRealityPrivate(n) => {
                 SecretMaterial::RealityPrivateKey(secrets.reality_private(n).unwrap().clone())
             }

@@ -1,0 +1,285 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Runs a parsed command against an [`Env`] and turns its result into
+//! output and an exit code (design §14): 0 on success, 1 for a local
+//! failure, 2 for a usage error (clap's), 3 to 8 for a router failure in
+//! the order of `RouterUnavailableReason`.
+//!
+//! Everything the commands touch comes in through `Env`, so tests run them
+//! against a loopback stub, a scripted link layer, an in-memory secret
+//! store, a scripted console and a fixed clock.
+
+use std::error::Error;
+use std::ffi::OsString;
+use std::fs::OpenOptions;
+use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use mooring_daemon_core::router::RouterReading;
+use mooring_daemon_core::router::netgear::RedactedModelJson;
+use mooring_model::iface::BsdName;
+use mooring_model::secret::{SecretEntry, SecretRef};
+use mooring_model::time::UnixTime;
+use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, write_router_pin};
+
+use crate::cli::{Command, RouterCommand};
+use crate::error::{CommandError, LocalError, Unconfirmed};
+use crate::paths;
+use crate::prompt::{self, Answer, Console};
+use crate::router::output::{json_line, summary};
+use crate::router::{self, PinDecision, RouterEnv, decide_pin};
+
+/// What a command runs against.
+pub(crate) struct Env<'a> {
+    /// The router adapter's link layer, port and limits.
+    pub(crate) router: RouterEnv<'a>,
+    /// The secret store (the login keychain in the binary).
+    pub(crate) secrets: &'a mut dyn SecretStore,
+    /// `HOME`, from which the support directory is derived.
+    pub(crate) home: Option<OsString>,
+    /// The Mac's clock.
+    pub(crate) clock: &'a dyn Fn() -> Result<UnixTime, LocalError>,
+    /// The operator's terminal.
+    pub(crate) console: &'a mut dyn Console,
+    /// Standard input.
+    pub(crate) stdin: &'a mut dyn Read,
+}
+
+/// The system clock, in whole seconds since the epoch.
+pub(crate) fn system_clock() -> Result<UnixTime, LocalError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| UnixTime::from_secs(since.as_secs()))
+        .map_err(|_| LocalError::Clock)
+}
+
+fn output(error: io::Error) -> CommandError {
+    CommandError::Local(LocalError::Output(error))
+}
+
+fn support_dir(env: &Env<'_>) -> Result<PathBuf, CommandError> {
+    paths::support_dir(env.home.clone()).map_err(CommandError::Local)
+}
+
+/// Runs `command`, writing its output to `out` and any error to `err`;
+/// returns the exit code.
+pub(crate) fn run(
+    command: Command,
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8 {
+    let Command::Router(command) = command;
+    let json = matches!(command, RouterCommand::Status { json: true, .. });
+    let Err(error) = execute(command, env, out) else {
+        return 0;
+    };
+    if json && let CommandError::Router(router) = &error {
+        let reading = RouterReading::Unavailable {
+            reason: router.reason(),
+            last_polled_at: None,
+        };
+        let written = json_line(&reading)
+            .map_err(io::Error::other)
+            .and_then(|line| out.write_all(line.as_bytes()));
+        if let Err(write) = written {
+            // The reading could not be written; say so as well.
+            report(err, &output(write));
+        }
+    }
+    report(err, &error);
+    error.exit_code()
+}
+
+/// Writes `error` and its causes to `err`, one per line. If `err` itself
+/// cannot be written, the exit code is the only report left.
+fn report(err: &mut dyn Write, error: &CommandError) {
+    let mut text = format!("mooringctl: {error}\n");
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(&format!("  caused by: {cause}\n"));
+        source = cause.source();
+    }
+    if err.write_all(text.as_bytes()).is_err() {
+        // Nowhere left to report to: the exit code still says what failed.
+    }
+}
+
+fn execute(
+    command: RouterCommand,
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+) -> Result<(), CommandError> {
+    match command {
+        RouterCommand::Pin {
+            interface,
+            yes,
+            replace,
+        } => pin(env, out, &interface, yes, replace),
+        RouterCommand::SetPassword { stdin } => set_password(env, out, stdin),
+        RouterCommand::Status { interface, json } => status(env, out, &interface, json),
+        RouterCommand::Capture {
+            interface,
+            out: path,
+            anonymous,
+        } => capture(env, out, &interface, &path, anonymous),
+    }
+}
+
+fn pin(
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    interface: &BsdName,
+    yes: bool,
+    replace: bool,
+) -> Result<(), CommandError> {
+    let dir = support_dir(env)?;
+    let candidate = router::pin_candidate(&env.router, interface)?;
+    writeln!(
+        out,
+        "interface {}: gateway {}, link-layer address {}",
+        interface.as_str(),
+        candidate.attachment.gateway,
+        candidate.lladdr
+    )
+    .map_err(output)?;
+    let existing =
+        read_router_pin(&dir).map_err(|error| CommandError::Local(LocalError::Store(error)))?;
+    if decide_pin(existing.as_ref(), candidate.lladdr, replace)? == PinDecision::AlreadyPinned {
+        writeln!(out, "already pinned; nothing was written").map_err(output)?;
+        return Ok(());
+    }
+    if !yes {
+        match env
+            .console
+            .confirm("Record this link-layer address as the M7's identity?")?
+        {
+            Answer::Yes => {}
+            Answer::No => return Err(LocalError::NotConfirmed(Unconfirmed::Declined).into()),
+            Answer::NoTerminal => {
+                return Err(LocalError::NotConfirmed(Unconfirmed::NoTerminal).into());
+            }
+        }
+    }
+    paths::create_support_dir(&dir)?;
+    let pin = RouterPin {
+        gateway_lladdr: candidate.lladdr,
+        pinned_at: (env.clock)()?,
+    };
+    write_router_pin(&dir, &pin).map_err(|error| CommandError::Local(LocalError::Store(error)))?;
+    writeln!(
+        out,
+        "pinned as the M7's identity in {}",
+        dir.join(ROUTER_PIN_FILE).display()
+    )
+    .map_err(output)
+}
+
+fn set_password(env: &mut Env<'_>, out: &mut dyn Write, stdin: bool) -> Result<(), CommandError> {
+    let password = if stdin {
+        prompt::stdin_password(env.stdin)?
+    } else {
+        prompt::terminal_password(env.console)?
+    };
+    env.secrets
+        .put(SecretEntry::RouterAdmin(password))
+        .map_err(|error| CommandError::Local(LocalError::Keychain(error)))?;
+    writeln!(
+        out,
+        "the M7 admin password is stored as {}",
+        SecretRef::RouterAdmin
+    )
+    .map_err(output)
+}
+
+fn status(
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    interface: &BsdName,
+    json: bool,
+) -> Result<(), CommandError> {
+    let dir = support_dir(env)?;
+    let status = router::status(&env.router, &dir, &*env.secrets, interface)?;
+    let polled_at = (env.clock)()?;
+    let text = if json {
+        json_line(&RouterReading::Available {
+            polled_at,
+            status: Box::new(status),
+        })
+        .map_err(|error| output(io::Error::other(error)))?
+    } else {
+        summary(interface, polled_at, &status).map_err(|_| LocalError::Clock)?
+    };
+    out.write_all(text.as_bytes()).map_err(output)
+}
+
+/// Writes the capture to a new file (mode 0600), never over an existing
+/// one, and flushes it to stable storage.
+fn write_capture(path: &Path, capture: &RedactedModelJson) -> Result<(), LocalError> {
+    let write_error = |source: io::Error| LocalError::CaptureWrite {
+        path: path.to_path_buf(),
+        source,
+    };
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                LocalError::CaptureExists {
+                    path: path.to_path_buf(),
+                }
+            } else {
+                write_error(error)
+            }
+        })?;
+    file.write_all(capture.as_bytes()).map_err(write_error)?;
+    file.write_all(b"\n").map_err(write_error)?;
+    file.sync_all().map_err(write_error)
+}
+
+fn capture(
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    interface: &BsdName,
+    path: &Path,
+    anonymous: bool,
+) -> Result<(), CommandError> {
+    // Refused before the M7 is asked; `create_new` refuses it again if the
+    // file appears meanwhile.
+    match path.symlink_metadata() {
+        Ok(_) => {
+            return Err(LocalError::CaptureExists {
+                path: path.to_path_buf(),
+            }
+            .into());
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(LocalError::CaptureWrite {
+                path: path.to_path_buf(),
+                source,
+            }
+            .into());
+        }
+    }
+    let dir = support_dir(env)?;
+    let capture = router::capture(&env.router, &dir, &*env.secrets, interface, anonymous)?;
+    write_capture(path, &capture)?;
+    writeln!(
+        out,
+        "wrote the redacted capture ({} bytes) to {}",
+        capture.as_bytes().len() + 1,
+        path.display()
+    )
+    .map_err(output)?;
+    // Values the shape check refused are placeholders in the file; their
+    // paths (never their values) say which.
+    for withheld in capture.withheld() {
+        writeln!(out, "withheld (a placeholder in the capture): {withheld}").map_err(output)?;
+    }
+    Ok(())
+}

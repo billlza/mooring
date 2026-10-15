@@ -14,10 +14,11 @@ pub(crate) enum Command {
     Acceptance,
     ReleaseAcceptance,
     Clean,
+    Mooringctl,
 }
 
 impl Command {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Ci,
         Self::GraphCheck,
         Self::KindsCoverage,
@@ -25,6 +26,7 @@ impl Command {
         Self::Acceptance,
         Self::ReleaseAcceptance,
         Self::Clean,
+        Self::Mooringctl,
     ];
 
     pub(crate) const fn name(self) -> &'static str {
@@ -36,6 +38,7 @@ impl Command {
             Self::Acceptance => "acceptance",
             Self::ReleaseAcceptance => "release-acceptance",
             Self::Clean => "clean",
+            Self::Mooringctl => "mooringctl",
         }
     }
 
@@ -54,6 +57,9 @@ impl Command {
                 "release gate: require every enumerated export shape to be accepted by real CFM"
             }
             Self::Clean => "remove the target directory and report the freed bytes",
+            Self::Mooringctl => {
+                "build mooringctl and sign a copy, <target>/signed/mooringctl, with its reverse-DNS identifier (macOS only)"
+            }
         }
     }
 
@@ -109,6 +115,13 @@ mod tests {
         for command in Command::ALL {
             assert_eq!(parse(&[command.name()]).unwrap(), command);
         }
+    }
+
+    /// `mooringctl`'s own error and the documents tell the operator to run
+    /// `cargo xtask mooringctl`, so that spelling is pinned here.
+    #[test]
+    fn mooringctl_is_spelt_as_documented() {
+        assert_eq!(parse(&["mooringctl"]).unwrap(), Command::Mooringctl);
     }
 
     #[test]

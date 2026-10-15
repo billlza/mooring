@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::fmt::Display;
 
 use mooring_model::counters::ConfigGeneration;
+use mooring_model::secret::SecretRef;
 
 use crate::error::{ChangeErrorKind, StoreError, StoreErrorKind};
 use crate::secrets::{SecretOp, SecretStoreError, SecretStoreErrorKind};
@@ -29,8 +30,8 @@ fn assert_complete<K: Copy + Ord + Display>(
 
 #[test]
 fn kind_lists_are_complete() {
-    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 20);
-    assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 2);
+    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 21);
+    assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 3);
     assert_complete(ChangeErrorKind::ALL, ChangeErrorKind::name, 2);
     assert_eq!(
         StoreErrorKind::GenerationConflict.name(),
@@ -67,4 +68,25 @@ fn messages_name_the_counters_and_the_operation() {
         keychain.to_string(),
         "keychain delete failed with OSStatus -25300"
     );
+    assert_eq!(keychain.kind(), SecretStoreErrorKind::Keychain);
+}
+
+/// `ItemInvalid` is produced by a Keychain implementation (`mooringctl`'s
+/// login keychain) when an item is not text of its reference's kind; it
+/// names the reference and kind, never the item.
+#[test]
+fn an_invalid_item_names_its_reference_and_kind_only() {
+    let invalid = SecretStoreError::ItemInvalid {
+        secret_ref: SecretRef::RouterAdmin,
+    };
+    assert_eq!(invalid.kind(), SecretStoreErrorKind::ItemInvalid);
+    assert_eq!(
+        invalid.to_string(),
+        "the item stored as router/admin is not valid RouterAdminPassword material"
+    );
+    let missing = SecretStoreError::SecretMissing {
+        secret_ref: SecretRef::RouterAdmin,
+    };
+    assert_eq!(missing.kind(), SecretStoreErrorKind::SecretMissing);
+    assert_eq!(missing.to_string(), "secret router/admin is missing");
 }

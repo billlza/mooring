@@ -71,6 +71,25 @@ pub(crate) const ALLOWED_EDGES: &[AllowedEdges] = &[
         normal: &["mooring-model", "mooring-agent-proto"],
         dev: &["mooring-fixtures"],
     },
+    // The only crate with `unsafe` (libc only): no workspace edge, so it
+    // returns std types and its callers convert them.
+    AllowedEdges {
+        krate: "mooring-macsys",
+        normal: &[],
+        dev: &[],
+    },
+    // The CLI's first slice (revision 7): the router commands. The design's
+    // keys, render, export and agent-proto edges join with the daemon (M5).
+    AllowedEdges {
+        krate: "mooringctl",
+        normal: &[
+            "mooring-model",
+            "mooring-store",
+            "mooring-macsys",
+            "mooring-daemon-core",
+        ],
+        dev: &[],
+    },
     AllowedEdges {
         krate: "xtask",
         normal: &["mooring-export", "mooring-model"],
@@ -420,14 +439,14 @@ mod tests {
         let mut members = members_matching(ALLOWED_EDGES);
         members.retain(|m| m.name != "mooring-store");
         members.push(MemberEdges {
-            name: "mooring-macsys".to_owned(),
+            name: "mooring-unlisted".to_owned(),
             edges: BTreeSet::new(),
         });
         assert_eq!(
             check(&members, ALLOWED_EDGES, TEST_ONLY_CRATES),
             [
                 Finding::UnlistedMember {
-                    name: "mooring-macsys".to_owned(),
+                    name: "mooring-unlisted".to_owned(),
                 },
                 Finding::StaleRow {
                     name: "mooring-store",

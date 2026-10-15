@@ -4,7 +4,9 @@
 //! [`SecretRef`], holding typed [`SecretMaterial`].
 //!
 //! The shipped implementation is the macOS data-protection Keychain
-//! (milestone M5). Development and test lanes use [`InMemorySecretStore`].
+//! (milestone M5). Until then `mooringctl` keeps the M7's admin password
+//! in the legacy login keychain (revision 7); development and test lanes
+//! use [`InMemorySecretStore`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -51,6 +53,13 @@ pub enum SecretStoreError {
         /// The `OSStatus` the Security framework returned.
         status: i32,
     },
+    /// The item stored under the reference is not valid UTF-8 text of
+    /// the material its reference names; the text is never echoed.
+    #[error("the item stored as {secret_ref} is not valid {} material", secret_ref.kind())]
+    ItemInvalid {
+        /// The reference whose item is invalid.
+        secret_ref: SecretRef,
+    },
 }
 
 kinds! {
@@ -60,6 +69,8 @@ kinds! {
         SecretMissing,
         /// See [`SecretStoreError::Keychain`].
         Keychain,
+        /// See [`SecretStoreError::ItemInvalid`].
+        ItemInvalid,
     }
 }
 
@@ -70,6 +81,7 @@ impl SecretStoreError {
         match self {
             Self::SecretMissing { .. } => SecretStoreErrorKind::SecretMissing,
             Self::Keychain { .. } => SecretStoreErrorKind::Keychain,
+            Self::ItemInvalid { .. } => SecretStoreErrorKind::ItemInvalid,
         }
     }
 }

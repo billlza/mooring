@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "mooringctl"
+description = "The Mooring command-line tool (revision 7: the M7 router commands)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# macOS only (design §6): on any other target the binary is a stub that
+# says so and exits 1 (src/main.rs), and none of these is built.
+[target.'cfg(target_os = "macos")'.dependencies]
+clap.workspace = true
+core-foundation.workspace = true
+mooring-daemon-core.workspace = true
+mooring-macsys.workspace = true
+mooring-model.workspace = true
+mooring-store.workspace = true
+security-framework.workspace = true
+serde_json.workspace = true
+socket2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+tempfile.workspace = true

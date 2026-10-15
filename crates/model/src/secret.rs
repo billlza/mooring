@@ -81,6 +81,8 @@ kinds! {
         Uuid,
         /// An Ed25519 private key seed.
         Ed25519Seed,
+        /// The M7's admin password.
+        RouterAdminPassword,
     }
 }
 
@@ -206,6 +208,39 @@ impl Hy2KeyPem {
     }
 }
 
+/// The longest M7 admin password accepted, in bytes.
+pub const MAX_ROUTER_ADMIN_PASSWORD_BYTES: usize = 128;
+
+/// The M7's admin password (design §12, §15.6): 1 to
+/// [`MAX_ROUTER_ADMIN_PASSWORD_BYTES`] bytes of printable ASCII
+/// (`0x20..=0x7E`), its own canonical text.
+///
+/// The M7's own limits are undocumented (inference); CR, LF, NUL, other
+/// control bytes and non-ASCII are refused so that the login form's body
+/// and the reading of the password from a terminal or stdin stay exact.
+/// A refusal never echoes the text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouterAdminPassword(Secret<String>);
+
+impl RouterAdminPassword {
+    /// Accepts 1 to 128 bytes of printable ASCII.
+    pub fn parse(text: &str) -> Result<Self, ModelError> {
+        let valid = (1..=MAX_ROUTER_ADMIN_PASSWORD_BYTES).contains(&text.len())
+            && text.bytes().all(|byte| matches!(byte, 0x20..=0x7e));
+        if valid {
+            Ok(Self(Secret::new(text.to_owned())))
+        } else {
+            Err(invalid(SecretKind::RouterAdminPassword))
+        }
+    }
+
+    /// Borrows the password, for the login form's body only.
+    #[must_use]
+    pub fn expose_str(&self) -> &str {
+        self.0.expose_secret()
+    }
+}
+
 /// One piece of secret material of any kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretMaterial {
@@ -221,6 +256,8 @@ pub enum SecretMaterial {
     Uuid(Secret<Uuid>),
     /// See [`Ed25519Seed`].
     Ed25519Seed(Ed25519Seed),
+    /// See [`RouterAdminPassword`].
+    RouterAdminPassword(RouterAdminPassword),
 }
 
 impl SecretMaterial {
@@ -234,6 +271,7 @@ impl SecretMaterial {
             Self::Password(_) => SecretKind::Password,
             Self::Uuid(_) => SecretKind::Uuid,
             Self::Ed25519Seed(_) => SecretKind::Ed25519Seed,
+            Self::RouterAdminPassword(_) => SecretKind::RouterAdminPassword,
         }
     }
 
@@ -250,6 +288,9 @@ impl SecretMaterial {
                 Uuid::parse(text).map_err(|_| invalid(SecretKind::Uuid))?,
             )),
             SecretKind::Ed25519Seed => Self::Ed25519Seed(Ed25519Seed::parse(text)?),
+            SecretKind::RouterAdminPassword => {
+                Self::RouterAdminPassword(RouterAdminPassword::parse(text)?)
+            }
         })
     }
 
@@ -263,6 +304,7 @@ impl SecretMaterial {
             Self::Password(password) => password.expose_text(),
             Self::Uuid(uuid) => uuid.expose_secret().to_hyphenated(),
             Self::Ed25519Seed(seed) => seed.expose_text(),
+            Self::RouterAdminPassword(password) => Zeroizing::new(password.expose_str().to_owned()),
         }
     }
 
@@ -276,14 +318,15 @@ impl SecretMaterial {
             | Self::WgPrivateKey(_)
             | Self::Password(_)
             | Self::Uuid(_)
-            | Self::Ed25519Seed(_) => vec![self.encode()],
+            | Self::Ed25519Seed(_)
+            | Self::RouterAdminPassword(_) => vec![self.encode()],
         }
     }
 }
 
-/// Names one keychain item (design §7). Every reference but one belongs to
-/// a node ([`SecretRef::node`]); the deployment's ntfy topic belongs to no
-/// node.
+/// Names one keychain item (design §7). Every reference but two belongs
+/// to a node ([`SecretRef::node`]); the deployment's ntfy topic and the
+/// M7's admin password belong to no node.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SecretRef {
     /// The deployment's one ntfy topic (design §15.8, decision F6): the
@@ -296,6 +339,13 @@ pub enum SecretRef {
     /// (`[-_A-Za-z0-9]{1,64}`) is an inference from ntfy's server source,
     /// checked in M4.
     AlertTopic,
+    /// The M7's admin password (design §12, §15.6), account `router/admin`.
+    /// No deployment references it ([`crate::Deployment::required_secrets`]
+    /// never contains it): `mooringctl router set-password` stores it and
+    /// the router adapter reads it, so the store's ordered secret updates
+    /// never write or delete it, and an unreferenced item under this
+    /// account is not an orphan.
+    RouterAdmin,
     /// The node's REALITY private key.
     NodeRealityPrivate(NodeId),
     /// The VPS side of the node's WireGuard tunnel.
@@ -343,6 +393,7 @@ impl SecretRef {
             | Self::UserHy2Password(..)
             | Self::ProbeHy2Password(_) => SecretKind::Password,
             Self::NodeSshBootstrapPrivate(_) => SecretKind::Ed25519Seed,
+            Self::RouterAdmin => SecretKind::RouterAdminPassword,
             Self::NodeDeadManCheck(_)
             | Self::NodeMacAliveCheck(_)
             | Self::UserVlessUuid(..)
@@ -352,13 +403,13 @@ impl SecretRef {
         }
     }
 
-    /// The node this secret belongs to, or `None` for the one that
-    /// belongs to no node: the deployment's ntfy topic
-    /// ([`SecretRef::AlertTopic`]).
+    /// The node this secret belongs to, or `None` for the two that belong
+    /// to no node: the deployment's ntfy topic ([`SecretRef::AlertTopic`])
+    /// and the M7's admin password ([`SecretRef::RouterAdmin`]).
     #[must_use]
     pub const fn node(&self) -> Option<&NodeId> {
         match self {
-            Self::AlertTopic => None,
+            Self::AlertTopic | Self::RouterAdmin => None,
             Self::NodeRealityPrivate(node)
             | Self::NodeWgVpsPrivate(node)
             | Self::NodeWgMacPrivate(node)
@@ -378,7 +429,8 @@ impl SecretRef {
 }
 
 /// The stable text form, used as the keychain account name:
-/// `alert/topic` for the deployment's ntfy topic, `node/<node>/<item>`
+/// `alert/topic` for the deployment's ntfy topic, `router/admin` for the
+/// M7's admin password, `node/<node>/<item>`
 /// (a channel node's checks included: `node/<node>/dead-man-check`,
 /// `node/<node>/mac-alive-check`), `node/<node>/hy2-obfs/<listener>`,
 /// `user/<user>/<node>/<item>` or `probe/<node>/<item>`.
@@ -386,6 +438,7 @@ impl fmt::Display for SecretRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlertTopic => f.write_str("alert/topic"),
+            Self::RouterAdmin => f.write_str("router/admin"),
             Self::NodeRealityPrivate(node) => write!(f, "node/{node}/reality-private"),
             Self::NodeWgVpsPrivate(node) => write!(f, "node/{node}/wg-vps-private"),
             Self::NodeWgMacPrivate(node) => write!(f, "node/{node}/wg-mac-private"),
@@ -413,6 +466,7 @@ impl FromStr for SecretRef {
         let user = |text: &str| UserId::parse(text).map_err(|_| ModelError::InvalidSecretRef);
         match parts.as_slice() {
             ["alert", "topic"] => Ok(Self::AlertTopic),
+            ["router", "admin"] => Ok(Self::RouterAdmin),
             ["node", n, "reality-private"] => Ok(Self::NodeRealityPrivate(node(n)?)),
             ["node", n, "wg-vps-private"] => Ok(Self::NodeWgVpsPrivate(node(n)?)),
             ["node", n, "wg-mac-private"] => Ok(Self::NodeWgMacPrivate(node(n)?)),
@@ -457,6 +511,8 @@ pub struct SecretKindMismatch {
 pub enum SecretEntry {
     /// See [`SecretRef::AlertTopic`].
     AlertTopic(Password),
+    /// See [`SecretRef::RouterAdmin`].
+    RouterAdmin(RouterAdminPassword),
     /// See [`SecretRef::NodeRealityPrivate`].
     NodeRealityPrivate(NodeId, RealityPrivateKey),
     /// See [`SecretRef::NodeWgVpsPrivate`].
@@ -500,6 +556,7 @@ impl SecretEntry {
         let found = material.kind();
         Ok(match (secret_ref, material) {
             (R::AlertTopic, M::Password(topic)) => Self::AlertTopic(topic),
+            (R::RouterAdmin, M::RouterAdminPassword(password)) => Self::RouterAdmin(password),
             (R::NodeRealityPrivate(node), M::RealityPrivateKey(key)) => {
                 Self::NodeRealityPrivate(node, key)
             }
@@ -539,6 +596,7 @@ impl SecretEntry {
     pub fn secret_ref(&self) -> SecretRef {
         match self {
             Self::AlertTopic(_) => SecretRef::AlertTopic,
+            Self::RouterAdmin(_) => SecretRef::RouterAdmin,
             Self::NodeRealityPrivate(node, _) => SecretRef::NodeRealityPrivate(node.clone()),
             Self::NodeWgVpsPrivate(node, _) => SecretRef::NodeWgVpsPrivate(node.clone()),
             Self::NodeWgMacPrivate(node, _) => SecretRef::NodeWgMacPrivate(node.clone()),
@@ -579,6 +637,7 @@ impl SecretEntry {
             | Self::UserHy2Password(_, _, password)
             | Self::ProbeHy2Password(_, password) => SecretMaterial::Password(password),
             Self::NodeSshBootstrapPrivate(_, seed) => SecretMaterial::Ed25519Seed(seed),
+            Self::RouterAdmin(password) => SecretMaterial::RouterAdminPassword(password),
             Self::NodeDeadManCheck(_, uuid)
             | Self::NodeMacAliveCheck(_, uuid)
             | Self::UserVlessUuid(_, _, uuid)
@@ -690,6 +749,7 @@ fn lookup<'a, K: Ord, V>(
 #[derive(Debug, Default)]
 pub struct SecretSnapshot {
     alert_topic: Option<Password>,
+    router_admin: Option<RouterAdminPassword>,
     reality: BTreeMap<NodeId, RealityPrivateKey>,
     wg_vps: BTreeMap<NodeId, WgPrivateKey>,
     wg_mac: BTreeMap<NodeId, WgPrivateKey>,
@@ -719,6 +779,7 @@ impl SecretSnapshot {
         let reference = entry.secret_ref();
         match entry {
             E::AlertTopic(topic) => insert_once(&mut self.alert_topic, topic, reference),
+            E::RouterAdmin(password) => insert_once(&mut self.router_admin, password, reference),
             E::NodeRealityPrivate(node, key) => insert_new(&mut self.reality, node, key, reference),
             E::NodeWgVpsPrivate(node, key) => insert_new(&mut self.wg_vps, node, key, reference),
             E::NodeWgMacPrivate(node, key) => insert_new(&mut self.wg_mac, node, key, reference),
@@ -810,6 +871,15 @@ impl SecretSnapshot {
             })
     }
 
+    /// The M7's admin password.
+    pub fn router_admin(&self) -> Result<&RouterAdminPassword, SecretSnapshotError> {
+        self.router_admin
+            .as_ref()
+            .ok_or(SecretSnapshotError::Missing {
+                secret_ref: SecretRef::RouterAdmin,
+            })
+    }
+
     /// The UUID of the node's own Healthchecks check.
     pub fn dead_man_check(&self, node: &NodeId) -> Result<&Secret<Uuid>, SecretSnapshotError> {
         lookup(&self.dead_man_check, node, || {
@@ -883,6 +953,7 @@ impl SecretSnapshot {
     pub fn refs(&self) -> Vec<SecretRef> {
         let mut refs: Vec<SecretRef> = Vec::with_capacity(self.len());
         refs.extend(self.alert_topic.iter().map(|_| SecretRef::AlertTopic));
+        refs.extend(self.router_admin.iter().map(|_| SecretRef::RouterAdmin));
         refs.extend(
             self.reality
                 .keys()
@@ -956,6 +1027,7 @@ impl SecretSnapshot {
     #[must_use]
     pub fn len(&self) -> usize {
         usize::from(self.alert_topic.is_some())
+            + usize::from(self.router_admin.is_some())
             + self.reality.len()
             + self.wg_vps.len()
             + self.wg_mac.len()
@@ -993,6 +1065,11 @@ impl SecretSnapshot {
             .chain(self.hy2_obfs.values().map(Password::expose_text))
             .chain(self.ssh_bootstrap.values().map(Ed25519Seed::expose_text))
             .chain(self.alert_topic.iter().map(Password::expose_text))
+            .chain(
+                self.router_admin
+                    .iter()
+                    .map(|password| Zeroizing::new(password.expose_str().to_owned())),
+            )
             .chain(self.user_hy2.values().map(Password::expose_text))
             .chain(self.probe_hy2.values().map(Password::expose_text))
             .chain(
@@ -1057,6 +1134,7 @@ mod tests {
             SecretRef::AlertTopic,
             SecretRef::NodeDeadManCheck(n.clone()),
             SecretRef::NodeMacAliveCheck(n),
+            SecretRef::RouterAdmin,
         ]
     }
 
@@ -1076,6 +1154,9 @@ mod tests {
             SecretKind::Ed25519Seed => {
                 SecretMaterial::Ed25519Seed(Ed25519Seed::from_bytes([byte; 32]).unwrap())
             }
+            SecretKind::RouterAdminPassword => SecretMaterial::RouterAdminPassword(
+                RouterAdminPassword::parse(&format!("router admin {byte}")).unwrap(),
+            ),
         }
     }
 
@@ -1093,6 +1174,53 @@ mod tests {
         };
         let hyphenated = inner.expose_secret().to_hyphenated();
         assert!(!format!("{material:?}").contains(hyphenated.as_str()));
+        let password = RouterAdminPassword::parse("hunter2 router").unwrap();
+        let shown = format!(
+            "{password:?} {:?}",
+            SecretMaterial::RouterAdminPassword(password.clone())
+        );
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(shown.contains("<redacted>"));
+    }
+
+    /// The M7's admin password is 1 to 128 bytes of printable ASCII; a
+    /// refusal is `InvalidSecret` naming the kind and never the text.
+    #[test]
+    fn router_admin_passwords_are_printable_ascii_up_to_128_bytes() {
+        let longest = "~".repeat(MAX_ROUTER_ADMIN_PASSWORD_BYTES);
+        for good in [" ", "p@ss w&rd=+%", "~", longest.as_str(), "x"] {
+            let password = RouterAdminPassword::parse(good).unwrap();
+            assert_eq!(password.expose_str(), good);
+            let material = SecretMaterial::decode(SecretKind::RouterAdminPassword, good).unwrap();
+            assert_eq!(material.encode().as_str(), good);
+            assert_eq!(material.needles(), vec![Zeroizing::new(good.to_owned())]);
+        }
+        assert_eq!(MAX_ROUTER_ADMIN_PASSWORD_BYTES, 128);
+        let too_long = "a".repeat(MAX_ROUTER_ADMIN_PASSWORD_BYTES + 1);
+        for bad in [
+            "",
+            too_long.as_str(),
+            "secret\r",
+            "secret\n",
+            "\nsecret",
+            "sec\0ret",
+            "tab\there",
+            "del\u{7f}",
+            "caf\u{e9}",
+        ] {
+            let refused = RouterAdminPassword::parse(bad).unwrap_err();
+            assert_eq!(
+                refused,
+                ModelError::InvalidSecret {
+                    kind: SecretKind::RouterAdminPassword
+                },
+                "{bad:?}"
+            );
+            if !bad.is_empty() {
+                assert!(!refused.to_string().contains(bad), "{refused}");
+                assert!(!format!("{refused:?}").contains(bad));
+            }
+        }
     }
 
     #[test]
@@ -1109,6 +1237,11 @@ mod tests {
         // deployment's one topic and each channel node's two checks.
         for (reference, text, kind) in [
             (SecretRef::AlertTopic, "alert/topic", SecretKind::Password),
+            (
+                SecretRef::RouterAdmin,
+                "router/admin",
+                SecretKind::RouterAdminPassword,
+            ),
             (
                 SecretRef::NodeDeadManCheck(node("lon1")),
                 "node/lon1/dead-man-check",
@@ -1146,6 +1279,14 @@ mod tests {
             "alert/Topic",
             "node/lon1/deadman-check",
             "user/abcdefghij/lon1/mac-alive-check",
+            "router",
+            "router/",
+            "router/admin/",
+            "router/Admin",
+            "Router/admin",
+            "router/admin/lon1",
+            "router/lon1/admin",
+            "node/lon1/router-admin",
         ] {
             assert_eq!(
                 bad.parse::<SecretRef>(),
@@ -1180,28 +1321,32 @@ mod tests {
             .collect()
     }
 
-    /// The ntfy topic is the deployment's, not a node's: it is the one
-    /// reference without a node, and every other names the node it belongs
-    /// to in its text.
+    /// The ntfy topic and the M7's admin password are the deployment's,
+    /// not a node's: they are the only references without a node, and
+    /// every other names the node it belongs to in its text.
     #[test]
-    fn only_the_alert_topic_belongs_to_no_node() {
+    fn only_deployment_wide_references_belong_to_no_node() {
+        let deployment_wide = [SecretRef::AlertTopic, SecretRef::RouterAdmin];
         for reference in every_ref() {
             match reference.node() {
-                None => assert_eq!(reference, SecretRef::AlertTopic),
+                None => assert!(deployment_wide.contains(&reference), "{reference}"),
                 Some(node) => {
-                    assert_ne!(reference, SecretRef::AlertTopic);
+                    assert!(!deployment_wide.contains(&reference), "{reference}");
                     assert_eq!(node.as_str(), "lon1", "{reference}");
                     assert!(reference.to_string().contains("/lon1/"), "{reference}");
                 }
             }
         }
-        assert!(!SecretRef::AlertTopic.to_string().contains("lon1"));
+        for reference in deployment_wide {
+            assert_eq!(reference.node(), None, "{reference}");
+            assert!(!reference.to_string().contains("lon1"));
+        }
     }
 
     #[test]
     fn insert_and_typed_lookup() {
         let snapshot = full_snapshot();
-        assert_eq!(snapshot.len(), 15);
+        assert_eq!(snapshot.len(), 16);
         assert_eq!(snapshot.refs(), {
             let mut all = every_ref();
             all.sort();
@@ -1251,6 +1396,10 @@ mod tests {
             snapshot.mac_alive_check(&n).unwrap(),
             &Secret::new(Uuid::from_random_bytes([15; 16]))
         );
+        assert_eq!(
+            snapshot.router_admin().unwrap().expose_str(),
+            "router admin 16"
+        );
         // Same id, different slot: the VLESS and loopback UUIDs are distinct.
         assert_ne!(
             snapshot.user_vless_uuid(&u, &n).unwrap(),
@@ -1273,6 +1422,7 @@ mod tests {
         assert_eq!(err.to_string(), "secret probe/ams1/loop-uuid is missing");
         for (err, reference) in [
             (snapshot.alert_topic().unwrap_err(), SecretRef::AlertTopic),
+            (snapshot.router_admin().unwrap_err(), SecretRef::RouterAdmin),
             (
                 snapshot.dead_man_check(&n).unwrap_err(),
                 SecretRef::NodeDeadManCheck(n.clone()),
@@ -1306,6 +1456,26 @@ mod tests {
         assert_eq!(topics.alert_topic().unwrap().expose_bytes(), &[1; 32]);
         assert_eq!(topics.refs(), [SecretRef::AlertTopic]);
         assert_eq!(topics.len(), 1);
+        let router = |text: &str| {
+            SecretEntry::new(
+                SecretRef::RouterAdmin,
+                SecretMaterial::RouterAdminPassword(RouterAdminPassword::parse(text).unwrap()),
+            )
+            .unwrap()
+        };
+        topics.insert(router("first")).unwrap();
+        assert_eq!(
+            topics.insert(router("second")),
+            Err(SecretSnapshotError::Duplicate {
+                secret_ref: SecretRef::RouterAdmin
+            })
+        );
+        assert_eq!(topics.router_admin().unwrap().expose_str(), "first");
+        assert_eq!(
+            topics.refs(),
+            [SecretRef::AlertTopic, SecretRef::RouterAdmin]
+        );
+        assert_eq!(topics.len(), 2);
         let mut snapshot = SecretSnapshot::new();
         let reference = SecretRef::NodeWgMacPrivate(node("lon1"));
         let entry = |byte| {
@@ -1373,7 +1543,9 @@ mod tests {
             assert_eq!(decoded, material, "{kind}");
             assert_eq!(decoded.kind(), kind);
             // Text of one kind is rejected by every other kind's decoder,
-            // except where two kinds share an encoding by design.
+            // except where two kinds share an encoding by design. The M7's
+            // admin password may be any printable single-line text, so the
+            // text of every kind but the multi-line PEM key decodes as one.
             for &other in SecretKind::ALL {
                 let shares_encoding = matches!(
                     (kind, other),
@@ -1381,7 +1553,8 @@ mod tests {
                         | (SecretKind::Ed25519Seed, SecretKind::WgPrivateKey)
                         | (SecretKind::RealityPrivateKey, SecretKind::Password)
                         | (SecretKind::Password, SecretKind::RealityPrivateKey)
-                );
+                ) || (other == SecretKind::RouterAdminPassword
+                    && kind != SecretKind::Hy2PrivateKey);
                 if other != kind && !shares_encoding {
                     assert_eq!(
                         SecretMaterial::decode(other, &text),

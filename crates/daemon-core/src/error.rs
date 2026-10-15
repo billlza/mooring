@@ -14,7 +14,8 @@ use mooring_model::{CalendarDate, ModelError, NodeId, UnixTime, UserId, kinds};
 use serde::{Deserialize, Serialize};
 
 use crate::alert::AlertKey;
-use crate::router::{RouterTextField, SignalMetric};
+use crate::router::netgear::{LeafPath, NetgearLeaf, carrier_list_path};
+use crate::router::{LteCarriers, RouterTextField, RouterUnavailableReason, SignalMetric};
 
 /// The SIM forecast cannot be computed from its inputs
 /// ([`crate::forecast::SimForecast::project`]).
@@ -501,6 +502,19 @@ pub enum RouterValueError {
         /// Which text.
         field: RouterTextField,
     },
+    /// More secondary LTE carriers than [`LteCarriers::MAX_SECONDARY`].
+    #[error(
+        "{count} secondary LTE carriers are more than {max}",
+        max = LteCarriers::MAX_SECONDARY
+    )]
+    TooManySecondaryCarriers {
+        /// How many were given.
+        count: usize,
+    },
+    /// The data session is longer than the router's uptime: a session
+    /// cannot outlast the boot it runs in.
+    #[error("the router's data session is longer than its uptime")]
+    SessionExceedsUptime,
 }
 
 kinds! {
@@ -514,6 +528,10 @@ kinds! {
         BatteryPercentOutOfRange,
         /// See [`RouterValueError::InvalidText`].
         InvalidText,
+        /// See [`RouterValueError::TooManySecondaryCarriers`].
+        TooManySecondaryCarriers,
+        /// See [`RouterValueError::SessionExceedsUptime`].
+        SessionExceedsUptime,
     }
 }
 
@@ -526,6 +544,219 @@ impl RouterValueError {
             Self::TemperatureOutOfRange { .. } => RouterValueErrorKind::TemperatureOutOfRange,
             Self::BatteryPercentOutOfRange { .. } => RouterValueErrorKind::BatteryPercentOutOfRange,
             Self::InvalidText { .. } => RouterValueErrorKind::InvalidText,
+            Self::TooManySecondaryCarriers { .. } => RouterValueErrorKind::TooManySecondaryCarriers,
+            Self::SessionExceedsUptime => RouterValueErrorKind::SessionExceedsUptime,
+        }
+    }
+}
+
+/// The MR7450's `model.json` cannot be read as a session or a status, or
+/// cannot be redacted ([`crate::router::netgear`]).
+///
+/// No variant can hold a byte of the router's answer: a field is named by
+/// its allowlisted path (and, in the carrier list, the element's index) and
+/// the kind of fault, never by its value, and serde_json's own messages,
+/// which can quote the input, are dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RouterParseError {
+    /// The answer is not JSON, or has bytes after the JSON value.
+    #[error("the router's answer is not JSON, or has bytes after its JSON value")]
+    Syntax,
+    /// The JSON ends before its value does.
+    #[error("the router's answer ends inside its JSON value")]
+    Truncated,
+    /// The JSON value is not an object.
+    #[error("the router's answer is not a JSON object")]
+    NotAnObject,
+    /// The redactor met a key that is not a plain name (`[A-Za-z0-9_]`, 1
+    /// to 64 bytes, no run of more than three digits or eight hexadecimal
+    /// characters), so the key itself may be data, such as a link-layer
+    /// address or a phone number; nothing is captured.
+    #[error("a key of the router's answer is not a plain name, so nothing was captured")]
+    KeyRefused,
+    /// An allowlisted field is missing, of the wrong JSON type, repeated,
+    /// out of range, not a value the MR7450 has been seen to report, or not
+    /// text of its form.
+    #[error(
+        "router field {}: {}",
+        LeafPath { leaf: *leaf, element: *element },
+        fault.describe()
+    )]
+    Field {
+        /// The field.
+        leaf: NetgearLeaf,
+        /// The element of the carrier list it is in, if it is in one.
+        element: Option<u16>,
+        /// What is wrong with it.
+        fault: FieldFaultKind,
+    },
+    /// The LTE carrier list (`wwan.lteBandInfo`) breaks its form.
+    #[error("router field {}: {}", carrier_list_path(), fault.describe())]
+    Carriers {
+        /// What is wrong with it.
+        fault: CarrierFaultKind,
+    },
+    /// The session is not an administrator's (`session.userRole` is not
+    /// exactly `Admin`), so the status leaves are not there to read.
+    #[error("the router's session is not an administrator's")]
+    NotAdmin,
+    /// The device is not an MR7450 (`general.model`) or does not speak API
+    /// 2.0 (`general.apiVersion`).
+    #[error("the router is not an MR7450 speaking API 2.0 ({leaf})")]
+    Unsupported {
+        /// The leaf that differs.
+        leaf: NetgearLeaf,
+    },
+    /// The data session is longer than the router's uptime.
+    #[error("the router reports a data session longer than its uptime")]
+    SessionExceedsUptime,
+}
+
+kinds! {
+    /// The kind of a [`RouterParseError`].
+    pub enum RouterParseErrorKind {
+        /// See [`RouterParseError::Syntax`].
+        Syntax,
+        /// See [`RouterParseError::Truncated`].
+        Truncated,
+        /// See [`RouterParseError::NotAnObject`].
+        NotAnObject,
+        /// See [`RouterParseError::KeyRefused`].
+        KeyRefused,
+        /// See [`RouterParseError::Field`].
+        Field,
+        /// See [`RouterParseError::Carriers`].
+        Carriers,
+        /// See [`RouterParseError::NotAdmin`].
+        NotAdmin,
+        /// See [`RouterParseError::Unsupported`].
+        Unsupported,
+        /// See [`RouterParseError::SessionExceedsUptime`].
+        SessionExceedsUptime,
+    }
+}
+
+impl RouterParseError {
+    /// The kind of this error.
+    #[must_use]
+    pub const fn kind(&self) -> RouterParseErrorKind {
+        match self {
+            Self::Syntax => RouterParseErrorKind::Syntax,
+            Self::Truncated => RouterParseErrorKind::Truncated,
+            Self::NotAnObject => RouterParseErrorKind::NotAnObject,
+            Self::KeyRefused => RouterParseErrorKind::KeyRefused,
+            Self::Field { .. } => RouterParseErrorKind::Field,
+            Self::Carriers { .. } => RouterParseErrorKind::Carriers,
+            Self::NotAdmin => RouterParseErrorKind::NotAdmin,
+            Self::Unsupported { .. } => RouterParseErrorKind::Unsupported,
+            Self::SessionExceedsUptime => RouterParseErrorKind::SessionExceedsUptime,
+        }
+    }
+
+    /// Why the router panel has no status after this error: a session that
+    /// is not an administrator's is a failed login, another device or API
+    /// is unsupported, and everything else is a malformed answer.
+    #[must_use]
+    pub const fn reason(&self) -> RouterUnavailableReason {
+        match self {
+            Self::NotAdmin => RouterUnavailableReason::AuthFailed,
+            Self::Unsupported { .. } => RouterUnavailableReason::Unsupported,
+            Self::Syntax
+            | Self::Truncated
+            | Self::NotAnObject
+            | Self::KeyRefused
+            | Self::Field { .. }
+            | Self::Carriers { .. }
+            | Self::SessionExceedsUptime => RouterUnavailableReason::Malformed,
+        }
+    }
+}
+
+kinds! {
+    /// What is wrong with an allowlisted field
+    /// ([`RouterParseError::Field`]).
+    pub enum FieldFaultKind {
+        /// The field is absent.
+        Missing,
+        /// The field's JSON type is not its shape's (a string where a
+        /// number belongs, a float where an integer does).
+        WrongType,
+        /// The field appears twice.
+        Duplicate,
+        /// The number is outside the field's range.
+        OutOfRange,
+        /// The text is not a value the MR7450 has been seen to report.
+        UnknownValue,
+        /// The text is not of the field's form: too long, not printable
+        /// ASCII, a run of digits long enough to be an identifier, or not
+        /// the digits it must be.
+        InvalidText,
+        /// A decimal counter is not in canonical form (a leading zero).
+        NotCanonical,
+    }
+}
+
+impl FieldFaultKind {
+    /// The fault in words, for an error message.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::WrongType => "not of its JSON type",
+            Self::Duplicate => "repeated",
+            Self::OutOfRange => "out of range",
+            Self::UnknownValue => "not a value the MR7450 has been seen to report",
+            Self::InvalidText => "not text of its form",
+            Self::NotCanonical => "not a canonical decimal",
+        }
+    }
+}
+
+kinds! {
+    /// What is wrong with the LTE carrier list
+    /// ([`RouterParseError::Carriers`]): entries, then exactly one empty
+    /// object as a terminator; the primary carrier first, every other one
+    /// secondary.
+    pub enum CarrierFaultKind {
+        /// The document has no carrier list.
+        Absent,
+        /// The carrier list is not an array.
+        NotAnArray,
+        /// The carrier list appears twice.
+        Duplicate,
+        /// The carrier list has more than 16 elements.
+        TooLong,
+        /// An element is not an object.
+        ElementNotAnObject,
+        /// The list does not end with the empty-object terminator.
+        MissingTerminator,
+        /// A terminator is not the last element.
+        MisplacedTerminator,
+        /// The first entry is not the primary carrier.
+        PrimaryNotFirst,
+        /// An entry after the first claims to be the primary carrier.
+        SecondPrimary,
+        /// More secondary carriers than
+        /// [`LteCarriers::MAX_SECONDARY`].
+        TooManySecondaries,
+    }
+}
+
+impl CarrierFaultKind {
+    /// The fault in words, for an error message.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::Absent => "missing",
+            Self::NotAnArray => "not an array",
+            Self::Duplicate => "repeated",
+            Self::TooLong => "more than 16 elements",
+            Self::ElementNotAnObject => "an element is not an object",
+            Self::MissingTerminator => "no terminating empty object",
+            Self::MisplacedTerminator => "an empty object before the end",
+            Self::PrimaryNotFirst => "the first carrier is not the primary",
+            Self::SecondPrimary => "a second primary carrier",
+            Self::TooManySecondaries => "too many secondary carriers",
         }
     }
 }

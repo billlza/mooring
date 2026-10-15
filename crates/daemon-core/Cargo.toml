@@ -16,9 +16,11 @@ workspace = true
 mooring-agent-proto.workspace = true
 mooring-model.workspace = true
 serde.workspace = true
+# The MR7450's model.json is walked with serde_json's streaming deserializer
+# (router::netgear); already in the graph through mooring-agent-proto.
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 mooring-fixtures.workspace = true
 proptest.workspace = true
-serde_json.workspace = true

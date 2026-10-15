@@ -9,7 +9,7 @@ Mooring 让少数受信任的大陆用户经运营者在英国的移动网络出
 
 ## 当前状态
 
-设计第 6 版（2026-10-08）：M1（纯 Rust 核心）已提交（4a95ee0）。其上的控制台基础（第 5 版）与第 6 版落实的运营者决策（SMARTY 线路、试运行最多 5 名活跃用户、自动配额、远程查看角色、告警渠道）尚待提交。尚未构建引擎、未部署任何 VPS。
+设计第 7 版（2026-10-13）：M1（纯 Rust 核心，4a95ee0）以及其上的控制台基础与第 6 版落实的运营者决策（71af715）均已提交。M2a 在 SMARTY 卡到货前完成了步骤 1–3（记录见 [docs/measurements/M2.md](docs/measurements/M2.md)）：M7 的 JSON 接口为 `GET /api/model.json?internalapi=1`，状态字段需要登录，登录后的文档以明文携带管理员密码、Wi-Fi 密钥与设备和用户标识，M7 时钟不可信。`crates/daemon-core` 据此实现了 MR7450 `model.json` 的白名单解析器与脱敏器（共用一张白名单表），路由器状态类型按设备实际上报的字段重塑。`crates/macsys` 读取内核路由表与邻居表；`mooringctl` 首批路由器命令 `router pin | set-password | status | capture`（只读访问 M7，仅 macOS）已实现并在本机回环桩服务器上测试；2026-10-14 首次对真实 M7 运行 `router pin` 时，普通 `cargo` 构建的预热连接已到达 M7，但内核对它返回空的邻居表，命令因此失败；现须使用 `cargo xtask mooringctl` 签名的副本 `target/signed/mooringctl`（见“构建约定”）。同日稍后 `router pin` 已在本机记录 M7 身份；`router capture --anonymous` 与 `router status` 则在第一个请求即以退出码 8 失败：M7 对不带会话 cookie 的 JSON 请求先以 302 重定向到会话建立地址 `/sess_cd_tmp…`，再重定向回 JSON（实测记录见 M2.md）。客户端现只跟随这一会话建立序列，每次读取 JSON 至多一次、至多三个请求，其他重定向一律拒绝（设计 §15.6 规则 9）。登录被拒时 M7 以 302 跳到 `/index.html?loginfailed&errno=2&errdetail=session.password`，客户端据此直接报告密码被拒；存入正确的管理员密码后，当晚 `router status`（含 `--json`）与两种 `router capture` 均已在真实 M7 上成功运行，两份脱敏抓取经检查不含任何标识，结构与 fixture 一致（见 M2.md）。尚未构建引擎、未部署任何 VPS。
 
 ## 仓库结构
 
@@ -22,8 +22,10 @@ Mooring 让少数受信任的大陆用户经运营者在英国的移动网络出
 | `crates/render` | VPS（Xray、Hysteria2、WireGuard、nftables、主机配置、cloud-init）与 Mac（出口、探测）配置渲染 |
 | `crates/store` | `state.json`（锁、CAS、原子写、迁移链）与密钥存储抽象 |
 | `crates/fixtures` | 仅供测试的确定性部署样例（只能作为 dev-dependency） |
-| `crates/daemon-core` | 控制台纯逻辑与数据模型：`mooringctl status --follow --json` 的 `MacStatusV1`、SIM 预测、上行容量判定、按用户用量汇总（UTC 周期）、告警状态机、外部网络检查、配额与到期评估、M7 状态类型；`contract/status-fixtures/` 为 App 解码用样例 |
-| `xtask` | 开发任务：`ci`、`graph-check`、`kinds-coverage`、`deny-skips`、`acceptance`、`release-acceptance`（发布门槛）、`clean` |
+| `crates/daemon-core` | 控制台纯逻辑与数据模型：`mooringctl status --follow --json` 的 `MacStatusV1`、SIM 预测、上行容量判定、按用户用量汇总（UTC 周期）、告警状态机、外部网络检查、配额与到期评估、M7 状态类型与 M7 `model.json` 白名单解析与脱敏；`contract/status-fixtures/` 为 App 解码用样例，`contract/router-fixtures/` 为脱敏后的 M2a 抓取 |
+| `crates/macsys` | 仅 macOS（其他平台上为空 crate，工作区仍可在 ubuntu 上构建）、唯一允许 `unsafe` 的 crate（只依赖 libc）：接口索引、IPv4 默认网关及其链路层地址（PF_ROUTE sysctl）、终端回显开关 |
+| `crates/mooringctl` | 命令行工具（仅 macOS；其他平台上只提示后以退出码 1 结束）。第 7 版首批命令：`router pin`（记录网关链路层地址为 M7 身份；iOS 用来代替真实地址的占位值 `02:00:00:00:00:00` 永不记录、永不匹配）、`router set-password`（管理员密码存入登录钥匙串，仅从终端或 stdin 读取）、`router status`（绑定接口的 HTTP/1.1 客户端，身份核对后才登录）、`router capture`（只写脱敏器输出；形状不符的白名单值以占位符代替，并按路径列出） |
+| `xtask` | 开发任务：`ci`、`graph-check`、`kinds-coverage`、`deny-skips`、`acceptance`、`release-acceptance`（发布门槛）、`clean`、`mooringctl`（构建 `mooringctl` 并签名一份副本 `target/signed/mooringctl`，仅 macOS） |
 | `engines.lock.toml` | Go 引擎的固定输入（Xray v26.9.30 + REALITY e1986a4、sing-box v1.14.2、Go 1.27.1） |
 
 ## 构建约定
@@ -31,6 +33,7 @@ Mooring 让少数受信任的大陆用户经运营者在英国的移动网络出
 - 工具链固定为 Rust 1.98.1（`rust-toolchain.toml`）。
 - 出口 Mac 将作为专用服务器：所有编译输出只写入仓库内的 `target/`，每个里程碑结束执行 `cargo xtask clean`。xtask 依赖 `mooring-export` 与 `mooring-model`，工作区无法编译时改用 `rm -rf target`（设计 §6.1）。Go 引擎构建与虚拟机测试在研究电脑或托管 CI 上进行（设计 D-7）。
 - 交付门槛：`cargo xtask ci` 零错误、零警告。
+- `mooringctl` 用 `cargo xtask mooringctl` 构建：它构建该包，把 cargo 报告的可执行文件复制为 `target/signed/` 下的临时文件，以 `com.bill.mooring.mooringctl` 为标识符对这份副本做 ad hoc 签名，要求 `codesign -dv` 报告的正是这个标识符，然后才把它改名为 `target/signed/mooringctl` 并打印该路径。改名之前任何一步失败，`target/signed/mooringctl` 都保持原样，临时文件被删除；若删除失败，则报告 `PartialNotRemoved`（以原失败为其原因）。改名成功后只有最后的提示信息还可能失败。运行被强行中断（Ctrl-C）时可能留下 `target/signed/mooringctl.<pid>.partial`，`cargo xtask clean` 会连同整个目标目录将其删除。只要工作区没有名为 `signed` 的 profile（`[profile.signed]`），cargo 就不写 `target/signed/`，之后的 `cargo build` 或 `cargo xtask ci` 都不会撤销这个签名。签名副本不会随之后的源代码改动更新，因此在工作区根目录、Terminal.app 自己的 shell 里按 `cargo xtask mooringctl && ./target/signed/mooringctl router …` 运行（副本启动时 xtask 已经退出，不是它的祖先进程）：不要经 `cargo run`，中间也不要隔着 ad hoc 签名的 shell 或终端复用器。原因（2026-10-14 在 macOS 27.0.1 (26A434) 上实测，规则由实测情形归纳）：内核只向签名标识符为反向 DNS 形式、且不由 ad hoc 签名进程（直接或间接）启动的进程显示邻居表；普通 `cargo build` 的产物由链接器签名为 `mooringctl-<哈希>`，读到的是空表，无法读取 M7 的链路层地址。`macsys` 只如实报告表为空；`mooringctl` 只在已连通网关之后才把空表判断为被内核隐藏：`status`、`capture` 须在匿名 `GET` 成功之后；`router pin` 须预热连接成功，且预热前后两次读取都得到空表（第一次读取不为空，说明本程序能读取该表，此时第二次读到空表报告 `GatewayUnresolved`，退出码 4）。被隐藏时以本地错误（退出码 1）说明原因、提示该命令。它只在 macOS 上运行，不属于 `cargo xtask ci`（`ci` 在各平台执行相同步骤；设计 §15.6 规则 10）。
 
 ## 许可证
 

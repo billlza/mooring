@@ -44,7 +44,8 @@ use crate::network::{ForeignNetworkFinding, IpFamily};
 use crate::period::UsagePeriods;
 use crate::policy::{ExpiryState, QuotaState};
 use crate::router::{
-    Band, BandNumber, RadioAccess, RadioState, RouterPower, RouterReading, RouterUnavailableReason,
+    Band, BandNumber, BatteryState, ChargeSource, DataService, LteBandwidth, NetworkService,
+    PowerState, RadioState, RouterReading, RouterUnavailableReason, ThermalState, WifiApStatus,
 };
 use crate::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, ForecastView,
@@ -87,9 +88,15 @@ struct Variants {
     ip_family: Vec<IpFamily>,
     quota_state: Vec<QuotaState>,
     expiry_state: Vec<ExpiryState>,
-    radio_access: Vec<RadioAccess>,
+    network_service: Vec<NetworkService>,
+    data_service: Vec<DataService>,
     radio_state: Vec<RadioState>,
-    router_power: Vec<RouterPower>,
+    thermal_state: Vec<ThermalState>,
+    power_state: Vec<PowerState>,
+    battery_state: Vec<BatteryState>,
+    charge_source: Vec<ChargeSource>,
+    wifi_ap_status: Vec<WifiApStatus>,
+    lte_bandwidth: Vec<LteBandwidth>,
     router_unavailable_reason: Vec<RouterUnavailableReason>,
     router_reading: Vec<RouterReading>,
     band: Vec<Band>,
@@ -395,15 +402,15 @@ fn variants() -> Variants {
             },
             ExpiryState::Expired { at: t(0) },
         ],
-        radio_access: vec![RadioAccess::Lte, RadioAccess::NrNsa, RadioAccess::NrSa],
-        radio_state: vec![RadioState::NoService, router::status().radio],
-        router_power: vec![
-            RouterPower::Plugged,
-            RouterPower::Battery {
-                percent: crate::router::BatteryPercent::new(64).unwrap(),
-                charging: true,
-            },
-        ],
+        network_service: NetworkService::ALL.to_vec(),
+        data_service: DataService::ALL.to_vec(),
+        radio_state: vec![RadioState::NoService, router::status().into_parts().radio],
+        thermal_state: ThermalState::ALL.to_vec(),
+        power_state: PowerState::ALL.to_vec(),
+        battery_state: BatteryState::ALL.to_vec(),
+        charge_source: ChargeSource::ALL.to_vec(),
+        wifi_ap_status: WifiApStatus::ALL.to_vec(),
+        lte_bandwidth: LteBandwidth::ALL.to_vec(),
         router_unavailable_reason: vec![
             RouterUnavailableReason::NotConfigured,
             RouterUnavailableReason::Unreachable,
@@ -413,7 +420,7 @@ fn variants() -> Variants {
             RouterUnavailableReason::Malformed,
         ],
         router_reading: vec![
-            RouterReading::Available(router::status()),
+            router::reading(),
             RouterReading::Unavailable {
                 reason: RouterUnavailableReason::IdentityMismatch,
                 last_polled_at: None,
@@ -828,32 +835,81 @@ fn the_variants_fixture_lists_every_variant() {
         3,
     );
     every_variant(
-        "radio_access",
-        &v.radio_access,
+        "network_service",
+        &v.network_service,
         |value| match value {
-            RadioAccess::Lte => 0,
-            RadioAccess::NrNsa => 1,
-            RadioAccess::NrSa => 2,
+            NetworkService::Nr5g => 0,
         },
-        3,
+        1,
+    );
+    every_variant(
+        "data_service",
+        &v.data_service,
+        |value| match value {
+            DataService::NrSub6 => 0,
+        },
+        1,
     );
     every_variant(
         "radio_state",
         &v.radio_state,
         |value| match value {
             RadioState::NoService => 0,
-            RadioState::Attached { .. } => 1,
+            RadioState::Attached(_) => 1,
         },
         2,
     );
     every_variant(
-        "router_power",
-        &v.router_power,
+        "thermal_state",
+        &v.thermal_state,
         |value| match value {
-            RouterPower::Plugged => 0,
-            RouterPower::Battery { .. } => 1,
+            ThermalState::Normal => 0,
         },
-        2,
+        1,
+    );
+    every_variant(
+        "power_state",
+        &v.power_state,
+        |value| match value {
+            PowerState::Online => 0,
+        },
+        1,
+    );
+    every_variant(
+        "battery_state",
+        &v.battery_state,
+        |value| match value {
+            BatteryState::Normal => 0,
+        },
+        1,
+    );
+    every_variant(
+        "charge_source",
+        &v.charge_source,
+        |value| match value {
+            ChargeSource::QuickCharge => 0,
+        },
+        1,
+    );
+    every_variant(
+        "wifi_ap_status",
+        &v.wifi_ap_status,
+        |value| match value {
+            WifiApStatus::Off => 0,
+        },
+        1,
+    );
+    every_variant(
+        "lte_bandwidth",
+        &v.lte_bandwidth,
+        |value| match value {
+            LteBandwidth::Mhz3 => 0,
+            LteBandwidth::Mhz5 => 1,
+            LteBandwidth::Mhz10 => 2,
+            LteBandwidth::Mhz15 => 3,
+            LteBandwidth::Mhz20 => 4,
+        },
+        5,
     );
     every_variant(
         "router_unavailable_reason",
@@ -872,7 +928,7 @@ fn the_variants_fixture_lists_every_variant() {
         "router_reading",
         &v.router_reading,
         |value| match value {
-            RouterReading::Available(_) => 0,
+            RouterReading::Available { .. } => 0,
             RouterReading::Unavailable { .. } => 1,
         },
         2,

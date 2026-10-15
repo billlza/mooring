@@ -272,7 +272,7 @@ pub enum AlertCondition {
     RouterThermalStepDown,
     /// The M7's RSRP stays low.
     RouterWeakSignal {
-        /// The latest RSRP in tenths of a dBm.
+        /// The latest LTE RSRP in tenths of a dBm.
         rsrp_dbm_x10: i16,
     },
     /// The M7's firmware version changed: re-run the M7 settings checklist.

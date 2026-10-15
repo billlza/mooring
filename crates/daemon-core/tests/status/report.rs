@@ -11,17 +11,18 @@ use std::net::Ipv4Addr;
 use std::str::FromStr;
 
 use mooring_agent_proto::{
-    ExitPhase, MacReportRule, MacReportV1, NodeName, ReportAccuracy, ReportBand, ReportBandNumber,
-    ReportPlanLine, ReportRadio, ReportRadioAccess, ReportRadioSystem, ReportRouter,
-    ReportSaturation, ReportSeverity, ReportUsage, ReportUserId, ReportUserStatus, ValueError,
+    ExitPhase, MacAlertKind, MacReportRule, MacReportV1, NodeName, ReportAccuracy, ReportBand,
+    ReportBandNumber, ReportDataService, ReportLteSignal, ReportNrSignal, ReportPlanLine,
+    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportUsage,
+    ReportUserId, ReportUserStatus, ValueError,
 };
 use mooring_daemon_core::alert::Severity;
 use mooring_daemon_core::capacity::Saturation;
 use mooring_daemon_core::notify::digest_message;
 use mooring_daemon_core::report::project;
 use mooring_daemon_core::router::{
-    Band, CarrierName, FirmwareVersion, RadioAccess, RadioState, RouterReading, Rsrp, Rsrq, Rssi,
-    Signal, Sinr,
+    Band, CarrierName, FirmwareVersion, LteSignal, NrSignal, RadioState, RouterReading,
+    RouterStatus, RouterStatusParts, Rsrp, Rsrq, Rssi, Sinr, WebAppVersion,
 };
 use mooring_daemon_core::status::{DegradedReason, DownReason, ExitState, ForecastView, UsageView};
 use mooring_daemon_core::{
@@ -54,20 +55,35 @@ fn secs(time: UnixTime) -> u64 {
     time.as_secs()
 }
 
-/// Whether `text` is a closed-enum name as the report spells one: an ASCII
+/// Whether `text` is a variant tag as the report spells one: an ASCII
 /// capital followed by ASCII letters.
 fn is_closed_name(text: &str) -> bool {
     text.starts_with(|c: char| c.is_ascii_uppercase())
         && text.chars().all(|c| c.is_ascii_alphabetic())
 }
 
+/// Every name a string value of a report may hold besides a node name: the
+/// closed enums' variants and the unit variants of the data-carrying enums.
+fn closed_names() -> BTreeSet<&'static str> {
+    let mut names: BTreeSet<&'static str> =
+        ["NoService", "NoEvidence", "Clear", "Unavailable"].into();
+    names.extend(ExitPhase::ALL.iter().map(|value| value.name()));
+    names.extend(ReportAccuracy::ALL.iter().map(|value| value.name()));
+    names.extend(ReportDataService::ALL.iter().map(|value| value.name()));
+    names.extend(ReportRadioSystem::ALL.iter().map(|value| value.name()));
+    names.extend(ReportUserStatus::ALL.iter().map(|value| value.name()));
+    names.extend(ReportSeverity::ALL.iter().map(|value| value.name()));
+    names.extend(MacAlertKind::ALL.iter().map(|value| value.name()));
+    names
+}
+
 /// Walks a report's JSON: the keys of `users` are report user ids, every
 /// other key is a field name (`[a-z_]+`) or a variant tag, and every string
-/// value is a closed name or a node name.
+/// value is one of the closed names or a node name.
 fn walk(value: &Value, in_users: bool, problems: &mut Vec<String>) {
     match value {
         Value::String(text) => {
-            if !is_closed_name(text) && NodeName::new(text.as_str()).is_err() {
+            if !closed_names().contains(text.as_str()) && NodeName::new(text.as_str()).is_err() {
                 problems.push(text.clone());
             }
         }
@@ -161,23 +177,33 @@ fn the_serving_report_keeps_the_allowlisted_values() {
         panic!("the serving scenario's router answered");
     };
     assert_eq!(temperature_c, 41);
-    let RouterReading::Available(router) = &status.router else {
+    let RouterReading::Available {
+        polled_at: polled, ..
+    } = &status.router
+    else {
         panic!("the serving scenario's router answered");
     };
-    assert_eq!(polled_at.as_secs(), secs(router.polled_at));
+    assert_eq!(polled_at.as_secs(), secs(*polled));
     assert!(polled_at.as_secs() < parts.at.as_secs());
     assert_eq!(
         radio,
         ReportRadio::Attached {
-            access: ReportRadioAccess::NrNsa,
+            service: ReportDataService::NrSub6,
             band: ReportBand {
-                system: ReportRadioSystem::Nr,
-                number: ReportBandNumber::new(78).unwrap()
+                system: ReportRadioSystem::Lte,
+                number: ReportBandNumber::new(3).unwrap()
             },
-            rsrp_tenths: Some(-985),
-            rsrq_tenths: Some(-105),
-            sinr_tenths: Some(124),
-            rssi_tenths: None,
+            lte: ReportLteSignal {
+                rsrp_tenths: Some(-990),
+                rsrq_tenths: Some(-110),
+                sinr_tenths: Some(120),
+                rssi_tenths: Some(-700),
+            },
+            nr: ReportNrSignal {
+                rsrp_tenths: None,
+                rsrq_tenths: None,
+                sinr_tenths: None,
+            },
         }
     );
 
@@ -215,7 +241,7 @@ fn the_serving_report_keeps_the_allowlisted_values() {
 
 /// A degraded exit's alerts keep their kind, severity, node and start, in
 /// the status's order; a saturated uplink stays saturated since the same
-/// time, and the LTE fallback is reported as LTE band 3 with its four
+/// time, and the radio is reported on LTE band 20 with its four LTE
 /// readings.
 #[test]
 fn the_degraded_report_keeps_each_alert() {
@@ -237,15 +263,22 @@ fn the_degraded_report_keeps_each_alert() {
     assert_eq!(
         radio,
         ReportRadio::Attached {
-            access: ReportRadioAccess::Lte,
+            service: ReportDataService::NrSub6,
             band: ReportBand {
                 system: ReportRadioSystem::Lte,
-                number: ReportBandNumber::new(3).unwrap()
+                number: ReportBandNumber::new(20).unwrap()
             },
-            rsrp_tenths: Some(-1125),
-            rsrq_tenths: Some(-145),
-            sinr_tenths: Some(-15),
-            rssi_tenths: Some(-810),
+            lte: ReportLteSignal {
+                rsrp_tenths: Some(-1125),
+                rsrq_tenths: Some(-145),
+                sinr_tenths: Some(-15),
+                rssi_tenths: Some(-810),
+            },
+            nr: ReportNrSignal {
+                rsrp_tenths: None,
+                rsrq_tenths: None,
+                sinr_tenths: None,
+            },
         }
     );
     assert_eq!(parts.alerts.len(), status.alerts.len());
@@ -353,37 +386,53 @@ fn every_exit_state_reports_its_own_phase() {
     }
 }
 
-/// The serving status with the router attached as `radio`.
-fn with_radio(radio: RadioState) -> MacStatusParts {
+/// The serving status with its router reading changed by `edit`.
+fn with_router(edit: impl FnOnce(&mut RouterStatusParts)) -> MacStatusParts {
     let mut status = scenario("serving");
-    let RouterReading::Available(router) = &mut status.router else {
+    let RouterReading::Available { status: router, .. } = &mut status.router else {
         panic!("the serving scenario's router answered");
     };
-    router.radio = radio;
+    let mut parts = router.as_ref().clone().into_parts();
+    edit(&mut parts);
+    **router = RouterStatus::new(parts).unwrap();
     status
 }
 
-/// The serving status's radio attached through `access` on `band`, with
-/// the four readings given in tenths.
-fn attached(access: RadioAccess, band: &str, readings: [Option<i16>; 4]) -> RadioState {
-    RadioState::Attached {
-        access,
-        band: Band::parse(band).unwrap(),
-        carrier: CarrierName::parse("SMARTY").unwrap(),
-        signal: Signal {
-            rsrp: readings[0].map(|tenths| Rsrp::from_tenths(tenths).unwrap()),
-            rsrq: readings[1].map(|tenths| Rsrq::from_tenths(tenths).unwrap()),
-            sinr: readings[2].map(|tenths| Sinr::from_tenths(tenths).unwrap()),
-            rssi: readings[3].map(|tenths| Rssi::from_tenths(tenths).unwrap()),
-        },
-    }
+/// The serving status with the router's radio as `radio`.
+fn with_radio(radio: RadioState) -> MacStatusParts {
+    with_router(|parts| parts.radio = radio)
 }
 
-/// Every radio state, access technology and band system reports exactly:
-/// no service; LTE, 5G NSA and 5G SA; an LTE and an NR band with their
-/// numbers; each reading in its own slot, and an absent one absent.
+/// The serving scenario's radio on `band`, with the LTE and NR readings
+/// given in tenths.
+fn attached(band: &str, lte: [Option<i16>; 4], nr: [Option<i16>; 3]) -> RadioState {
+    let RouterReading::Available { status, .. } = scenario("serving").router else {
+        panic!("the serving scenario's router answered");
+    };
+    let RadioState::Attached(mut radio) = status.into_parts().radio else {
+        panic!("the serving scenario's radio is attached");
+    };
+    radio.band = Band::parse(band).unwrap();
+    radio.lte = LteSignal {
+        rsrp: lte[0].map(|tenths| Rsrp::from_tenths(tenths).unwrap()),
+        rsrq: lte[1].map(|tenths| Rsrq::from_tenths(tenths).unwrap()),
+        sinr: lte[2].map(|tenths| Sinr::from_tenths(tenths).unwrap()),
+        rssi: lte[3].map(|tenths| Rssi::from_tenths(tenths).unwrap()),
+    };
+    radio.nr = NrSignal {
+        rsrp: nr[0].map(|tenths| Rsrp::from_tenths(tenths).unwrap()),
+        rsrq: nr[1].map(|tenths| Rsrq::from_tenths(tenths).unwrap()),
+        sinr: nr[2].map(|tenths| Sinr::from_tenths(tenths).unwrap()),
+    };
+    RadioState::Attached(radio)
+}
+
+/// Every radio state and band system reports exactly: no service; an LTE
+/// and an NR band with their numbers; the data service as the router
+/// claims it; each LTE and each NR reading in its own slot, and an absent
+/// one absent.
 #[test]
-fn every_radio_reports_exactly() {
+fn the_report_carries_service_band_and_both_signals() {
     let band = |system, number| ReportBand {
         system,
         number: ReportBandNumber::new(number).unwrap(),
@@ -391,44 +440,69 @@ fn every_radio_reports_exactly() {
     let cases = [
         (RadioState::NoService, ReportRadio::NoService),
         (
-            attached(RadioAccess::Lte, "B20", [Some(-1012), None, Some(31), None]),
+            attached(
+                "B20",
+                [Some(-1012), None, Some(31), None],
+                [None, Some(-118), None],
+            ),
             ReportRadio::Attached {
-                access: ReportRadioAccess::Lte,
+                service: ReportDataService::NrSub6,
                 band: band(ReportRadioSystem::Lte, 20),
-                rsrp_tenths: Some(-1012),
-                rsrq_tenths: None,
-                sinr_tenths: Some(31),
-                rssi_tenths: None,
+                lte: ReportLteSignal {
+                    rsrp_tenths: Some(-1012),
+                    rsrq_tenths: None,
+                    sinr_tenths: Some(31),
+                    rssi_tenths: None,
+                },
+                nr: ReportNrSignal {
+                    rsrp_tenths: None,
+                    rsrq_tenths: Some(-118),
+                    sinr_tenths: None,
+                },
             },
         ),
         (
             attached(
-                RadioAccess::NrNsa,
-                "B3",
-                [None, Some(-118), None, Some(-702)],
-            ),
-            ReportRadio::Attached {
-                access: ReportRadioAccess::NrNsa,
-                band: band(ReportRadioSystem::Lte, 3),
-                rsrp_tenths: None,
-                rsrq_tenths: Some(-118),
-                sinr_tenths: None,
-                rssi_tenths: Some(-702),
-            },
-        ),
-        (
-            attached(
-                RadioAccess::NrSa,
                 "n78",
-                [Some(-934), Some(-97), Some(205), Some(-655)],
+                [None, Some(-97), None, Some(-655)],
+                [Some(-934), None, Some(205)],
             ),
             ReportRadio::Attached {
-                access: ReportRadioAccess::NrSa,
+                service: ReportDataService::NrSub6,
                 band: band(ReportRadioSystem::Nr, 78),
-                rsrp_tenths: Some(-934),
-                rsrq_tenths: Some(-97),
-                sinr_tenths: Some(205),
-                rssi_tenths: Some(-655),
+                lte: ReportLteSignal {
+                    rsrp_tenths: None,
+                    rsrq_tenths: Some(-97),
+                    sinr_tenths: None,
+                    rssi_tenths: Some(-655),
+                },
+                nr: ReportNrSignal {
+                    rsrp_tenths: Some(-934),
+                    rsrq_tenths: None,
+                    sinr_tenths: Some(205),
+                },
+            },
+        ),
+        (
+            attached(
+                "B3",
+                [Some(-1001), Some(-102), Some(103), Some(-704)],
+                [Some(-905), Some(-106), Some(107)],
+            ),
+            ReportRadio::Attached {
+                service: ReportDataService::NrSub6,
+                band: band(ReportRadioSystem::Lte, 3),
+                lte: ReportLteSignal {
+                    rsrp_tenths: Some(-1001),
+                    rsrq_tenths: Some(-102),
+                    sinr_tenths: Some(103),
+                    rssi_tenths: Some(-704),
+                },
+                nr: ReportNrSignal {
+                    rsrp_tenths: Some(-905),
+                    rsrq_tenths: Some(-106),
+                    sinr_tenths: Some(107),
+                },
             },
         ),
     ];
@@ -502,28 +576,30 @@ fn every_plan_line_reports_with_its_kind() {
 }
 
 /// Text that fits the report's own grammars stays out all the same: the
-/// projection, not the grammar, keeps it out. A carrier name shaped like
-/// both a report user id and a node name, a firmware version shaped like a
-/// node name, and an interface name shaped like one are planted in fields
-/// the report drops, and none reaches it.
+/// projection, not the grammar, keeps it out. A SIM name shaped like both a
+/// report user id and a node name, a network name, firmware and web app
+/// versions shaped like node names, and an interface name shaped like one
+/// are planted in fields the report drops, and none reaches it.
 #[test]
 fn grammar_shaped_text_in_dropped_fields_stays_out() {
-    let (carrier, firmware, interface) = (GRAMMAR_SHAPED_LABEL, "phone", "phone0");
-    assert!(ReportUserId::new(carrier).is_ok() && NodeName::new(carrier).is_ok());
-    assert!(NodeName::new(firmware).is_ok() && NodeName::new(interface).is_ok());
-    let mut status = with_radio(RadioState::NoService);
-    let RouterReading::Available(router) = &mut status.router else {
-        panic!("the serving scenario's router answered");
-    };
-    router.radio = attached(RadioAccess::NrNsa, "n78", [Some(-985), None, None, None]);
-    let RadioState::Attached { carrier: name, .. } = &mut router.radio else {
-        panic!("the radio is attached");
-    };
-    *name = CarrierName::parse(carrier).unwrap();
-    router.firmware = FirmwareVersion::parse(firmware).unwrap();
+    let (spn, network, firmware, web_app, interface) =
+        (GRAMMAR_SHAPED_LABEL, "tablet", "phone", "laptop", "phone0");
+    assert!(ReportUserId::new(spn).is_ok() && NodeName::new(spn).is_ok());
+    for name in [network, firmware, web_app, interface] {
+        assert!(NodeName::new(name).is_ok(), "{name}");
+    }
+    let mut status = with_router(|parts| {
+        parts.sim_spn = CarrierName::parse(spn).unwrap();
+        parts.firmware = FirmwareVersion::parse(firmware).unwrap();
+        parts.web_app = WebAppVersion::parse(web_app).unwrap();
+        let RadioState::Attached(radio) = &mut parts.radio else {
+            panic!("the radio is attached");
+        };
+        radio.network = CarrierName::parse(network).unwrap();
+    });
     status.exit.egress.as_mut().unwrap().interface = BsdName::parse(interface).unwrap();
     let json = serde_json::to_string(&report(status)).unwrap();
-    for canary in [carrier, firmware, interface] {
+    for canary in [spn, network, firmware, web_app, interface] {
         assert!(
             !json.contains(canary),
             "the report holds {canary:?}: {json}"
@@ -559,8 +635,9 @@ fn revoked_users_are_left_out() {
 }
 
 /// The identifiers a status holds that the report must drop: every IPv4
-/// address, link-layer address and interface name in it, the router's
-/// carrier name and firmware, and the users' aliases. Labels never reach a
+/// address, link-layer address and interface name in it, the router's SIM
+/// and network names and its firmware and web app versions, and the users'
+/// aliases. Labels never reach a
 /// `MacStatusV1` (it has no field for one); every label of every fixture
 /// deployment, and the grammar-shaped label the degraded scenario gives a
 /// user, are scanned for all the same, so a status that ever gained one
@@ -597,10 +674,13 @@ fn identifiers(status: &MacStatusV1) -> Vec<String> {
         | ForeignNetworkFinding::PersonalHotspot { interface }) = finding;
         words.push(interface.as_str().to_owned());
     }
-    if let RouterReading::Available(router) = &parts.router {
+    if let RouterReading::Available { status, .. } = &parts.router {
+        let router = status.parts();
         words.push(router.firmware.as_str().to_owned());
-        if let RadioState::Attached { carrier, .. } = &router.radio {
-            words.push(carrier.as_str().to_owned());
+        words.push(router.web_app.as_str().to_owned());
+        words.push(router.sim_spn.as_str().to_owned());
+        if let RadioState::Attached(radio) = &router.radio {
+            words.push(radio.network.as_str().to_owned());
         }
     }
     words.extend(

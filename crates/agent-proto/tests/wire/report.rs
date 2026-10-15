@@ -14,9 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use mooring_agent_proto::{
     ExitPhase, MAX_REPORT_ALERTS, MAX_REPORT_USERS, MacAlertKind, MacReportParts, MacReportRule,
     MacReportV1, NodeName, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber,
-    ReportCapacity, ReportExit, ReportForecast, ReportPlanLine, ReportRadio, ReportRadioAccess,
-    ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim, ReportUsage,
-    ReportUser, ReportUserId, ReportUserStatus, StoredMacReport, Traffic, UnixTime, ValueError,
+    ReportCapacity, ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal,
+    ReportPlanLine, ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity,
+    ReportSim, ReportUsage, ReportUser, ReportUserId, ReportUserStatus, StoredMacReport, Traffic,
+    UnixTime, ValueError,
 };
 use proptest::collection::{btree_map, vec};
 use proptest::option;
@@ -96,23 +97,27 @@ fn router() -> impl Strategy<Value = ReportRouter> {
     let radio = prop_oneof![
         Just(ReportRadio::NoService),
         (
-            select(ReportRadioAccess::ALL),
+            select(ReportDataService::ALL),
             select(ReportRadioSystem::ALL),
             (1..=ReportBandNumber::MAX).prop_map(|number| ReportBandNumber::new(number).unwrap()),
             (signal(), signal(), signal(), signal()),
+            (signal(), signal(), signal()),
         )
-            .prop_map(
-                |(access, system, number, (rsrp_tenths, rsrq_tenths, sinr_tenths, rssi_tenths))| {
-                    ReportRadio::Attached {
-                        access,
-                        band: ReportBand { system, number },
-                        rsrp_tenths,
-                        rsrq_tenths,
-                        sinr_tenths,
-                        rssi_tenths,
-                    }
-                }
-            ),
+            .prop_map(|(service, system, number, lte, nr)| ReportRadio::Attached {
+                service,
+                band: ReportBand { system, number },
+                lte: ReportLteSignal {
+                    rsrp_tenths: lte.0,
+                    rsrq_tenths: lte.1,
+                    sinr_tenths: lte.2,
+                    rssi_tenths: lte.3,
+                },
+                nr: ReportNrSignal {
+                    rsrp_tenths: nr.0,
+                    rsrq_tenths: nr.1,
+                    sinr_tenths: nr.2,
+                },
+            }),
     ];
     prop_oneof![
         (time(), radio, any::<i16>()).prop_map(|(polled_at, radio, temperature_c)| {
@@ -243,10 +248,12 @@ const FIELDS: &[&str] = &[
     "polled_at",
     "radio",
     "Attached",
-    "access",
+    "service",
     "band",
     "system",
     "number",
+    "lte",
+    "nr",
     "rsrp_tenths",
     "rsrq_tenths",
     "sinr_tenths",
@@ -282,7 +289,7 @@ fn names() -> BTreeSet<&'static str> {
         ["NoService", "NoEvidence", "Clear", "Unavailable"].into();
     names.extend(ExitPhase::ALL.iter().map(|value| value.name()));
     names.extend(ReportAccuracy::ALL.iter().map(|value| value.name()));
-    names.extend(ReportRadioAccess::ALL.iter().map(|value| value.name()));
+    names.extend(ReportDataService::ALL.iter().map(|value| value.name()));
     names.extend(ReportRadioSystem::ALL.iter().map(|value| value.name()));
     names.extend(ReportUserStatus::ALL.iter().map(|value| value.name()));
     names.extend(ReportSeverity::ALL.iter().map(|value| value.name()));

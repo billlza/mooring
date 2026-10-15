@@ -112,31 +112,75 @@
   "router": {
     "available": {
       "polled_at": 1791464379,
-      "radio": {
-        "attached": {
-          "access": "lte",
-          "band": "B3",
-          "carrier": "SMARTY",
-          "signal": {
-            "rsrp": -1125,
-            "rsrq": -145,
-            "sinr": -15,
-            "rssi": -810
+      "status": {
+        "firmware": "NTGX75_10.04.43.01",
+        "web_app": "M7_GENERIC_v07.01.81.00",
+        "uptime_secs": 523014,
+        "temperature_c": 47,
+        "thermal": "normal",
+        "power": {
+          "state": "online",
+          "battery": {
+            "charge": 64,
+            "state": "normal",
+            "charging": false,
+            "source": "quick_charge",
+            "temperature_c": 33
           }
-        }
-      },
-      "temperature_c": 47,
-      "power": {
-        "battery": {
-          "percent": 64,
-          "charging": false
-        }
-      },
-      "data_counter_bytes": 97412311040,
-      "connected_clients": 1,
-      "unread_sms": 0,
-      "firmware": "NTG9X75C_10.05.07.00",
-      "uptime_secs": 523014
+        },
+        "sim_spn": "SMARTY",
+        "radio": {
+          "attached": {
+            "network_service": "nr5g",
+            "data_service": "nr_sub6",
+            "band": "B20",
+            "lte_carriers": {
+              "primary": {
+                "band": 20,
+                "dl_bandwidth": "mhz10"
+              },
+              "secondary": []
+            },
+            "ca_secondary_count": 0,
+            "lte": {
+              "rsrp": -1125,
+              "rsrq": -145,
+              "sinr": -15,
+              "rssi": -810
+            },
+            "nr": {
+              "rsrp": null,
+              "rsrq": null,
+              "sinr": null
+            },
+            "network": "SMARTY",
+            "plmn": {
+              "mcc": "234",
+              "mnc": "20"
+            },
+            "session_secs": 522950
+          }
+        },
+        "counters": {
+          "rx_bytes": 81000000000,
+          "tx_bytes": 16412311040
+        },
+        "wifi": {
+          "enabled": false,
+          "main": "off",
+          "guest": "off",
+          "aux": "off",
+          "clients": 0
+        },
+        "settings": {
+          "wifi_offload": false,
+          "ethernet_offload": false,
+          "upnp": false,
+          "analytics": false,
+          "insight_active": false
+        },
+        "unread_sms": 0
+      }
     }
   },
   "capacity": {

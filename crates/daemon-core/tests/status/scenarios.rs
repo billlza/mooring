@@ -26,9 +26,11 @@ use mooring_daemon_core::policy::{
     ExpiryState, QuotaState, automatic_quota, effective_quota, evaluate, user_alerts,
 };
 use mooring_daemon_core::router::{
-    Band, BatteryPercent, CarrierName, Celsius, FirmwareVersion, RadioAccess, RadioState,
-    RouterPower, RouterReading, RouterStatus, RouterUnavailableReason, Rsrp, Rsrq, Rssi, Signal,
-    Sinr,
+    Band, BandNumber, Battery, BatteryPercent, BatteryState, CarrierName, Celsius, ChargeSource,
+    DataService, FirmwareVersion, LteBandwidth, LteCarrier, LteCarriers, LteSignal, Mcc, Mnc,
+    NetworkService, NrSignal, Plmn, PowerState, Radio, RadioState, RouterPower, RouterReading,
+    RouterSettings, RouterStatus, RouterStatusParts, RouterUnavailableReason, RouterWifi, Rsrp,
+    Rsrq, Rssi, Sinr, ThermalState, WebAppVersion, WifiApStatus, WwanCounters,
 };
 use mooring_daemon_core::status::{
     AgentUnreachable, CarrierCheck, DegradedReason, DownReason, EgressFacts, EngineExit,
@@ -273,39 +275,95 @@ fn capacity(
     latest.unwrap()
 }
 
-fn router(
-    polled_at: UnixTime,
-    radio: RadioState,
-    temperature: i16,
-    power: RouterPower,
-) -> RouterReading {
-    RouterReading::Available(RouterStatus {
-        polled_at,
-        radio,
-        temperature_c: Celsius::new(temperature).unwrap(),
-        power,
-        data_counter_bytes: 97_412_311_040,
-        connected_clients: 1,
-        unread_sms: 0,
-        firmware: FirmwareVersion::parse("NTG9X75C_10.05.07.00").unwrap(),
+/// The M7's reading in a scenario: the M2a firmware and settings (Wi-Fi,
+/// offload, UPnP, Analytics and Insight off), on the battery the operator
+/// keeps installed, with the SMARTY SIM's names and network codes, which
+/// are not yet captured *(inference: SMARTY displays as `SMARTY` on Three
+/// UK, MCC 234 MNC 20)*.
+fn router(polled_at: UnixTime, radio: RadioState, temperature: i16, charge: u8) -> RouterReading {
+    let status = RouterStatus::new(RouterStatusParts {
+        firmware: FirmwareVersion::parse("NTGX75_10.04.43.01").unwrap(),
+        web_app: WebAppVersion::parse("M7_GENERIC_v07.01.81.00").unwrap(),
         uptime_secs: 523_014,
+        temperature_c: Celsius::new(temperature).unwrap(),
+        thermal: ThermalState::Normal,
+        power: RouterPower {
+            state: PowerState::Online,
+            battery: Battery {
+                charge: BatteryPercent::new(charge).unwrap(),
+                state: BatteryState::Normal,
+                charging: false,
+                source: ChargeSource::QuickCharge,
+                temperature_c: Celsius::new(33).unwrap(),
+            },
+        },
+        sim_spn: CarrierName::parse("SMARTY").unwrap(),
+        radio,
+        counters: WwanCounters {
+            rx_bytes: 81_000_000_000,
+            tx_bytes: 16_412_311_040,
+        },
+        wifi: RouterWifi {
+            enabled: false,
+            main: WifiApStatus::Off,
+            guest: WifiApStatus::Off,
+            aux: WifiApStatus::Off,
+            clients: 0,
+        },
+        settings: RouterSettings {
+            wifi_offload: false,
+            ethernet_offload: false,
+            upnp: false,
+            analytics: false,
+            insight_active: false,
+        },
+        unread_sms: 0,
     })
+    .unwrap();
+    RouterReading::Available {
+        polled_at,
+        status: Box::new(status),
+    }
 }
 
-fn attached(access: RadioAccess, band: &str, signal: [Option<i16>; 4]) -> RadioState {
-    RadioState::Attached {
-        access,
-        band: Band::parse(band).unwrap(),
-        // What the M7 displays for a SMARTY SIM is unknown until the M2a
-        // capture (inference).
-        carrier: CarrierName::parse("SMARTY").unwrap(),
-        signal: Signal {
-            rsrp: signal[0].map(|tenths| Rsrp::from_tenths(tenths).unwrap()),
-            rsrq: signal[1].map(|tenths| Rsrq::from_tenths(tenths).unwrap()),
-            sinr: signal[2].map(|tenths| Sinr::from_tenths(tenths).unwrap()),
-            rssi: signal[3].map(|tenths| Rssi::from_tenths(tenths).unwrap()),
+/// Attached on LTE band `band` (the M7's one carrier, of `dl_bandwidth`),
+/// with the LTE readings given in tenths and no NR reading, as the M7
+/// reported in M2a while claiming a 5G data service.
+fn attached(band: u16, dl_bandwidth: LteBandwidth, lte: [Option<i16>; 4]) -> RadioState {
+    let number = BandNumber::new(band).unwrap();
+    RadioState::Attached(Radio {
+        network_service: NetworkService::Nr5g,
+        data_service: DataService::NrSub6,
+        band: Band::Lte(number),
+        lte_carriers: Some(
+            LteCarriers::new(
+                LteCarrier {
+                    band: number,
+                    dl_bandwidth,
+                },
+                Vec::new(),
+            )
+            .unwrap(),
+        ),
+        ca_secondary_count: 0,
+        lte: LteSignal {
+            rsrp: lte[0].map(|tenths| Rsrp::from_tenths(tenths).unwrap()),
+            rsrq: lte[1].map(|tenths| Rsrq::from_tenths(tenths).unwrap()),
+            sinr: lte[2].map(|tenths| Sinr::from_tenths(tenths).unwrap()),
+            rssi: lte[3].map(|tenths| Rssi::from_tenths(tenths).unwrap()),
         },
-    }
+        nr: NrSignal {
+            rsrp: None,
+            rsrq: None,
+            sinr: None,
+        },
+        network: CarrierName::parse("SMARTY").unwrap(),
+        plmn: Plmn {
+            mcc: Mcc::parse("234").unwrap(),
+            mnc: Mnc::parse("20").unwrap(),
+        },
+        session_secs: 522_950,
+    })
 }
 
 fn ledger(
@@ -555,12 +613,12 @@ fn serving() -> MacStatusV1 {
         router: router(
             before(now, 44),
             attached(
-                RadioAccess::NrNsa,
-                "n78",
-                [Some(-985), Some(-105), Some(124), None],
+                3,
+                LteBandwidth::Mhz20,
+                [Some(-990), Some(-110), Some(120), Some(-700)],
             ),
             41,
-            RouterPower::Plugged,
+            100,
         ),
         capacity: Some(capacity(
             before(now, 20),
@@ -830,6 +888,8 @@ fn degraded() -> MacStatusV1 {
             threshold: first.threshold,
             on,
         },
+        // The scenario's alerts are its inputs, not derived from its
+        // reading, which still claims the 5G data service as M2a's did.
         AlertCondition::RouterOnLte,
         AlertCondition::RouterWeakSignal {
             rsrp_dbm_x10: -1125,
@@ -864,15 +924,12 @@ fn degraded() -> MacStatusV1 {
         router: router(
             before(now, 51),
             attached(
-                RadioAccess::Lte,
-                "B3",
+                20,
+                LteBandwidth::Mhz10,
                 [Some(-1125), Some(-145), Some(-15), Some(-810)],
             ),
             47,
-            RouterPower::Battery {
-                percent: BatteryPercent::new(64).unwrap(),
-                charging: false,
-            },
+            64,
         ),
         capacity: Some(capacity(
             before(now, 12),

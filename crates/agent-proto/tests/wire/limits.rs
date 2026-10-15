@@ -16,11 +16,12 @@ use mooring_agent_proto::{
     MAX_REPORT_USERS, MAX_REQUEST_LINE_BYTES, MAX_RESPONSE_LINE_BYTES, MAX_SERIES_ENTRIES,
     MAX_USAGE_SERIES_REPLY_BYTES, MacAlertKind, MacReportParts, MacReportRule, MacReportV1,
     NodeName, Reply, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber, ReportCapacity,
-    ReportExit, ReportForecast, ReportPlanLine, ReportRadio, ReportRadioAccess, ReportRadioSystem,
-    ReportRouter, ReportSaturation, ReportSeverity, ReportSim, ReportUsage, ReportUser,
-    ReportUserId, ReportUserStatus, Request, Resolution, Response, SeriesRange, ShutdownReason,
-    StatsEmail, StoredMacReport, Traffic, UnixTime, UsageBin, UsageSeriesV1, ValueError,
-    WatchError, WatchErrorKind, read_reply, read_request, write_reply, write_request,
+    ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine,
+    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim,
+    ReportUsage, ReportUser, ReportUserId, ReportUserStatus, Request, Resolution, Response,
+    SeriesRange, ShutdownReason, StatsEmail, StoredMacReport, Traffic, UnixTime, UsageBin,
+    UsageSeriesV1, ValueError, WatchError, WatchErrorKind, read_reply, read_request, write_reply,
+    write_request,
 };
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -270,20 +271,27 @@ fn largest_report(users: usize, alerts: usize) -> MacReportParts {
         })
     });
     let mut radios = vec![ReportRadio::NoService];
-    for access in ReportRadioAccess::ALL {
+    for service in ReportDataService::ALL {
         for system in ReportRadioSystem::ALL {
-            for signals in 0..16_u8 {
+            for signals in 0..128_u8 {
                 let reading = |bit: u8| (signals & (1 << bit) != 0).then_some(signal);
                 radios.push(ReportRadio::Attached {
-                    access: *access,
+                    service: *service,
                     band: ReportBand {
                         system: *system,
                         number: ReportBandNumber::new(ReportBandNumber::MAX).unwrap(),
                     },
-                    rsrp_tenths: reading(0),
-                    rsrq_tenths: reading(1),
-                    sinr_tenths: reading(2),
-                    rssi_tenths: reading(3),
+                    lte: ReportLteSignal {
+                        rsrp_tenths: reading(0),
+                        rsrq_tenths: reading(1),
+                        sinr_tenths: reading(2),
+                        rssi_tenths: reading(3),
+                    },
+                    nr: ReportNrSignal {
+                        rsrp_tenths: reading(4),
+                        rsrq_tenths: reading(5),
+                        sinr_tenths: reading(6),
+                    },
                 });
             }
         }

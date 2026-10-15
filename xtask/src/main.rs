@@ -13,8 +13,13 @@ mod cli;
 mod deny_skips;
 mod graph_check;
 mod kinds;
+#[cfg(test)]
+mod lint_tables;
 mod metadata;
+mod mooringctl;
 mod output;
+#[cfg(test)]
+mod testing;
 mod version;
 
 use std::error::Error as _;
@@ -28,6 +33,7 @@ use crate::cli::{Command, UsageError};
 use crate::deny_skips::DenySkipsError;
 use crate::graph_check::GraphCheckError;
 use crate::kinds::KindsError;
+use crate::mooringctl::MooringctlError;
 
 /// Exit status when a command failed and its error report could not be written either.
 const EXIT_REPORT_UNWRITABLE: u8 = 2;
@@ -50,6 +56,8 @@ enum XtaskError {
     Acceptance(#[from] AcceptanceError),
     #[error(transparent)]
     Clean(#[from] CleanError),
+    #[error(transparent)]
+    Mooringctl(#[from] MooringctlError),
     #[error(transparent)]
     Output(#[from] output::OutputError),
 }
@@ -78,6 +86,7 @@ fn run(command: Command) -> Result<(), XtaskError> {
         Command::Acceptance => Ok(acceptance::run(&cargo, &mut out, Gate::Recorded)?),
         Command::ReleaseAcceptance => Ok(acceptance::run(&cargo, &mut out, Gate::Accepted)?),
         Command::Clean => Ok(clean::run(&cargo, &mut out)?),
+        Command::Mooringctl => Ok(mooringctl::run(&cargo, &mut out)?),
     }
 }
 

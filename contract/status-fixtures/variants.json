@@ -665,35 +665,68 @@
       }
     }
   ],
-  "radio_access": [
-    "lte",
-    "nr_nsa",
-    "nr_sa"
+  "network_service": [
+    "nr5g"
+  ],
+  "data_service": [
+    "nr_sub6"
   ],
   "radio_state": [
     "no_service",
     {
       "attached": {
-        "access": "nr_nsa",
-        "band": "n78",
-        "carrier": "SMARTY",
-        "signal": {
-          "rsrp": -985,
-          "rsrq": -105,
-          "sinr": 124,
-          "rssi": null
-        }
+        "network_service": "nr5g",
+        "data_service": "nr_sub6",
+        "band": "B3",
+        "lte_carriers": {
+          "primary": {
+            "band": 3,
+            "dl_bandwidth": "mhz20"
+          },
+          "secondary": []
+        },
+        "ca_secondary_count": 0,
+        "lte": {
+          "rsrp": -1040,
+          "rsrq": -170,
+          "sinr": 0,
+          "rssi": -720
+        },
+        "nr": {
+          "rsrp": null,
+          "rsrq": null,
+          "sinr": null
+        },
+        "network": "CMLink",
+        "plmn": {
+          "mcc": "234",
+          "mnc": "30"
+        },
+        "session_secs": 359217
       }
     }
   ],
-  "router_power": [
-    "plugged",
-    {
-      "battery": {
-        "percent": 64,
-        "charging": true
-      }
-    }
+  "thermal_state": [
+    "normal"
+  ],
+  "power_state": [
+    "online"
+  ],
+  "battery_state": [
+    "normal"
+  ],
+  "charge_source": [
+    "quick_charge"
+  ],
+  "wifi_ap_status": [
+    "off"
+  ],
+  "lte_bandwidth": [
+    "mhz3",
+    "mhz5",
+    "mhz10",
+    "mhz15",
+    "mhz20"
   ],
   "router_unavailable_reason": [
     "not_configured",
@@ -706,27 +739,76 @@
   "router_reading": [
     {
       "available": {
-        "polled_at": 1791453600,
-        "radio": {
-          "attached": {
-            "access": "nr_nsa",
-            "band": "n78",
-            "carrier": "SMARTY",
-            "signal": {
-              "rsrp": -985,
-              "rsrq": -105,
-              "sinr": 124,
-              "rssi": null
+        "polled_at": 1791919200,
+        "status": {
+          "firmware": "NTGX75_10.04.43.01",
+          "web_app": "M7_GENERIC_v07.01.81.00",
+          "uptime_secs": 359272,
+          "temperature_c": 35,
+          "thermal": "normal",
+          "power": {
+            "state": "online",
+            "battery": {
+              "charge": 100,
+              "state": "normal",
+              "charging": false,
+              "source": "quick_charge",
+              "temperature_c": 32
             }
-          }
-        },
-        "temperature_c": 41,
-        "power": "plugged",
-        "data_counter_bytes": 212000000000,
-        "connected_clients": 1,
-        "unread_sms": 0,
-        "firmware": "NTG9X75C_10.05.07.00",
-        "uptime_secs": 523000
+          },
+          "sim_spn": "CMLink",
+          "radio": {
+            "attached": {
+              "network_service": "nr5g",
+              "data_service": "nr_sub6",
+              "band": "B3",
+              "lte_carriers": {
+                "primary": {
+                  "band": 3,
+                  "dl_bandwidth": "mhz20"
+                },
+                "secondary": []
+              },
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1040,
+                "rsrq": -170,
+                "sinr": 0,
+                "rssi": -720
+              },
+              "nr": {
+                "rsrp": null,
+                "rsrq": null,
+                "sinr": null
+              },
+              "network": "CMLink",
+              "plmn": {
+                "mcc": "234",
+                "mnc": "30"
+              },
+              "session_secs": 359217
+            }
+          },
+          "counters": {
+            "rx_bytes": 591655199,
+            "tx_bytes": 188784597
+          },
+          "wifi": {
+            "enabled": false,
+            "main": "off",
+            "guest": "off",
+            "aux": "off",
+            "clients": 0
+          },
+          "settings": {
+            "wifi_offload": false,
+            "ethernet_offload": false,
+            "upnp": false,
+            "analytics": false,
+            "insight_active": false
+          },
+          "unread_sms": 0
+        }
       }
     },
     {

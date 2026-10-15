@@ -20,11 +20,12 @@ use mooring_agent_proto::{
     EngineUser, EventSeq, EventsV1, ExitPhase, GateReason, GateState, Generation, Holds,
     HostHealth, Inbound, InboundSet, LineRequest, MacAlertKind, MacReportParts, MacReportV1,
     NodeName, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber, ReportCapacity,
-    ReportExit, ReportForecast, ReportPlanLine, ReportRadio, ReportRadioAccess, ReportRadioSystem,
-    ReportRouter, ReportSaturation, ReportSeverity, ReportSim, ReportUsage, ReportUser,
-    ReportUserId, ReportUserStatus, RequestKind, Resolution, Response, SeriesRange, ShutdownReason,
-    StatsEmail, StatusV1, StoredMacReport, Traffic, UnixTime, UplinkTransfer, UsageBin, UsageMonth,
-    UsageSeriesV1, WatchConditions, WatchError, WatchErrorKind,
+    ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine,
+    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim,
+    ReportUsage, ReportUser, ReportUserId, ReportUserStatus, RequestKind, Resolution, Response,
+    SeriesRange, ShutdownReason, StatsEmail, StatusV1, StoredMacReport, Traffic, UnixTime,
+    UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, WatchConditions, WatchError,
+    WatchErrorKind,
 };
 
 use crate::golden::{
@@ -247,15 +248,22 @@ fn put_mac_report_request() -> Vec<u8> {
         router: ReportRouter::Available {
             polled_at: time(1_791_417_890),
             radio: ReportRadio::Attached {
-                access: ReportRadioAccess::NrNsa,
+                service: ReportDataService::NrSub6,
                 band: ReportBand {
-                    system: ReportRadioSystem::Nr,
-                    number: ReportBandNumber::new(78).unwrap(),
+                    system: ReportRadioSystem::Lte,
+                    number: ReportBandNumber::new(3).unwrap(),
                 },
-                rsrp_tenths: Some(-982),
-                rsrq_tenths: Some(-105),
-                sinr_tenths: Some(143),
-                rssi_tenths: None,
+                lte: ReportLteSignal {
+                    rsrp_tenths: Some(-1040),
+                    rsrq_tenths: Some(-170),
+                    sinr_tenths: Some(0),
+                    rssi_tenths: Some(-720),
+                },
+                nr: ReportNrSignal {
+                    rsrp_tenths: None,
+                    rsrq_tenths: None,
+                    sinr_tenths: None,
+                },
             },
             temperature_c: 46,
         },

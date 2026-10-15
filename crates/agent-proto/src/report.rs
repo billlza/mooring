@@ -175,14 +175,12 @@ pub struct ReportSim {
 }
 
 named_enum! {
-    /// The radio access technology in use.
-    pub enum ReportRadioAccess {
-        /// 4G LTE.
-        Lte,
-        /// 5G non-standalone.
-        NrNsa,
-        /// 5G standalone.
-        NrSa,
+    /// The data service type the router reports (the Mac's `DataService`,
+    /// the router's own `currentPSserviceType`): the router's claim, not an
+    /// access type derived from its readings.
+    pub enum ReportDataService {
+        /// The router's `5GSUB6`: a 5G sub-6 GHz data service.
+        NrSub6,
     }
 }
 
@@ -248,8 +246,44 @@ pub struct ReportBand {
     pub number: ReportBandNumber,
 }
 
-/// The router's attachment to the mobile network. The carrier's name, the
-/// cell and every device identifier are left out.
+/// The router's LTE readings, each `None` when the router does not report
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportLteSignal {
+    /// RSRP in tenths of a dBm.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub rsrp_tenths: Option<i16>,
+    /// RSRQ in tenths of a dB.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub rsrq_tenths: Option<i16>,
+    /// SINR in tenths of a dB.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub sinr_tenths: Option<i16>,
+    /// RSSI in tenths of a dBm.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub rssi_tenths: Option<i16>,
+}
+
+/// The router's NR readings, each `None` when the router does not report
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportNrSignal {
+    /// SS-RSRP in tenths of a dBm.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub rsrp_tenths: Option<i16>,
+    /// SS-RSRQ in tenths of a dB.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub rsrq_tenths: Option<i16>,
+    /// SS-SINR in tenths of a dB.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub sinr_tenths: Option<i16>,
+}
+
+/// The router's attachment to the mobile network. The carrier's and the
+/// network's names, the network's codes, the carrier list, the cell and
+/// every device identifier are left out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum ReportRadio {
@@ -257,22 +291,14 @@ pub enum ReportRadio {
     NoService,
     /// Attached.
     Attached {
-        /// The access technology.
-        access: ReportRadioAccess,
+        /// The data service type.
+        service: ReportDataService,
         /// The band.
         band: ReportBand,
-        /// RSRP in tenths of a dBm, if reported.
-        #[serde(deserialize_with = "Option::deserialize")]
-        rsrp_tenths: Option<i16>,
-        /// RSRQ in tenths of a dB, if reported.
-        #[serde(deserialize_with = "Option::deserialize")]
-        rsrq_tenths: Option<i16>,
-        /// SINR in tenths of a dB, if reported.
-        #[serde(deserialize_with = "Option::deserialize")]
-        sinr_tenths: Option<i16>,
-        /// RSSI in tenths of a dBm, if reported.
-        #[serde(deserialize_with = "Option::deserialize")]
-        rssi_tenths: Option<i16>,
+        /// The LTE readings.
+        lte: ReportLteSignal,
+        /// The NR readings.
+        nr: ReportNrSignal,
     },
 }
 
@@ -608,10 +634,11 @@ const I16_BYTES: usize = "-32768".len();
 const BAND_NUMBER_BYTES: usize = "999".len();
 
 /// Everything but the users' and alerts' entries, with the longest shape of
-/// every field: the longest phase, accuracy, access and system names; a
-/// hard stop, an allowance line and a forecast; an attached radio with
-/// every signal; a saturated capacity sample; available usage. The
-/// literal leaves out every number and name, which are added after it.
+/// every field: the longest phase, accuracy, data service and system
+/// names; a hard stop, an allowance line and a forecast; an attached radio
+/// with every LTE and NR reading; a saturated capacity sample; available
+/// usage. The literal leaves out every number and name, which are added
+/// after it: seven readings and the temperature are the eight `i16`s.
 const FIXED_BYTES: usize = concat!(
     "{\"at\":,\"exit\":{\"phase\":\"\",\"since\":},",
     "\"sim\":{\"cycle_starts_at\":,\"cycle_ends_at\":,\"rx_bytes\":,\"tx_bytes\":,",
@@ -619,8 +646,9 @@ const FIXED_BYTES: usize = concat!(
     "\"line\":{\"Allowance\":{\"bytes\":}},",
     "\"forecast\":{\"daily_average_bytes\":,\"projected_bytes\":}},",
     "\"router\":{\"Available\":{\"polled_at\":,\"radio\":{\"Attached\":{",
-    "\"access\":\"\",\"band\":{\"system\":\"\",\"number\":},",
-    "\"rsrp_tenths\":,\"rsrq_tenths\":,\"sinr_tenths\":,\"rssi_tenths\":}},",
+    "\"service\":\"\",\"band\":{\"system\":\"\",\"number\":},",
+    "\"lte\":{\"rsrp_tenths\":,\"rsrq_tenths\":,\"sinr_tenths\":,\"rssi_tenths\":},",
+    "\"nr\":{\"rsrp_tenths\":,\"rsrq_tenths\":,\"sinr_tenths\":}}},",
     "\"temperature_c\":}},",
     "\"capacity\":{\"at\":,\"tx_bps\":,\"rx_bps\":,\"saturation\":{\"Saturated\":{\"since\":}}},",
     "\"usage\":{\"Available\":{\"through\":}},",
@@ -628,11 +656,11 @@ const FIXED_BYTES: usize = concat!(
 )
 .len()
     + 17 * NUMBER_BYTES
-    + 5 * I16_BYTES
+    + 8 * I16_BYTES
     + BAND_NUMBER_BYTES
     + ExitPhase::longest_name()
     + ReportAccuracy::longest_name()
-    + ReportRadioAccess::longest_name()
+    + ReportDataService::longest_name()
     + ReportRadioSystem::longest_name();
 
 /// One user entry with the comma that may follow it: the longest status,
@@ -693,7 +721,7 @@ mod tests {
         );
         assert_eq!(ExitPhase::longest_name(), "Preflight".len());
         assert_eq!(ReportAccuracy::longest_name(), "LowerBound".len());
-        assert_eq!(ReportRadioAccess::longest_name(), "NrNsa".len());
+        assert_eq!(ReportDataService::longest_name(), "NrSub6".len());
         assert_eq!(ReportRadioSystem::longest_name(), "Lte".len());
         assert_eq!(ReportUserStatus::longest_name(), "RevokePending".len());
         assert_eq!(ReportSeverity::longest_name(), "Critical".len());
@@ -703,7 +731,7 @@ mod tests {
         );
         // Pinned so that a change to the bound is deliberate; it is far
         // below both frame limits (1 MiB).
-        assert_eq!(MAX_MAC_REPORT_BYTES, 178_874);
+        assert_eq!(MAX_MAC_REPORT_BYTES, 178_954);
     }
 
     /// A band number is 1..=999, every `u16` checked, on decode too.

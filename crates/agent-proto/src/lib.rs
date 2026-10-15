@@ -111,9 +111,10 @@ pub use profile::{
 pub use report::{
     ExitPhase, MAX_MAC_REPORT_BYTES, MAX_REPORT_ALERTS, MAX_REPORT_USERS, MacAlertKind,
     MacReportParts, MacReportRule, MacReportV1, ReportAccuracy, ReportAlert, ReportBand,
-    ReportBandNumber, ReportCapacity, ReportExit, ReportForecast, ReportPlanLine, ReportRadio,
-    ReportRadioAccess, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity,
-    ReportSim, ReportUsage, ReportUser, ReportUserId, ReportUserStatus, StoredMacReport,
+    ReportBandNumber, ReportCapacity, ReportDataService, ReportExit, ReportForecast,
+    ReportLteSignal, ReportNrSignal, ReportPlanLine, ReportRadio, ReportRadioSystem, ReportRouter,
+    ReportSaturation, ReportSeverity, ReportSim, ReportUsage, ReportUser, ReportUserId,
+    ReportUserStatus, StoredMacReport,
 };
 pub use request::{LineRequest, Request, RequestKind};
 pub use response::{HelloInfo, Reply, Response, ResponseKind, TxnStage, TxnState};

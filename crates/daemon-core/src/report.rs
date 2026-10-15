@@ -8,10 +8,11 @@
 //! # What it keeps
 //!
 //! The exit's phase and since when; the SIM meter (cycle, bytes, accuracy,
-//! thresholds, plan line, forecast totals); the router's radio (access,
-//! band, signal) and temperature; the uplink's rates and saturation; each
-//! user that is not revoked, by id, with its status, cycle bytes and last
-//! activity; and the open alerts by kind, severity, node and start.
+//! thresholds, plan line, forecast totals); the router's radio (data
+//! service, band, LTE and NR signal) and temperature; the uplink's rates
+//! and saturation; each user that is not revoked, by id, with its status,
+//! cycle bytes and last activity; and the open alerts by kind, severity,
+//! node and start.
 //!
 //! # What it drops
 //!
@@ -20,17 +21,19 @@
 //! (interface name, link-layer address, LAN address); the carrier check
 //! (the line's public address); the engines' processes; the power and
 //! sleep record; the foreign networks; the details of a degraded or down
-//! exit; the router's carrier name, firmware version, data counter,
-//! clients, SMS count, power and uptime; the users' aliases, node sets,
+//! exit; the router's SIM SPN, network name, PLMN, firmware and web app
+//! versions, counters, Wi-Fi, settings, power, thermal state, uptime,
+//! session time, carrier list and unread SMS count; the users' aliases,
+//! node sets,
 //! quota and expiry states, per-node activity, day, month and lifetime
 //! figures and shares; revoked users; and the node rows (a viewer reads a
 //! node's own `Status`). Labels never reach a [`MacStatusV1`] at all.
 
 use mooring_agent_proto::{
     ExitPhase, MacReportParts, MacReportV1, ReportAccuracy, ReportAlert, ReportBand,
-    ReportCapacity, ReportExit, ReportForecast, ReportPlanLine, ReportRadio, ReportRadioAccess,
-    ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim, ReportUsage,
-    ReportUser, ReportUserStatus,
+    ReportCapacity, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine,
+    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim,
+    ReportUsage, ReportUser, ReportUserStatus,
 };
 use mooring_model::sim::{PlanLine, PlanLineKind};
 use mooring_model::user::UserStatus;
@@ -38,11 +41,13 @@ use mooring_model::user::UserStatus;
 use crate::alert::{OpenAlert, Severity};
 use crate::capacity::{CapacityStatus, Saturation};
 use crate::error::ReportError;
-use crate::router::{Band, RadioAccess, RadioState, RouterReading};
+use crate::router::{Band, RadioState, RouterReading};
 use crate::status::{
     ExitState, ForecastView, MacStatusV1, MeterAccuracy, SimMeterStatus, UsageView, UserRow,
 };
-use crate::wire::{mac_alert_kind, node_name, report_band_number, report_user, wire_time};
+use crate::wire::{
+    mac_alert_kind, node_name, report_band_number, report_data_service, report_user, wire_time,
+};
 
 /// The report of `status`. `Wire` when the projection breaks a report rule:
 /// more than the report's user or alert bound (the ids and the band number
@@ -127,10 +132,10 @@ const fn report_line(line: PlanLine) -> ReportPlanLine {
 
 fn report_router(router: &RouterReading) -> Result<ReportRouter, ReportError> {
     Ok(match router {
-        RouterReading::Available(status) => ReportRouter::Available {
-            polled_at: wire_time(status.polled_at),
-            radio: report_radio(&status.radio)?,
-            temperature_c: status.temperature_c.get(),
+        RouterReading::Available { polled_at, status } => ReportRouter::Available {
+            polled_at: wire_time(*polled_at),
+            radio: report_radio(&status.parts().radio)?,
+            temperature_c: status.parts().temperature_c.get(),
         },
         RouterReading::Unavailable { last_polled_at, .. } => ReportRouter::Unavailable {
             last_polled_at: last_polled_at.map(wire_time),
@@ -138,35 +143,35 @@ fn report_router(router: &RouterReading) -> Result<ReportRouter, ReportError> {
     })
 }
 
-/// The radio without the carrier's name.
+/// The radio's data service, band and readings: without the network's
+/// name and codes, the carrier list, the secondary-carrier count and the
+/// session time.
 fn report_radio(radio: &RadioState) -> Result<ReportRadio, ReportError> {
     Ok(match radio {
         RadioState::NoService => ReportRadio::NoService,
-        RadioState::Attached {
-            access,
-            band,
-            carrier: _,
-            signal,
-        } => ReportRadio::Attached {
-            access: match access {
-                RadioAccess::Lte => ReportRadioAccess::Lte,
-                RadioAccess::NrNsa => ReportRadioAccess::NrNsa,
-                RadioAccess::NrSa => ReportRadioAccess::NrSa,
-            },
-            band: match band {
+        RadioState::Attached(radio) => ReportRadio::Attached {
+            service: report_data_service(radio.data_service),
+            band: match radio.band {
                 Band::Lte(number) => ReportBand {
                     system: ReportRadioSystem::Lte,
-                    number: report_band_number(*number)?,
+                    number: report_band_number(number)?,
                 },
                 Band::Nr(number) => ReportBand {
                     system: ReportRadioSystem::Nr,
-                    number: report_band_number(*number)?,
+                    number: report_band_number(number)?,
                 },
             },
-            rsrp_tenths: signal.rsrp.map(|value| value.tenths()),
-            rsrq_tenths: signal.rsrq.map(|value| value.tenths()),
-            sinr_tenths: signal.sinr.map(|value| value.tenths()),
-            rssi_tenths: signal.rssi.map(|value| value.tenths()),
+            lte: ReportLteSignal {
+                rsrp_tenths: radio.lte.rsrp.map(|value| value.tenths()),
+                rsrq_tenths: radio.lte.rsrq.map(|value| value.tenths()),
+                sinr_tenths: radio.lte.sinr.map(|value| value.tenths()),
+                rssi_tenths: radio.lte.rssi.map(|value| value.tenths()),
+            },
+            nr: ReportNrSignal {
+                rsrp_tenths: radio.nr.rsrp.map(|value| value.tenths()),
+                rsrq_tenths: radio.nr.rsrq.map(|value| value.tenths()),
+                sinr_tenths: radio.nr.sinr.map(|value| value.tenths()),
+            },
         },
     })
 }

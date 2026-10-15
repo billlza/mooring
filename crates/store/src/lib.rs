@@ -32,11 +32,20 @@
 //! writing the new version. A document the chain cannot lift is refused
 //! (`MigrationFailed`) and left as it is.
 //!
+//! # The router identity
+//!
+//! Beside the state, [`write_router_pin`] records the M7 gateway's
+//! link-layer address as `router-identity.json` (same durable write, mode
+//! 0600, under the same lock), and [`read_router_pin`] reads it back
+//! (design §15.6 rule 4).
+//!
 //! # Secrets
 //!
 //! The state holds no secrets. They live in a [`SecretStore`]; the
-//! Keychain implementation is part of milestone M5, and
-//! [`InMemorySecretStore`] serves development and test lanes. The state
+//! data-protection Keychain implementation is part of milestone M5 (until
+//! then `mooringctl` implements it over the legacy login keychain for the
+//! M7's admin password), and [`InMemorySecretStore`] serves development and
+//! test lanes. The state
 //! writes above refuse any change to the set of referenced secrets; such
 //! changes go through [`update_config_with_secrets`], which writes new
 //! secrets before the state that references them and deletes dropped ones
@@ -48,6 +57,7 @@ mod durable;
 mod error;
 mod migrate;
 mod ordered;
+mod router_pin;
 mod secrets;
 mod store;
 #[cfg(test)]
@@ -56,6 +66,10 @@ mod tests;
 pub use error::{ChangeError, ChangeErrorKind, CleanupFailure, IoOp, StoreError, StoreErrorKind};
 pub use migrate::migrate;
 pub use ordered::{record_with_secrets, update_config_with_secrets};
+pub use router_pin::{
+    MAX_ROUTER_PIN_BYTES, ROUTER_PIN_FILE, RouterPin, RouterPinFault, read_router_pin,
+    write_router_pin,
+};
 pub use secrets::{
     InMemorySecretStore, SecretOp, SecretStore, SecretStoreError, SecretStoreErrorKind,
 };

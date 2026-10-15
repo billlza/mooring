@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "mooring-macsys"
+description = "macOS kernel interfaces for Mooring: interface index, default gateway, neighbour table, terminal echo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The one crate allowed `unsafe` (design §6.2), so it cannot inherit
+# `[workspace.lints]`, which forbids it. These tables repeat the workspace's
+# without `unsafe_code` and add the three unsafe-discipline lints; an xtask
+# test keeps them equal to the workspace's apart from those lines.
+[lints.rust]
+missing_debug_implementations = "deny"
+unused_qualifications = "deny"
+unreachable_pub = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+
+# macOS only (design §6): the crate is empty on any other target
+# (`#![cfg(target_os = "macos")]` in lib.rs), so the workspace still
+# builds on the ubuntu L0 lane.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true

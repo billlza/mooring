@@ -11,7 +11,8 @@
 //! - [`notify`]: the push notices and the daily digest (Level 0).
 //! - [`network`]: the foreign-network check.
 //! - [`policy`]: quota (own and automatic) and expiry evaluation.
-//! - [`router`]: the M7's status types.
+//! - [`router`]: the M7's status types, and the MR7450 `model.json`
+//!   allowlist parser and redactor ([`router::netgear`]).
 //! - [`status`]: [`MacStatusV1`] itself.
 //! - [`report`]: the remote viewer's report projected from it.
 //!
@@ -64,10 +65,11 @@ pub use alert::{
 };
 pub use capacity::{CapacityMonitor, CapacitySample, CapacityStatus, CapacityThresholds};
 pub use error::{
-    AlertError, AlertErrorKind, CapacityError, CapacityErrorKind, FigureError, FigureErrorKind,
-    ForecastError, ForecastErrorKind, NotifyError, NotifyErrorKind, PolicyError, PolicyErrorKind,
-    ReportError, ReportErrorKind, RouterValueError, RouterValueErrorKind, StatusError,
-    StatusErrorKind, UsageError, UsageErrorKind,
+    AlertError, AlertErrorKind, CapacityError, CapacityErrorKind, CarrierFaultKind, FieldFaultKind,
+    FigureError, FigureErrorKind, ForecastError, ForecastErrorKind, NotifyError, NotifyErrorKind,
+    PolicyError, PolicyErrorKind, ReportError, ReportErrorKind, RouterParseError,
+    RouterParseErrorKind, RouterValueError, RouterValueErrorKind, StatusError, StatusErrorKind,
+    UsageError, UsageErrorKind,
 };
 pub use forecast::{DailySimBytes, SimForecast};
 pub use network::{ForeignNetworkFinding, NetworkSnapshot, foreign_networks};

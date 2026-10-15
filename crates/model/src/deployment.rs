@@ -268,8 +268,10 @@ impl Deployment {
     }
 
     /// Every secret the deployment references; anything else in the
-    /// keychain is orphaned. While at least one node has its alert channels
-    /// set up, the deployment references its one ntfy topic
+    /// keychain is orphaned, except the M7's admin password
+    /// ([`SecretRef::RouterAdmin`]), which no deployment references and
+    /// this set never contains. While at least one node has its alert
+    /// channels set up, the deployment references its one ntfy topic
     /// ([`SecretRef::AlertTopic`]), which every channel node sends to, and
     /// each channel node its own two Healthchecks checks.
     #[must_use]
@@ -789,6 +791,7 @@ mod tests {
     use crate::ids::LocalLabel;
     use crate::node::LifecycleStage;
     use crate::ports::{DEBIAN_EPHEMERAL_PORTS, PortRange};
+    use crate::secret::SecretKind;
     use crate::sim::SimPolicy;
     use crate::testing::{applied, exit_site, node, node_id, site, two_node_parts, user, user_id};
     use crate::user::SuspendReason;
@@ -1042,6 +1045,29 @@ mod tests {
                 .filter(|secret_ref| secret_ref.node().is_none())
                 .collect();
             assert_eq!(without_node, [&SecretRef::AlertTopic], "{nodes:?}");
+        }
+    }
+
+    /// No deployment references the M7's admin password: it is set by
+    /// `mooringctl router set-password`, so the store's ordered secret
+    /// updates never plan to write or delete it, and it is never orphaned.
+    #[test]
+    fn deployments_never_require_the_router_password() {
+        let mut planned = two_node_parts();
+        planned.nodes[1].lifecycle = NodeLifecycle::Planned;
+        let mut with_channels = two_node_parts();
+        with_channels.alerting = channels(&["lon1", "ams1"]);
+        let mut without_users = two_node_parts();
+        without_users.users.clear();
+        for parts in [two_node_parts(), planned, with_channels, without_users] {
+            let required = build(parts).unwrap().required_secrets();
+            assert!(!required.is_empty());
+            assert!(!required.contains(&SecretRef::RouterAdmin));
+            assert!(
+                required
+                    .iter()
+                    .all(|secret_ref| secret_ref.kind() != SecretKind::RouterAdminPassword)
+            );
         }
     }
 

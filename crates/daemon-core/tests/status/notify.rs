@@ -157,8 +157,8 @@ fn strings(value: &Value, found: &mut Vec<String>) {
 }
 
 /// The identifiers a status holds that must never reach a notice: user ids,
-/// aliases, IPv4 and link-layer addresses, and the router's carrier name and
-/// firmware. Labels never reach a `MacStatusV1` (it has no field for one);
+/// aliases, IPv4 and link-layer addresses, and the router's SIM and network
+/// names and its firmware and web app versions. Labels never reach a `MacStatusV1` (it has no field for one);
 /// every fixture label and the degraded scenario's grammar-shaped label are
 /// scanned for all the same, so a status that ever gained one would be
 /// caught leaking it.
@@ -176,10 +176,13 @@ fn forbidden(status: &MacStatusV1) -> Vec<String> {
             .into_iter()
             .filter(|leaf| Ipv4Addr::from_str(leaf).is_ok() || MacAddr::parse(leaf).is_ok()),
     );
-    if let RouterReading::Available(router) = &parts.router {
+    if let RouterReading::Available { status, .. } = &parts.router {
+        let router = status.parts();
         words.push(router.firmware.as_str().to_owned());
-        if let RadioState::Attached { carrier, .. } = &router.radio {
-            words.push(carrier.as_str().to_owned());
+        words.push(router.web_app.as_str().to_owned());
+        words.push(router.sim_spn.as_str().to_owned());
+        if let RadioState::Attached(radio) = &router.radio {
+            words.push(radio.network.as_str().to_owned());
         }
     }
     words.push(GRAMMAR_SHAPED_LABEL.to_owned());

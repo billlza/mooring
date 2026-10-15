@@ -14,6 +14,7 @@ use mooring_model::ids::{NodeId, UserId};
 use mooring_model::secret::SecretRef;
 use mooring_model::user::UserStatus;
 
+use crate::router_pin::RouterPinFault;
 use crate::secrets::SecretStoreError;
 use mooring_model::kinds;
 
@@ -40,6 +41,8 @@ pub enum IoOp {
     OpenDir,
     /// Flushing the store directory to stable storage.
     SyncDir,
+    /// Opening or reading the router identity file.
+    ReadRouterPin,
 }
 
 impl fmt::Display for IoOp {
@@ -55,6 +58,7 @@ impl fmt::Display for IoOp {
             Self::Rename => "rename a temporary file into place",
             Self::OpenDir => "open the store directory",
             Self::SyncDir => "sync the store directory",
+            Self::ReadRouterPin => "read the router identity file",
         })
     }
 }
@@ -253,6 +257,15 @@ pub enum StoreError {
         #[source]
         source: SecretStoreError,
     },
+    /// The router identity file (`router-identity.json`) exists but is not
+    /// a version-1 router identity; nothing was read from it.
+    #[error("router identity file {} is corrupt: {fault}", path.display())]
+    RouterPinCorrupt {
+        /// The router identity file.
+        path: PathBuf,
+        /// What is wrong with it.
+        fault: RouterPinFault,
+    },
     /// The state **was committed**, but deleting secrets it no longer
     /// references failed; those secrets are orphaned (`doctor` lists them).
     #[error(
@@ -310,6 +323,8 @@ kinds! {
         SecretWrite,
         /// See [`StoreError::SecretCleanup`].
         SecretCleanup,
+        /// See [`StoreError::RouterPinCorrupt`].
+        RouterPinCorrupt,
     }
 }
 
@@ -338,6 +353,7 @@ impl StoreError {
             Self::DuplicateSecret { .. } => StoreErrorKind::DuplicateSecret,
             Self::SecretWrite { .. } => StoreErrorKind::SecretWrite,
             Self::SecretCleanup { .. } => StoreErrorKind::SecretCleanup,
+            Self::RouterPinCorrupt { .. } => StoreErrorKind::RouterPinCorrupt,
         }
     }
 }

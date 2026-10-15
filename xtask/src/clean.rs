@@ -3,10 +3,12 @@
 //! `clean`: runs `cargo clean` and reports the bytes it freed.
 //!
 //! The freed amount is the allocated size (`st_blocks`) of the target and
-//! build directories before cleaning, counting hard-linked files once (cargo
-//! hard-links final binaries into `target/<profile>/`). After `cargo clean`
-//! both directories must be gone; anything left is an error, not a smaller
-//! number.
+//! build directories before cleaning, counting hard-linked files once (on
+//! Linux cargo hard-links final binaries into `target/<profile>/`). On macOS
+//! cargo copies them instead, as APFS clones that share their blocks with
+//! the original but have their own inode, so there the figure can overstate
+//! the space freed. After `cargo clean` both directories must be gone;
+//! anything left is an error, not a smaller number.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -126,27 +128,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{BLOCK_SIZE, allocated_bytes, distinct_roots};
-
-    /// A fresh directory under the system temporary directory, removed on drop.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(name: &str) -> Self {
-            let path =
-                std::env::temp_dir().join(format!("mooring-xtask-{name}-{}", std::process::id()));
-            if path.exists() {
-                fs::remove_dir_all(&path).unwrap();
-            }
-            fs::create_dir(&path).unwrap();
-            Self(path)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.0).unwrap();
-        }
-    }
+    use crate::testing::Scratch;
 
     fn blocks(path: &Path) -> u64 {
         fs::symlink_metadata(path).unwrap().blocks() * BLOCK_SIZE

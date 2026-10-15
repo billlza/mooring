@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The command's errors and exit codes (design §14): a router failure,
+//! whose kind is the status's `RouterUnavailableReason`, or a failure on
+//! the Mac itself.
+
+use std::io;
+use std::path::PathBuf;
+
+use mooring_daemon_core::router::RouterUnavailableReason;
+use mooring_macsys::MacsysError;
+use mooring_model::error::ModelError;
+use mooring_model::iface::MacAddr;
+use mooring_store::{SecretStoreError, StoreError};
+
+use crate::router::error::RouterError;
+
+/// A failure on the Mac rather than at the M7.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LocalError {
+    /// `HOME` is unset or not an absolute path.
+    #[error("HOME is not set to an absolute path")]
+    Home,
+    /// The support directory could not be created.
+    #[error("cannot create {}", path.display())]
+    SupportDir {
+        /// The directory.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The keychain refused an operation.
+    #[error("the keychain failed")]
+    Keychain(#[source] SecretStoreError),
+    /// The router identity file could not be read or written.
+    #[error("the router identity file failed")]
+    Store(#[source] StoreError),
+    /// The kernel's interface, routing or neighbour tables could not be
+    /// read.
+    #[error("reading the kernel's network tables failed")]
+    Kernel(#[source] MacsysError),
+    /// The kernel returned an empty neighbour table although the gateway
+    /// had been reached: after the anonymous `GET` (`status`, `capture`), or,
+    /// for `router pin`, in the reads both before and after its warm-up
+    /// connection, which succeeded. So the M7's link-layer address cannot be
+    /// read. That the kernel hides the table from this binary is an
+    /// inference (design §15.6 rule 10). Measured on macOS 27.0.1 (26A434):
+    /// the table was empty to a binary whose code-signing identifier is not
+    /// reverse-DNS, as a plain `cargo build` signs it, and to one with an
+    /// ad-hoc-signed ancestor (a copy of bash, cargo or nextest). That an
+    /// ad-hoc-signed terminal multiplexer above it hides the table as well,
+    /// and that every such binary is refused it, are inferences.
+    #[error(
+        "the kernel returned an empty neighbour table to this binary; on macOS 27.0.1 that was seen when a binary's signing identifier is not reverse-DNS or an ad-hoc-signed program such as cargo is among its ancestors: build it with `cargo xtask mooringctl` and run the binary it names from Terminal.app's own shell"
+    )]
+    NeighbourTableHidden,
+    /// No terminal is attached to ask for the password.
+    #[error("no terminal to ask for the password (use --stdin)")]
+    NoTerminal,
+    /// The terminal could not be used.
+    #[error("the terminal failed")]
+    Terminal(#[source] io::Error),
+    /// The terminal's echo could not be switched off or back on.
+    #[error("the terminal's echo could not be controlled")]
+    Echo(#[source] MacsysError),
+    /// The pin was not confirmed.
+    #[error("not recorded: {0}")]
+    NotConfirmed(Unconfirmed),
+    /// A different identity is already pinned.
+    #[error("the M7's identity is already pinned as {pinned}; rerun with --replace to replace it")]
+    PinExists {
+        /// The pinned link-layer address.
+        pinned: MacAddr,
+    },
+    /// The password is not 1 to 128 bytes of printable ASCII.
+    #[error("the password is not 1 to 128 bytes of printable ASCII")]
+    Password(#[source] ModelError),
+    /// The two passwords typed differ.
+    #[error("the two passwords differ")]
+    PasswordsDiffer,
+    /// Reading the password from stdin failed.
+    #[error("reading the password from stdin failed")]
+    Stdin(#[source] io::Error),
+    /// The capture file already exists; it is never overwritten.
+    #[error("{} already exists; a capture never overwrites a file", path.display())]
+    CaptureExists {
+        /// The file.
+        path: PathBuf,
+    },
+    /// The capture file could not be written.
+    #[error("cannot write the capture to {}", path.display())]
+    CaptureWrite {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The Mac's clock is before 1970 or past the year 9999.
+    #[error("the Mac's clock is outside 1970 to 9999")]
+    Clock,
+    /// The output could not be encoded or written.
+    #[error("writing the output failed")]
+    Output(#[source] io::Error),
+}
+
+/// Why a pin was not confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unconfirmed {
+    /// The operator did not answer yes.
+    Declined,
+    /// No terminal is attached and `--yes` was not given.
+    NoTerminal,
+}
+
+impl std::fmt::Display for Unconfirmed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Declined => "the answer was not yes",
+            Self::NoTerminal => "no terminal to ask and --yes was not given",
+        })
+    }
+}
+
+/// A command's failure.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CommandError {
+    /// At the M7, or on the way to it.
+    #[error(transparent)]
+    Router(#[from] RouterError),
+    /// On the Mac.
+    #[error(transparent)]
+    Local(#[from] LocalError),
+}
+
+/// The exit code of a usage error (clap's own).
+#[cfg(test)]
+pub(crate) const EXIT_USAGE: u8 = 2;
+
+/// The exit code of a local failure.
+pub(crate) const EXIT_LOCAL: u8 = 1;
+
+impl CommandError {
+    /// The exit code: 1 for a local failure, 3 to 8 for a router failure
+    /// in the order of `RouterUnavailableReason` (2 is clap's usage error).
+    pub(crate) const fn exit_code(&self) -> u8 {
+        match self {
+            Self::Local(_) => EXIT_LOCAL,
+            Self::Router(error) => reason_exit_code(error.reason()),
+        }
+    }
+}
+
+/// The exit code of a router failure with `reason`.
+pub(crate) const fn reason_exit_code(reason: RouterUnavailableReason) -> u8 {
+    match reason {
+        RouterUnavailableReason::NotConfigured => 3,
+        RouterUnavailableReason::Unreachable => 4,
+        RouterUnavailableReason::AuthFailed => 5,
+        RouterUnavailableReason::IdentityMismatch => 6,
+        RouterUnavailableReason::Unsupported => 7,
+        RouterUnavailableReason::Malformed => 8,
+    }
+}

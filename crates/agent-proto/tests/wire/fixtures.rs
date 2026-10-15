@@ -16,15 +16,16 @@ use mooring_agent_proto::{
     HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion, IfName, Inbound,
     InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MacAlertKind, MacDrainHold,
     MacReportParts, MacReportV1, NodeName, OperatorHold, PROTOCOL, PortRange, ReportAccuracy,
-    ReportAlert, ReportBand, ReportBandNumber, ReportCapacity, ReportExit, ReportForecast,
-    ReportPlanLine, ReportRadio, ReportRadioAccess, ReportRadioSystem, ReportRouter,
-    ReportSaturation, ReportSeverity, ReportSim, ReportUsage, ReportUser, ReportUserId,
-    ReportUserStatus, Request, RequestKind, Resolution, Response, ResponseKind, Role,
-    RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason, SshEd25519Key,
-    SshdDirective, StatusV1, StderrTail, StoredMacReport, SystemdOp, TargetFacts, TargetHost,
-    TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage, TxnState, UnitName,
-    UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1, VIEWER_STOP_WAIT_SECS,
-    ValidationTool, WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
+    ReportAlert, ReportBand, ReportBandNumber, ReportCapacity, ReportDataService, ReportExit,
+    ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine, ReportRadio,
+    ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim, ReportUsage,
+    ReportUser, ReportUserId, ReportUserStatus, Request, RequestKind, Resolution, Response,
+    ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason,
+    SshEd25519Key, SshdDirective, StatusV1, StderrTail, StoredMacReport, SystemdOp, TargetFacts,
+    TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage,
+    TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1,
+    VIEWER_STOP_WAIT_SECS, ValidationTool, WatchConditions, WatchConfig, WatchError,
+    WatchErrorKind, WatchTarget,
 };
 
 pub(crate) fn digest(byte: u8) -> Sha256Hex {
@@ -333,15 +334,22 @@ pub(crate) fn mac_report_parts() -> MacReportParts {
         router: ReportRouter::Available {
             polled_at: time(1_790_000_190),
             radio: ReportRadio::Attached {
-                access: ReportRadioAccess::NrNsa,
+                service: ReportDataService::NrSub6,
                 band: ReportBand {
                     system: ReportRadioSystem::Nr,
                     number: ReportBandNumber::new(78).unwrap(),
                 },
-                rsrp_tenths: Some(-1005),
-                rsrq_tenths: Some(-110),
-                sinr_tenths: None,
-                rssi_tenths: Some(-650),
+                lte: ReportLteSignal {
+                    rsrp_tenths: Some(-1005),
+                    rsrq_tenths: Some(-110),
+                    sinr_tenths: None,
+                    rssi_tenths: Some(-650),
+                },
+                nr: ReportNrSignal {
+                    rsrp_tenths: Some(-950),
+                    rsrq_tenths: None,
+                    sinr_tenths: Some(85),
+                },
             },
             temperature_c: 47,
         },

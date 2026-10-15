@@ -21,15 +21,17 @@
 //!   band converts; the conversion still checks.
 //! - An alert's kind: `MacAlertKind` spells the console's
 //!   [`AlertConditionKind`] names, matched exhaustively here.
+//! - The router's data service: `ReportDataService` has one variant per
+//!   [`DataService`], of the same meaning, matched exhaustively here.
 
 use mooring_agent_proto::{
-    MacAlertKind, NodeName, OpaqueUserId, ReportBandNumber, ReportUserId, UnixTime as WireTime,
-    ValueError,
+    MacAlertKind, NodeName, OpaqueUserId, ReportBandNumber, ReportDataService, ReportUserId,
+    UnixTime as WireTime, ValueError,
 };
 use mooring_model::{ModelError, NodeId, UnixTime, UserId};
 
 use crate::alert::AlertConditionKind;
-use crate::router::BandNumber;
+use crate::router::{BandNumber, DataService};
 
 /// The Mac's form of an instant the VPS reported.
 #[must_use]
@@ -56,6 +58,16 @@ pub(crate) fn node_name(node: &NodeId) -> Result<NodeName, ValueError> {
 /// The report's form of a band number.
 pub(crate) const fn report_band_number(number: BandNumber) -> Result<ReportBandNumber, ValueError> {
     ReportBandNumber::new(number.get())
+}
+
+/// The report's data service: the one of the same meaning. The match names
+/// every service, so a service added on the Mac fails to compile until it
+/// is mapped.
+#[must_use]
+pub(crate) const fn report_data_service(service: DataService) -> ReportDataService {
+    match service {
+        DataService::NrSub6 => ReportDataService::NrSub6,
+    }
 }
 
 /// The report's name of an alert kind: the same name. The match names
@@ -155,6 +167,25 @@ mod tests {
             assert!(mapped.insert(wire), "{kind} maps onto a taken kind");
         }
         assert_eq!(mapped.len(), MacAlertKind::ALL.len());
+    }
+
+    /// Each data service maps to the report service of the same meaning
+    /// (its variant name), and the two lists are the same length, so the
+    /// map is a bijection.
+    #[test]
+    fn data_services_map_to_the_report_service_of_the_same_meaning() {
+        assert_eq!(DataService::ALL.len(), ReportDataService::ALL.len());
+        let mut mapped = BTreeSet::new();
+        for &service in DataService::ALL {
+            let wire = report_data_service(service);
+            assert_eq!(format!("{service:?}"), wire.name());
+            assert!(mapped.insert(wire), "{service:?} maps onto a taken service");
+        }
+        assert_eq!(mapped.len(), ReportDataService::ALL.len());
+        assert_eq!(
+            report_data_service(DataService::NrSub6),
+            ReportDataService::NrSub6
+        );
     }
 
     #[test]

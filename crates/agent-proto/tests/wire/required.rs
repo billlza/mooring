@@ -97,15 +97,27 @@ fn report_options_must_be_spelled_out() {
         &["sim", "line"],
         &["sim", "forecast"],
         &["capacity"],
-        &["router", "Available", "radio", "Attached", "rsrp_tenths"],
-        &["router", "Available", "radio", "Attached", "rsrq_tenths"],
-        &["router", "Available", "radio", "Attached", "sinr_tenths"],
-        &["router", "Available", "radio", "Attached", "rssi_tenths"],
         &["users", "fxuseraaab", "cycle"],
         &["users", "fxuseraaab", "last_seen"],
         &["users", "fxuseraaac", "last_seen"],
     ] {
         assert_required(&report, path);
+    }
+    // The radio's two signal objects, and every reading in each of them.
+    let radio = ["router", "Available", "radio", "Attached"];
+    for (signal, readings) in [
+        (
+            "lte",
+            &["rsrp_tenths", "rsrq_tenths", "sinr_tenths", "rssi_tenths"][..],
+        ),
+        ("nr", &["rsrp_tenths", "rsrq_tenths", "sinr_tenths"]),
+    ] {
+        let object: Vec<&str> = radio.iter().copied().chain([signal]).collect();
+        assert_required(&report, &object);
+        for reading in readings {
+            let path: Vec<&str> = object.iter().copied().chain([*reading]).collect();
+            assert_required(&report, &path);
+        }
     }
     for alert in &report.parts().alerts {
         assert_required(alert, &["node"]);

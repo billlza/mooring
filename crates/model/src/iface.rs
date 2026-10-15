@@ -240,6 +240,18 @@ impl From<InterfaceIndex> for u32 {
     }
 }
 
+impl From<NonZeroU32> for InterfaceIndex {
+    fn from(index: NonZeroU32) -> Self {
+        Self(index)
+    }
+}
+
+impl From<InterfaceIndex> for NonZeroU32 {
+    fn from(index: InterfaceIndex) -> Self {
+        index.0
+    }
+}
+
 /// The LAN subnet an interface's IPv4 address must lie in, written as its
 /// network address (for example the M7's `192.168.1.0/24`).
 ///
@@ -630,6 +642,12 @@ mod tests {
             InterfaceIndex::new(0),
             Err(ModelError::InvalidInterfaceIndex)
         );
+        let index = NonZeroU32::new(40).unwrap();
+        assert_eq!(
+            InterfaceIndex::from(index),
+            InterfaceIndex::new(40).unwrap()
+        );
+        assert_eq!(NonZeroU32::from(InterfaceIndex::from(index)), index);
     }
 
     /// The egress the testing site selects: `02:6d:6f:6f:72:01` in 192.168.1.0/24.
