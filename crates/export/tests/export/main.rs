@@ -7,6 +7,8 @@
 //! allowances in `clippy.toml` cover them as they cover `#[test]` functions.
 
 #[cfg(test)]
+mod agreement_text;
+#[cfg(test)]
 mod certificates;
 #[cfg(test)]
 mod documents;

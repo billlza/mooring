@@ -17,6 +17,8 @@
 //! F1) with the pilot's SIM thresholds (F2), no cap on active users (the
 //! 20-user fixture would break the pilot's cap of 5), no automatic quotas
 //! and no alert channels; [`two_nodes_three_users`] also has one viewer.
+//! Every user accepted the current agreement revision on 2026-10-08
+//! (decision F9), so every user can be exported.
 
 #![deny(missing_docs)]
 
@@ -64,7 +66,8 @@ use mooring_model::target::{
 };
 use mooring_model::time::UnixTime;
 use mooring_model::user::{
-    Capability, ClientLine, ClientProfile, User, UserNodePublic, UserPolicy, UserStatus,
+    AgreementRecord, AgreementVersion, Capability, ClientLine, ClientProfile, User, UserNodePublic,
+    UserPolicy, UserStatus,
 };
 use mooring_model::viewer::Viewer;
 use mooring_model::wg::{Keepalive, WgIndex, WgLink};
@@ -456,7 +459,11 @@ fn user(number: u8, nodes: &[&NodeMaterial]) -> Result<User, ModelError> {
         per_node,
         policy: UserPolicy::NONE,
         alias: None,
-        agreement: None,
+        // Decision F9: exports require the current agreement revision.
+        agreement: Some(AgreementRecord {
+            version: AgreementVersion::CURRENT,
+            accepted_on: CalendarDate::utc_of(FIXTURE_NOW)?,
+        }),
     })
 }
 
@@ -626,7 +633,8 @@ mod tests {
 
     /// Every fixture runs the pilot's thresholds on the decided SMARTY
     /// plan, and leaves the cap, automatic quotas, alert channels and every
-    /// per-user record off.
+    /// per-user record off, except the agreement: every user accepted the
+    /// current revision on the fixtures' day, as exports require (F9).
     #[test]
     fn the_sim_policy_is_the_pilot_on_the_smarty_plan() {
         for fixture in all().unwrap() {
@@ -655,7 +663,14 @@ mod tests {
             assert_eq!(fixture.deployment.alerting(), None);
             for user in fixture.deployment.users().values() {
                 assert_eq!(user.policy, UserPolicy::NONE);
-                assert_eq!((user.alias.as_ref(), user.agreement), (None, None));
+                assert_eq!(user.alias, None);
+                assert_eq!(
+                    user.agreement,
+                    Some(AgreementRecord {
+                        version: AgreementVersion::CURRENT,
+                        accepted_on: CalendarDate::parse("2026-10-08").unwrap(),
+                    })
+                );
             }
         }
     }

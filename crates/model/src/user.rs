@@ -4,6 +4,7 @@
 //! §13.5).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::num::{NonZeroU16, NonZeroU64};
 
 use serde::{Deserialize, Serialize};
@@ -248,6 +249,14 @@ impl UserPolicy {
 pub struct AgreementVersion(NonZeroU16);
 
 impl AgreementVersion {
+    /// The revision of the user agreement (`docs/runbooks/user-agreement.md`)
+    /// this build requires: `user export` refuses a user whose record is of
+    /// another revision, or who has none (decision F9). A new revision of the
+    /// text changes this constant in the same commit; the export crate's
+    /// `agreement_text` test pins the text of this revision by its SHA-256,
+    /// so an edit made without a new revision fails it.
+    pub const CURRENT: Self = Self(NonZeroU16::MIN);
+
     /// The agreement revision `revision`.
     #[must_use]
     pub const fn new(revision: NonZeroU16) -> Self {
@@ -261,9 +270,17 @@ impl AgreementVersion {
     }
 }
 
-/// That a user accepted a revision of the user agreement, and on which day.
-/// Whether an export requires it is a pending operator decision; nothing
-/// checks it yet.
+impl fmt::Display for AgreementVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// That a user accepted a revision of the user agreement, and on which day
+/// (a calendar day, never compared with a clock). Since decision F9
+/// (2026-10-15) `user export` requires a record of
+/// [`AgreementVersion::CURRENT`]. Mac-only, like the label: never rendered,
+/// sent or exported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgreementRecord {
@@ -386,6 +403,16 @@ mod tests {
 
     fn date(text: &str) -> CalendarDate {
         CalendarDate::parse(text).unwrap()
+    }
+
+    #[test]
+    fn the_current_agreement_revision_is_the_first() {
+        assert_eq!(AgreementVersion::CURRENT.get(), 1);
+        assert_eq!(AgreementVersion::CURRENT.to_string(), "1");
+        assert_eq!(
+            AgreementVersion::new(NonZeroU16::new(12).unwrap()).to_string(),
+            "12"
+        );
     }
 
     #[test]

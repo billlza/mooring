@@ -59,6 +59,7 @@ fn every_export_error_kind_is_named_and_described() {
     // together they cover every kind.
     let elsewhere = [
         ExportErrorKind::UserNotActive,
+        ExportErrorKind::AgreementNotAccepted,
         ExportErrorKind::NothingToExport,
         ExportErrorKind::NodeNotApplied,
         ExportErrorKind::CapabilityUnsupported,

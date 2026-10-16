@@ -51,9 +51,12 @@ fn rendered(fixture: &Fixture, deployment: &Deployment) -> Rendered {
 
 /// Records `entry` on `before` and checks that the generation stayed, no
 /// bundle changed, and every export that could be made before is byte for
-/// byte the same after. (Retiring a node can make an export possible that
-/// was not: a user who held credentials on the retiring node.)
-fn assert_neutral(fixture: &Fixture, before: &Deployment, entry: Bookkeeping) {
+/// byte the same after. Returns how many exports could be made before and
+/// after, which every test states: an export refused for any reason (an
+/// agreement, a status, a stage) must not make the comparison vacuous
+/// unnoticed. (Retiring a node can make an export possible that was not: a
+/// user who held credentials on the retiring node.)
+fn assert_neutral(fixture: &Fixture, before: &Deployment, entry: Bookkeeping) -> (usize, usize) {
     let after = before.clone().record(entry.clone()).unwrap();
     assert_eq!(after.config_generation(), before.config_generation());
     assert_ne!(&after, before, "{entry:?} recorded nothing");
@@ -67,13 +70,14 @@ fn assert_neutral(fixture: &Fixture, before: &Deployment, entry: Bookkeeping) {
             "{entry:?} changed the export {key:?}"
         );
     }
+    (old.exports.len(), new.exports.len())
 }
 
 #[test]
 fn recording_an_apply_changes_no_bundle_and_no_export() {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
-    assert!(!rendered(&fixture, &fixture.deployment).exports.is_empty());
-    assert_neutral(
+    // Three users, each in both formats.
+    let exports = assert_neutral(
         &fixture,
         &fixture.deployment,
         Bookkeeping::Applied {
@@ -84,6 +88,7 @@ fn recording_an_apply_changes_no_bundle_and_no_export() {
             },
         },
     );
+    assert_eq!(exports, (6, 6));
 }
 
 #[test]
@@ -93,7 +98,8 @@ fn committing_a_revocation_changes_no_bundle_and_no_export() {
         parts.users[2].status = UserStatus::RevokePending;
     });
     let user = revoking.users().keys().nth(2).unwrap().clone();
-    assert_neutral(
+    // The revoking user exports nothing; the other two export both formats.
+    let exports = assert_neutral(
         &fixture,
         &revoking,
         Bookkeeping::RevocationCommitted {
@@ -101,6 +107,7 @@ fn committing_a_revocation_changes_no_bundle_and_no_export() {
             node: node("lon1"),
         },
     );
+    assert_eq!(exports, (4, 4));
     // The last commit revokes the user, still without a rendered change.
     let one_left = revoking
         .record(Bookkeeping::RevocationCommitted {
@@ -108,7 +115,7 @@ fn committing_a_revocation_changes_no_bundle_and_no_export() {
             node: node("lon1"),
         })
         .unwrap();
-    assert_neutral(
+    let exports = assert_neutral(
         &fixture,
         &one_left,
         Bookkeeping::RevocationCommitted {
@@ -116,12 +123,16 @@ fn committing_a_revocation_changes_no_bundle_and_no_export() {
             node: node("ams1"),
         },
     );
+    assert_eq!(exports, (4, 4));
 }
 
 #[test]
 fn shutting_down_a_retiring_node_changes_no_bundle_and_no_export() {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
     let retiring = edit(&fixture.deployment, |parts| {
+        // The first user holds credentials on lon1 alone, so its exports can
+        // be made before the shutdown and are compared after it.
+        parts.users[0].per_node.remove(&node("ams1"));
         let ams1 = parts
             .nodes
             .iter_mut()
@@ -130,11 +141,14 @@ fn shutting_down_a_retiring_node_changes_no_bundle_and_no_export() {
         let site = ams1.lifecycle.site().unwrap().clone();
         ams1.lifecycle = NodeLifecycle::Retiring { site };
     });
-    assert_neutral(
+    // The two users who hold credentials on the retiring node export nothing
+    // before the shutdown, and both formats after it drops them.
+    let exports = assert_neutral(
         &fixture,
         &retiring,
         Bookkeeping::RetirementShutDown { node: node("ams1") },
     );
+    assert_eq!(exports, (2, 6));
 }
 
 /// Suspending a user is not bookkeeping: every bundle the user was served

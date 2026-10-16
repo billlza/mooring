@@ -35,9 +35,10 @@
 //! users (F4, [`policy::automatic_quota`]), the push notices and digest
 //! of the alert channels (F6, [`notify`]; the node's dead-man pings are
 //! agent-proto's `dead_man_pings`, because the node decides them alone), and
-//! the remote viewer's report (F5, [`report`]). Still pending, so nothing
-//! here presumes them: expiry defaults, retention (F7, the caller's
-//! ledger) and any agreement requirement.
+//! the remote viewer's report (F5, [`report`]). Decided on 2026-10-15 by
+//! delegation and kept outside this crate: retention (F7, the caller's
+//! ledger) and the agreement requirement (F9, `mooring-export`'s). Still
+//! pending, so nothing here presumes them: expiry defaults.
 
 #![deny(missing_docs)]
 

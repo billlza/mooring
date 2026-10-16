@@ -10,7 +10,8 @@ use std::fmt;
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretSnapshotError;
 use mooring_model::{
-    Capability, ClientLine, ConfigGeneration, ModelError, NodeId, UnixTime, UserId,
+    AgreementVersion, Capability, ClientLine, ConfigGeneration, ModelError, NodeId, UnixTime,
+    UserId,
 };
 
 use mooring_model::kinds;
@@ -68,6 +69,18 @@ impl fmt::Display for TagRule {
     }
 }
 
+/// The recorded acceptance an [`ExportError::AgreementNotAccepted`] names.
+struct RecordedAgreement(Option<AgreementVersion>);
+
+impl fmt::Display for RecordedAgreement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            None => f.write_str("no acceptance is recorded"),
+            Some(version) => write!(f, "the recorded acceptance is of revision {version}"),
+        }
+    }
+}
+
 /// An export, a probe outbound or a certificate check failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
@@ -84,6 +97,21 @@ pub enum ExportError {
     UserNotActive {
         /// The user.
         user: UserId,
+    },
+    /// The user has not accepted the agreement revision this build ships
+    /// (decision F9): no record, or a record of another revision. Checked
+    /// after the status and before anything about the file.
+    #[error(
+        "user {user} has not accepted agreement revision {required}: {}",
+        RecordedAgreement(*.recorded)
+    )]
+    AgreementNotAccepted {
+        /// The user.
+        user: UserId,
+        /// The revision the user accepted, if a record exists.
+        recorded: Option<AgreementVersion>,
+        /// The revision exports require, [`AgreementVersion::CURRENT`].
+        required: AgreementVersion,
     },
     /// The user is active but holds credentials on no node, so the file
     /// would have no outbounds, which CFM rejects.
@@ -172,6 +200,8 @@ kinds! {
         Secret,
         /// See [`ExportError::UserNotActive`].
         UserNotActive,
+        /// See [`ExportError::AgreementNotAccepted`].
+        AgreementNotAccepted,
         /// See [`ExportError::NothingToExport`].
         NothingToExport,
         /// See [`ExportError::NodeNotApplied`].
@@ -203,6 +233,7 @@ impl ExportError {
             Self::Model(_) => ExportErrorKind::Model,
             Self::Secret(_) => ExportErrorKind::Secret,
             Self::UserNotActive { .. } => ExportErrorKind::UserNotActive,
+            Self::AgreementNotAccepted { .. } => ExportErrorKind::AgreementNotAccepted,
             Self::NothingToExport { .. } => ExportErrorKind::NothingToExport,
             Self::NodeNotApplied { .. } => ExportErrorKind::NodeNotApplied,
             Self::CapabilityUnsupported { .. } => ExportErrorKind::CapabilityUnsupported,

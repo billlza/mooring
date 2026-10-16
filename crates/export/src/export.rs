@@ -6,7 +6,9 @@ use std::fmt;
 
 use mooring_model::ports::ListenerIdx;
 use mooring_model::secret::SecretSnapshot;
-use mooring_model::{Deployment, Node, NodeId, NodeRole, UnixTime, User, UserId, UserStatus};
+use mooring_model::{
+    AgreementVersion, Deployment, Node, NodeId, NodeRole, UnixTime, User, UserId, UserStatus,
+};
 use zeroize::Zeroizing;
 
 use crate::cert::{certificate_pins, check_certificate};
@@ -85,16 +87,19 @@ impl fmt::Debug for ExportDocument {
 /// The file covers every node the user holds credentials on, primary nodes
 /// first, then by node id; each node contributes its REALITY outbound and
 /// then one Hysteria2 outbound per listener. The shape is selected by the
-/// user's `ClientProfile`. Refused when the user is not active (suspended,
-/// pending revocation or revoked: `UserNotActive`), holds no credentials,
-/// has a capability its CFM line does not accept, or when any of those
-/// nodes has not confirmed the current generation or fails a certificate
-/// check.
+/// user's `ClientProfile`. Refused, in this order, when the user is not
+/// active (suspended, pending revocation or revoked: `UserNotActive`), has
+/// not accepted the agreement revision this build ships
+/// (`AgreementNotAccepted`, decision F9), has a capability its CFM line does
+/// not accept, holds no credentials, or when any of those nodes has not
+/// confirmed the current generation or fails a certificate check.
 ///
-/// The user's policy is not consulted: an expired or over-quota user is
-/// refused only once an explicit operator or daemon action has moved it to
-/// `Suspended { Expired | QuotaExceeded }`, so an export never depends on
-/// the clock beyond the certificate check at `now`.
+/// Neither the day of the agreement record (a calendar day without a time
+/// zone) nor the user's policy is compared with `now`: an expired or
+/// over-quota user is refused only once an explicit operator or daemon
+/// action has moved it to `Suspended { Expired | QuotaExceeded }`, so an
+/// export never depends on the clock beyond the certificate check at
+/// `now`.
 ///
 /// An export reads only this user's credentials, so it does not compare
 /// them with other identities'. That check belongs to rendering each
@@ -182,6 +187,7 @@ fn user_outbounds(
             });
         }
     }
+    require_agreement(user)?;
     let hello = ClientHello::for_profile(&user.client)?;
     let mut nodes = user
         .per_node
@@ -223,6 +229,21 @@ fn user_outbounds(
         }
     }
     Ok(outbounds)
+}
+
+/// Decision F9: a file goes only to a user who accepted the agreement
+/// revision this build ships. The record's day is not compared with `now`:
+/// it is a calendar day without a time zone, and `user agree` dates it.
+fn require_agreement(user: &User) -> Result<(), ExportError> {
+    let required = AgreementVersion::CURRENT;
+    match user.agreement {
+        Some(record) if record.version == required => Ok(()),
+        recorded => Err(ExportError::AgreementNotAccepted {
+            user: user.id.clone(),
+            recorded: recorded.map(|record| record.version),
+            required,
+        }),
+    }
 }
 
 /// Primary nodes come first in an export.

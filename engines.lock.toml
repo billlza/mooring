@@ -10,9 +10,13 @@
 schema = 1
 
 [go]
-version = "go1.27.1"
-darwin-arm64-sha256 = "ee215d57e0ec269c60cc9ceca68e6bda321ba9ee5afe24f4b0988703c2d87d12"
-linux-amd64-sha256 = "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445"
+# go1.27.2 (the standard-library advisories of 2026-10-08), checked on
+# 2026-10-15: both values equal https://go.dev/dl/?mode=json&include=all and
+# the .sha256 files at https://dl.google.com/go/; darwin-arm64 also equals
+# CFM's scripts/dependency_pins.env:38 at f5b425d.
+version = "go1.27.2"
+darwin-arm64-sha256 = "76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5"
+linux-amd64-sha256 = "ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
 env = { GOTOOLCHAIN = "local", CGO_ENABLED = "0", GOFLAGS = "-mod=readonly -trimpath" }
 
 [xray]
