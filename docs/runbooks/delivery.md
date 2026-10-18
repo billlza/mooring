@@ -23,7 +23,7 @@ The last command must print `[Excluded]`.
 
 1. **The user's CFM.**
    - The user runs CFM on an Apple-silicon Mac with macOS 15 or later: CFM is arm64 only from 15.0.
-   - The CFM build must be a 0.5-line release that has the mainland China direct switch (F10). The switch is committed as `d828f92` on CFM's branch `feat/mainland-direct-routing` (2026-10-16) and is in no release.
+   - The CFM build must be a 0.5-line release that has the mainland China direct switch (F10): CFM 0.5.0 (build 50030, tag `v0.5.0`, released 2026-10-18) or a later 0.5.x. The switch is `d828f92`; 0.5.0 is the first release with it.
    - Do not deliver a file to an older CFM. Without the switch, mainland sites fail, because the nodes deny `geoip:cn` and `geosite:cn` (§8.2).
 2. **Add the user.** `mooringctl user add`, typing the user's label at its prompt (never as an argument, which the shell history keeps), with the client line CFM 0.5 (`Cfm05`). A user without an alias gets one with `user alias <uid>`: files are named after the alias, never the label.
 3. **Hand over the two documents:** [user-onboarding.md](user-onboarding.md) and [user-agreement.md](user-agreement.md).

@@ -269,7 +269,7 @@ mod tests {
     /// The cfm04 importer digest, computed with `shasum -a 256` over the
     /// three object lines when the manifest was written.
     const CFM04_IMPORTER: &str = "be5ad5c27b251901a77ee5912812282c9b8088535868c5e2994973b5dbf267e7";
-    const CFM05_IMPORTER: &str = "e9c2cfa8e886ee34d65765b743a7a6396880f2c67aa657e4d40c0680359647be";
+    const CFM05_IMPORTER: &str = "7f503efa40bdff3cb5e42418caef3297b095b8c57a69b491b0a15d3a85f111ce";
 
     fn rejects(text: &str) -> ManifestError {
         CfmManifest::parse(text).unwrap_err()

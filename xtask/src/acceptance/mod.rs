@@ -298,7 +298,7 @@ mod tests {
                 )
             } else {
                 (
-                    "e9c2cfa8e886ee34d65765b743a7a6396880f2c67aa657e4d40c0680359647be",
+                    "7f503efa40bdff3cb5e42418caef3297b095b8c57a69b491b0a15d3a85f111ce",
                     "0.5.0",
                     "1.14.2",
                 )

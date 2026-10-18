@@ -1,12 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!--
   Operator notes (not part of the text the user reads):
-  - Decisions F9–F11 (design §9.4, §20.2). The CFM wording below is taken from
-    CFM commit d828f92 on its branch feat/mainland-direct-routing (2026-10-16,
-    in no release yet), and from the 0.5 line's zh-Hans catalogue
-    (ui/src/locales/zh-Hans.json at 7256caf).
-  - Placeholders in 【】 wait for the CFM release that ships the switch. M6
-    checks every CFM step against that build (design §22).
+  - Decisions F9–F11 (design §9.4, §20.2). The CFM wording below was checked
+    on 2026-10-18 against CFM 0.5.0 (build 50030, tag v0.5.0, commit 502adf9),
+    the first release with the mainland China direct switch (d828f92): its
+    zh-Hans catalogue (apps/cfw-tauri-shell/ui/src/locales/zh-Hans.json) and
+    the two English messages quoted in section 4 and section 8
+    (crates/cfw-engine-api/src/lib.rs). M6 still checks every CFM step
+    against the real build (design §22).
   - Send users the text from the title on, never these notes (delivery.md,
     step 3 of section 1).
 -->
@@ -17,18 +18,21 @@
 ## 0. 你需要什么
 
 - **电脑：** 一台使用 Apple 芯片（M1 或更新）的 Mac，系统为 macOS 15 或更新。
-- **CFM：** 0.5 系列中带有“中国大陆直连”开关的版本【版本号与下载方式待 CFM 正式版发布后补充】。
+- **CFM：** Clash for Mac 0.5.0 或更新的 0.5 版本。“中国大陆直连”开关从 0.5.0 起才有，更早的版本不能用。
 - **不支持的设备和客户端：** 手机、Windows 和其他客户端都不支持。
 - **使用约定：** 你已经阅读《Mooring 使用约定》的当前版本，并在与运营者的 FaceTime 语音通话中确认同意。
 
 ## 1. 安装 CFM
 
-1. 按运营者告诉你的方式下载并安装 CFM【安装或更新步骤待补充】。
-2. 开启「系统代理」时，macOS 可能会请你输入本机密码；以后也可能再次询问。
-3. 如果要使用「TUN 模式」：
+1. 下载安装包 `Clash.for.Mac_0.5.0_arm64.dmg`：打开 <https://github.com/billlza/cfw-rs/releases/tag/v0.5.0>，在页面下方的 Assets 里点这个文件。下载不了时，告诉运营者，当面用隔空投送给你。
+2. 双击打开 .dmg，把 Clash for Mac 拖进「应用程序」文件夹，然后推出这个安装映像。
+3. 在「应用程序」里打开 Clash for Mac。第一次打开时，macOS 会提示它是从互联网下载的 App，点「打开」。CFM 经过 Apple 公证；如果 macOS 说无法验证开发者或文件已损坏，不要绕过提示，删掉它，再告诉运营者。
+4. 以后更新：打开 Clash for Mac，在屏幕顶部菜单栏的「Clash for Mac」菜单里选「检查更新…」，按提示安装新版本。
+5. 开启「系统代理」时，macOS 可能会请你输入本机密码；以后也可能再次询问。
+6. 如果要使用「TUN 模式」：
    - 需要到「系统设置 › 通用 › 登录项与扩展」中批准 CFM 的网络扩展；批准之前，这个开关不可用。
    - 第一次打开时，macOS 还会询问是否允许 CFM 添加 VPN 配置，请选择允许。
-4. 「允许局域网连接」保持关闭：打开后，同一网络里的其他设备也能使用你的代理。
+7. 「允许局域网连接」保持关闭：打开后，同一网络里的其他设备也能使用你的代理。
 
 ## 2. 接收配置文件
 
