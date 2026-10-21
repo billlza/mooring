@@ -21,4 +21,6 @@ mod probes;
 #[cfg(test)]
 mod refusals;
 #[cfg(test)]
+mod secrets;
+#[cfg(test)]
 mod support;

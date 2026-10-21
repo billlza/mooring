@@ -72,5 +72,6 @@ pub use router_pin::{
 };
 pub use secrets::{
     InMemorySecretStore, SecretOp, SecretStore, SecretStoreError, SecretStoreErrorKind,
+    SnapshotReadError, SnapshotReadErrorKind, read_snapshot,
 };
 pub use store::{LOCK_FILE, STATE_FILE, Store};

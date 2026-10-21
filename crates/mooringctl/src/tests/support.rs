@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
@@ -24,9 +25,10 @@ use zeroize::Zeroizing;
 
 use super::stub::{Reply, response};
 use crate::app::{Env, run};
+use crate::backup::{BackupCheck, BackupCheckError};
 use crate::cli::Cli;
 use crate::error::LocalError;
-use crate::prompt::{Answer, Console};
+use crate::prompt::{Answer, Console, Line};
 use crate::router::RouterEnv;
 use crate::router::http::Timeouts;
 use crate::router::link::LinkLayer;
@@ -312,6 +314,8 @@ impl LinkLayer for FakeLink {
 pub(crate) struct FakeConsole {
     pub(crate) answers: VecDeque<Answer>,
     pub(crate) passwords: VecDeque<Vec<u8>>,
+    /// Lines to type, each `None` for no terminal.
+    pub(crate) lines: VecDeque<Option<Vec<u8>>>,
     pub(crate) asked: Vec<String>,
 }
 
@@ -328,6 +332,15 @@ impl Console for FakeConsole {
             .map(Zeroizing::new)
             .ok_or(LocalError::NoTerminal)
     }
+
+    fn line(&mut self, prompt: &str, limit: usize) -> Result<Line, LocalError> {
+        self.asked.push(prompt.to_owned());
+        Ok(match self.lines.pop_front().unwrap() {
+            None => Line::NoTerminal,
+            Some(line) if line.len() > limit => Line::Overlong,
+            Some(line) => Line::Text(Zeroizing::new(line)),
+        })
+    }
 }
 
 /// A finished command: its exit code and what it wrote.
@@ -336,6 +349,36 @@ pub(crate) struct Outcome {
     pub(crate) code: u8,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+}
+
+/// What the fake Time Machine check answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackupAnswer {
+    /// The folder is excluded.
+    Excluded,
+    /// The folder is backed up.
+    Included,
+    /// `tmutil` gave no answer.
+    Unanswered,
+}
+
+/// A Time Machine check that answers `answer` and records each folder it
+/// was asked about.
+#[derive(Debug)]
+pub(crate) struct FakeBackups {
+    pub(crate) answer: BackupAnswer,
+    pub(crate) asked: RefCell<Vec<PathBuf>>,
+}
+
+impl BackupCheck for FakeBackups {
+    fn is_excluded(&self, dir: &Path) -> Result<bool, BackupCheckError> {
+        self.asked.borrow_mut().push(dir.to_path_buf());
+        match self.answer {
+            BackupAnswer::Excluded => Ok(true),
+            BackupAnswer::Included => Ok(false),
+            BackupAnswer::Unanswered => Err(BackupCheckError::Unanswered),
+        }
+    }
 }
 
 /// Everything a command runs against, owned by the test.
@@ -347,6 +390,7 @@ pub(crate) struct Harness {
     pub(crate) stdin: Cursor<Vec<u8>>,
     pub(crate) port: u16,
     pub(crate) timeouts: Timeouts,
+    pub(crate) backups: FakeBackups,
 }
 
 impl Harness {
@@ -360,6 +404,10 @@ impl Harness {
             stdin: Cursor::new(Vec::new()),
             port,
             timeouts: TEST_TIMEOUTS,
+            backups: FakeBackups {
+                answer: BackupAnswer::Excluded,
+                asked: RefCell::new(Vec::new()),
+            },
         }
     }
 
@@ -376,7 +424,7 @@ impl Harness {
         harness
     }
 
-    pub(crate) fn support_dir(&self) -> std::path::PathBuf {
+    pub(crate) fn support_dir(&self) -> PathBuf {
         self.home
             .path()
             .join("Library")
@@ -413,6 +461,7 @@ impl Harness {
             clock: &clock,
             console: &mut self.console,
             stdin: &mut self.stdin,
+            backups: &self.backups,
         };
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

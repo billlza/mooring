@@ -5,7 +5,7 @@ This runbook is for the operator. It covers a user's first file, every later fil
 
 The rules come from design §9.2, §9.4, §13.4, §13.5 and §13.6, and from decisions F9–F11. The operator delegated those decisions to the recommended default on 2026-10-15 (§20.2).
 
-Of the commands named here only `hdiutil` and `tmutil` exist today. Every `mooringctl` command below (`user …`, `node apply`, `apply`, `doctor`) arrives in M5, and so does the console's rotation tracker. Until then this runbook is the procedure they will follow.
+Of the commands named here `hdiutil`, `tmutil` and `mooringctl user add | alias | agree | export` exist today (the `mooringctl` ones since 2026-10-18, in the development build, which keeps its secrets in the login keychain until M5's data-protection keychain; they need the state that `exit init` will create). The other `mooringctl` commands below (`user reissue`, `node apply`, `apply`, `doctor`) arrive in M5, and so does the console's rotation tracker. Until then this runbook is the procedure they will follow.
 
 ## 0. Once, on the operator's Mac
 
@@ -42,6 +42,7 @@ mooringctl user export <uid> --format singbox --out <exports>/<alias>.json
 
 - **Format.** Use `--format clash` only if the user asks for YAML.
 - **Names.** Name the file, the image and the volume after the user's alias. Never use the label, "Mooring", "VPN" or "proxy".
+- **The file.** The command creates it with mode 0600 and never overwrites a file. It warns, and writes the file all the same, when the folder is in iCloud Drive, another cloud folder, the Desktop or Documents, or when Time Machine backs it up: move the file and fix the folder (section 0) before going on.
 
 Refusals and what to do about each:
 
@@ -54,7 +55,7 @@ Refusals and what to do about each:
 | `NodeNotApplied` | A node in the file has not confirmed the current generation | `node apply` that node, in the window |
 | `CertNotCurrent` | A node's certificate is not valid now, with one day of margin | Check the Mac's clock first: `sntp time.apple.com` prints its offset. Only if the clock is right, rotate the node (§13.4) |
 | Any other `Cert…` | A node's certificate fails the export's checks. The certificate is never re-issued | Rotate the node (§13.4) |
-| `Secret` | A credential is missing from the Keychain | `mooringctl doctor`, then `user reissue` if needed |
+| "reading the user's secrets from the keychain failed" (or `Secret`) | A credential is missing from the Keychain, or the Keychain refused | `mooringctl doctor`, then `user reissue` if needed |
 | `Model`, `InvalidTag`, `Encode` | An unknown user, or a defect in Mooring | Check the user id; otherwise stop and record the error: it is a bug, not an operating state |
 
 ## 3. Channel A: in person

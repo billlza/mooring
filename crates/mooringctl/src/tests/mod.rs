@@ -6,7 +6,9 @@
 //! terminal and the clock are fakes. Nothing here contacts the M7 or any
 //! other host, and the live keychain is never touched.
 
+mod add;
 mod capture;
+mod export;
 mod flow;
 mod form;
 mod http;
@@ -16,3 +18,4 @@ mod pin;
 mod stub;
 mod support;
 mod units;
+mod user;

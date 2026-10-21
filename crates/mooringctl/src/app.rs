@@ -24,7 +24,8 @@ use mooring_model::secret::{SecretEntry, SecretRef};
 use mooring_model::time::UnixTime;
 use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, write_router_pin};
 
-use crate::cli::{Command, RouterCommand};
+use crate::backup::BackupCheck;
+use crate::cli::{Command, RouterCommand, UserCommand};
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::paths;
 use crate::prompt::{self, Answer, Console};
@@ -45,6 +46,8 @@ pub(crate) struct Env<'a> {
     pub(crate) console: &'a mut dyn Console,
     /// Standard input.
     pub(crate) stdin: &'a mut dyn Read,
+    /// Whether Time Machine excludes a folder (`tmutil` in the binary).
+    pub(crate) backups: &'a dyn BackupCheck,
 }
 
 /// The system clock, in whole seconds since the epoch.
@@ -59,7 +62,7 @@ fn output(error: io::Error) -> CommandError {
     CommandError::Local(LocalError::Output(error))
 }
 
-fn support_dir(env: &Env<'_>) -> Result<PathBuf, CommandError> {
+pub(crate) fn support_dir(env: &Env<'_>) -> Result<PathBuf, CommandError> {
     paths::support_dir(env.home.clone()).map_err(CommandError::Local)
 }
 
@@ -71,9 +74,24 @@ pub(crate) fn run(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> u8 {
-    let Command::Router(command) = command;
-    let json = matches!(command, RouterCommand::Status { json: true, .. });
-    let Err(error) = execute(command, env, out) else {
+    let json = matches!(
+        command,
+        Command::Router(RouterCommand::Status { json: true, .. })
+    );
+    let result = match command {
+        Command::Router(command) => execute(command, env, out),
+        Command::User(UserCommand::Add { client, mlkem }) => {
+            crate::user::add(env, out, client.into(), mlkem)
+        }
+        Command::User(UserCommand::Alias { user }) => crate::user::alias(env, out, &user),
+        Command::User(UserCommand::Agree { user }) => crate::user::agree(env, out, &user),
+        Command::User(UserCommand::Export {
+            user,
+            format,
+            out: path,
+        }) => crate::user::export(env, out, err, &user, format.into(), &path),
+    };
+    let Err(error) = result else {
         return 0;
     };
     if json && let CommandError::Router(router) = &error {

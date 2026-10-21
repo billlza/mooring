@@ -8,10 +8,13 @@ use std::io;
 use std::path::PathBuf;
 
 use mooring_daemon_core::router::RouterUnavailableReason;
+use mooring_export::ExportError;
+use mooring_keys::KeysError;
 use mooring_macsys::MacsysError;
 use mooring_model::error::ModelError;
 use mooring_model::iface::MacAddr;
-use mooring_store::{SecretStoreError, StoreError};
+use mooring_model::{PublicAlias, UserId};
+use mooring_store::{SecretStoreError, SnapshotReadError, StoreError};
 
 use crate::router::error::RouterError;
 
@@ -36,6 +39,106 @@ pub(crate) enum LocalError {
     /// The router identity file could not be read or written.
     #[error("the router identity file failed")]
     Store(#[source] StoreError),
+    /// There is no deployment on this Mac yet: no `state.json`, or not
+    /// even the support directory.
+    #[error("no state at {}: there is no deployment on this Mac yet (`exit init` creates it)", path.display())]
+    NoState {
+        /// Where `state.json` would be.
+        path: PathBuf,
+    },
+    /// `state.json` could not be read. (Boxed, as in `StateChange`: a
+    /// second unboxed `StoreError` beside `Store` would grow every
+    /// `CommandError` by the discriminant the niche no longer holds.)
+    #[error("the state could not be read")]
+    StateRead(#[source] Box<StoreError>),
+    /// A change to `state.json` was refused or failed; the store leaves the
+    /// state as it was.
+    #[error("the state was not changed")]
+    StateChange(#[source] Box<StoreError>),
+    /// The label typed is not a valid local label.
+    #[error("the label was not accepted")]
+    Label(#[source] ModelError),
+    /// No terminal is attached to ask for the label.
+    #[error("no terminal to ask for the label (it is never taken from an argument)")]
+    NoLabelTerminal,
+    /// `--mlkem` was asked for a CFM 0.4 client, whose importer refuses it.
+    #[error("CFM 0.4 does not accept the ML-KEM opt-in; drop --mlkem or use --client cfm05")]
+    MlkemUnsupported,
+    /// Random credentials could not be drawn.
+    #[error("drawing random credentials failed")]
+    Keys(#[source] KeysError),
+    /// The user already has an alias; an alias is never replaced.
+    #[error("user {user} already has the alias {alias}")]
+    AliasExists {
+        /// The user.
+        user: UserId,
+        /// The alias it has.
+        alias: PublicAlias,
+    },
+    /// No user has this id.
+    #[error("unknown user {user}")]
+    UnknownUser {
+        /// The id given.
+        user: UserId,
+    },
+    /// The export's file already exists; an export never overwrites one.
+    #[error("{} already exists; an export never overwrites a file", path.display())]
+    ExportExists {
+        /// The file.
+        path: PathBuf,
+    },
+    /// The folder the export's file would go in cannot be resolved.
+    #[error("cannot use the folder of {}", path.display())]
+    ExportFolder {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The user has not accepted the agreement revision this build ships
+    /// (decision F9).
+    #[error(
+        "no file was written: record the user's acceptance with `mooringctl user agree {user}` once the user has accepted the agreement (docs/runbooks/user-agreement.md)"
+    )]
+    AgreementNotRecorded {
+        /// The user.
+        user: UserId,
+        /// The export's refusal.
+        #[source]
+        source: Box<ExportError>,
+    },
+    /// `mooring-export` refused the file for another reason.
+    #[error("no file was written: the export was refused")]
+    ExportRefused(#[source] Box<ExportError>),
+    /// The user's secrets could not be read from the keychain.
+    #[error("no file was written: reading the user's secrets from the keychain failed")]
+    Secrets(#[source] Box<SnapshotReadError>),
+    /// The export's file could not be written; what was written of it has
+    /// been removed.
+    #[error("cannot write the export to {}; no part of it is left", path.display())]
+    ExportWrite {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The export's file could not be written, and what was written of it
+    /// could not be removed either: it holds the user's credentials.
+    #[error(
+        "cannot write the export to {} and cannot remove what was written ({removal}): delete the file by hand",
+        path.display()
+    )]
+    ExportLeftBehind {
+        /// The file.
+        path: PathBuf,
+        /// Why the removal failed.
+        removal: io::Error,
+        /// The write's error.
+        #[source]
+        source: io::Error,
+    },
     /// The kernel's interface, routing or neighbour tables could not be
     /// read.
     #[error("reading the kernel's network tables failed")]

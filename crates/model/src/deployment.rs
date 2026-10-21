@@ -20,7 +20,7 @@ use crate::node::{AppliedConfig, Node, NodeAddress, NodeLifecycle};
 use crate::ports::PortConflict;
 use crate::quota::AutoQuotaPolicy;
 use crate::secret::SecretRef;
-use crate::user::{User, UserNodePublic, UserStatus};
+use crate::user::{AgreementRecord, User, UserNodePublic, UserStatus};
 use crate::viewer::Viewer;
 use crate::wg::WgIndex;
 
@@ -570,6 +570,10 @@ impl Entities<'_> {
 ///   is still denied everywhere), and drops every user's credentials on it
 ///   and its alert channels: a retired node renders nothing, so no bundle
 ///   carries them any more.
+/// - `AgreementRecorded` records which revision of the user agreement a user
+///   accepted. It is Mac-only and is never rendered, sent or exported; it
+///   decides only whether `user export` refuses the user (decision F9,
+///   design §9.2), so a recorded agreement needs no `node apply`.
 ///
 /// Suspending or resuming a user ([`User::suspend`], [`User::resume`]) is
 /// never bookkeeping: it changes which users every node serves, so it is
@@ -600,6 +604,17 @@ pub enum Bookkeeping {
     RetirementShutDown {
         /// The node.
         node: NodeId,
+    },
+    /// `user` accepted the agreement revision in `record` (`user agree`,
+    /// design §7). A user pending revocation or revoked is refused
+    /// (`RevocationAlreadyStarted`), and so is a revision older than the
+    /// one recorded (`AgreementRegressed`). The same revision keeps the
+    /// record as it is, so its day stays the day of the first acceptance.
+    AgreementRecorded {
+        /// The user.
+        user: UserId,
+        /// The revision accepted and the day.
+        record: AgreementRecord,
     },
 }
 
@@ -671,6 +686,29 @@ impl Deployment {
                 }
                 if let Some(alerting) = &mut parts.alerting {
                     alerting.channels.remove(&node);
+                }
+            }
+            Bookkeeping::AgreementRecorded { user, record } => {
+                let user = parts
+                    .users
+                    .iter_mut()
+                    .find(|candidate| candidate.id == user)
+                    .ok_or(ModelError::UnknownUser { id: user })?;
+                if matches!(user.status, UserStatus::RevokePending | UserStatus::Revoked) {
+                    return Err(ModelError::RevocationAlreadyStarted {
+                        user: user.id.clone(),
+                    });
+                }
+                match user.agreement {
+                    Some(recorded) if record.version < recorded.version => {
+                        return Err(ModelError::AgreementRegressed {
+                            user: user.id.clone(),
+                            recorded: recorded.version,
+                            offered: record.version,
+                        });
+                    }
+                    Some(recorded) if record.version == recorded.version => {}
+                    Some(_) | None => user.agreement = Some(record),
                 }
             }
         }
@@ -794,7 +832,7 @@ mod tests {
     use crate::secret::SecretKind;
     use crate::sim::SimPolicy;
     use crate::testing::{applied, exit_site, node, node_id, site, two_node_parts, user, user_id};
-    use crate::user::SuspendReason;
+    use crate::user::{AgreementVersion, SuspendReason};
 
     fn build(parts: DeploymentParts) -> Result<Deployment, ModelError> {
         Deployment::try_from(parts)
@@ -1674,6 +1712,98 @@ mod tests {
                 node: node_id("lon1"),
             }),
             Err(ModelError::NotRevoking { user: user_id(2) })
+        );
+    }
+
+    fn agreement(revision: u16, day: &str) -> AgreementRecord {
+        AgreementRecord {
+            version: AgreementVersion::new(NonZeroU16::new(revision).unwrap()),
+            accepted_on: CalendarDate::parse(day).unwrap(),
+        }
+    }
+
+    fn agree(deployment: Deployment, record: AgreementRecord) -> Result<Deployment, ModelError> {
+        deployment.record(Bookkeeping::AgreementRecorded {
+            user: user_id(1),
+            record,
+        })
+    }
+
+    #[test]
+    fn a_recorded_agreement_keeps_the_generation_and_a_newer_revision_replaces_it() {
+        let deployment = build(two_node_parts()).unwrap();
+        let generation = deployment.config_generation();
+        assert_eq!(deployment.users()[&user_id(1)].agreement, None);
+        let agreed = agree(deployment, agreement(1, "2026-10-18")).unwrap();
+        assert_eq!(agreed.config_generation(), generation);
+        assert_eq!(
+            agreed.users()[&user_id(1)].agreement,
+            Some(agreement(1, "2026-10-18"))
+        );
+        assert_eq!(agreed.users()[&user_id(2)].agreement, None);
+        let newer = agree(agreed, agreement(2, "2026-11-02")).unwrap();
+        assert_eq!(
+            newer.users()[&user_id(1)].agreement,
+            Some(agreement(2, "2026-11-02"))
+        );
+        assert_eq!(newer.config_generation(), generation);
+    }
+
+    /// The same revision recorded again keeps the first record's day: the
+    /// record says when the user first accepted that text.
+    #[test]
+    fn the_same_agreement_revision_keeps_the_record_as_it_is() {
+        let agreed = agree(build(two_node_parts()).unwrap(), agreement(1, "2026-10-18")).unwrap();
+        let again = agree(agreed.clone(), agreement(1, "2026-12-01")).unwrap();
+        assert_eq!(again, agreed);
+    }
+
+    #[test]
+    fn an_older_agreement_revision_is_refused() {
+        let agreed = agree(build(two_node_parts()).unwrap(), agreement(2, "2026-11-02")).unwrap();
+        assert_eq!(
+            agree(agreed, agreement(1, "2026-11-03")),
+            Err(ModelError::AgreementRegressed {
+                user: user_id(1),
+                recorded: AgreementVersion::new(NonZeroU16::new(2).unwrap()),
+                offered: AgreementVersion::CURRENT,
+            })
+        );
+    }
+
+    /// A suspended user may record an agreement (it changes no export until
+    /// the user is resumed); a revoking or revoked user may not, and an
+    /// unknown user is refused.
+    #[test]
+    fn only_active_and_suspended_users_record_an_agreement() {
+        let mut suspended = two_node_parts();
+        suspended.users[0]
+            .suspend(SuspendReason::Operator, crate::time::UnixTime::from_secs(0))
+            .unwrap();
+        let recorded = agree(build(suspended).unwrap(), agreement(1, "2026-10-18")).unwrap();
+        assert_eq!(
+            recorded.users()[&user_id(1)].agreement,
+            Some(agreement(1, "2026-10-18"))
+        );
+        let mut revoking = two_node_parts();
+        revoking.users[0].status = UserStatus::RevokePending;
+        let mut revoked = two_node_parts();
+        revoked.users[0].status = UserStatus::Revoked;
+        revoked.users[0].per_node.clear();
+        for parts in [revoking, revoked] {
+            assert_eq!(
+                agree(build(parts).unwrap(), agreement(1, "2026-10-18")),
+                Err(ModelError::RevocationAlreadyStarted { user: user_id(1) })
+            );
+        }
+        assert_eq!(
+            build(two_node_parts())
+                .unwrap()
+                .record(Bookkeeping::AgreementRecorded {
+                    user: user_id(9),
+                    record: agreement(1, "2026-10-18"),
+                }),
+            Err(ModelError::UnknownUser { id: user_id(9) })
         );
     }
 

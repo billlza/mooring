@@ -5,11 +5,13 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use mooring_export::ExportFormat;
 use mooring_model::iface::BsdName;
+use mooring_model::{ClientLine, UserId};
 
 /// Mooring's command-line tool. Revision 7 builds the M7 router commands,
-/// which only read from the M7.
+/// which only read from the M7; M5 adds the user commands.
 #[derive(Debug, Parser)]
 #[command(name = "mooringctl", version)]
 pub(crate) struct Cli {
@@ -25,6 +27,91 @@ pub(crate) enum Command {
     /// captures.
     #[command(subcommand)]
     Router(RouterCommand),
+    /// Users: what the operator records about them.
+    #[command(subcommand)]
+    User(UserCommand),
+}
+
+/// A user command.
+#[derive(Debug, Subcommand)]
+pub(crate) enum UserCommand {
+    /// Add an active user with fresh credentials on every node that is not
+    /// retiring. The label is asked at the terminal, never taken from an
+    /// argument; it stays on this Mac. Every node then needs `node apply`.
+    Add {
+        /// The user's CFM line.
+        #[arg(long, value_enum, default_value_t = ClientArg::Cfm05)]
+        client: ClientArg,
+        /// Opt the user in to the hybrid X25519MLKEM768 REALITY hello
+        /// (CFM 0.5 only).
+        #[arg(long)]
+        mlkem: bool,
+    },
+    /// Give a user without one a random public alias (xxxx-xxxx), to quote
+    /// instead of a name. Every node then needs `node apply`.
+    Alias {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+    },
+    /// Record that the user accepted the agreement revision this build
+    /// ships, dated today (UTC). It takes neither a revision nor a date, so
+    /// neither can be mistyped; it needs no node apply.
+    Agree {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+    },
+    /// Write the user's file for CFM to a new file with mode 0600 (never
+    /// overwritten), and deliver it as docs/runbooks/delivery.md says.
+    Export {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// The file format.
+        #[arg(long, value_enum, default_value_t = FormatArg::Singbox)]
+        format: FormatArg,
+        /// The file to create, in a folder Time Machine excludes and outside
+        /// iCloud Drive, the Desktop and Documents.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+}
+
+/// A CFM line, as typed on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ClientArg {
+    /// CFM 0.5 (the default).
+    Cfm05,
+    /// CFM 0.4.
+    Cfm04,
+}
+
+impl From<ClientArg> for ClientLine {
+    fn from(client: ClientArg) -> Self {
+        match client {
+            ClientArg::Cfm05 => Self::Cfm05,
+            ClientArg::Cfm04 => Self::Cfm04,
+        }
+    }
+}
+
+/// An export format, as typed on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum FormatArg {
+    /// sing-box JSON (the default).
+    Singbox,
+    /// Clash YAML, only if the user asks for it.
+    Clash,
+}
+
+impl From<FormatArg> for ExportFormat {
+    fn from(format: FormatArg) -> Self {
+        match format {
+            FormatArg::Singbox => Self::SingBoxJson,
+            FormatArg::Clash => Self::ClashYaml,
+        }
+    }
 }
 
 /// A router command.

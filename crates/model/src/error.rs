@@ -20,6 +20,7 @@ use crate::kinds;
 use crate::node::LifecycleStage;
 use crate::ports::{Port, PortConflict, PortRange};
 use crate::secret::SecretKind;
+use crate::user::AgreementVersion;
 use crate::wg::WgIndex;
 
 /// Identifies the entity behind a duplicate-id error.
@@ -504,6 +505,19 @@ pub enum ModelError {
         /// The node.
         node: NodeId,
     },
+    /// An agreement record would replace the recorded revision with an
+    /// older one, as after a downgrade; a recorded revision never goes back.
+    #[error(
+        "user {user} accepted agreement revision {recorded}; refusing to record the older revision {offered}"
+    )]
+    AgreementRegressed {
+        /// The user.
+        user: UserId,
+        /// The revision already recorded.
+        recorded: AgreementVersion,
+        /// The older revision offered.
+        offered: AgreementVersion,
+    },
     /// A retirement step names a node that is not retiring.
     #[error("node {node} is {stage}, not retiring")]
     NodeNotRetiring {
@@ -698,6 +712,8 @@ kinds! {
         RevocationAlreadyStarted,
         /// See [`ModelError::NoCredentialsOnNode`].
         NoCredentialsOnNode,
+        /// See [`ModelError::AgreementRegressed`].
+        AgreementRegressed,
         /// See [`ModelError::NodeNotRetiring`].
         NodeNotRetiring,
         /// See [`ModelError::RevokedUserHoldsCredentials`].
@@ -795,6 +811,7 @@ impl ModelError {
             Self::UserNotSuspended { .. } => ModelErrorKind::UserNotSuspended,
             Self::RevocationAlreadyStarted { .. } => ModelErrorKind::RevocationAlreadyStarted,
             Self::NoCredentialsOnNode { .. } => ModelErrorKind::NoCredentialsOnNode,
+            Self::AgreementRegressed { .. } => ModelErrorKind::AgreementRegressed,
             Self::NodeNotRetiring { .. } => ModelErrorKind::NodeNotRetiring,
             Self::RevokedUserHoldsCredentials { .. } => ModelErrorKind::RevokedUserHoldsCredentials,
             Self::RevokePendingWithoutCredentials { .. } => {
@@ -839,7 +856,7 @@ mod tests {
     use crate::target::{CertificateName, EvidenceUrl, HttpStatus, require_attested};
     use crate::testing::{self, attestation, node_id, two_node_parts, user, user_id};
     use crate::time::UnixTime;
-    use crate::user::UserStatus;
+    use crate::user::{AgreementRecord, UserStatus};
     use crate::user::{SuspendReason, WarnPercent};
     use crate::v1::StateV1;
     use crate::v1::{CycleDay, SimPolicyV1};
@@ -1203,6 +1220,26 @@ mod tests {
                 .record(Bookkeeping::RevocationCommitted {
                     user: user_id(1),
                     node: node_id("par1"),
+                })
+                .unwrap_err(),
+            ),
+            (
+                K::AgreementRegressed,
+                Deployment::try_from({
+                    let mut parts = two_node_parts();
+                    parts.users[0].agreement = Some(AgreementRecord {
+                        version: AgreementVersion::new(NonZeroU16::new(2).unwrap()),
+                        accepted_on: CalendarDate::parse("2026-11-02").unwrap(),
+                    });
+                    parts
+                })
+                .unwrap()
+                .record(Bookkeeping::AgreementRecorded {
+                    user: user_id(1),
+                    record: AgreementRecord {
+                        version: AgreementVersion::CURRENT,
+                        accepted_on: CalendarDate::parse("2026-11-03").unwrap(),
+                    },
                 })
                 .unwrap_err(),
             ),
