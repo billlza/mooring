@@ -345,8 +345,9 @@ router_text!(
 );
 router_text!(
     /// The M7's web application version (`M7_GENERIC_v07.01.81.00` in M2a;
-    /// the device appends a newline, which the parser removes), with the
-    /// firmware version's limits.
+    /// the device appends a newline, which the parser removes; with the
+    /// SMARTY SIM on 2026-10-16 it reported none), with the firmware
+    /// version's limits.
     WebAppVersion,
     WebApp,
     64,
@@ -655,7 +656,8 @@ device_vocabulary! {
     /// spelled `20MHz` in M2a). The one vocabulary not limited to what M2a
     /// observed: the set is 3GPP's E-UTRA channel bandwidths spelled like
     /// `20MHz`, except 1.4 MHz, whose spelling cannot be inferred
-    /// *(inference: only `20MHz` was seen; design §15.6 rule 2, M2.md)*.
+    /// *(inference: only `20MHz` and, with the SMARTY SIM on 2026-10-16,
+    /// `10MHz` were seen; design §15.6 rule 2, M2.md)*.
     /// Another spelling is still refused, so the inference can make a
     /// carrier unreadable but never misread.
     pub enum LteBandwidth {
@@ -663,7 +665,7 @@ device_vocabulary! {
         Mhz3 = "3MHz",
         /// 5 MHz.
         Mhz5 = "5MHz",
-        /// 10 MHz.
+        /// 10 MHz (the SMARTY SIM, 2026-10-16).
         Mhz10 = "10MHz",
         /// 15 MHz.
         Mhz15 = "15MHz",
@@ -903,8 +905,10 @@ pub struct RouterSettings {
 pub struct RouterStatusParts {
     /// The firmware version.
     pub firmware: FirmwareVersion,
-    /// The web application's version.
-    pub web_app: WebAppVersion,
+    /// The web application's version; `None` when the M7 reports it as
+    /// the empty string, as it did with the SMARTY SIM (2026-10-16).
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub web_app: Option<WebAppVersion>,
     /// Seconds since the M7 booted; a decrease shows a reboot.
     pub uptime_secs: u64,
     /// The device temperature.
@@ -913,8 +917,11 @@ pub struct RouterStatusParts {
     pub thermal: ThermalState,
     /// The power.
     pub power: RouterPower,
-    /// The SIM's service provider name.
-    pub sim_spn: CarrierName,
+    /// The SIM's service provider name; `None` when the M7 reports it as
+    /// the empty string, as it does for the SMARTY SIM (2026-10-16;
+    /// *inference:* a SIM that carries none).
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub sim_spn: Option<CarrierName>,
     /// The radio.
     pub radio: RadioState,
     /// The WWAN counters.

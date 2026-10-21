@@ -589,9 +589,9 @@ fn grammar_shaped_text_in_dropped_fields_stays_out() {
         assert!(NodeName::new(name).is_ok(), "{name}");
     }
     let mut status = with_router(|parts| {
-        parts.sim_spn = CarrierName::parse(spn).unwrap();
+        parts.sim_spn = Some(CarrierName::parse(spn).unwrap());
         parts.firmware = FirmwareVersion::parse(firmware).unwrap();
-        parts.web_app = WebAppVersion::parse(web_app).unwrap();
+        parts.web_app = Some(WebAppVersion::parse(web_app).unwrap());
         let RadioState::Attached(radio) = &mut parts.radio else {
             panic!("the radio is attached");
         };
@@ -677,8 +677,13 @@ fn identifiers(status: &MacStatusV1) -> Vec<String> {
     if let RouterReading::Available { status, .. } = &parts.router {
         let router = status.parts();
         words.push(router.firmware.as_str().to_owned());
-        words.push(router.web_app.as_str().to_owned());
-        words.push(router.sim_spn.as_str().to_owned());
+        words.extend(
+            router
+                .web_app
+                .iter()
+                .map(|web_app| web_app.as_str().to_owned()),
+        );
+        words.extend(router.sim_spn.iter().map(|spn| spn.as_str().to_owned()));
         if let RadioState::Attached(radio) = &router.radio {
             words.push(radio.network.as_str().to_owned());
         }

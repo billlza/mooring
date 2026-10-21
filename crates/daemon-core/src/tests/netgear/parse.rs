@@ -152,6 +152,45 @@ fn the_not_reported_sentinel_is_none_for_every_reading() {
     assert_eq!(readings(&parse(&all).unwrap()), [None; 7]);
 }
 
+/// The fixture's reading as JSON, with `absent` set to `null`.
+fn reading_without(absent: &[&str]) -> Value {
+    let mut reading = serde_json::to_value(router::status()).unwrap();
+    for field in absent {
+        assert!(reading.get(*field).is_some_and(Value::is_string), "{field}");
+        reading[*field] = Value::Null;
+    }
+    reading
+}
+
+/// The status of `body`, as JSON.
+fn parsed(body: &[u8]) -> Result<Value, RouterParseError> {
+    parse(body).map(|status| serde_json::to_value(status).unwrap())
+}
+
+/// The SMARTY SIM's SPN is the empty string (2026-10-16): the status holds
+/// no SIM name (`null`), not an empty one, and reads everything else as
+/// before.
+#[test]
+fn an_empty_spn_is_no_sim_name() {
+    let body = with(&pointer(NetgearLeaf::SimSpn, 0), json!(""));
+    assert_eq!(parsed(&body), Ok(reading_without(&["sim_spn"])));
+}
+
+/// With the SMARTY SIM the M7 also reported its web app's version as the
+/// empty string (2026-10-16): the status holds no version (`null`), and
+/// reads everything else as before, the SPN's absence too.
+#[test]
+fn an_empty_web_app_version_is_no_version() {
+    let web_app = pointer(NetgearLeaf::GeneralWebAppVersion, 0);
+    let body = with(&web_app, json!(""));
+    assert_eq!(parsed(&body), Ok(reading_without(&["web_app"])));
+    let both = edited(|value| {
+        *value.pointer_mut(&web_app).unwrap() = json!("");
+        *value.pointer_mut(&pointer(NetgearLeaf::SimSpn, 0)).unwrap() = json!("");
+    });
+    assert_eq!(parsed(&both), Ok(reading_without(&["web_app", "sim_spn"])));
+}
+
 /// The M7 reports whole dB and dBm; the status keeps tenths. A value
 /// outside the reading's range, or outside what tenths can hold, is
 /// `OutOfRange`, never wrapped or saturated.
@@ -237,7 +276,11 @@ fn every_status_leaf_refuses_the_wrong_type() {
             LeafShape::Text { .. }
             | LeafShape::Line { .. }
             | LeafShape::Digits { .. }
-            | LeafShape::Secret { .. } => &[json!(1), json!(false), Value::Null],
+            | LeafShape::Secret { .. }
+            | LeafShape::OrEmpty(LeafShape::Text { .. } | LeafShape::Line { .. }) => {
+                &[json!(1), json!(false), Value::Null]
+            }
+            LeafShape::OrEmpty(other) => panic!("{leaf}: empty or {other:?}"),
         };
         for value in wrong {
             assert_eq!(
@@ -704,13 +747,17 @@ fn identifier_shaped_values_fit_no_allowlisted_text() {
         "+447700900123",
         "07700900123",
     ];
+    let mut exercised = 0;
     for leaf in NetgearLeaf::ALL.iter().copied() {
         let (line, digits) = match leaf.shape() {
-            LeafShape::Text { .. } => (false, false),
-            LeafShape::Line { .. } => (true, false),
+            // An empty-or leaf judges every identifier by its inner shape.
+            LeafShape::Text { .. } | LeafShape::OrEmpty(LeafShape::Text { .. }) => (false, false),
+            LeafShape::Line { .. } | LeafShape::OrEmpty(LeafShape::Line { .. }) => (true, false),
             LeafShape::Digits { .. } => (false, true),
             LeafShape::Bool | LeafShape::Int | LeafShape::Secret { .. } => continue,
+            LeafShape::OrEmpty(other) => panic!("{leaf}: empty or {other:?}"),
         };
+        exercised += 1;
         for identifier in identifiers {
             let text = if line {
                 format!("{identifier}\n")
@@ -749,6 +796,9 @@ fn identifier_shaped_values_fit_no_allowlisted_text() {
             }
         }
     }
+    // Every text, line and digit leaf, the SPN and the web app version among
+    // them.
+    assert_eq!(exercised, 23);
 }
 
 /// A data session longer than the uptime is refused (a session cannot
@@ -974,7 +1024,7 @@ fn every_field_fault_kind_is_produced() {
         ),
         (
             FieldFaultKind::InvalidText,
-            parse(&with(&pointer(L::SimSpn, 0), json!(""))).unwrap_err(),
+            parse(&with(&pointer(L::SimSpn, 0), json!("CM123"))).unwrap_err(),
         ),
         (
             FieldFaultKind::NotCanonical,

@@ -5,10 +5,11 @@
 
 use serde_json::{Value, json};
 
-use super::{FIXTURE, field, pointer, spliced, with};
+use super::{FIXTURE, element_of, field, pointer, spliced, with};
 use crate::error::{FieldFaultKind, RouterParseError};
 use crate::router::netgear::{
-    NetgearLeaf, parse_netgear_model_json, parse_netgear_session, redact_netgear_model_json,
+    LeafSet, NetgearLeaf, parse_netgear_model_json, parse_netgear_session,
+    redact_netgear_model_json,
 };
 use crate::tests::router;
 
@@ -93,7 +94,9 @@ fn redacted_at(body: &[u8], at: &str) -> (Value, Vec<RouterParseError>) {
 /// A text leaf is printable ASCII within its length, with no run of
 /// digits longer than its limit; the redactor checks the same shape
 /// before it writes a value and withholds one that fails it (the empty
-/// string as `""`), so an identifier never reaches a capture.
+/// string as `""`), so an identifier never reaches a capture. The SIM's
+/// SPN may also be empty, as the SMARTY SIM's is (2026-10-16): that is
+/// kept, and every other value keeps the text's form.
 #[test]
 fn text_shapes_refuse_control_bytes_and_long_digit_runs() {
     use NetgearLeaf as L;
@@ -104,7 +107,6 @@ fn text_shapes_refuse_control_bytes_and_long_digit_runs() {
         "C\tM",
         "C\u{7f}M",
         "CMLïnk",
-        "",
         &"C".repeat(33),
         "CM123",
     ] {
@@ -114,17 +116,22 @@ fn text_shapes_refuse_control_bytes_and_long_digit_runs() {
             Err(fault),
             "{bad:?}"
         );
-        let placeholder = if bad.is_empty() { "" } else { "REDACTED" };
         assert_eq!(
             redacted_at(&body, &spn),
-            (json!(placeholder), vec![fault]),
+            (json!("REDACTED"), vec![fault]),
             "{bad:?}"
         );
     }
-    for good in ["CM12", &"C".repeat(32), "O2 UK"] {
+    for good in ["", "CM12", &"C".repeat(32), "O2 UK"] {
         let body = with(&spn, json!(good));
         assert_eq!(redacted_at(&body, &spn), (json!(good), vec![]), "{good:?}");
     }
+    // The network's name has the same form but may not be empty.
+    let network = pointer(L::WwanNetworkName, 0);
+    let body = with(&network, json!(""));
+    let fault = field(L::WwanNetworkName, None, FieldFaultKind::InvalidText);
+    assert_eq!(parse_netgear_model_json(&body).map(|_| ()), Err(fault));
+    assert_eq!(redacted_at(&body, &network), (json!(""), vec![fault]));
     // The role may be empty (an anonymous session's may be).
     let role = with(&pointer(L::SessionUserRole, 0), json!(""));
     assert_eq!(
@@ -148,12 +155,13 @@ fn text_shapes_refuse_control_bytes_and_long_digit_runs() {
 
 /// The web app version is text followed by exactly one line feed, which
 /// the parser removes and the redactor keeps (or withholds, as the parser
-/// refuses it).
+/// refuses it); or the empty string, which the M7 reported with the SMARTY
+/// SIM (2026-10-16) and which both keep. A line feed alone is neither.
 #[test]
 fn line_shape_needs_exactly_one_trailing_newline() {
     let leaf = NetgearLeaf::GeneralWebAppVersion;
     let at = pointer(leaf, 0);
-    for bad in ["", "x", "\n", "x\n\n", "x\r\n", "x\ny\n", "\nx"] {
+    for bad in ["x", "\n", "x\n\n", "x\r\n", "x\ny\n", "\nx"] {
         let body = with(&at, json!(bad));
         let fault = field(leaf, None, FieldFaultKind::InvalidText);
         assert_eq!(
@@ -161,17 +169,96 @@ fn line_shape_needs_exactly_one_trailing_newline() {
             Err(fault),
             "{bad:?}"
         );
-        let placeholder = if bad.is_empty() { "" } else { "REDACTED" };
         assert_eq!(
             redacted_at(&body, &at),
-            (json!(placeholder), vec![fault]),
+            (json!("REDACTED"), vec![fault]),
             "{bad:?}"
         );
     }
     let body = with(&at, json!("x\n"));
     let status = parse_netgear_model_json(&body).unwrap();
-    assert_eq!(status.parts().web_app.as_str(), "x");
+    let web_app = serde_json::to_value(status.parts()).unwrap()["web_app"].clone();
+    assert_eq!(web_app, json!("x"));
     assert_eq!(redacted_at(&body, &at), (json!("x\n"), vec![]));
+    let body = with(&at, json!(""));
+    assert_eq!(redacted_at(&body, &at), (json!(""), vec![]));
+    assert!(parse_netgear_model_json(&body).is_ok());
+}
+
+/// Past the empty string, the SIM's SPN and the web app's version are read
+/// as before: a space at either end is refused by the status's own types
+/// (the redactor, which checks only the shape, keeps it), and a version of
+/// more than 64 bytes by the shape. Only exactly `""` is read as none.
+#[test]
+fn every_other_spn_or_web_app_version_is_read_as_before() {
+    use NetgearLeaf as L;
+    let long = format!("{}\n", "v".repeat(65));
+    for (leaf, value, withheld) in [
+        (L::SimSpn, " ", false),
+        (L::SimSpn, " EE", false),
+        (L::SimSpn, "EE ", false),
+        (L::GeneralWebAppVersion, " \n", false),
+        (L::GeneralWebAppVersion, " x\n", false),
+        (L::GeneralWebAppVersion, "x \n", false),
+        (L::GeneralWebAppVersion, long.as_str(), true),
+    ] {
+        let at = pointer(leaf, 0);
+        let body = with(&at, json!(value));
+        let fault = field(leaf, None, FieldFaultKind::InvalidText);
+        assert_eq!(
+            parse_netgear_model_json(&body).map(|_| ()),
+            Err(fault),
+            "{leaf} {value:?}"
+        );
+        let redacted = if withheld {
+            (json!("REDACTED"), vec![fault])
+        } else {
+            (json!(value), vec![])
+        };
+        assert_eq!(redacted_at(&body, &at), redacted, "{leaf} {value:?}");
+    }
+}
+
+/// The empty string is a value at three leaves only: the session's role
+/// (an anonymous session's may be empty, and is no administrator's), the
+/// SIM's SPN and the web app's version, which the M7 reported empty with the
+/// SMARTY SIM (2026-10-16). At every other leaf the redactor withholds it, naming the leaf, and the status parse
+/// refuses it; of the status leaves only the last two read it.
+#[test]
+fn the_empty_string_is_a_value_at_three_leaves_only() {
+    use NetgearLeaf as L;
+    let mut kept = Vec::new();
+    let mut read = Vec::new();
+    for leaf in NetgearLeaf::ALL.iter().copied() {
+        if leaf.is_secret() {
+            continue;
+        }
+        let at = pointer(leaf, 0);
+        let body = with(&at, json!(""));
+        let (value, withheld) = redacted_at(&body, &at);
+        assert_eq!(value, json!(""), "{leaf}");
+        match withheld.as_slice() {
+            [] => kept.push(leaf),
+            [
+                RouterParseError::Field {
+                    leaf: named,
+                    element,
+                    ..
+                },
+            ] => {
+                assert_eq!((*named, *element), (leaf, element_of(leaf)), "{leaf}");
+            }
+            other => panic!("{leaf}: {other:?}"),
+        }
+        if LeafSet::Status.contains(leaf) && parse_netgear_model_json(&body).is_ok() {
+            read.push(leaf);
+        }
+    }
+    assert_eq!(
+        kept,
+        [L::SessionUserRole, L::GeneralWebAppVersion, L::SimSpn]
+    );
+    assert_eq!(read, [L::GeneralWebAppVersion, L::SimSpn]);
 }
 
 /// Malformed JSON is `Syntax`, JSON cut short is `Truncated`, and a value

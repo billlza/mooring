@@ -3,7 +3,9 @@
 //! The human summary, pinned on the router fixture (the M2a reading).
 
 use mooring_daemon_core::router::netgear::parse_netgear_model_json;
-use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
+use mooring_daemon_core::router::{
+    RadioState, RouterReading, RouterStatus, RouterUnavailableReason,
+};
 use mooring_model::iface::BsdName;
 use mooring_model::time::UnixTime;
 
@@ -21,17 +23,125 @@ fn the_human_summary_of_the_fixture() {
     .unwrap();
     assert_eq!(
         text,
-        "M7 MR7450 on en9, polled 2026-10-13 19:20:00 UTC
-firmware NTGX75_10.04.43.01, web app M7_GENERIC_v07.01.81.00; up 4d 03:47:52; 35 °C, thermal Normal
+        r#"M7 MR7450 on en9, polled 2026-10-13 19:20:00 UTC
+firmware "NTGX75_10.04.43.01", web app "M7_GENERIC_v07.01.81.00"; up 4d 03:47:52; 35 °C, thermal Normal
 radio connected: Nr5gService, 5GSUB6, band B3; LTE carriers B3 20MHz (primary); secondary carriers 0; session 4d 03:46:57
-network CMLink (234-30); SIM CMLink
+network "CMLink" (234-30); SIM "CMLink"
 LTE RSRP -104 dBm, RSRQ -17 dB, SINR 0 dB, RSSI -72 dBm; NR RSRP not reported, RSRQ not reported, SINR not reported
 power Online; battery 100 %, Normal, not charging, QuickCharge, 32 °C
 counters received 591655199 B, sent 188784597 B
 Wi-Fi radio off (main Off, guest Off, aux Off), 0 clients
 offload Wi-Fi off, Ethernet off; UPnP off; Analytics off; Insight inactive
 unread SMS 0
-"
+"#
+    );
+}
+
+/// What the M7 reports as the empty string reads as not reported, never as
+/// an empty name: the SPN and the web app's version, both empty with the
+/// SMARTY SIM (2026-10-16).
+#[test]
+fn the_human_summary_says_what_the_m7_did_not_report() {
+    let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
+    document["sim"]["SPN"] = serde_json::json!("");
+    document["general"]["webAppVersion"] = serde_json::json!("");
+    let body = serde_json::to_vec(&document).unwrap();
+    let text = parse_netgear_model_json(&body).map(|status| {
+        summary(
+            &BsdName::parse("en9").unwrap(),
+            UnixTime::from_secs(NOW),
+            &status,
+        )
+        .unwrap()
+    });
+    assert_eq!(
+        text,
+        Ok(r#"M7 MR7450 on en9, polled 2026-10-13 19:20:00 UTC
+firmware "NTGX75_10.04.43.01", web app version not reported; up 4d 03:47:52; 35 °C, thermal Normal
+radio connected: Nr5gService, 5GSUB6, band B3; LTE carriers B3 20MHz (primary); secondary carriers 0; session 4d 03:46:57
+network "CMLink" (234-30); SIM name not reported
+LTE RSRP -104 dBm, RSRQ -17 dB, SINR 0 dB, RSSI -72 dBm; NR RSRP not reported, RSRQ not reported, SINR not reported
+power Online; battery 100 %, Normal, not charging, QuickCharge, 32 °C
+counters received 591655199 B, sent 188784597 B
+Wi-Fi radio off (main Off, guest Off, aux Off), 0 clients
+offload Wi-Fi off, Ethernet off; UPnP off; Analytics off; Insight inactive
+unread SMS 0
+"#
+        .to_owned())
+    );
+}
+
+/// Without service the summary still names the SIM, or says that the M7
+/// reported no name for it.
+#[test]
+fn without_service_the_summary_names_the_sim_or_says_it_was_not_reported() {
+    let mut parts = parse_netgear_model_json(FIXTURE).unwrap().into_parts();
+    parts.radio = RadioState::NoService;
+    for (sim_spn, line) in [
+        (
+            parts.sim_spn.clone(),
+            "\nradio no service; SIM \"CMLink\"\n",
+        ),
+        (None, "\nradio no service; SIM name not reported\n"),
+    ] {
+        let mut parts = parts.clone();
+        parts.sim_spn = sim_spn;
+        let text = summary(
+            &BsdName::parse("en9").unwrap(),
+            UnixTime::from_secs(NOW),
+            &RouterStatus::new(parts).unwrap(),
+        )
+        .unwrap();
+        assert!(text.contains(line), "{text}");
+        assert!(!text.contains("radio connected"), "{text}");
+    }
+}
+
+/// Text the M7 reports prints in double quotes, with `"` and `\` escaped,
+/// so none of it reads as the summary's own words: a version or a name
+/// that spells "not reported" prints unlike one the M7 did not report, and
+/// a quote in a name cannot end it early.
+#[test]
+fn reported_text_is_quoted_so_it_never_reads_as_the_summarys_words() {
+    let summary_of = |edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
+        edit(&mut document);
+        let body = serde_json::to_vec(&document).unwrap();
+        summary(
+            &BsdName::parse("en9").unwrap(),
+            UnixTime::from_secs(NOW),
+            &parse_netgear_model_json(&body).unwrap(),
+        )
+        .unwrap()
+    };
+    let spelt = summary_of(&|document| {
+        document["general"]["FWversion"] = serde_json::json!("not reported");
+        document["general"]["webAppVersion"] = serde_json::json!("version not reported\n");
+        document["wwan"]["registerNetworkDisplay"] = serde_json::json!("not reported");
+        document["sim"]["SPN"] = serde_json::json!("name not reported");
+    });
+    for line in [
+        "\nfirmware \"not reported\", web app \"version not reported\"; up ",
+        "\nnetwork \"not reported\" (234-30); SIM \"name not reported\"\n",
+    ] {
+        assert!(spelt.contains(line), "{spelt}");
+    }
+    let absent = summary_of(&|document| {
+        document["general"]["webAppVersion"] = serde_json::json!("");
+        document["sim"]["SPN"] = serde_json::json!("");
+    });
+    for line in [
+        "\nfirmware \"NTGX75_10.04.43.01\", web app version not reported; up ",
+        "\nnetwork \"CMLink\" (234-30); SIM name not reported\n",
+    ] {
+        assert!(absent.contains(line), "{absent}");
+    }
+    let quoting = summary_of(&|document| {
+        document["sim"]["SPN"] = serde_json::json!(r#"CM" (1-2); SIM "X\Y"#);
+    });
+    assert!(
+        quoting.contains("\nnetwork \"CMLink\" (234-30); SIM \"CM\\\" (1-2); SIM \\\"X\\\\Y\"\n"),
+        "{quoting}"
     );
 }
 

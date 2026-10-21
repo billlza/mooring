@@ -73,7 +73,9 @@ impl fmt::Debug for RedactedModelJson {
 /// answer's key order (no trailing newline) in which
 ///
 /// - every allowlisted leaf that is not secret keeps its value, after the
-///   same shape check the parser makes;
+///   same shape check the parser makes (the empty string of the SIM's SPN
+///   or of the web app's version, which the parser reads as none,
+///   included);
 /// - the session token, and every value outside the allowlist, becomes a
 ///   placeholder of its type: a string `"REDACTED"`, a number `0`, a
 ///   boolean `false`, `null` itself; an object keeps its keys, and an array
@@ -216,6 +218,7 @@ impl Sink for Redactor {
             LeafValue::Text(text) | LeafValue::Digits(text) => write_string(&mut self.out, &text),
             LeafValue::Line(text) => write_string(&mut self.out, &format!("{text}\n")),
             LeafValue::Secret(_) => self.out.extend_from_slice(PLACEHOLDER),
+            LeafValue::Empty => self.out.extend_from_slice(b"\"\""),
         }
     }
 

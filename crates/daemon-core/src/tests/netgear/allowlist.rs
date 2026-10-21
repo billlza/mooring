@@ -165,9 +165,52 @@ fn session_and_status_leaves_cover_the_allowlist_and_status_never_reads_the_toke
     }
 }
 
-/// A leaf's row as `docs/measurements/M2.md` writes it.
-fn row(number: usize, leaf: NetgearLeaf) -> String {
-    let shape = match leaf.shape() {
+/// Two leaves read the empty string as the M7's report of no value
+/// (`OrEmpty`): the SIM's SPN and the web app's version, which the M7
+/// reported empty with the SMARTY SIM (2026-10-16). (`session.userRole` is
+/// the one other leaf whose shape admits it, as a role.) Every other value
+/// of theirs keeps the shape it had before, so the walk judges it exactly
+/// as then.
+#[test]
+fn only_the_spn_and_web_app_version_read_the_empty_string_as_none() {
+    let or_empty: Vec<(NetgearLeaf, LeafShape)> = NetgearLeaf::ALL
+        .iter()
+        .filter_map(|leaf| {
+            if let LeafShape::OrEmpty(inner) = leaf.shape() {
+                Some((*leaf, *inner))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        or_empty,
+        [
+            (
+                NetgearLeaf::GeneralWebAppVersion,
+                LeafShape::Line {
+                    max: 64,
+                    digit_run: 6
+                }
+            ),
+            (
+                NetgearLeaf::SimSpn,
+                LeafShape::Text {
+                    min: 1,
+                    max: 32,
+                    digit_run: 2
+                }
+            ),
+        ]
+    );
+    // The SPN's text has the network name's form; only the network name
+    // may not be empty.
+    assert_eq!(or_empty[1].1, NetgearLeaf::WwanNetworkName.shape());
+}
+
+/// A shape as `docs/measurements/M2.md` writes it.
+fn shape_text(shape: LeafShape) -> String {
+    match shape {
         LeafShape::Bool => "Bool".to_owned(),
         LeafShape::Int => "Int".to_owned(),
         LeafShape::Text {
@@ -180,7 +223,13 @@ fn row(number: usize, leaf: NetgearLeaf) -> String {
         }
         LeafShape::Digits { min, max } => format!("Digits {min}..={max}"),
         LeafShape::Secret { max } => format!("Secret 1..={max}"),
-    };
+        LeafShape::OrEmpty(inner) => format!("{}, or empty", shape_text(*inner)),
+    }
+}
+
+/// A leaf's row as `docs/measurements/M2.md` writes it.
+fn row(number: usize, leaf: NetgearLeaf) -> String {
+    let shape = shape_text(leaf.shape());
     let read_by = match leaf.used_by() {
         LeafUse::Session => "session",
         LeafUse::Status => "status",

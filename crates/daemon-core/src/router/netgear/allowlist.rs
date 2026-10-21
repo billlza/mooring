@@ -22,7 +22,9 @@ pub enum Segment {
 /// What a leaf's JSON value must be. The walker checks it before a value
 /// is stored or written; ranges, vocabularies, sentinels and rules between
 /// fields are the parser's, so the redactor can still capture an unknown
-/// value of a known shape.
+/// value of a known shape. The one exception is the empty string of a
+/// [`LeafShape::OrEmpty`], the M7's report of no value, which the shape
+/// itself admits so that the redactor keeps exactly what the parser reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LeafShape {
     /// `true` or `false`.
@@ -60,6 +62,12 @@ pub(crate) enum LeafShape {
         /// The most bytes.
         max: usize,
     },
+    /// The empty string, which the M7 reports for a value it does not have
+    /// (the parser reads it as none, the redactor keeps it), or a value of
+    /// the inner shape, judged by it alone: a [`LeafShape::Text`] of at
+    /// least one byte or a [`LeafShape::Line`], a string shape that refuses
+    /// the empty string itself (checked at compile time below).
+    OrEmpty(&'static LeafShape),
 }
 
 /// Which parse reads a leaf.
@@ -134,7 +142,7 @@ macro_rules! netgear_leaves {
 
             /// The leaf's shape.
             pub(crate) const fn shape(self) -> LeafShape {
-                use LeafShape::{Bool, Digits, Int, Line, Secret, Text};
+                use LeafShape::{Bool, Digits, Int, Line, OrEmpty, Secret, Text};
                 match self {
                     $( Self::$variant => $shape ),+
                 }
@@ -167,8 +175,9 @@ netgear_leaves! {
     /// `general.FWversion`: the firmware version.
     GeneralFirmware = ["general", "FWversion"] => Text { min: 1, max: 64, digit_run: 6 }, Status;
     /// `general.webAppVersion`: the web application's version, ending in a
-    /// line feed.
-    GeneralWebAppVersion = ["general", "webAppVersion"] => Line { max: 64, digit_run: 6 }, Status;
+    /// line feed; empty with the SMARTY SIM (2026-10-16), when the M7 does
+    /// not report it.
+    GeneralWebAppVersion = ["general", "webAppVersion"] => OrEmpty(&Line { max: 64, digit_run: 6 }), Status;
     /// `general.devTemperature`: the device temperature, °C.
     GeneralTemperature = ["general", "devTemperature"] => Int, Status;
     /// `general.upTime`: seconds since boot.
@@ -185,8 +194,9 @@ netgear_leaves! {
     BatteryChargeSource = ["power", "battChargeSource"] => Text { min: 1, max: 32, digit_run: 3 }, Status;
     /// `power.batteryTemperature`: the battery's temperature, °C.
     BatteryTemperature = ["power", "batteryTemperature"] => Int, Status;
-    /// `sim.SPN`: the SIM's service provider name.
-    SimSpn = ["sim", "SPN"] => Text { min: 1, max: 32, digit_run: 2 }, Status;
+    /// `sim.SPN`: the SIM's service provider name; empty for the SMARTY
+    /// SIM (2026-10-16), when the M7 reports none.
+    SimSpn = ["sim", "SPN"] => OrEmpty(&Text { min: 1, max: 32, digit_run: 2 }), Status;
     /// `wwan.connection`: the data session's state.
     WwanConnection = ["wwan", "connection"] => Text { min: 1, max: 32, digit_run: 3 }, Status;
     /// `wwan.currentNWserviceType`: the network service type.
@@ -430,4 +440,37 @@ const fn parted_by_keys(a: &[Segment], b: &[Segment]) -> bool {
 const _: () = assert!(
     table_is_a_tree(),
     "the allowlist must be a tree of distinct leaves"
+);
+
+/// Whether every [`LeafShape::OrEmpty`] of the table wraps a
+/// [`LeafShape::Text`] of at least one byte or a [`LeafShape::Line`], the
+/// shapes that refuse the empty string themselves: so the empty string is
+/// such a leaf's none and nothing else, and no other shape (a secret above
+/// all) can be wrapped. Checked at compile time below.
+const fn empty_is_only_none() -> bool {
+    let all = NetgearLeaf::ALL;
+    let mut index = 0;
+    while index < all.len() {
+        if let LeafShape::OrEmpty(inner) = all[index].shape() {
+            let refuses_empty = match *inner {
+                LeafShape::Text { min, .. } => min >= 1,
+                LeafShape::Line { .. } => true,
+                LeafShape::Bool
+                | LeafShape::Int
+                | LeafShape::Digits { .. }
+                | LeafShape::Secret { .. }
+                | LeafShape::OrEmpty(_) => false,
+            };
+            if !refuses_empty {
+                return false;
+            }
+        }
+        index += 1;
+    }
+    true
+}
+
+const _: () = assert!(
+    empty_is_only_none(),
+    "an empty-or shape must wrap a text of at least one byte or a line"
 );

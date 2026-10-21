@@ -110,13 +110,17 @@ fn capture_writes_only_the_redactors_output() {
     assert_eq!(received.len(), 3);
 }
 
-/// A state whose allowlisted leaves change form (here an empty carrier
-/// name and an identifier where the network name belongs) is captured with
-/// those values withheld and named, and a value the parser does not know
-/// yet (Wi-Fi `On`) is captured as it is.
+/// A state whose allowlisted leaves change form (here an empty firmware
+/// version and an identifier where the network name belongs) is captured
+/// with those values withheld and named, and a value the parser does not
+/// know yet (Wi-Fi `On`) is captured as it is. So are the empty SPN and web
+/// app version the M7 reported with the SMARTY SIM (2026-10-16), which the
+/// parser reads as not reported: kept, not named.
 #[test]
 fn a_capture_withholds_values_whose_form_is_refused() {
     let mut document: Value = serde_json::from_slice(FIXTURE).unwrap();
+    document["general"]["FWversion"] = value!("");
+    document["general"]["webAppVersion"] = value!("");
     document["sim"]["SPN"] = value!("");
     document["wwan"]["registerNetworkDisplay"] = value!("447700900123");
     document["wifi"]["status"] = value!("On");
@@ -130,6 +134,8 @@ fn a_capture_withholds_values_whose_form_is_refused() {
     assert_secrets_kept(&outcome, &received);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let written: Value = serde_json::from_slice(&fs::read(&out).unwrap()).unwrap();
+    assert_eq!(written["general"]["FWversion"], value!(""));
+    assert_eq!(written["general"]["webAppVersion"], value!(""));
     assert_eq!(written["sim"]["SPN"], value!(""));
     assert_eq!(
         written["wwan"]["registerNetworkDisplay"],
@@ -141,7 +147,7 @@ fn a_capture_withholds_values_whose_form_is_refused() {
         outcome.stdout,
         format!(
             "wrote the redacted capture ({size} bytes) to {path}\n\
-             withheld (a placeholder in the capture): router field sim.SPN: not text of its form\n\
+             withheld (a placeholder in the capture): router field general.FWversion: not text of its form\n\
              withheld (a placeholder in the capture): router field wwan.registerNetworkDisplay: not text of its form\n"
         )
     );

@@ -41,6 +41,9 @@ pub(crate) enum LeafValue {
     Digits(String),
     /// A [`LeafShape::Secret`].
     Secret(Secret<String>),
+    /// The empty string of a [`LeafShape::OrEmpty`]: the M7 reports no
+    /// value.
+    Empty,
 }
 
 /// An element of the carrier list.
@@ -468,7 +471,8 @@ impl ShapeVisitor {
             | LeafShape::Text { .. }
             | LeafShape::Line { .. }
             | LeafShape::Digits { .. }
-            | LeafShape::Secret { .. } => {
+            | LeafShape::Secret { .. }
+            | LeafShape::OrEmpty(_) => {
                 Err((FieldFaultKind::WrongType, Found::Scalar(Scalar::Number)))
             }
         }
@@ -503,6 +507,8 @@ impl ShapeVisitor {
             LeafShape::Secret { max } => {
                 text_of(text, 1, max, max).map(|()| LeafValue::Secret(Secret::new(text.to_owned())))
             }
+            LeafShape::OrEmpty(_) if text.is_empty() => Ok(LeafValue::Empty),
+            LeafShape::OrEmpty(inner) => Self { shape: *inner }.text_shape(text),
         }
     }
 
@@ -538,7 +544,8 @@ impl<'de> Visitor<'de> for ShapeVisitor {
             | LeafShape::Text { .. }
             | LeafShape::Line { .. }
             | LeafShape::Digits { .. }
-            | LeafShape::Secret { .. } => {
+            | LeafShape::Secret { .. }
+            | LeafShape::OrEmpty(_) => {
                 Err((FieldFaultKind::WrongType, Found::Scalar(Scalar::Bool)))
             }
         })

@@ -969,6 +969,60 @@ fn an_unknown_device_state_is_malformed() {
     );
 }
 
+/// The empty SPN and web app version the M7 reported with the SMARTY SIM
+/// (2026-10-16, when `router status` exited 8) are read as not reported,
+/// each alone and both at once: exit 0, the
+/// summary says so, and `--json` spells each `null`, with no empty string
+/// anywhere.
+#[test]
+fn an_empty_spn_or_web_app_version_is_read_as_not_reported() {
+    let spn = (
+        "/sim/SPN",
+        "; SIM name not reported\n",
+        r#""sim_spn":null,"#,
+    );
+    let web_app = (
+        "/general/webAppVersion",
+        ", web app version not reported; ",
+        r#""web_app":null,"#,
+    );
+    for emptied in [&[spn][..], &[web_app], &[spn, web_app]] {
+        let edit = |document: &mut serde_json::Value| {
+            for (at, _, _) in emptied {
+                *document.pointer_mut(at).unwrap() = serde_json::json!("");
+            }
+        };
+        let (outcome, received, _) = run_status(login_script(edited_admin_document(edit)), None);
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert_eq!(outcome.stderr, "");
+        assert_eq!(request_lines(&received), [GET, POST, GET]);
+        let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
+        edit(&mut document);
+        let status = parse_netgear_model_json(&serde_json::to_vec(&document).unwrap()).unwrap();
+        let expected = summary(&lo0_name(), UnixTime::from_secs(NOW), &status).unwrap();
+        assert_eq!(outcome.stdout, expected);
+        let stub = Stub::start_for(login_script(edited_admin_document(edit)));
+        let mut harness = Harness::configured(stub.port());
+        let json_outcome = harness.run(&["router", "status", "--interface", "lo0", "--json"]);
+        let received = stub.finish();
+        assert_secrets_kept(&json_outcome, &received);
+        assert_eq!(json_outcome.code, 0, "{}", json_outcome.stderr);
+        let line = json_outcome.stdout.trim_end();
+        for (_, said, null) in emptied {
+            assert!(outcome.stdout.contains(said), "{}", outcome.stdout);
+            assert!(line.contains(null), "{line}");
+        }
+        assert!(!line.contains(r#""""#), "{line}");
+        assert_eq!(
+            serde_json::from_str::<RouterReading>(line).unwrap(),
+            RouterReading::Available {
+                polled_at: UnixTime::from_secs(NOW),
+                status: Box::new(status),
+            }
+        );
+    }
+}
+
 /// Another API version, which only the administrator's document reports,
 /// is unsupported: exit 7, the leaf named.
 #[test]

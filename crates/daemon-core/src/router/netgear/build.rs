@@ -64,7 +64,8 @@ impl Leaves {
             | LeafValue::Text(_)
             | LeafValue::Line(_)
             | LeafValue::Digits(_)
-            | LeafValue::Secret(_) => Err(field(leaf, element, FieldFaultKind::WrongType)),
+            | LeafValue::Secret(_)
+            | LeafValue::Empty => Err(field(leaf, element, FieldFaultKind::WrongType)),
         }
     }
 
@@ -79,7 +80,8 @@ impl Leaves {
             | LeafValue::Text(_)
             | LeafValue::Line(_)
             | LeafValue::Digits(_)
-            | LeafValue::Secret(_) => Err(field(leaf, element, FieldFaultKind::WrongType)),
+            | LeafValue::Secret(_)
+            | LeafValue::Empty => Err(field(leaf, element, FieldFaultKind::WrongType)),
         }
     }
 
@@ -90,7 +92,8 @@ impl Leaves {
             | LeafValue::Int(_)
             | LeafValue::Line(_)
             | LeafValue::Digits(_)
-            | LeafValue::Secret(_) => Err(field(leaf, element, FieldFaultKind::WrongType)),
+            | LeafValue::Secret(_)
+            | LeafValue::Empty => Err(field(leaf, element, FieldFaultKind::WrongType)),
         }
     }
 
@@ -105,7 +108,8 @@ impl Leaves {
             | LeafValue::Int(_)
             | LeafValue::Text(_)
             | LeafValue::Digits(_)
-            | LeafValue::Secret(_) => Err(field(leaf, None, FieldFaultKind::WrongType)),
+            | LeafValue::Secret(_)
+            | LeafValue::Empty => Err(field(leaf, None, FieldFaultKind::WrongType)),
         }
     }
 
@@ -116,7 +120,8 @@ impl Leaves {
             | LeafValue::Int(_)
             | LeafValue::Text(_)
             | LeafValue::Line(_)
-            | LeafValue::Secret(_) => Err(field(leaf, None, FieldFaultKind::WrongType)),
+            | LeafValue::Secret(_)
+            | LeafValue::Empty => Err(field(leaf, None, FieldFaultKind::WrongType)),
         }
     }
 
@@ -127,7 +132,8 @@ impl Leaves {
             | LeafValue::Int(_)
             | LeafValue::Text(_)
             | LeafValue::Line(_)
-            | LeafValue::Digits(_) => Err(field(leaf, None, FieldFaultKind::WrongType)),
+            | LeafValue::Digits(_)
+            | LeafValue::Empty => Err(field(leaf, None, FieldFaultKind::WrongType)),
         }
     }
 
@@ -189,6 +195,34 @@ impl Leaves {
         parse: fn(&str) -> Result<T, RouterValueError>,
     ) -> Result<T, RouterParseError> {
         parse(self.text(leaf)?).map_err(|_| field(leaf, None, FieldFaultKind::InvalidText))
+    }
+
+    /// A line leaf, without its line feed, through a router text type
+    /// (`InvalidText` if refused).
+    fn router_line<T>(
+        &self,
+        leaf: NetgearLeaf,
+        parse: fn(&str) -> Result<T, RouterValueError>,
+    ) -> Result<T, RouterParseError> {
+        parse(self.line(leaf)?).map_err(|_| field(leaf, None, FieldFaultKind::InvalidText))
+    }
+
+    /// A leaf the M7 may report as the empty string (its shape is
+    /// `OrEmpty`): `None` for exactly that, else `read` of the leaf.
+    fn unless_empty<T>(
+        &self,
+        leaf: NetgearLeaf,
+        read: impl FnOnce(NetgearLeaf) -> Result<T, RouterParseError>,
+    ) -> Result<Option<T>, RouterParseError> {
+        match self.value(leaf, None)? {
+            LeafValue::Empty => Ok(None),
+            LeafValue::Bool(_)
+            | LeafValue::Int(_)
+            | LeafValue::Text(_)
+            | LeafValue::Line(_)
+            | LeafValue::Digits(_)
+            | LeafValue::Secret(_) => read(leaf).map(Some),
+        }
     }
 
     /// A temperature leaf (`OutOfRange` outside -40..=125 °C).
@@ -360,8 +394,9 @@ fn status_parts(leaves: &Leaves) -> Result<RouterStatusParts, RouterParseError> 
     use NetgearLeaf as L;
     Ok(RouterStatusParts {
         firmware: leaves.router_text(L::GeneralFirmware, FirmwareVersion::parse)?,
-        web_app: WebAppVersion::parse(leaves.line(L::GeneralWebAppVersion)?)
-            .map_err(|_| field(L::GeneralWebAppVersion, None, FieldFaultKind::InvalidText))?,
+        web_app: leaves.unless_empty(L::GeneralWebAppVersion, |leaf| {
+            leaves.router_line(leaf, WebAppVersion::parse)
+        })?,
         uptime_secs: leaves.integer(L::GeneralUptime)?,
         temperature_c: leaves.celsius(L::GeneralTemperature)?,
         thermal: leaves.vocabulary(L::WwanThermalState, None, ThermalState::from_wire)?,
@@ -376,7 +411,9 @@ fn status_parts(leaves: &Leaves) -> Result<RouterStatusParts, RouterParseError> 
                 temperature_c: leaves.celsius(L::BatteryTemperature)?,
             },
         },
-        sim_spn: leaves.router_text(L::SimSpn, CarrierName::parse)?,
+        sim_spn: leaves.unless_empty(L::SimSpn, |leaf| {
+            leaves.router_text(leaf, CarrierName::parse)
+        })?,
         radio: radio(leaves)?,
         counters: WwanCounters {
             rx_bytes: leaves.counter(L::WwanRxBytes)?,

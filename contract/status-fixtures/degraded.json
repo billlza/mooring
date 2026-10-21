@@ -114,7 +114,7 @@
       "polled_at": 1791464379,
       "status": {
         "firmware": "NTGX75_10.04.43.01",
-        "web_app": "M7_GENERIC_v07.01.81.00",
+        "web_app": null,
         "uptime_secs": 523014,
         "temperature_c": 47,
         "thermal": "normal",
@@ -128,7 +128,7 @@
             "temperature_c": 33
           }
         },
-        "sim_spn": "SMARTY",
+        "sim_spn": null,
         "radio": {
           "attached": {
             "network_service": "nr5g",

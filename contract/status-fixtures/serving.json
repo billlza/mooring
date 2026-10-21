@@ -117,7 +117,7 @@
             "temperature_c": 33
           }
         },
-        "sim_spn": "SMARTY",
+        "sim_spn": null,
         "radio": {
           "attached": {
             "network_service": "nr5g",

@@ -2,13 +2,17 @@
 
 //! What `router status` prints: a human summary, or one JSON line of the
 //! `RouterReading` (`--json`). Enum values print as the M7 spells them, so
-//! the operator can compare with its web interface.
+//! the operator can compare with its web interface. Text the M7 reports
+//! (the firmware and web app versions, the network's and the SIM's names)
+//! prints in double quotes, so nothing it holds can read as the summary's
+//! own words, such as "not reported".
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use mooring_daemon_core::router::netgear::NETGEAR_MODEL;
 use mooring_daemon_core::router::{
-    LteCarrier, LteCarriers, LteSignal, NrSignal, Radio, RadioState, RouterReading, RouterStatus,
+    CarrierName, LteCarrier, LteCarriers, LteSignal, NrSignal, Radio, RadioState, RouterReading,
+    RouterStatus, WebAppVersion,
 };
 use mooring_model::date::CalendarDate;
 use mooring_model::error::ModelError;
@@ -44,6 +48,29 @@ impl fmt::Display for Reading {
             None => f.write_str("not reported"),
         }
     }
+}
+
+/// Text the M7 reported, in double quotes with `"` and `\` escaped by a
+/// `\`, so its end is always where the text ends.
+struct Quoted<'a>(&'a str);
+
+impl fmt::Display for Quoted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_char('"')?;
+        for character in self.0.chars() {
+            if matches!(character, '"' | '\\') {
+                f.write_char('\\')?;
+            }
+            f.write_char(character)?;
+        }
+        f.write_char('"')
+    }
+}
+
+/// Text the M7 may report as the empty string, which the status holds as
+/// `None`: the text quoted, or `absent`, in the summary's own words.
+fn reported(text: Option<&str>, absent: &str) -> String {
+    text.map_or_else(|| absent.to_owned(), |text| Quoted(text).to_string())
 }
 
 /// A duration in seconds as `<days>d <hh>:<mm>:<ss>`.
@@ -115,7 +142,7 @@ fn radio_lines(lines: &mut Vec<String>, radio: &Radio, sim_spn: &str) {
     ));
     lines.push(format!(
         "network {} ({}-{}); SIM {sim_spn}",
-        radio.network.as_str(),
+        Quoted(radio.network.as_str()),
         radio.plmn.mcc,
         radio.plmn.mnc,
     ));
@@ -133,6 +160,16 @@ pub(crate) fn summary(
     let date = CalendarDate::utc_of(polled_at)?;
     let of_day = polled_at.as_secs() % SECONDS_PER_DAY;
     let parts = status.parts();
+    // What the M7 reported as the empty string reads as not reported,
+    // never as an empty name.
+    let web_app = reported(
+        parts.web_app.as_ref().map(WebAppVersion::as_str),
+        "version not reported",
+    );
+    let sim_spn = reported(
+        parts.sim_spn.as_ref().map(CarrierName::as_str),
+        "name not reported",
+    );
     let mut lines = vec![
         format!(
             "M7 {NETGEAR_MODEL} on {}, polled {date} {:02}:{:02}:{:02} UTC",
@@ -142,18 +179,17 @@ pub(crate) fn summary(
             of_day % 60
         ),
         format!(
-            "firmware {}, web app {}; up {}; {} °C, thermal {}",
-            parts.firmware.as_str(),
-            parts.web_app.as_str(),
+            "firmware {}, web app {web_app}; up {}; {} °C, thermal {}",
+            Quoted(parts.firmware.as_str()),
             Span(parts.uptime_secs),
             parts.temperature_c.get(),
             parts.thermal.wire(),
         ),
     ];
     match &parts.radio {
-        RadioState::Attached(radio) => radio_lines(&mut lines, radio, parts.sim_spn.as_str()),
+        RadioState::Attached(radio) => radio_lines(&mut lines, radio, &sim_spn),
         RadioState::NoService => {
-            lines.push(format!("radio no service; SIM {}", parts.sim_spn.as_str()));
+            lines.push(format!("radio no service; SIM {sim_spn}"));
         }
     }
     let battery = &parts.power.battery;

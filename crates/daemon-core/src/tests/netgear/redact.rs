@@ -154,23 +154,29 @@ fn the_redactor_withholds_identifier_shaped_kept_values() {
 /// know would bring it (an empty or null reading, a number where text
 /// belongs, a carrier list that is no longer an array), is withheld by
 /// type, the empty string kept as `""`, and named in document order; the
-/// capture goes on. The parser refuses each of them.
+/// capture goes on. The parser refuses each of them. The SIM's SPN may be
+/// empty (the SMARTY SIM's is, 2026-10-16), so its `""` is kept as a value
+/// and not named.
 #[test]
 fn the_redactor_withholds_refused_values_by_type() {
-    let body = br#"{"sim":{"SPN":""},"wwan":{"registerNetworkDisplay":null,"signalStrength":{"rsrp":null,"rsrq":-17},"lteBandInfo":"","currentPSserviceType":{"k":"v"}},"general":{"devTemperature":35.5,"FWversion":["x"]},"power":{"charging":"yes"},"wifi":{"status":7}}"#;
+    let body = br#"{"sim":{"SPN":""},"wwan":{"registerNetworkDisplay":null,"connection":"","signalStrength":{"rsrp":null,"rsrq":-17},"lteBandInfo":"","currentPSserviceType":{"k":"v"}},"general":{"devTemperature":35.5,"FWversion":["x"]},"power":{"charging":"yes"},"wifi":{"status":7}}"#;
     let redacted = redact_netgear_model_json(body).unwrap();
     assert_eq!(
         String::from_utf8(redacted.as_bytes().to_vec()).unwrap(),
-        r#"{"sim":{"SPN":""},"wwan":{"registerNetworkDisplay":null,"signalStrength":{"rsrp":null,"rsrq":-17},"lteBandInfo":"","currentPSserviceType":{}},"general":{"devTemperature":0,"FWversion":[]},"power":{"charging":"REDACTED"},"wifi":{"status":0}}"#
+        r#"{"sim":{"SPN":""},"wwan":{"registerNetworkDisplay":null,"connection":"","signalStrength":{"rsrp":null,"rsrq":-17},"lteBandInfo":"","currentPSserviceType":{}},"general":{"devTemperature":0,"FWversion":[]},"power":{"charging":"REDACTED"},"wifi":{"status":0}}"#
     );
     assert_eq!(
         redacted.withheld(),
         [
-            field(NetgearLeaf::SimSpn, None, FieldFaultKind::InvalidText),
             field(
                 NetgearLeaf::WwanNetworkName,
                 None,
                 FieldFaultKind::WrongType
+            ),
+            field(
+                NetgearLeaf::WwanConnection,
+                None,
+                FieldFaultKind::InvalidText
             ),
             field(NetgearLeaf::SignalRsrp, None, FieldFaultKind::WrongType),
             RouterParseError::Carriers {
@@ -214,7 +220,7 @@ fn the_redactor_withholds_refused_values_by_type() {
     assert_eq!(redacted.withheld(), [element, element]);
     // The parser refuses what the redactor withholds.
     for edit in [
-        (pointer(NetgearLeaf::SimSpn, 0), json!("")),
+        (pointer(NetgearLeaf::WwanNetworkName, 0), json!("")),
         (pointer(NetgearLeaf::SignalRsrp, 0), Value::Null),
         (pointer(NetgearLeaf::GeneralTemperature, 0), json!(35.5)),
         ("/wwan/lteBandInfo".to_owned(), json!("")),
@@ -229,6 +235,32 @@ fn the_redactor_withholds_refused_values_by_type() {
             1,
             "{edit:?}"
         );
+    }
+}
+
+/// The SIM's SPN and the web app's version may be the empty string (the M7
+/// reported both so with the SMARTY SIM, 2026-10-16): the redactor keeps `""` as the value it is, as the parser
+/// reads it, and names neither; the capture is otherwise the fixture's.
+#[test]
+fn an_empty_spn_or_web_app_version_is_kept_not_withheld() {
+    let at = [
+        pointer(NetgearLeaf::SimSpn, 0),
+        pointer(NetgearLeaf::GeneralWebAppVersion, 0),
+    ];
+    let emptied = || {
+        let mut value = fixture();
+        for at in &at {
+            *value.pointer_mut(at).unwrap() = json!("");
+        }
+        value
+    };
+    let text = redact(&serde_json::to_vec(&emptied()).unwrap()).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), emptied());
+    // Such a capture is a fixed point of the redactor, as the fixture is.
+    assert_eq!(redact(text.as_bytes()).unwrap(), text);
+    for at in &at {
+        let alone = with(at, json!(""));
+        assert_eq!(redact_netgear_model_json(&alone).unwrap().withheld(), []);
     }
 }
 

@@ -421,7 +421,7 @@ fn lte_carriers_are_bounded_and_primary_first_by_type() {
 pub(crate) fn status() -> RouterStatus {
     RouterStatus::new(RouterStatusParts {
         firmware: FirmwareVersion::parse("NTGX75_10.04.43.01").unwrap(),
-        web_app: WebAppVersion::parse("M7_GENERIC_v07.01.81.00").unwrap(),
+        web_app: Some(WebAppVersion::parse("M7_GENERIC_v07.01.81.00").unwrap()),
         uptime_secs: 359_272,
         temperature_c: Celsius::new(35).unwrap(),
         thermal: ThermalState::Normal,
@@ -435,7 +435,7 @@ pub(crate) fn status() -> RouterStatus {
                 temperature_c: Celsius::new(32).unwrap(),
             },
         },
-        sim_spn: CarrierName::parse("CMLink").unwrap(),
+        sim_spn: Some(CarrierName::parse("CMLink").unwrap()),
         radio: RadioState::Attached(Radio {
             network_service: NetworkService::Nr5g,
             data_service: DataService::NrSub6,
@@ -563,6 +563,34 @@ fn the_router_reading_has_a_fixed_encoding() {
         serde_json::to_string(&RadioState::NoService).unwrap(),
         "\"no_service\""
     );
+}
+
+/// A SIM name or web app version the M7 did not report (the empty string
+/// on the device, 2026-10-16) is `null` on the wire: decoded and encoded
+/// as such, never an empty string, and never left out.
+#[test]
+fn an_unreported_sim_name_or_web_app_version_is_null() {
+    let decoded = |json: &str| {
+        serde_json::from_str::<RouterReading>(json)
+            .map(|reading| serde_json::to_string(&reading).unwrap())
+            .map_err(|error| error.to_string())
+    };
+    for (present, absent) in [
+        (r#""sim_spn":"CMLink","#, r#""sim_spn":null,"#),
+        (
+            r#""web_app":"M7_GENERIC_v07.01.81.00","#,
+            r#""web_app":null,"#,
+        ),
+    ] {
+        assert!(READING_JSON.contains(present), "{present}");
+        let null = READING_JSON.replacen(present, absent, 1);
+        assert_eq!(decoded(&null), Ok(null.clone()), "{absent}");
+        let (key, _) = present.split_once(':').unwrap();
+        for refused in [format!("{key}:\"\","), String::new()] {
+            let json = READING_JSON.replacen(present, &refused, 1);
+            assert!(decoded(&json).is_err(), "{json}");
+        }
+    }
 }
 
 /// A data session cannot outlast the boot it runs in: the status refuses a

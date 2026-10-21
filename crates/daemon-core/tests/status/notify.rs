@@ -13,7 +13,7 @@ use mooring_agent_proto::{NoticeBody, NoticeTitle, NtfyMessage, NtfyPriority, Nt
 use mooring_daemon_core::MacStatusV1;
 use mooring_daemon_core::alert::{AlertNotice, NoticeEvent};
 use mooring_daemon_core::notify::{alert_message, digest_message};
-use mooring_daemon_core::router::{RadioState, RouterReading};
+use mooring_daemon_core::router::{CarrierName, RadioState, RouterReading, RouterStatus};
 use mooring_model::MacAddr;
 use mooring_model::sim::{PlanLine, PlanLineKind, SimThresholds, StopPolicy};
 use serde_json::Value;
@@ -179,8 +179,13 @@ fn forbidden(status: &MacStatusV1) -> Vec<String> {
     if let RouterReading::Available { status, .. } = &parts.router {
         let router = status.parts();
         words.push(router.firmware.as_str().to_owned());
-        words.push(router.web_app.as_str().to_owned());
-        words.push(router.sim_spn.as_str().to_owned());
+        words.extend(
+            router
+                .web_app
+                .iter()
+                .map(|web_app| web_app.as_str().to_owned()),
+        );
+        words.extend(router.sim_spn.iter().map(|spn| spn.as_str().to_owned()));
         if let RadioState::Attached(radio) = &router.radio {
             words.push(radio.network.as_str().to_owned());
         }
@@ -215,8 +220,11 @@ fn longest_digit_run(text: &str) -> usize {
 #[test]
 fn no_message_holds_a_label_an_id_an_alias_an_address_or_sms_digits() {
     let mut kinds_seen = [false; 4];
+    let mut sim_name_seen = false;
     for (name, status) in scenarios::all() {
+        let status = with_sim_name(status);
         let words = forbidden(&status);
+        sim_name_seen |= words.iter().any(|word| word == SIM_NAME);
         let parts = status.parts();
         kinds_seen[0] |= !parts.users.is_empty();
         kinds_seen[1] |= parts.users.values().any(|row| row.alias.is_some());
@@ -240,6 +248,23 @@ fn no_message_holds_a_label_an_id_an_alias_an_address_or_sms_digits() {
         kinds_seen, [true; 4],
         "the scenarios hold ids, aliases, IPv4 and link-layer addresses"
     );
+    assert!(sim_name_seen, "a scenario's router names its SIM");
+}
+
+/// A SIM name planted in the scenarios' router readings.
+const SIM_NAME: &str = "SPN canary";
+
+/// `status` with its router reading, if it has one, naming the SIM
+/// [`SIM_NAME`]: the SMARTY SIM the scenarios carry reports no name
+/// (2026-10-16), so the scan would otherwise have no SIM name to look for.
+fn with_sim_name(status: MacStatusV1) -> MacStatusV1 {
+    let mut parts = status.into_parts();
+    if let RouterReading::Available { status: router, .. } = &mut parts.router {
+        let mut named = router.as_ref().clone().into_parts();
+        named.sim_spn = Some(CarrierName::parse(SIM_NAME).unwrap());
+        **router = RouterStatus::new(named).unwrap();
+    }
+    MacStatusV1::new(parts).unwrap()
 }
 
 #[test]

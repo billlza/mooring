@@ -277,13 +277,22 @@ fn capacity(
 
 /// The M7's reading in a scenario: the M2a firmware and settings (Wi-Fi,
 /// offload, UPnP, Analytics and Insight off), on the battery the operator
-/// keeps installed, with the SMARTY SIM's names and network codes, which
-/// are not yet captured *(inference: SMARTY displays as `SMARTY` on Three
-/// UK, MCC 234 MNC 20)*.
-fn router(polled_at: UnixTime, radio: RadioState, temperature: i16, charge: u8) -> RouterReading {
+/// keeps installed, with the web app version `web_app` and the SMARTY SIM.
+/// With that SIM the M7 reported no service provider name and no web app
+/// version (2026-10-16): the degraded scenario carries both as `None`, the
+/// serving one M2a's version. The SIM is on MCC 234 MNC 20, as the
+/// operator reported, with a network name not yet recorded *(inference:
+/// `SMARTY`)*.
+fn router(
+    polled_at: UnixTime,
+    web_app: Option<&str>,
+    radio: RadioState,
+    temperature: i16,
+    charge: u8,
+) -> RouterReading {
     let status = RouterStatus::new(RouterStatusParts {
         firmware: FirmwareVersion::parse("NTGX75_10.04.43.01").unwrap(),
-        web_app: WebAppVersion::parse("M7_GENERIC_v07.01.81.00").unwrap(),
+        web_app: web_app.map(|version| WebAppVersion::parse(version).unwrap()),
         uptime_secs: 523_014,
         temperature_c: Celsius::new(temperature).unwrap(),
         thermal: ThermalState::Normal,
@@ -297,7 +306,7 @@ fn router(polled_at: UnixTime, radio: RadioState, temperature: i16, charge: u8) 
                 temperature_c: Celsius::new(33).unwrap(),
             },
         },
-        sim_spn: CarrierName::parse("SMARTY").unwrap(),
+        sim_spn: None,
         radio,
         counters: WwanCounters {
             rx_bytes: 81_000_000_000,
@@ -328,7 +337,10 @@ fn router(polled_at: UnixTime, radio: RadioState, temperature: i16, charge: u8) 
 
 /// Attached on LTE band `band` (the M7's one carrier, of `dl_bandwidth`),
 /// with the LTE readings given in tenths and no NR reading, as the M7
-/// reported in M2a while claiming a 5G data service.
+/// reported in M2a while claiming a 5G data service. The service types the
+/// M7 reported with the SMARTY SIM (`LteService`, and `4G` or `4GPLUS`,
+/// 2026-10-16) are not yet values the status holds, so the scenarios keep
+/// M2a's.
 fn attached(band: u16, dl_bandwidth: LteBandwidth, lte: [Option<i16>; 4]) -> RadioState {
     let number = BandNumber::new(band).unwrap();
     RadioState::Attached(Radio {
@@ -612,6 +624,7 @@ fn serving() -> MacStatusV1 {
         sim_accuracy: MeterAccuracy::Exact,
         router: router(
             before(now, 44),
+            Some("M7_GENERIC_v07.01.81.00"),
             attached(
                 3,
                 LteBandwidth::Mhz20,
@@ -923,6 +936,7 @@ fn degraded() -> MacStatusV1 {
         sim_accuracy: MeterAccuracy::Exact,
         router: router(
             before(now, 51),
+            None,
             attached(
                 20,
                 LteBandwidth::Mhz10,
