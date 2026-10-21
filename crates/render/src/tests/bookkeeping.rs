@@ -11,7 +11,10 @@ use mooring_export::{ExportFormat, export_user};
 use mooring_fixtures::{FIXTURE_NOW, Fixture};
 use mooring_model::node::{AppliedConfig, NodeLifecycle};
 use mooring_model::user::{SuspendReason, UserStatus};
-use mooring_model::{Bookkeeping, Deployment, NodeId, Sha256Digest, UserId};
+use mooring_model::{
+    AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Deployment, NodeId, Sha256Digest,
+    UserId,
+};
 
 use crate::tests::support::{edit, engines, node};
 use crate::vps::bundle;
@@ -149,6 +152,31 @@ fn shutting_down_a_retiring_node_changes_no_bundle_and_no_export() {
         Bookkeeping::RetirementShutDown { node: node("ams1") },
     );
     assert_eq!(exports, (2, 6));
+}
+
+/// Recording an agreement changes no bundle and no export that could be
+/// made: it only lets the user's own export be made (decision F9).
+#[test]
+fn recording_an_agreement_changes_no_bundle_and_no_export() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let unrecorded = edit(&fixture.deployment, |parts| {
+        parts.users[0].agreement = None;
+    });
+    let user = unrecorded.users().keys().next().unwrap().clone();
+    // The user without a record exports nothing before and both formats
+    // after; the other two export both formats throughout.
+    let exports = assert_neutral(
+        &fixture,
+        &unrecorded,
+        Bookkeeping::AgreementRecorded {
+            user,
+            record: AgreementRecord {
+                version: AgreementVersion::CURRENT,
+                accepted_on: CalendarDate::parse("2026-10-18").unwrap(),
+            },
+        },
+    );
+    assert_eq!(exports, (4, 6));
 }
 
 /// Suspending a user is not bookkeeping: every bundle the user was served

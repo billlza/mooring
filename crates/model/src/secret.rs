@@ -948,6 +948,35 @@ impl SecretSnapshot {
         })
     }
 
+    /// A copy of the material held for `secret_ref`, as a secret store
+    /// would return it; `Missing` if there is none.
+    pub fn material(&self, secret_ref: &SecretRef) -> Result<SecretMaterial, SecretSnapshotError> {
+        use SecretMaterial as M;
+        use SecretRef as R;
+        Ok(match secret_ref {
+            R::AlertTopic => M::Password(self.alert_topic()?.clone()),
+            R::RouterAdmin => M::RouterAdminPassword(self.router_admin()?.clone()),
+            R::NodeRealityPrivate(node) => {
+                M::RealityPrivateKey(self.reality_private(node)?.clone())
+            }
+            R::NodeWgVpsPrivate(node) => M::WgPrivateKey(self.wg_vps_private(node)?.clone()),
+            R::NodeWgMacPrivate(node) => M::WgPrivateKey(self.wg_mac_private(node)?.clone()),
+            R::NodeHy2Key(node) => M::Hy2PrivateKey(self.hy2_key(node)?.clone()),
+            R::NodeHy2Obfs(node, listener) => M::Password(self.hy2_obfs(node, *listener)?.clone()),
+            R::NodeSshBootstrapPrivate(node) => M::Ed25519Seed(self.ssh_bootstrap(node)?.clone()),
+            R::NodeDeadManCheck(node) => M::Uuid(self.dead_man_check(node)?.clone()),
+            R::NodeMacAliveCheck(node) => M::Uuid(self.mac_alive_check(node)?.clone()),
+            R::UserVlessUuid(user, node) => M::Uuid(self.user_vless_uuid(user, node)?.clone()),
+            R::UserHy2Password(user, node) => {
+                M::Password(self.user_hy2_password(user, node)?.clone())
+            }
+            R::UserLoopUuid(user, node) => M::Uuid(self.user_loop_uuid(user, node)?.clone()),
+            R::ProbeVlessUuid(node) => M::Uuid(self.probe_vless_uuid(node)?.clone()),
+            R::ProbeHy2Password(node) => M::Password(self.probe_hy2_password(node)?.clone()),
+            R::ProbeLoopUuid(node) => M::Uuid(self.probe_loop_uuid(node)?.clone()),
+        })
+    }
+
     /// Every reference held, in ascending order.
     #[must_use]
     pub fn refs(&self) -> Vec<SecretRef> {
@@ -1340,6 +1369,25 @@ mod tests {
         for reference in deployment_wide {
             assert_eq!(reference.node(), None, "{reference}");
             assert!(!reference.to_string().contains("lon1"));
+        }
+    }
+
+    /// `material` copies what every reference holds, and reports a missing
+    /// one as `Missing` with that reference.
+    #[test]
+    fn material_copies_every_entry() {
+        let snapshot = full_snapshot();
+        for (reference, material) in every_entry() {
+            assert_eq!(snapshot.material(&reference), Ok(material), "{reference}");
+        }
+        for reference in every_ref() {
+            assert_eq!(
+                SecretSnapshot::new().material(&reference),
+                Err(SecretSnapshotError::Missing {
+                    secret_ref: reference.clone()
+                }),
+                "{reference}"
+            );
         }
     }
 

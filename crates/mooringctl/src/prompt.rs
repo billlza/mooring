@@ -26,6 +26,17 @@ pub(crate) enum Answer {
     NoTerminal,
 }
 
+/// A line typed at the terminal, with echo.
+#[derive(Debug)]
+pub(crate) enum Line {
+    /// The line, without its newline.
+    Text(Zeroizing<Vec<u8>>),
+    /// The line was longer than the limit (and was read to its end).
+    Overlong,
+    /// No terminal is attached to ask.
+    NoTerminal,
+}
+
 /// The operator's terminal.
 pub(crate) trait Console {
     /// Asks `question` (the console adds `[y/N]`).
@@ -33,6 +44,9 @@ pub(crate) trait Console {
 
     /// Asks for a password with echo off; the line without its newline.
     fn password(&mut self, prompt: &str) -> Result<Zeroizing<Vec<u8>>, LocalError>;
+
+    /// Asks for one line of at most `limit` bytes, with echo on.
+    fn line(&mut self, prompt: &str, limit: usize) -> Result<Line, LocalError>;
 }
 
 /// The controlling terminal, `/dev/tty`, opened for each question.
@@ -109,6 +123,15 @@ impl Console for TtyConsole {
         quiet.restore().map_err(LocalError::Echo)?;
         line.map_err(LocalError::Terminal)?
             .ok_or_else(invalid_password)
+    }
+
+    fn line(&mut self, prompt: &str, limit: usize) -> Result<Line, LocalError> {
+        let Some(tty) = open_tty()? else {
+            return Ok(Line::NoTerminal);
+        };
+        write!(&tty, "{prompt}").map_err(LocalError::Terminal)?;
+        let line = read_line(&mut &tty, limit).map_err(LocalError::Terminal)?;
+        Ok(line.map_or(Line::Overlong, Line::Text))
     }
 }
 

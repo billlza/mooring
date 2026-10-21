@@ -10,7 +10,7 @@ use mooring_model::counters::ConfigGeneration;
 use mooring_model::secret::SecretRef;
 
 use crate::error::{ChangeErrorKind, StoreError, StoreErrorKind};
-use crate::secrets::{SecretOp, SecretStoreError, SecretStoreErrorKind};
+use crate::secrets::{SecretOp, SecretStoreError, SecretStoreErrorKind, SnapshotReadErrorKind};
 
 /// `ALL` lists each kind once, and each kind's name is its Display text.
 fn assert_complete<K: Copy + Ord + Display>(
@@ -32,6 +32,7 @@ fn assert_complete<K: Copy + Ord + Display>(
 fn kind_lists_are_complete() {
     assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 21);
     assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 3);
+    assert_complete(SnapshotReadErrorKind::ALL, SnapshotReadErrorKind::name, 2);
     assert_complete(ChangeErrorKind::ALL, ChangeErrorKind::name, 2);
     assert_eq!(
         StoreErrorKind::GenerationConflict.name(),

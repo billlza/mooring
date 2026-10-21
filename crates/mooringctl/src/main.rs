@@ -14,6 +14,19 @@
 //! - `router capture --interface <bsd> --out <path> [--anonymous]` writes
 //!   the allowlist redactor's output, never a raw document.
 //!
+//! M5 adds the user commands to `state.json` (design §7, §15.3):
+//!
+//! - `user add [--client cfm05|cfm04] [--mlkem]` adds an active user with
+//!   fresh credentials on every node that is not retiring, reading its
+//!   label at the terminal;
+//! - `user alias <uid>` gives a user without one a random public alias;
+//! - `user agree <uid>` records that the user accepted the agreement
+//!   revision this build ships, dated today (UTC), as a bookkeeping record
+//!   that keeps the configuration generation;
+//! - `user export <uid> [--format singbox|clash] --out <path>` writes the
+//!   user's file for CFM with mode 0600, never overwriting one, reading
+//!   only that user's secrets and only once every check has passed.
+//!
 //! Nothing is logged: the only output is what a command prints and its
 //! error on stderr.
 //!
@@ -23,6 +36,8 @@
 
 #[cfg(target_os = "macos")]
 mod app;
+#[cfg(target_os = "macos")]
+mod backup;
 #[cfg(target_os = "macos")]
 mod cli;
 #[cfg(target_os = "macos")]
@@ -38,6 +53,8 @@ mod router;
 #[cfg(target_os = "macos")]
 #[cfg(test)]
 mod tests;
+#[cfg(target_os = "macos")]
+mod user;
 
 use std::io;
 use std::process::ExitCode;
@@ -47,6 +64,7 @@ fn main() -> ExitCode {
     use clap::Parser;
 
     use crate::app::{Env, run, system_clock};
+    use crate::backup::Tmutil;
     use crate::cli::Cli;
     use crate::keychain::LoginKeychain;
     use crate::prompt::TtyConsole;
@@ -59,6 +77,7 @@ fn main() -> ExitCode {
     let mut keychain = LoginKeychain;
     let mut console = TtyConsole;
     let mut stdin = io::stdin().lock();
+    let backups = Tmutil;
     let mut env = Env {
         router: RouterEnv {
             link: &link,
@@ -70,6 +89,7 @@ fn main() -> ExitCode {
         clock: &system_clock,
         console: &mut console,
         stdin: &mut stdin,
+        backups: &backups,
     };
     let code = run(
         cli.command,

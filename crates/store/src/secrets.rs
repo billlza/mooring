@@ -11,7 +11,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mooring_model::secret::{SecretEntry, SecretMaterial, SecretRef};
+use mooring_model::secret::{
+    SecretEntry, SecretMaterial, SecretRef, SecretSnapshot, SecretSnapshotError,
+};
 
 use mooring_model::kinds;
 
@@ -101,6 +103,62 @@ pub trait SecretStore {
 
     /// Deletes the item stored under `secret_ref`; `SecretMissing` if there is none.
     fn delete(&mut self, secret_ref: &SecretRef) -> Result<(), SecretStoreError>;
+}
+
+/// Reading a [`SecretSnapshot`] from a [`SecretStore`] failed.
+#[derive(Debug, thiserror::Error)]
+pub enum SnapshotReadError {
+    /// The store could not supply an item: it is missing, the Keychain
+    /// refused, or its material is not of the kind its reference names
+    /// (`ItemInvalid`).
+    #[error(transparent)]
+    Store(#[from] SecretStoreError),
+    /// The snapshot refused an item. Distinct references never trip this;
+    /// it is kept as a typed error rather than assumed away.
+    #[error(transparent)]
+    Snapshot(#[from] SecretSnapshotError),
+}
+
+kinds! {
+    /// The kind of a [`SnapshotReadError`], without its details.
+    pub enum SnapshotReadErrorKind {
+        /// See [`SnapshotReadError::Store`].
+        Store,
+        /// See [`SnapshotReadError::Snapshot`].
+        Snapshot,
+    }
+}
+
+impl SnapshotReadError {
+    /// The kind of this error.
+    #[must_use]
+    pub const fn kind(&self) -> SnapshotReadErrorKind {
+        match self {
+            Self::Store(_) => SnapshotReadErrorKind::Store,
+            Self::Snapshot(_) => SnapshotReadErrorKind::Snapshot,
+        }
+    }
+}
+
+/// Reads exactly `refs` from `store` into a snapshot, in ascending order,
+/// stopping at the first failure; nothing else the store holds is read.
+/// (For a user export, `refs` is what `mooring_export::export_secret_refs`
+/// lists, so only the secrets the file needs are read.)
+pub fn read_snapshot(
+    store: &dyn SecretStore,
+    refs: &BTreeSet<SecretRef>,
+) -> Result<SecretSnapshot, SnapshotReadError> {
+    let mut snapshot = SecretSnapshot::new();
+    for secret_ref in refs {
+        let material = store.get(secret_ref)?;
+        let entry = SecretEntry::new(secret_ref.clone(), material).map_err(|_| {
+            SecretStoreError::ItemInvalid {
+                secret_ref: secret_ref.clone(),
+            }
+        })?;
+        snapshot.insert(entry)?;
+    }
+    Ok(snapshot)
 }
 
 /// A [`SecretStore`] held in process memory, for development and test lanes.

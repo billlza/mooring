@@ -33,7 +33,9 @@ mod tree;
 
 pub use cert::{CERT_SKEW_MARGIN_SECS, certificate_pins, check_certificate};
 pub use error::{ExportError, ExportErrorKind, NotApplied, TagRule};
-pub use export::{ExportDocument, ExportFormat, ProbeOutbounds, export_user, probe_outbounds};
+pub use export::{
+    ExportDocument, ExportFormat, ProbeOutbounds, export_secret_refs, export_user, probe_outbounds,
+};
 pub use json::exact_json;
 pub use proxy::{ClientHello, Fingerprint, Protocol, line_name};
 pub use shape::{ProxyShape, Shape, shapes};

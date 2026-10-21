@@ -2,12 +2,15 @@
 
 //! User exports and the probe outbounds the Mac prober wraps.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
+use mooring_model::cert::CertPins;
 use mooring_model::ports::ListenerIdx;
-use mooring_model::secret::SecretSnapshot;
+use mooring_model::secret::{SecretRef, SecretSnapshot};
 use mooring_model::{
-    AgreementVersion, Deployment, Node, NodeId, NodeRole, UnixTime, User, UserId, UserStatus,
+    AgreementVersion, Deployment, Node, NodeId, NodeRole, ShortId, UnixTime, User, UserId,
+    UserStatus,
 };
 use zeroize::Zeroizing;
 
@@ -170,12 +173,59 @@ pub fn probe_outbounds(
     })
 }
 
-fn user_outbounds(
+/// The secrets an export of `user` reads, once every check `export_user`
+/// makes before reading a secret has passed, in the same order and with
+/// the same errors: the user's status, its agreement record (decision F9),
+/// its capabilities, that it holds credentials, and for each of its nodes
+/// the confirmed generation, the certificate at `now` and the address.
+///
+/// They are the user's VLESS UUID and Hysteria2 password on each node it
+/// holds credentials on, and each of those nodes' salamander passwords. A
+/// caller reads exactly these from its secret store and passes them to
+/// [`export_user`], so no secret is read for a user whose file would be
+/// refused before any secret is needed (design §9.2).
+pub fn export_secret_refs(
     deployment: &Deployment,
-    secrets: &SecretSnapshot,
+    user: &UserId,
+    now: UnixTime,
+) -> Result<BTreeSet<SecretRef>, ExportError> {
+    let user = deployment.user(user)?;
+    let checked = checked_nodes(deployment, user, now)?;
+    let mut refs = BTreeSet::new();
+    for node in &checked.nodes {
+        let id = &node.node.id;
+        refs.insert(SecretRef::UserVlessUuid(user.id.clone(), id.clone()));
+        refs.insert(SecretRef::UserHy2Password(user.id.clone(), id.clone()));
+        for (index, _) in node.node.ports.hy2_listeners() {
+            refs.insert(SecretRef::NodeHy2Obfs(id.clone(), index));
+        }
+    }
+    Ok(refs)
+}
+
+/// A user's nodes in export order, each checked and with what the checks
+/// derived.
+struct CheckedNodes<'a> {
+    hello: ClientHello,
+    nodes: Vec<CheckedNode<'a>>,
+}
+
+struct CheckedNode<'a> {
+    node: &'a Node,
+    short_id: ShortId,
+    pins: CertPins,
+    endpoint: Endpoint<'a>,
+}
+
+/// Every check an export makes before it reads a secret, in this order:
+/// the status, the agreement, the capabilities, that the user holds
+/// credentials, then for every node, primary nodes first and then by id,
+/// the confirmed generation, the certificate at `now` and the endpoint.
+fn checked_nodes<'a>(
+    deployment: &'a Deployment,
     user: &User,
     now: UnixTime,
-) -> Result<Vec<SingBoxOutbound>, ExportError> {
+) -> Result<CheckedNodes<'a>, ExportError> {
     // Only the status decides. An expired or over-quota user is still
     // exported while `Active`: moving it to `Suspended` is an explicit
     // operator or daemon action, never a side effect of exporting.
@@ -189,30 +239,57 @@ fn user_outbounds(
     }
     require_agreement(user)?;
     let hello = ClientHello::for_profile(&user.client)?;
-    let mut nodes = user
+    let mut held = user
         .per_node
         .iter()
         .map(|(id, public)| Ok((deployment.node(id)?, public.short_id)))
         .collect::<Result<Vec<_>, ExportError>>()?;
-    if nodes.is_empty() {
+    if held.is_empty() {
         return Err(ExportError::NothingToExport {
             user: user.id.clone(),
         });
     }
-    nodes.sort_by(|(left, _), (right, _)| {
+    held.sort_by(|(left, _), (right, _)| {
         (role_rank(left.role), &left.id).cmp(&(role_rank(right.role), &right.id))
     });
+    let nodes = held
+        .into_iter()
+        .map(|(node, short_id)| {
+            require_current(deployment, node)?;
+            let pins = check_certificate(node, now)?;
+            let endpoint = Endpoint::of(node)?;
+            Ok(CheckedNode {
+                node,
+                short_id,
+                pins,
+                endpoint,
+            })
+        })
+        .collect::<Result<Vec<_>, ExportError>>()?;
+    Ok(CheckedNodes { hello, nodes })
+}
+
+fn user_outbounds(
+    deployment: &Deployment,
+    secrets: &SecretSnapshot,
+    user: &User,
+    now: UnixTime,
+) -> Result<Vec<SingBoxOutbound>, ExportError> {
+    let checked = checked_nodes(deployment, user, now)?;
     let mut outbounds = Vec::new();
-    for (node, short_id) in nodes {
-        require_current(deployment, node)?;
-        let pins = check_certificate(node, now)?;
-        let endpoint = Endpoint::of(node)?;
+    for CheckedNode {
+        node,
+        short_id,
+        pins,
+        endpoint,
+    } in checked.nodes
+    {
         let reality = RealityProxy::new(
             endpoint,
             node,
             secrets.user_vless_uuid(&user.id, &node.id)?,
             short_id,
-            hello,
+            checked.hello,
         );
         outbounds.push(SingBoxOutbound::new(
             OutboundTag::reality(&node.id),

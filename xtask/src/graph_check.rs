@@ -80,6 +80,8 @@ pub(crate) const ALLOWED_EDGES: &[AllowedEdges] = &[
     },
     // The CLI's first slice (revision 7): the router commands. The design's
     // keys, render, export and agent-proto edges join with the daemon (M5).
+    // The user commands (M5) draw credentials with mooring-keys, export
+    // through mooring-export and test against the fixture deployments.
     AllowedEdges {
         krate: "mooringctl",
         normal: &[
@@ -87,8 +89,10 @@ pub(crate) const ALLOWED_EDGES: &[AllowedEdges] = &[
             "mooring-store",
             "mooring-macsys",
             "mooring-daemon-core",
+            "mooring-export",
+            "mooring-keys",
         ],
-        dev: &[],
+        dev: &["mooring-fixtures"],
     },
     AllowedEdges {
         krate: "xtask",
