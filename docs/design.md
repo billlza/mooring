@@ -127,7 +127,7 @@ The pure Rust core is built and tested on this Mac; no engine has been built, an
 | Restricting the reflector to the carrier's source prefixes | A Wi-Fi offload on the M7 would then show up as a timed-out probe rather than as `OutsideCarrierPrefixes`, which turns a detectable violation into an ambiguous one. A per-source limit is used instead (§11.4). |
 | Regex log redactor | Engines run at log levels that do not emit per-flow lines. The canary lane checks this, and stderr tails are scrubbed by exact substring against the bundle's known secrets (§15). |
 | CAP_NET_ADMIN or SO_MARK for Xray | The owner guard enforces the same thing with no privilege on the internet-facing process. |
-| Provider API token (v1) | It would be a long-lived credential able to create and destroy servers. |
+| Provider API token in Mooring (v1) | It would be a long-lived credential able to create and destroy servers. The operator's own tooling holds one key, outside Mooring (D-10). |
 
 ---
 
@@ -1788,7 +1788,7 @@ before it reaches `status.json`, the UI, `daemon.log` or an SSH reply. Scrubbing
 **Candidates:**
 - **Primary:** a less popular UK network, such as Mythic Beasts (AS44684). Whether it supports cloud-init is **unknown**: no user-data documentation was found ([beasts.org VPS API quickstart](https://beasts.org/support/api/vps/quickstart), checked 2026-10-08). Use the console-fingerprint path if needed.
 - **Standby, on a different ASN:** DigitalOcean LON1, which has billed per second since 2026-01-01 ([DO blog](https://www.digitalocean.com/blog/dropletplans-persecbilling-byoip-natgateway), checked 2026-10-08). DigitalOcean ranges were partially affected in the 2023 GFW measurements, which is one reason it is the standby rather than the primary.
-- The final choice goes to whichever shows less peak-hour loss (19:00–23:00 China time) to the users' carriers in M8. **The user rents and pays for these;** Mooring holds no provider token.
+- The final choice goes to whichever shows less peak-hour loss (19:00–23:00 China time) to the users' carriers in M8. **The user rents and pays for these;** Mooring holds no provider token (the operator's own tooling holds one, outside Mooring: D-10).
 
 ### 13.2 Provisioning (about 15 minutes hands-on)
 
@@ -2242,7 +2242,7 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 | Logs | Non-emitting levels, a canary gate, exact-substring scrubbing of stderr tails | **Regex redactor:** complex and incomplete. |
 | SSH keys | ed25519-dalek 3 plus a small OpenSSH encoder tested against ssh-keygen | **ssh-key 0.6.7:** a duplicate RustCrypto generation. |
 | Lab | A typed `LabAllowance` behind cfg, a separate bundle id and state directory, release verifier checks | **Ad-hoc relaxations:** the release deny list would go untested on darwin. |
-| Provider API | None in v1 | A token that could create and destroy servers. |
+| Provider API | None in Mooring v1; the operator's tooling holds one key outside Mooring (D-10) | A token that could create and destroy servers. |
 | Shaping | Deferred until data justifies it (M10) | cake/IFB in v1 would add complexity before evidence. |
 | Uplink | `SameAsExit` by default; `Separate` explicit | **Automatic switching:** a runtime fallback. |
 | M7 attachment (revision 5) | Plugged-In mode, data over the 2.5GbE port through a USB-C Ethernet adapter (§2) | **USB tethering:** the only USB-C port powers the M7 in Plugged-In mode, and computer ports supply less current. **Battery-powered and always plugged in:** the manual advises against it. |
@@ -2419,6 +2419,7 @@ Revision 5 recorded these facts while EE was the candidate line. EE's Data SIM o
 | D-7 | **Resolved 2026-10-08 by the user:** this Mac becomes the dedicated exit server, so it must not accumulate build caches. Rust work (M0/M1 pure crates) runs here in the single repository `target/`, which `cargo xtask clean` removes at the end of every milestone. Go engine builds, govulncheck and every VM lane (Lima/QEMU) run on the research computer or in hosted CI. The exit Mac only runs signed release artifacts. | Done |
 | D-8 | **Decided 2026-10-08 for the M1 close-out (review finding F24), recorded as the operator's decision; the repository keeps no record of the user's own wording, so the user confirms it with the M1 commit:** `MAX_ACTIVE_NODES` stays 2, because the Mac exit carries at most two WireGuard endpoints and the probe port span is sized for two nodes. Rotation with a healthy standby therefore retires the blocked node before `node new` (§13.4). | Implemented in M1. **Confirmed 2026-10-08:** the user approved the M1 commit 4a95ee0, which this entry named as the confirmation |
 | D-9 | **Decided 2026-10-08 for the M1 close-out (review finding F16), recorded as the operator's decision; the user confirms it with the M1 commit, as for D-8:** CFM acceptance checking lives in `xtask` (`cargo xtask acceptance`, a `ci` step), reading `contract/cfm-acceptance.toml` and `contract/cfm-manifest.toml` with the `toml` crate (xtask-only; `deny-skips` reads `deny.toml` with it too) and the shapes and SHA-256 values through xtask → `mooring-export` and `mooring-model` edges; the release gate `require_accepted` is `cargo xtask release-acceptance`, which release verification runs (§6.1, §6.3, §9.3). Accepted cost: every xtask command compiles those crates first (§6.1). | Implemented in M1. **Confirmed 2026-10-08:** the user approved the M1 commit 4a95ee0, which this entry named as the confirmation |
+| D-10 | **Decided 2026-10-21 by the user:** the operator holds one provider API key for operator tooling, outside Mooring. It was created on 2026-10-18 at the D-2 primary provider with the provider's only VPS scope, which can create, manage and delete servers (there is no read-only scope), and with no DNS or domain scope. It is kept in the operator's login keychain; the operator's scripts, which are not in this repository, pass it to the provider's token endpoint on stdin, never in arguments, files or output. They read server state at will, and every call that creates, resizes or deletes a server, or otherwise costs money or destroys data, is asked of the operator first. No Mooring crate, binary or state reads, stores or depends on it: Mooring still provisions through the console path of §13.2, and §17's "Provider API: none" holds for Mooring itself. Threat: the key can create and destroy servers. Whoever can read it already runs code as the operator on the Mac, which holds root SSH to every node (§1, "Same-user processes on the Mac"), so it adds the provider account's billing and server deletion to what that attacker already has. Revoking it is deleting it in the provider's control panel and deleting the keychain item. | Done, outside Mooring's code |
 
 ### 20.1 D-1 in detail (revision 6; not legal advice)
 
