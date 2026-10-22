@@ -39,6 +39,8 @@ mod serve;
 mod store;
 #[cfg(test)]
 mod tests;
+#[cfg(any(target_os = "linux", test))]
+mod txn;
 
 use std::io::{self, Write};
 use std::process::ExitCode;

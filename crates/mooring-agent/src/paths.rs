@@ -8,12 +8,21 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use mooring_agent_proto::{CURRENT_DIR, Sha256Hex, WG_INTERFACE};
+use mooring_agent_proto::{
+    AGENT_CURRENT_PATH, CURRENT_DIR, ETC_DIR, Generation, ManagedFile, Sha256Hex, WG_INTERFACE,
+};
 
 /// The agent's state directory.
 const VAR_LIB: &str = "/var/lib/mooring";
 /// The agent's runtime directory (locks).
 const RUN: &str = "/run/mooring";
+/// The installed agents (design §5.2).
+const AGENT_DIR: &str = "/usr/local/lib/mooring/agent";
+
+/// A generation's directory name, `gen-<N>`.
+pub(crate) fn generation_name(generation: Generation) -> String {
+    format!("gen-{}", generation.get())
+}
 
 /// The fixed layout, under a root that is `/` on a node.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +108,74 @@ impl Paths {
     /// The current generation's link, `/etc/mooring/current`.
     pub(crate) fn current(&self) -> PathBuf {
         self.at(CURRENT_DIR)
+    }
+
+    /// `/etc/mooring`, which holds the generations.
+    pub(crate) fn etc(&self) -> PathBuf {
+        self.at(ETC_DIR)
+    }
+
+    /// The directory of generation `generation`, `/etc/mooring/gen-<N>`.
+    pub(crate) fn generation(&self, generation: Generation) -> PathBuf {
+        self.etc().join(generation_name(generation))
+    }
+
+    /// The transaction records, `/var/lib/mooring/txn`.
+    pub(crate) fn txn_dir(&self) -> PathBuf {
+        self.var_lib().join("txn")
+    }
+
+    /// The record of the transaction for `generation`.
+    pub(crate) fn txn_record(&self, generation: Generation) -> PathBuf {
+        self.txn_dir()
+            .join(format!("gen-{}.json", generation.get()))
+    }
+
+    /// The change in flight and its phase,
+    /// `/var/lib/mooring/txn/pending.json`.
+    pub(crate) fn pending(&self) -> PathBuf {
+        self.txn_dir().join("pending.json")
+    }
+
+    /// The transaction lock, `/run/mooring/txn.lock`.
+    pub(crate) fn txn_lock(&self) -> PathBuf {
+        self.at(RUN).join("txn.lock")
+    }
+
+    /// Scratch space for the validators' copies, `/run/mooring/validate`.
+    pub(crate) fn validate_dir(&self) -> PathBuf {
+        self.at(RUN).join("validate")
+    }
+
+    /// The engine store, `/opt/mooring/engines/store`.
+    pub(crate) fn engine_store(&self) -> PathBuf {
+        self.at("/opt/mooring/engines/store")
+    }
+
+    /// The fixed link Xray's `XRAY_LOCATION_ASSET` names,
+    /// `/opt/mooring/engines/geodata/current`.
+    pub(crate) fn geodata_link(&self) -> PathBuf {
+        self.at("/opt/mooring/engines/geodata/current")
+    }
+
+    /// `/etc/wireguard/wgexit.conf`, a link into the current generation.
+    pub(crate) fn wg_conf_link(&self) -> PathBuf {
+        self.at(ManagedFile::WgConf.path())
+    }
+
+    /// `/etc/nftables.conf`, a link into the current generation.
+    pub(crate) fn nft_conf_link(&self) -> PathBuf {
+        self.at(ManagedFile::Nftables.path())
+    }
+
+    /// The installed agents, `/usr/local/lib/mooring/agent`.
+    pub(crate) fn agent_dir(&self) -> PathBuf {
+        self.at(AGENT_DIR)
+    }
+
+    /// The forced command's link, `/usr/local/lib/mooring/agent/current`.
+    pub(crate) fn agent_current(&self) -> PathBuf {
+        self.at(AGENT_CURRENT_PATH)
     }
 
     /// A file of the kernel's `/proc/sys`.

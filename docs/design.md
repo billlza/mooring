@@ -460,6 +460,7 @@ mooring/
                        SecretStore (`LoginKeychain`) for the M7's admin password
     mooring-agent/ (bin, x86_64/aarch64-unknown-linux-musl) bootstrap, serve-ssh, txn, watch, reflect, target-check, accounting, self-test.
                  Built 2026-10-22 (M4a): serve-ssh (Hello, blobs, gate, halt, Mac report), reflect, halted-check, gate-close, self-test
+                 Built 2026-10-22 (M4b): Apply, TxnStatus, Confirm, Rollback, ActivateAgent, Resume; txn, txn-revert, txn-recover
     e2e/         (dev-only) netns harness and lab harness; never built for release
     fieldkit/    (dev-only bin, darwin + linux-musl) M2 field measurements (the router capture is `mooringctl router capture` since revision 7); never shipped.
                  Built 2026-10-22: `serve` (the VPS side) and `env`, `udp-nat-timeout`, `nat-behaviour`, `public-ips`, `pooling`,
@@ -1598,20 +1599,20 @@ The header's host facts are the node's recorded site (uplink, VPS4, arch, port r
    - `xray run -test -c` with `XRAY_LOCATION_ASSET` set to the **staged** geodata, run on a copy forced to `loglevel: warning`;
    - `mooring-hy2 check -c` on a copy forced to `level: warn`;
    - `nft -c -f`;
-   - `wg-quick strip`;
-   - `sshd -t -f <staged config>`;
-   - `systemd-analyze verify <staged units>`;
-   - a check that every staged sysctl key exists under `/proc/sys`.
+   - `wg-quick strip` (only its stderr is judged: its stdout is the configuration, private key included);
+   - `sshd -t -f <staged config>` (M4e, with host-profile convergence, §11.6);
+   - `systemd-analyze verify <staged units>` (M4e);
+   - a check that every staged sysctl key exists under `/proc/sys` (M4e).
 
-   **Zero WARN or ERROR lines** are allowed.
-4. **Swap** the symlinks atomically with `rename`: `current` → `gen-<N>`, plus the engine and geodata links. Install the host-profile files. Keep two previous generations.
+   **Zero WARN or ERROR lines** are allowed: any output line holding the word `warn`, `warning`, `error` or `fatal`, in any case, fails. The tail reaches the Mac with the bundle's secrets (the WireGuard keys; the engine configurations' `privateKey`, `id`, `password`, `shortIds` and `uuid` values) replaced.
+4. **Swap** `/etc/mooring/current` → `gen-<N>` with one `rename`. A generation holds its engines and geodata as links into the engine store (`engines/xray`, `engines/mooring-hy2`, `geodata/geoip.dat`, `geodata/geosite.dat` → `/opt/mooring/engines/store/<sha>/<name>`), so the configuration, the engines and the geodata switch together. The fixed links point into `current` and never change: `/etc/nftables.conf` → `mooring/current/nftables.conf` (the first swap keeps Debian's own file as `/etc/nftables.conf.pre-mooring`), `/etc/wireguard/wgexit.conf` → `../mooring/current/wgexit.conf`, and `/opt/mooring/engines/geodata/current` (`XRAY_LOCATION_ASSET`) → `/etc/mooring/current/geodata`. Install the host-profile files (M4e). Keep two previous generations and the store entries they use; the rest are removed before staging.
 5. **Apply only what changed:**
    - `nft -f`, which leaves the gate closed until the watch reopens it;
-   - `wg syncconf`, or a restart if Address or MTU changed;
-   - `daemon-reload`;
-   - `sysctl --system`;
-   - an sshd reload;
-   - restart `mooring-xray` and `mooring-hy2`.
+   - `wg syncconf` (on a 0600 copy that `wg-quick strip` made, removed afterwards), or a restart if Address or MTU changed or the previous configuration cannot be read;
+   - `daemon-reload` (M4e);
+   - `sysctl --system` (M4e);
+   - an sshd reload (M4e);
+   - restart `mooring-xray` and `mooring-hy2` when their configuration or the engine set changed, and neither while the node is halted (a `Shutdown` that arrives mid-transaction included).
 6. **Local health gate,** with a 20 s budget:
    - units are active;
    - `ss -Hltnu` shows the expected listeners;
@@ -1619,17 +1620,19 @@ The header's host facts are the node's recorded site (uplink, VPS4, arch, port r
    - `nft -j list set inet mooring exit_closed` succeeds;
    - the owner-guard rules are present;
    - `net.ipv4.conf.wgexit.accept_local = 1`.
-7. **Arm the confirm timer** (`systemd-run --on-active=120 agent txn-revert <gen>`) and report the state `AwaitingConfirm`. The Mac opens a **new** SSH session and sends `Confirm{generation}`, answered `Confirmed{generation}`. That session proves reachability through the new nftables rules and sshd configuration. If the timer fires first, the agent reverts exactly as for a rollback → `RevertedUnconfirmed{generation}`.
-8. **If steps 5–6 fail:** swap back, restart and re-check → `RolledBack{generation, cause}`. If that also fails, stop both engines and close the gate → `RollbackFailed{generation, cause}`. The cause is `Swap{errno} | Apply{step, stderr_tail} | HealthGate{failed}`; the failed stage follows from it, so an inconsistent stage/cause pair cannot be expressed.
+7. **The confirm timer** (`systemd-run --unit=mooring-txn-revert-<gen> --on-active=120 agent txn-revert <gen>`) and the state `AwaitingConfirm`. The timer is armed once validation has passed, **before** the swap (2026-10-22, M4b), so that a transaction unit that dies between the swap and `AwaitingConfirm` is still reverted; the Mac's window is therefore 120 s less the apply and the health gate (at most about 25 s). The Mac opens a **new** SSH session and sends `Confirm{generation}`, answered `Confirmed{generation}`. That session proves reachability through the new nftables rules and sshd configuration. If the timer fires first, the agent reverts exactly as for a rollback → `RevertedUnconfirmed{generation}`. A transaction that fails after arming stops its timer, so a retry of the same generation can arm it again.
+8. **If steps 4–6 fail:** swap back, re-apply what differed and re-check → `RolledBack{generation, cause}`. If that also fails, stop both engines and close the gate → `RollbackFailed{generation, cause}`. The cause is `Swap{errno} | Apply{step, stderr_tail} | HealthGate{failed}`; the failed stage follows from it, so an inconsistent stage/cause pair cannot be expressed. With no previous generation (the node's first), the rollback leaves the node serving nothing: `current` removed, both engines and the tunnel stopped, and `/etc/nftables.conf.pre-mooring` put back and loaded, so that a first ruleset that shut the operator out is undone too. The failed generation's directory is removed either way.
 9. **An `Apply` whose digest equals the current generation's** returns `Unchanged{generation}` with the node's current generation. It restarts nothing, and **never changes holds or the halted state**. The bundle digest excludes the generation (§8.1), so a generation bump with no VPS-visible change is answered this way, and the Mac records it as an `Applied` bookkeeping entry at the new generation (§7).
 
-**`Rollback`** reverts the change awaiting confirmation at once, exactly as the confirm timer would, and returns `Reverted{generation}`; with nothing awaiting confirmation it fails with `NotAwaitingConfirm`.
+**`Rollback`** reverts the pending change at once, exactly as the confirm timer would, and returns `Reverted{generation}`; with nothing pending it fails with `NotAwaitingConfirm`.
+
+**One pending change, and what a dead transaction or a reboot leaves** (2026-10-22, M4b). `/var/lib/mooring/txn/pending.json` names the one change in flight and its phase: `Launched` (written by `Apply`), `Armed` (the transaction unit armed its timer) or `AwaitingConfirm`; while it exists every other change is `Busy`. Each transaction's record, `txn/gen-<N>.json`, holds its header and `TxnState` for `TxnStatus`. Every change takes `/run/mooring/txn.lock`, and a transaction unit holds it for its whole run, so a pending change found under the lock that does not await confirmation belongs to a unit that died (or was launched and has not started; it then finds nothing to run). `Rollback` and the timer revert such a change too: when `current` is already its generation, as a rollback; otherwise nothing was switched, and only its staged directory goes. Its timer is stopped first when its phase says one was armed. A reboot loses the transient timer, so `agent txn-recover`, run at boot by a oneshot unit ordered after `nftables.service`, the tunnel and both engines (installed with the other units in M4e), reverts whatever is pending → `RevertedUnconfirmed{generation}`.
 
 **`ActivateAgent{sha}`:**
-1. Run `<new> self-test`: parse its embedded host profile, open its state, print `PROTOCOL`. A failure → `AgentSelfTestFailed`.
-2. Swap the forced-command symlink.
-3. Arm the same 120 s revert timer and reply `AwaitingConfirm{generation}`. Activation changes no configuration, so `generation` is the node's current one: `Generation::ZERO` before the first `Apply`. `ConfigGeneration` starts at 1 (§7), so every real `Apply` generation is newer.
-4. The Mac's `Confirm{generation}` must be served by the new agent.
+1. Install the stored blob as `/usr/local/lib/mooring/agent/<sha>` (0755) and run its `self-test`: parse its embedded host profile, open its state, print `PROTOCOL`. A failure, or any other output → `AgentSelfTestFailed`.
+2. Arm the same 120 s revert timer, run by the **previous** agent, so that a new agent that cannot serve cannot block its own revert.
+3. Record the pending activation, swap the forced-command link `agent/current` → `<sha>`, and reply `AwaitingConfirm{generation}`. Activation changes no configuration, so `generation` is the node's current one: `Generation::ZERO` before the first `Apply`. `ConfigGeneration` starts at 1 (§7), so every real `Apply` generation is newer.
+4. The Mac's `Confirm{generation}` must be served by the new agent. A revert points the link back at the previous agent. Because the previous agent performs that revert, it must read the `pending.json` the new agent wrote: the pending record's format changes only in ways the previous release reads, which M4f's cross-version test checks. A node whose forced command has no target cannot have received the request, so an activation that finds none fails with `Io{ReadState}` before changing anything.
 
 **Agent upgrades go to one canary node first.**
 
@@ -1657,7 +1660,7 @@ The header's host facts are the node's recorded site (uplink, VPS4, arch, port r
 2. It closes the gate.
 3. It stops both engines.
 
-The engine units' `ExecCondition=agent halted-check` then prevents any restart: by systemd, by a reboot, or by a running transaction's rollback. Transactions check the marker before restarting anything. `Apply` returns `NodeHalted`, and only an explicit `Resume{config_generation}` clears the marker. The runbook requires investigating the cause first.
+The engine units' `ExecCondition=agent halted-check` then prevents any restart: by systemd, by a reboot, or by a running transaction's rollback. Transactions check the marker before restarting anything. `Apply` returns `NodeHalted`, and only an explicit `Resume{config_generation}` clears the marker. The runbook requires investigating the cause first. `Resume` takes `txn.lock` like a change (`Busy` while one is pending), fails with `NotHalted` on a node that is not halted and with `GenerationMismatch{current}` unless `config_generation` is the node's current generation, so the Mac resumes only the configuration it believes is there. It then removes the marker, starts both engines (`Systemd{unit, Start}` if one does not start) and runs the health gate (`HealthGate{failed}`); the gate stays closed until the watch reopens it.
 
 **Watch loop (every 5 s):**
 1. Read the latest handshake, rx and tx from `wg show wgexit dump`.
@@ -2223,6 +2226,9 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 | SSH killed mid-transaction | The transaction completes, and `TxnStatus` reports it |
 | No `Confirm` sent | `RevertedUnconfirmed` |
 | nft rules that would drop SSH | Revert by timer |
+| Transaction unit killed after the swap | Revert by timer; `Apply` is `Busy` until then |
+| Reboot while awaiting `Confirm` (nft rules that would drop SSH) | `txn-recover` reverts at boot → `RevertedUnconfirmed`; SSH works again |
+| Retry of a generation whose transaction rolled back | Arms its timer again and reaches `AwaitingConfirm` |
 | Renamed NIC | `HostFactsChanged` before staging |
 | Broken agent binary | `AgentSelfTestFailed`; a broken-but-passing agent is reverted by the timer |
 | `wgexit` deleted | `WgReadFailed`, gate closed, no leak |
@@ -2985,10 +2991,11 @@ cargo xtask lane l1 -p mooring-agent-proto  # frozen-core wire goldens
   - A drop-in that adds `AllowUsers debian` after Mooring's is reported by `Hello` as `AllowUsers` drift.
   - The alert unit sends a test notice to ntfy and pings both Healthchecks checks; stopping the watch stops the node check's pings, and stopping the peer's handshakes stops the `MacAlive` pings.
 
-**Status 2026-10-22 (M4a, on the topic branch `feat/m4a-agent-core`).** M4 is built in six slices, each gated and committed on its own: M4a the agent's core; M4b transactions with commit-confirm, `ActivateAgent` and `Resume`; M4c the watch loop, conditions and event journal; M4d accounting, the series, retention, `Usage`, `UsageSeries` and `Events`; M4e bootstrap, host-profile convergence, sshd, the viewer account, the alert unit and `TargetCheck`; M4f the VM lanes and the cross-version test.
+**Status 2026-10-22 (M4a merged; M4b on the topic branch `feat/m4b-transactions`).** M4 is built in six slices, each gated and committed on its own: M4a the agent's core; M4b transactions with commit-confirm, `ActivateAgent` and `Resume`; M4c the watch loop, conditions and event journal; M4d accounting, the series, retention, `Usage`, `UsageSeries` and `Events`; M4e bootstrap, host-profile convergence, sshd, the viewer account, the alert unit and `TargetCheck`; M4f the VM lanes and the cross-version test.
 - **Built in M4a** (`crates/mooring-agent`, edges as §6.1): `serve-ssh --role` reads one frame, checks the role (`Request::authorize`) before acting and writes one reply. It serves `Hello` (every host fact read live: the up IPv4 default route in `/proc/net/route`, the one global IPv4 on it from `ip -j`, `/proc/sys`, `/etc/os-release`, `/proc/self/exe`'s digest; sshd drift from `sshd -T` as multisets; `client_ip` from `SSH_CONNECTION`), `HaveBlobs` and `PutBlob` (hashed on arrival and whenever reported present; a damaged blob is removed for re-upload), `GateSet`, `ClearHold`, `Shutdown`, `PutMacReport` and `MacReport`. `reflect`, `halted-check` (exit 1 while halted or while the marker cannot be read), `gate-close` and `self-test` are the unit commands. Tools run only from a closed list at Debian 13 paths (`nft`, `systemctl`, `ip`, `sshd`, `wg`), with a cleared environment.
 - **State files added:** `/var/lib/mooring/host-profile.json` (the installed `HostProfileVersion`, written by `Bootstrap` and transactions; an agent without it answers `Hello` with `Io{ReadState, ENOENT}`), `/var/lib/mooring/gate/stop-request.json` (a viewer's stop, `{"at"}`, for the watch) and `/var/lib/mooring/mac-report.json`.
 - **Shutdown** attempts every step whatever the step before did: on 2026-10-22 on the London VPS (no `mooring` table yet) the gate's close failed, and the engines must still be stopped. The first failure is reported.
+- **Built in M4b** (`crates/mooring-agent/src/txn`): `Apply`, `TxnStatus`, `Confirm`, `Rollback`, `ActivateAgent` and `Resume`, and the unit commands `txn <N>`, `txn-revert <N>` and `txn-recover`, as §11.2 and §11.3 describe them, with the layout of §11.2 step 4. The tool list adds `wg-quick`, `systemd-run` and `ss`; a staged engine or a new agent runs by its own path, with the same cleared environment. The host-profile parts of a transaction (its files, `sshd -t`, `systemd-analyze verify`, the sysctl check, `daemon-reload`, `sysctl --system`, the sshd reload) join with host-profile convergence in M4e, which also installs the boot unit that runs `txn-recover`. Checked only against a stand-in node: a transaction on the London VPS would load the golden ruleset there, so the first real transactions run in the M4f VM lane.
 - **`AgentError::NotServedYet{request}`** (protocol 1, not frozen) answers the requests of the slices still to come; the slice that serves the last request removes it, so no released agent carries it.
 - **Checked on the London VPS** (Debian 13, kernel 6.12.113, 2026-10-22, all state removed afterwards): `Hello` read the real facts (and the eight sshd directives the profile would change), the blob round trip, `GateSet` reporting `GateCloseFailed` with nft's own message while keeping the hold, `Shutdown`, `halted-check`, `self-test`, the reflector on the public address, and the usage errors.
 

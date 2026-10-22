@@ -267,20 +267,14 @@ fn the_mac_report_is_stored_with_the_nodes_time_and_read_back() {
 
 /// The requests this slice does not serve yet; the list shrinks as M4's
 /// slices land, and `NotServedYet` goes when it is empty.
-const NOT_SERVED_YET: [RequestKind; 13] = [
-    RequestKind::ActivateAgent,
-    RequestKind::Confirm,
+const NOT_SERVED_YET: [RequestKind; 7] = [
     RequestKind::Bootstrap,
     RequestKind::RevokeBootstrap,
-    RequestKind::Apply,
-    RequestKind::TxnStatus,
-    RequestKind::Rollback,
     RequestKind::Status,
     RequestKind::Usage,
     RequestKind::UsageSeries,
     RequestKind::Events,
     RequestKind::TargetCheck,
-    RequestKind::Resume,
 ];
 
 #[test]
@@ -315,9 +309,15 @@ fn requests_of_later_slices_are_answered_not_served_yet() {
             RequestKind::Hello,
             RequestKind::HaveBlobs,
             RequestKind::PutBlob,
+            RequestKind::ActivateAgent,
+            RequestKind::Confirm,
+            RequestKind::Apply,
+            RequestKind::TxnStatus,
+            RequestKind::Rollback,
             RequestKind::GateSet,
             RequestKind::ClearHold,
             RequestKind::Shutdown,
+            RequestKind::Resume,
             RequestKind::PutMacReport,
             RequestKind::MacReport,
         ]

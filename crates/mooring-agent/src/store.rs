@@ -79,6 +79,17 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> io::Result<(
     written
 }
 
+/// Removes `path`; a file that is already gone is not an error.
+pub(crate) fn remove(path: &Path) -> Result<(), AgentError> {
+    match fs::remove_file(path) {
+        Ok(()) => File::open(parent_of(path).map_err(|error| io_error(IoOp::WriteState, &error))?)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|error| io_error(IoOp::WriteState, &error)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(IoOp::WriteState, &error)),
+    }
+}
+
 fn parent_of(path: &Path) -> io::Result<&Path> {
     path.parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a state path has no directory"))
@@ -103,19 +114,38 @@ impl Lock {
     /// Waits for the exclusive lock on `path`, creating the file (and its
     /// directory) if needed.
     pub(crate) fn exclusive(path: &Path) -> Result<Self, AgentError> {
-        let fail = |error: io::Error| io_error(IoOp::WriteState, &error);
-        ensure_dir(parent_of(path).map_err(fail)?).map_err(fail)?;
-        let file = OpenOptions::new()
+        let file = Self::open(path)?;
+        file.lock().map_err(lock_error)?;
+        Ok(Self { file })
+    }
+
+    /// The exclusive lock on `path` if no one holds it; `None` if someone
+    /// does.
+    pub(crate) fn try_exclusive(path: &Path) -> Result<Option<Self>, AgentError> {
+        let file = Self::open(path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(fs::TryLockError::WouldBlock) => Ok(None),
+            Err(fs::TryLockError::Error(error)) => Err(lock_error(error)),
+        }
+    }
+
+    /// Opens the lock file, creating it (and its directory) if needed.
+    fn open(path: &Path) -> Result<File, AgentError> {
+        ensure_dir(parent_of(path).map_err(lock_error)?).map_err(lock_error)?;
+        OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .mode(0o660)
             .open(path)
-            .map_err(fail)?;
-        file.lock().map_err(fail)?;
-        Ok(Self { file })
+            .map_err(lock_error)
     }
+}
+
+fn lock_error(error: io::Error) -> AgentError {
+    io_error(IoOp::WriteState, &error)
 }
 
 impl Drop for Lock {

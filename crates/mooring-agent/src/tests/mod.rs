@@ -7,11 +7,13 @@
 mod blobs;
 mod cli;
 mod gate;
+mod health;
 mod hello;
 mod reflect;
 mod requests;
 mod serve;
 mod store;
+mod txn;
 
 use std::cell::{Cell, RefCell};
 use std::io;
@@ -25,12 +27,16 @@ use crate::paths::Paths;
 /// What the stand-in node answers for one tool call.
 pub(crate) type Responder = Box<dyn Fn(Tool, &[&str]) -> io::Result<ToolOutput>>;
 
+/// What the stand-in node answers for one staged program.
+pub(crate) type ProgramResponder = Box<dyn Fn(&std::path::Path, &[&str]) -> io::Result<ToolOutput>>;
+
 /// A stand-in node: answers tool calls with `responder`, records them,
 /// keeps a clock that sleeping advances, and lets a test act at each sleep.
 pub(crate) struct FakeNode {
     clock: Cell<u64>,
     calls: RefCell<Vec<String>>,
     responder: Responder,
+    program_responder: ProgramResponder,
     on_sleep: RefCell<Box<dyn FnMut(u64)>>,
     slept: Cell<u64>,
 }
@@ -47,9 +53,16 @@ impl FakeNode {
             clock: Cell::new(now),
             calls: RefCell::new(Vec::new()),
             responder,
+            program_responder: Box::new(|_, _| Ok(ok(b""))),
             on_sleep: RefCell::new(Box::new(|_| {})),
             slept: Cell::new(0),
         }
+    }
+
+    /// Answers staged programs as `responder` says.
+    pub(crate) fn programs(mut self, responder: ProgramResponder) -> Self {
+        self.program_responder = responder;
+        self
     }
 
     /// Runs `action` after each sleep, with the number of sleeps so far.
@@ -78,6 +91,25 @@ impl Node for FakeNode {
         }
         self.calls.borrow_mut().push(call);
         (self.responder)(tool, args)
+    }
+
+    fn run_program(
+        &self,
+        program: &std::path::Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> io::Result<ToolOutput> {
+        let mut call = String::new();
+        for (key, value) in env {
+            call.push_str(&format!("{key}={value} "));
+        }
+        call.push_str(&program.display().to_string());
+        for arg in args {
+            call.push(' ');
+            call.push_str(arg);
+        }
+        self.calls.borrow_mut().push(call);
+        (self.program_responder)(program, args)
     }
 
     fn now(&self) -> UnixTime {
