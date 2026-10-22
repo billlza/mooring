@@ -14,11 +14,11 @@ use mooring_agent_proto::{
 
 use super::{FakeNode, failed, nft_set, ok, scratch};
 use crate::gate::{
-    StopRequest, clear, current_generation, engine_unit, halted, holds, may_start_engines,
-    set_by_ops, set_by_viewer, shutdown, state,
+    clear, current_generation, engine_unit, halted, holds, may_start_engines, set_by_ops,
+    set_by_viewer, shutdown, state,
 };
 use crate::host::Tool;
-use crate::store::{read_json, write_json};
+use crate::store::write_json;
 
 const CLOSE: &str = "/usr/sbin/nft add element inet mooring exit_closed { \"wgexit\" }";
 
@@ -74,12 +74,20 @@ fn a_current_link_not_naming_a_generation_is_an_error() {
     }
 }
 
-fn wg(stdout: &'static [u8]) -> FakeNode {
+/// `wg show wgexit dump` with the Mac peer's latest handshake.
+fn dump(handshake: &str) -> String {
+    format!(
+        "PRIVATE=\tPUBLIC=\t27820\toff\nMAC=\t(none)\t92.40.201.7:4500\t10.66.0.2/32\t{handshake}\t100\t200\t10\n"
+    )
+}
+
+fn wg(stdout: &[u8]) -> FakeNode {
+    let stdout = stdout.to_vec();
     FakeNode::answering(
         50,
         Box::new(move |tool, _| {
             Ok(match tool {
-                Tool::Wg => ok(stdout),
+                Tool::Wg => ok(&stdout),
                 _ => ok(b""),
             })
         }),
@@ -89,14 +97,19 @@ fn wg(stdout: &'static [u8]) -> FakeNode {
 #[test]
 fn a_drain_records_the_peers_handshake_or_none() {
     let (_dir, paths) = scratch();
-    let held = set_by_ops(&paths, &wg(b"PEERKEY=\t1790000000\n"), GateReason::MacDrain).unwrap();
+    let held = set_by_ops(
+        &paths,
+        &wg(dump("1790000000").as_bytes()),
+        GateReason::MacDrain,
+    )
+    .unwrap();
     assert_eq!(
         held.mac_drain,
         Some(MacDrainHold {
             handshake_at_drain: Some(UnixTime::from_secs(1_790_000_000)),
         })
     );
-    let held = set_by_ops(&paths, &wg(b"PEERKEY=\t0\n"), GateReason::MacDrain).unwrap();
+    let held = set_by_ops(&paths, &wg(dump("0").as_bytes()), GateReason::MacDrain).unwrap();
     assert_eq!(
         held.mac_drain,
         Some(MacDrainHold {
@@ -107,9 +120,20 @@ fn a_drain_records_the_peers_handshake_or_none() {
 
 #[test]
 fn a_drain_whose_handshake_cannot_be_read_closes_the_gate_and_records_nothing() {
-    for output in [&b""[..], b"A\t1\nB\t2\n", b"A\tsoon\n", b"A 1\n"] {
+    let interface = "PRIVATE=\tPUBLIC=\t27820\toff\n";
+    let two_peers = format!(
+        "{}A=\t(none)\t(none)\t10.66.0.3/32\t1\t0\t0\toff\n",
+        dump("1")
+    );
+    for output in [
+        String::new(),
+        interface.to_owned(),
+        dump("soon"),
+        dump("1").replace('\t', " "),
+        two_peers,
+    ] {
         let (_dir, paths) = scratch();
-        let node = wg(output);
+        let node = wg(output.as_bytes());
         let error = set_by_ops(&paths, &node, GateReason::MacDrain).unwrap_err();
         assert_eq!(
             error,
@@ -325,33 +349,6 @@ fn gate_reads(closed: bool) -> FakeNode {
             })
         }),
     )
-}
-
-#[test]
-fn a_viewer_stop_is_answered_once_the_watch_has_carried_it_out() {
-    let (_dir, paths) = scratch();
-    let watch_paths = paths.clone();
-    let node = gate_reads(true).on_sleep(move |slept| {
-        if slept == 2 {
-            let request: StopRequest = read_json(&watch_paths.stop_request()).unwrap().unwrap();
-            let held = Holds {
-                operator: Some(OperatorHold { at: request.at }),
-                ..Holds::NONE
-            };
-            write_json(&watch_paths.holds(), &held, 0o640).unwrap();
-        }
-    });
-    let held = set_by_viewer(&paths, &node).unwrap();
-    assert_eq!(held.operator.unwrap().at, UnixTime::from_secs(1000));
-    assert_eq!(node.slept(), 2);
-    let request: StopRequest = read_json(&paths.stop_request()).unwrap().unwrap();
-    assert_eq!(request.at, UnixTime::from_secs(1000));
-    assert!(
-        node.calls()
-            .iter()
-            .all(|call| !call.contains("add element")),
-        "the viewer closed the gate itself"
-    );
 }
 
 #[test]

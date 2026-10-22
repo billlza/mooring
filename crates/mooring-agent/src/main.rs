@@ -2,18 +2,22 @@
 
 //! `mooring-agent`, the VPS side of Mooring (design §5.2, §11): a static
 //! Linux musl binary run by sshd's forced command and by its own systemd
-//! units. This slice (M4a) serves:
+//! units. Built so far (M4a to M4c):
 //!
 //! - `serve-ssh --role bootstrap|ops|viewer`: one request on stdin, one
-//!   reply on stdout. `Hello`, `HaveBlobs`, `PutBlob`, `GateSet`,
-//!   `ClearHold`, `Shutdown`, `PutMacReport` and `MacReport` are served;
+//!   reply on stdout. `Hello`, the blobs, the gate's requests, `Shutdown`,
+//!   the transactions (`Apply`, `TxnStatus`, `Confirm`, `Rollback`),
+//!   `ActivateAgent`, `Resume`, `Events` and the Mac report are served;
 //!   the rest are answered `NotServedYet` until their slices land;
 //! - `reflect --listen <vps4> [--port 27900]`, the reflector unit;
 //! - `halted-check`, the engines' `ExecCondition`: exit 0 when they may
 //!   start, 1 while the node is halted (or its marker cannot be read);
 //! - `gate-close`, the watch's `ExecStopPost`: close the gate;
 //! - `self-test`: check the embedded host profile and the state files, and
-//!   print the protocol number.
+//!   print the protocol number;
+//! - `txn <N>`, `txn-revert <N>` and `txn-recover`: a transaction's unit,
+//!   its confirm timer and the revert at boot;
+//! - `watch`, the `mooring-watch` unit.
 //!
 //! On any other OS than Linux it only says so and exits 1; its logic is
 //! tested on any host with a stand-in node.
@@ -30,6 +34,8 @@ mod hello;
 #[cfg(any(target_os = "linux", test))]
 mod host;
 #[cfg(any(target_os = "linux", test))]
+mod journal;
+#[cfg(any(target_os = "linux", test))]
 mod paths;
 #[cfg(any(target_os = "linux", test))]
 mod reflect;
@@ -41,6 +47,10 @@ mod store;
 mod tests;
 #[cfg(any(target_os = "linux", test))]
 mod txn;
+#[cfg(any(target_os = "linux", test))]
+mod watch;
+#[cfg(any(target_os = "linux", test))]
+mod wg;
 
 use std::io::{self, Write};
 use std::process::ExitCode;

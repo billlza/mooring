@@ -34,6 +34,10 @@ pub(crate) enum Tool {
     SystemdRun,
     /// `ss` (the health gate's listeners).
     Ss,
+    /// `stat -f` (the free space of the agent's filesystem).
+    Stat,
+    /// `chronyc` (whether the clock is synchronised).
+    Chronyc,
 }
 
 impl Tool {
@@ -50,6 +54,8 @@ impl Tool {
             Self::WgQuick => "/usr/bin/wg-quick",
             Self::SystemdRun => "/usr/bin/systemd-run",
             Self::Ss => "/usr/bin/ss",
+            Self::Stat => "/usr/bin/stat",
+            Self::Chronyc => "/usr/bin/chronyc",
         }
     }
 }

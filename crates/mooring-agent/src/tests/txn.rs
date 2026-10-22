@@ -259,7 +259,7 @@ impl World {
     }
 }
 
-fn facts() -> HostFacts {
+pub(super) fn facts() -> HostFacts {
     HostFacts {
         uplink: IfName::new("eth0").unwrap(),
         vps4: "176.126.246.203".parse().unwrap(),
@@ -308,6 +308,15 @@ fn apply_records_the_transaction_and_launches_its_unit() {
         TxnState::Running {
             stage: TxnStage::Preconditions
         }
+    );
+    assert_eq!(
+        fs::metadata(world.paths.txn_record(Generation::new(1)))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o640,
+        "the watch reads the records"
     );
     assert_eq!(
         pending(&world.paths).unwrap(),

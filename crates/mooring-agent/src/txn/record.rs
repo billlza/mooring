@@ -11,8 +11,10 @@ use serde::{Deserialize, Serialize};
 use crate::paths::Paths;
 use crate::store::{read_json, write_json};
 
-/// Records are read by root only.
-const MODE: u32 = 0o600;
+/// Records are read by the `mooring` group as well: the watch journals a
+/// commit from the current generation's record. They hold digests, host
+/// facts and scrubbed errors, no secret.
+const MODE: u32 = 0o640;
 
 /// A transaction's record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
