@@ -1,3 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [alias]
 xtask = "run --quiet --locked --package xtask --"
+
+# The x86-64 Linux musl binaries (fieldkit's `serve` now, mooring-agent
+# later) link with the toolchain's own rust-lld and its self-contained musl
+# crt, so no musl cross linker is needed on this Mac (design §6.2; checked
+# on 2026-10-22: a static-pie ELF that ran on Debian 13). aarch64 joins when
+# a build for it is checked the same way.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"

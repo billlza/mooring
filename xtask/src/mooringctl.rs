@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `mooringctl`: builds `mooringctl` and signs a copy of it ad hoc with
-//! [`SIGNING_IDENTIFIER`] at `<target>/signed/mooringctl`, so that macOS
-//! shows that copy the kernel's neighbour table (design §15.6 rule 10).
+//! `mooringctl` (and `fieldkit`, design §22 M2b): builds the package and
+//! signs a copy of its binary ad hoc with its reverse-DNS identifier
+//! ([`SIGNING_IDENTIFIER`] for `mooringctl`, `com.bill.mooring.fieldkit`
+//! for `fieldkit`, see [`Signed`]) at `<target>/signed/<package>`, so that
+//! macOS shows that copy the kernel's neighbour table (design §15.6 rule
+//! 10). What follows says `mooringctl`; `fieldkit` is handled the same way.
 //!
 //! On macOS 27.0.1 (26A434), measured on 2026-10-14, the kernel returned an
 //! empty neighbour table (`sysctl` `NET_RT_FLAGS` with `RTF_LLINFO`) to a
@@ -71,8 +74,29 @@ use crate::output::{OutputError, say};
 /// this command.
 pub(crate) const SIGNING_IDENTIFIER: &str = "com.bill.mooring.mooringctl";
 
-/// The package, and its binary.
-const PACKAGE: &str = "mooringctl";
+/// A package whose binary is signed again after it is built: its name,
+/// which is also its binary's, and the identifier it is signed with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Signed {
+    /// The package, and its binary.
+    pub(crate) package: &'static str,
+    /// The code-signing identifier.
+    pub(crate) identifier: &'static str,
+}
+
+/// `mooringctl`, signed as [`SIGNING_IDENTIFIER`].
+pub(crate) const MOORINGCTL: Signed = Signed {
+    package: "mooringctl",
+    identifier: SIGNING_IDENTIFIER,
+};
+
+/// `fieldkit` (design §22 M2b), whose `env` reads the neighbour table for
+/// the M7 gateway's link-layer address, signed as
+/// `com.bill.mooring.fieldkit`.
+pub(crate) const FIELDKIT: Signed = Signed {
+    package: "fieldkit",
+    identifier: "com.bill.mooring.fieldkit",
+};
 
 /// `codesign`, by its absolute path.
 pub(crate) const CODESIGN: &str = "/usr/bin/codesign";
@@ -88,18 +112,23 @@ const SIGNED_DIR: &str = "signed";
 /// The build: the locked graph, the debug profile, and cargo's messages as
 /// JSON on stdout (its diagnostics are still rendered on stderr), from
 /// which the executable's path is read.
-const BUILD_ARGS: [&str; 5] = [
-    "build",
-    "--locked",
-    "--package",
-    PACKAGE,
-    "--message-format=json-render-diagnostics",
-];
+const fn build_args(tool: Signed) -> [&'static str; 5] {
+    [
+        "build",
+        "--locked",
+        "--package",
+        tool.package,
+        "--message-format=json-render-diagnostics",
+    ]
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum MooringctlError {
-    #[error("`cargo xtask mooringctl` runs only on macOS, not on {os}")]
-    NotMacos { os: &'static str },
+    #[error("`cargo xtask {command}` runs only on macOS, not on {os}")]
+    NotMacos {
+        command: &'static str,
+        os: &'static str,
+    },
     #[error(transparent)]
     Command(#[from] CommandError),
     #[error(transparent)]
@@ -108,8 +137,8 @@ pub(crate) enum MooringctlError {
     Output(#[from] OutputError),
     #[error("cannot read cargo's build messages")]
     Messages(#[source] serde_json::Error),
-    #[error("cargo reported {count} `mooringctl` executables, not one")]
-    Executables { count: usize },
+    #[error("cargo reported {count} `{package}` executables, not one")]
+    Executables { package: &'static str, count: usize },
     #[error("cargo reported the executable {}, which is not an absolute path", path.display())]
     RelativeExecutable { path: PathBuf },
     #[error(
@@ -138,9 +167,10 @@ pub(crate) enum MooringctlError {
         status: ExitStatus,
         message: String,
     },
-    #[error("{} is not signed as {SIGNING_IDENTIFIER}: {fault}", path.display())]
+    #[error("{} is not signed as {identifier}: {fault}", path.display())]
     Signature {
         path: PathBuf,
+        identifier: &'static str,
         fault: SignatureFault,
     },
     #[error("cannot rename {} to {}", from.display(), to.display())]
@@ -185,9 +215,9 @@ impl fmt::Display for SignatureFault {
 
 /// The programs the command runs, so that a test can stand in for them.
 trait Tools {
-    /// Builds the package (`cargo` with [`BUILD_ARGS`]) and returns what
+    /// Builds the package (`cargo` with [`build_args`]) and returns what
     /// cargo wrote to standard output: its JSON messages.
-    fn build(&mut self) -> Result<Vec<u8>, MooringctlError>;
+    fn build(&mut self, tool: Signed) -> Result<Vec<u8>, MooringctlError>;
 
     /// The target directory `cargo metadata` reports.
     fn target_directory(&mut self) -> Result<PathBuf, MooringctlError>;
@@ -204,8 +234,8 @@ struct System<'a> {
 }
 
 impl Tools for System<'_> {
-    fn build(&mut self) -> Result<Vec<u8>, MooringctlError> {
-        Ok(self.cargo.capture(&BUILD_ARGS)?)
+    fn build(&mut self, tool: Signed) -> Result<Vec<u8>, MooringctlError> {
+        Ok(self.cargo.capture(&build_args(tool))?)
     }
 
     fn target_directory(&mut self) -> Result<PathBuf, MooringctlError> {
@@ -217,8 +247,12 @@ impl Tools for System<'_> {
     }
 }
 
-pub(crate) fn run(cargo: &Cargo, out: &mut impl Write) -> Result<(), MooringctlError> {
-    sign_copy(std::env::consts::OS, &mut System { cargo }, out)
+pub(crate) fn run(
+    cargo: &Cargo,
+    tool: Signed,
+    out: &mut impl Write,
+) -> Result<(), MooringctlError> {
+    sign_copy(std::env::consts::OS, tool, &mut System { cargo }, out)
 }
 
 /// A path known to be absolute. Cargo reports absolute paths, so a relative
@@ -262,11 +296,11 @@ struct SignedPaths {
 }
 
 impl SignedPaths {
-    fn under(target: &AbsolutePath) -> Self {
+    fn under(target: &AbsolutePath, tool: Signed) -> Self {
         let dir = target.join(SIGNED_DIR);
         Self {
-            partial: dir.join(&format!("{PACKAGE}.{}.partial", std::process::id())),
-            signed: dir.join(PACKAGE),
+            partial: dir.join(&format!("{}.{}.partial", tool.package, std::process::id())),
+            signed: dir.join(tool.package),
             dir,
         }
     }
@@ -277,25 +311,28 @@ impl SignedPaths {
 /// directory, and places the signed copy; then says where it is.
 fn sign_copy(
     os: &'static str,
+    tool: Signed,
     tools: &mut impl Tools,
     out: &mut impl Write,
 ) -> Result<(), MooringctlError> {
-    require_macos(os)?;
-    let executable = AbsolutePath::new(built_executable(&tools.build()?)?)
+    require_macos(tool, os)?;
+    let executable = AbsolutePath::new(built_executable(tool, &tools.build(tool)?)?)
         .map_err(|path| MooringctlError::RelativeExecutable { path })?;
     let target = AbsolutePath::new(tools.target_directory()?)
         .map_err(|path| MooringctlError::RelativeTargetDirectory { path })?;
-    let paths = SignedPaths::under(&target);
+    let paths = SignedPaths::under(&target, tool);
     fs::create_dir_all(paths.dir.as_path()).map_err(|source| MooringctlError::SignedDirectory {
         path: paths.dir.as_path().to_path_buf(),
         source,
     })?;
-    place_signed_copy(tools, &executable, &paths)
+    place_signed_copy(tool, tools, &executable, &paths)
         .map_err(|failure| discard(&paths.partial, failure))?;
     say!(
         out,
-        "mooringctl: {} is signed as {SIGNING_IDENTIFIER}",
-        paths.signed.as_path().display()
+        "{}: {} is signed as {}",
+        tool.package,
+        paths.signed.as_path().display(),
+        tool.identifier
     )?;
     Ok(())
 }
@@ -303,6 +340,7 @@ fn sign_copy(
 /// Copies the executable to the temporary file, signs it, checks the
 /// signature and renames the file over the signed copy.
 fn place_signed_copy(
+    tool: Signed,
     tools: &mut impl Tools,
     executable: &AbsolutePath,
     paths: &SignedPaths,
@@ -314,10 +352,11 @@ fn place_signed_copy(
             source,
         }
     })?;
-    tools.codesign(&sign_args(&paths.partial))?;
+    tools.codesign(&sign_args(tool, &paths.partial))?;
     let report = tools.codesign(&display_args(&paths.partial))?;
-    check_signature(&report).map_err(|fault| MooringctlError::Signature {
+    check_signature(tool, &report).map_err(|fault| MooringctlError::Signature {
         path: paths.partial.as_path().to_path_buf(),
+        identifier: tool.identifier,
         fault,
     })?;
     fs::rename(paths.partial.as_path(), paths.signed.as_path()).map_err(|source| {
@@ -346,11 +385,14 @@ fn discard(partial: &AbsolutePath, failure: MooringctlError) -> MooringctlError 
 }
 
 /// Fails unless `os` (the host's `std::env::consts::OS`) is macOS.
-fn require_macos(os: &'static str) -> Result<(), MooringctlError> {
+fn require_macos(tool: Signed, os: &'static str) -> Result<(), MooringctlError> {
     if os == "macos" {
         Ok(())
     } else {
-        Err(MooringctlError::NotMacos { os })
+        Err(MooringctlError::NotMacos {
+            command: tool.package,
+            os,
+        })
     }
 }
 
@@ -379,7 +421,7 @@ struct Target {
 /// cargo's JSON messages, so a line that is not fails the command
 /// (`Messages`) rather than being skipped. A stdout this does not
 /// understand never names the file that is signed.
-fn built_executable(messages: &[u8]) -> Result<PathBuf, MooringctlError> {
+fn built_executable(tool: Signed, messages: &[u8]) -> Result<PathBuf, MooringctlError> {
     let mut executables = Vec::new();
     for line in messages
         .split(|&byte| byte == b'\n')
@@ -390,7 +432,7 @@ fn built_executable(messages: &[u8]) -> Result<PathBuf, MooringctlError> {
             target,
             executable: Some(executable),
         } = message
-            && target.name == PACKAGE
+            && target.name == tool.package
             && target.kind.iter().any(|kind| kind == "bin")
         {
             executables.push(executable);
@@ -399,6 +441,7 @@ fn built_executable(messages: &[u8]) -> Result<PathBuf, MooringctlError> {
     match <[PathBuf; 1]>::try_from(executables) {
         Ok([executable]) => Ok(executable),
         Err(executables) => Err(MooringctlError::Executables {
+            package: tool.package,
             count: executables.len(),
         }),
     }
@@ -408,7 +451,7 @@ fn built_executable(messages: &[u8]) -> Result<PathBuf, MooringctlError> {
 /// one carrying [`SIGNING_IDENTIFIER`] and the hardened runtime, which
 /// refuses injected libraries (`DYLD_INSERT_LIBRARIES`): this binary is
 /// the one the keychain item trusts.
-fn sign_args(file: &AbsolutePath) -> [&OsStr; 8] {
+fn sign_args(tool: Signed, file: &AbsolutePath) -> [&OsStr; 8] {
     [
         OsStr::new("--force"),
         OsStr::new("--sign"),
@@ -416,7 +459,7 @@ fn sign_args(file: &AbsolutePath) -> [&OsStr; 8] {
         OsStr::new("--options"),
         OsStr::new("runtime"),
         OsStr::new("--identifier"),
-        OsStr::new(SIGNING_IDENTIFIER),
+        OsStr::new(tool.identifier),
         file.as_path().as_os_str(),
     ]
 }
@@ -453,8 +496,8 @@ fn codesign(args: &[&OsStr]) -> Result<Vec<u8>, MooringctlError> {
 
 /// Checks `codesign -dv`'s report: [`SIGNING_IDENTIFIER`] and the hardened
 /// runtime ([`check_signed_as`]).
-fn check_signature(report: &[u8]) -> Result<(), SignatureFault> {
-    check_signed_as(report, SIGNING_IDENTIFIER)
+fn check_signature(tool: Signed, report: &[u8]) -> Result<(), SignatureFault> {
+    check_signed_as(report, tool.identifier)
 }
 
 /// Checks `codesign -dv`'s report: exactly one `Identifier=` line, naming
@@ -496,7 +539,7 @@ fn hardened(report: &[u8]) -> bool {
 /// The signed copy this command places under `target`:
 /// `<target>/signed/mooringctl`.
 pub(crate) fn signed_copy(target: &Path) -> PathBuf {
-    target.join(SIGNED_DIR).join(PACKAGE)
+    target.join(SIGNED_DIR).join(MOORINGCTL.package)
 }
 
 #[cfg(test)]
@@ -511,9 +554,9 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::{
-        AbsolutePath, BUILD_ARGS, CODESIGN, MooringctlError, SIGNING_IDENTIFIER, SignatureFault,
-        Tools, built_executable, check_signature, display_args, require_macos, sign_args,
-        sign_copy,
+        AbsolutePath, CODESIGN, FIELDKIT, MOORINGCTL, MooringctlError, SIGNING_IDENTIFIER,
+        SignatureFault, Signed, Tools, build_args, built_executable, check_signature, display_args,
+        require_macos, sign_args, sign_copy,
     };
     use crate::cargo::CommandError;
     use crate::cli::Command;
@@ -556,7 +599,7 @@ Internal requirements=none
         assert_eq!(SIGNING_IDENTIFIER, "com.bill.mooring.mooringctl");
         assert_eq!(CODESIGN, "/usr/bin/codesign");
         assert_eq!(
-            BUILD_ARGS,
+            build_args(MOORINGCTL),
             [
                 "build",
                 "--locked",
@@ -567,7 +610,7 @@ Internal requirements=none
         );
         let file = absolute("/w/target/signed/mooringctl.7.partial");
         assert_eq!(
-            sign_args(&file),
+            sign_args(MOORINGCTL, &file),
             [
                 "--force",
                 "--sign",
@@ -586,11 +629,60 @@ Internal requirements=none
         );
     }
 
+    /// `cargo xtask fieldkit` builds and signs fieldkit the same way, with
+    /// its own identifier and file names.
+    #[test]
+    fn fieldkit_is_built_and_signed_as_its_own_identifier() {
+        assert_eq!(FIELDKIT.identifier, "com.bill.mooring.fieldkit");
+        assert_eq!(
+            build_args(FIELDKIT),
+            [
+                "build",
+                "--locked",
+                "--package",
+                "fieldkit",
+                "--message-format=json-render-diagnostics",
+            ]
+        );
+        let file = absolute("/w/target/signed/fieldkit.7.partial");
+        assert_eq!(
+            sign_args(FIELDKIT, &file)[6..],
+            [
+                "com.bill.mooring.fieldkit",
+                "/w/target/signed/fieldkit.7.partial"
+            ]
+            .map(OsStr::new)
+        );
+        let signed = SIGNED.replace("com.bill.mooring.mooringctl", "com.bill.mooring.fieldkit");
+        assert_eq!(check_signature(FIELDKIT, signed.as_bytes()), Ok(()));
+        assert_eq!(
+            check_signature(FIELDKIT, SIGNED.as_bytes()),
+            Err(SignatureFault::Different(SIGNING_IDENTIFIER.to_owned()))
+        );
+        let messages = MESSAGES.replace(r#""name":"mooringctl""#, r#""name":"fieldkit""#);
+        assert_eq!(
+            built_executable(FIELDKIT, messages.as_bytes()).unwrap(),
+            PathBuf::from("/w/target/debug/mooringctl")
+        );
+        assert!(matches!(
+            built_executable(FIELDKIT, MESSAGES.as_bytes()),
+            Err(MooringctlError::Executables {
+                package: "fieldkit",
+                count: 0
+            })
+        ));
+        let error = require_macos(FIELDKIT, "linux").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "`cargo xtask fieldkit` runs only on macOS, not on linux"
+        );
+    }
+
     #[test]
     fn only_the_one_identifier_codesign_reports_is_accepted() {
-        assert_eq!(check_signature(SIGNED.as_bytes()), Ok(()));
+        assert_eq!(check_signature(MOORINGCTL, SIGNED.as_bytes()), Ok(()));
         assert_eq!(
-            check_signature(LINKER_SIGNED.as_bytes()),
+            check_signature(MOORINGCTL, LINKER_SIGNED.as_bytes()),
             Err(SignatureFault::Different(
                 "mooringctl-020ac5c52e8594c4".to_owned()
             ))
@@ -599,7 +691,7 @@ Internal requirements=none
         // another one.
         let missing = SIGNED.replace("Identifier=com.bill.mooring.mooringctl\n", "");
         assert_eq!(
-            check_signature(missing.as_bytes()),
+            check_signature(MOORINGCTL, missing.as_bytes()),
             Err(SignatureFault::Missing)
         );
         let longer = SIGNED.replace(
@@ -607,17 +699,20 @@ Internal requirements=none
             "Identifier=com.bill.mooring.mooringctl.copy\n",
         );
         assert_eq!(
-            check_signature(longer.as_bytes()),
+            check_signature(MOORINGCTL, longer.as_bytes()),
             Err(SignatureFault::Different(
                 "com.bill.mooring.mooringctl.copy".to_owned()
             ))
         );
         let repeated = format!("{SIGNED}Identifier=com.bill.mooring.mooringctl\n");
         assert_eq!(
-            check_signature(repeated.as_bytes()),
+            check_signature(MOORINGCTL, repeated.as_bytes()),
             Err(SignatureFault::Repeated)
         );
-        assert_eq!(check_signature(b""), Err(SignatureFault::Missing));
+        assert_eq!(
+            check_signature(MOORINGCTL, b""),
+            Err(SignatureFault::Missing)
+        );
         // The right identifier without the hardened runtime, or with no
         // code directory line, is refused too.
         for unhardened in [
@@ -630,7 +725,7 @@ Internal requirements=none
             SIGNED.replace("CodeDirectory v=20500", "Code v=20500"),
         ] {
             assert_eq!(
-                check_signature(unhardened.as_bytes()),
+                check_signature(MOORINGCTL, unhardened.as_bytes()),
                 Err(SignatureFault::NotHardened),
                 "{unhardened}"
             );
@@ -649,13 +744,16 @@ Internal requirements=none
     #[test]
     fn the_executable_is_the_one_cargo_reports() {
         assert_eq!(
-            built_executable(MESSAGES.as_bytes()).unwrap(),
+            built_executable(MOORINGCTL, MESSAGES.as_bytes()).unwrap(),
             PathBuf::from("/w/target/debug/mooringctl")
         );
         let none = MESSAGES.replace(r#""name":"mooringctl""#, r#""name":"mooringctl2""#);
         assert!(matches!(
-            built_executable(none.as_bytes()),
-            Err(MooringctlError::Executables { count: 0 })
+            built_executable(MOORINGCTL, none.as_bytes()),
+            Err(MooringctlError::Executables {
+                package: "mooringctl",
+                count: 0
+            })
         ));
         // A library of that name has no executable to sign.
         let library = MESSAGES.replace(
@@ -663,26 +761,38 @@ Internal requirements=none
             r#""kind":["lib"],"crate_types":["lib"],"name":"mooringctl""#,
         );
         assert!(matches!(
-            built_executable(library.as_bytes()),
-            Err(MooringctlError::Executables { count: 0 })
+            built_executable(MOORINGCTL, library.as_bytes()),
+            Err(MooringctlError::Executables {
+                package: "mooringctl",
+                count: 0
+            })
         ));
         let line = MESSAGES.lines().nth(3).unwrap();
         let twice = format!("{MESSAGES}{line}\n");
         assert!(matches!(
-            built_executable(twice.as_bytes()),
-            Err(MooringctlError::Executables { count: 2 })
+            built_executable(MOORINGCTL, twice.as_bytes()),
+            Err(MooringctlError::Executables {
+                package: "mooringctl",
+                count: 2
+            })
         ));
         assert!(matches!(
-            built_executable(b"Compiling mooringctl\n"),
+            built_executable(MOORINGCTL, b"Compiling mooringctl\n"),
             Err(MooringctlError::Messages(_))
         ));
     }
 
     #[test]
     fn runs_only_on_macos() {
-        assert!(require_macos("macos").is_ok());
-        let error = require_macos("linux").unwrap_err();
-        assert!(matches!(error, MooringctlError::NotMacos { os: "linux" }));
+        assert!(require_macos(MOORINGCTL, "macos").is_ok());
+        let error = require_macos(MOORINGCTL, "linux").unwrap_err();
+        assert!(matches!(
+            error,
+            MooringctlError::NotMacos {
+                command: "mooringctl",
+                os: "linux"
+            }
+        ));
         assert_eq!(
             error.to_string(),
             "`cargo xtask mooringctl` runs only on macOS, not on linux"
@@ -765,7 +875,8 @@ Internal requirements=none
     }
 
     impl Tools for FakeTools {
-        fn build(&mut self) -> Result<Vec<u8>, MooringctlError> {
+        fn build(&mut self, tool: Signed) -> Result<Vec<u8>, MooringctlError> {
+            assert_eq!(tool, MOORINGCTL);
             self.record("build".to_owned());
             Ok(self.messages.clone())
         }
@@ -841,7 +952,7 @@ Internal requirements=none
         let signed = target.join("signed").join("mooringctl");
         let mut tools = FakeTools::new(&executable, &target);
         let mut out = Vec::new();
-        sign_copy("macos", &mut tools, &mut out).unwrap();
+        sign_copy("macos", MOORINGCTL, &mut tools, &mut out).unwrap();
         let call = |what: String, partial: Option<&[u8]>| Call {
             what,
             partial: partial.map(<[u8]>::to_vec),
@@ -882,7 +993,7 @@ Internal requirements=none
         // A later build is signed over the earlier copy.
         fs::write(&executable, b"rebuilt").unwrap();
         let mut tools = FakeTools::new(&executable, &target);
-        sign_copy("macos", &mut tools, &mut Vec::new()).unwrap();
+        sign_copy("macos", MOORINGCTL, &mut tools, &mut Vec::new()).unwrap();
         assert!(tools.calls[2].signed && tools.calls[3].signed);
         assert_eq!(contents(&signed).unwrap(), b"rebuilt+signature");
         assert_eq!(contents(&partial), None);
@@ -905,12 +1016,13 @@ Internal requirements=none
             let mut tools = FakeTools::new(&executable, &target);
             tools.report = LINKER_SIGNED;
             let mut out = Vec::new();
-            let error = sign_copy("macos", &mut tools, &mut out).unwrap_err();
+            let error = sign_copy("macos", MOORINGCTL, &mut tools, &mut out).unwrap_err();
             assert!(
                 matches!(
                     &error,
                     MooringctlError::Signature {
                         path,
+                        identifier: "com.bill.mooring.mooringctl",
                         fault: SignatureFault::Different(found),
                     } if *path == partial && found == "mooringctl-020ac5c52e8594c4"
                 ),
@@ -932,7 +1044,7 @@ Internal requirements=none
         let mut tools = FakeTools::new(&executable, &target);
         tools.refuse_signing = true;
         let mut out = Vec::new();
-        let error = sign_copy("macos", &mut tools, &mut out).unwrap_err();
+        let error = sign_copy("macos", MOORINGCTL, &mut tools, &mut out).unwrap_err();
         assert!(
             matches!(&error, MooringctlError::Codesign { message, .. } if message == "refused"),
             "{error:?}"
@@ -955,7 +1067,7 @@ Internal requirements=none
         fs::write(signed.join("kept"), b"kept").unwrap();
         let mut tools = FakeTools::new(&executable, &target);
         let mut out = Vec::new();
-        let error = sign_copy("macos", &mut tools, &mut out).unwrap_err();
+        let error = sign_copy("macos", MOORINGCTL, &mut tools, &mut out).unwrap_err();
         assert!(
             matches!(&error, MooringctlError::Rename { from, to, .. } if *from == partial && *to == signed),
             "{error:?}"
@@ -975,7 +1087,7 @@ Internal requirements=none
         let mut tools = FakeTools::new(&executable, &target);
         tools.report = LINKER_SIGNED;
         tools.wedge_partial = true;
-        let error = sign_copy("macos", &mut tools, &mut Vec::new()).unwrap_err();
+        let error = sign_copy("macos", MOORINGCTL, &mut tools, &mut Vec::new()).unwrap_err();
         let MooringctlError::PartialNotRemoved { path, failure, .. } = &error else {
             panic!("{error:?}");
         };
@@ -999,9 +1111,15 @@ Internal requirements=none
         let (target, executable) = built(&scratch);
         let mut tools = FakeTools::new(&executable, &target);
         let mut out = Vec::new();
-        let error = sign_copy("linux", &mut tools, &mut out).unwrap_err();
+        let error = sign_copy("linux", MOORINGCTL, &mut tools, &mut out).unwrap_err();
         assert!(
-            matches!(error, MooringctlError::NotMacos { os: "linux" }),
+            matches!(
+                error,
+                MooringctlError::NotMacos {
+                    command: "mooringctl",
+                    os: "linux"
+                }
+            ),
             "{error:?}"
         );
         assert_eq!(tools.calls, []);
@@ -1023,7 +1141,7 @@ Internal requirements=none
         let mut tools = FakeTools::new(&executable, &target);
         tools.messages = messages_naming("-o/mooringctl");
         let mut out = Vec::new();
-        let error = sign_copy("macos", &mut tools, &mut out).unwrap_err();
+        let error = sign_copy("macos", MOORINGCTL, &mut tools, &mut out).unwrap_err();
         assert!(
             matches!(&error, MooringctlError::RelativeExecutable { path } if *path == Path::new("-o/mooringctl")),
             "{error:?}"
@@ -1037,7 +1155,7 @@ Internal requirements=none
         );
         let relative = Path::new("Cargo.toml/-o/target");
         let mut tools = FakeTools::new(&executable, relative);
-        let error = sign_copy("macos", &mut tools, &mut out).unwrap_err();
+        let error = sign_copy("macos", MOORINGCTL, &mut tools, &mut out).unwrap_err();
         assert!(
             matches!(&error, MooringctlError::RelativeTargetDirectory { path } if path == relative),
             "{error:?}"
@@ -1058,7 +1176,7 @@ Internal requirements=none
         let partial = target.join("signed").join(partial_name());
         let mut tools = FakeTools::new(&executable, &target);
         let mut out = Vec::new();
-        let error = sign_copy("macos", &mut tools, &mut out).unwrap_err();
+        let error = sign_copy("macos", MOORINGCTL, &mut tools, &mut out).unwrap_err();
         assert!(
             matches!(
                 &error,
@@ -1087,7 +1205,7 @@ Internal requirements=none
         fs::write(&dir, b"a file").unwrap();
         let mut tools = FakeTools::new(&executable, &target);
         let mut out = Vec::new();
-        let error = sign_copy("macos", &mut tools, &mut out).unwrap_err();
+        let error = sign_copy("macos", MOORINGCTL, &mut tools, &mut out).unwrap_err();
         assert!(
             matches!(
                 &error,
@@ -1109,11 +1227,12 @@ Internal requirements=none
         let path = PathBuf::from;
         let signature = || MooringctlError::Signature {
             path: path("/w/target/signed/mooringctl.7.partial"),
+            identifier: SIGNING_IDENTIFIER,
             fault: SignatureFault::Different("mooringctl-020ac5c52e8594c4".to_owned()),
         };
         for (error, text) in [
             (
-                MooringctlError::NotMacos { os: "linux" },
+                MooringctlError::NotMacos { command: "mooringctl", os: "linux" },
                 "`cargo xtask mooringctl` runs only on macOS, not on linux".to_owned(),
             ),
             (
@@ -1136,7 +1255,10 @@ Internal requirements=none
                 "cannot read cargo's build messages".to_owned(),
             ),
             (
-                MooringctlError::Executables { count: 2 },
+                MooringctlError::Executables {
+                    package: "mooringctl",
+                    count: 2,
+                },
                 "cargo reported 2 `mooringctl` executables, not one".to_owned(),
             ),
             (

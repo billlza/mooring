@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 name = "mooring-macsys"
-description = "macOS kernel interfaces for Mooring: interface index, default gateway, neighbour table, terminal echo"
+description = "macOS kernel interfaces for Mooring: interface index and list, default gateway, neighbour table, open-files limit, terminal echo"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

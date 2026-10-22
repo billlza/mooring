@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::error::{MacsysError, MacsysErrorKind, RouteFault, TerminalCall};
+use crate::error::{MacsysError, MacsysErrorKind, RlimitCall, RouteFault, TerminalCall};
 
 #[test]
 fn every_macsys_error_has_its_kind() {
@@ -78,6 +78,14 @@ fn every_macsys_error_has_its_kind() {
             "the neighbour table holds different entries for the gateway on the interface",
         ),
         (
+            MacsysError::Rlimit {
+                call: RlimitCall::Set,
+                errno: 22,
+            },
+            MacsysErrorKind::Rlimit,
+            "setrlimit of the open-files limit failed with errno 22",
+        ),
+        (
             MacsysError::Terminal {
                 call: TerminalCall::SetAttributes,
                 errno: 25,
@@ -105,7 +113,7 @@ fn every_macsys_error_has_its_kind() {
 }
 
 #[test]
-fn route_faults_and_terminal_calls_are_named() {
+fn route_faults_and_calls_are_named() {
     for (fault, text) in [
         (RouteFault::ShortHeader, "is shorter than its header"),
         (RouteFault::LengthOverrun, "runs past the end of the table"),
@@ -117,9 +125,36 @@ fn route_faults_and_terminal_calls_are_named() {
             RouteFault::SockaddrOverrun,
             "has a socket address that runs past its end",
         ),
+        (
+            RouteFault::UnexpectedType { rtm_type: 1 },
+            "is of type 1, which an interface list does not hold",
+        ),
+        (
+            RouteFault::MissingLink,
+            "describes an interface without a link-layer socket address",
+        ),
+        (RouteFault::ZeroIndex, "describes an interface with index 0"),
+        (
+            RouteFault::InvalidName,
+            "names an interface with an empty or non-UTF-8 name",
+        ),
+        (
+            RouteFault::UnknownInterface,
+            "gives an address of an interface the list has not given",
+        ),
+        (
+            RouteFault::DuplicateInterface,
+            "repeats an interface the list has already given",
+        ),
+        (
+            RouteFault::NonContiguousMask,
+            "has a netmask whose ones are not contiguous",
+        ),
     ] {
         assert_eq!(fault.to_string(), text);
     }
+    assert_eq!(RlimitCall::Get.to_string(), "getrlimit");
+    assert_eq!(RlimitCall::Set.to_string(), "setrlimit");
     assert_eq!(TerminalCall::GetAttributes.to_string(), "tcgetattr");
     assert_eq!(TerminalCall::SetAttributes.to_string(), "tcsetattr");
 }

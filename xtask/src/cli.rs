@@ -16,6 +16,7 @@ pub(crate) enum Command {
     ReleaseAcceptance,
     Clean,
     Mooringctl,
+    Fieldkit,
     App,
     AgentInstall,
     AgentUninstall,
@@ -29,7 +30,7 @@ pub(crate) struct Invocation {
 }
 
 impl Command {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::Ci,
         Self::GraphCheck,
         Self::KindsCoverage,
@@ -38,6 +39,7 @@ impl Command {
         Self::ReleaseAcceptance,
         Self::Clean,
         Self::Mooringctl,
+        Self::Fieldkit,
         Self::App,
         Self::AgentInstall,
         Self::AgentUninstall,
@@ -53,6 +55,7 @@ impl Command {
             Self::ReleaseAcceptance => "release-acceptance",
             Self::Clean => "clean",
             Self::Mooringctl => "mooringctl",
+            Self::Fieldkit => "fieldkit",
             Self::App => "app",
             Self::AgentInstall => "agent-install",
             Self::AgentUninstall => "agent-uninstall",
@@ -71,6 +74,7 @@ impl Command {
             | Self::ReleaseAcceptance
             | Self::Clean
             | Self::Mooringctl
+            | Self::Fieldkit
             | Self::App
             | Self::AgentUninstall => None,
         }
@@ -93,6 +97,9 @@ impl Command {
             Self::Clean => "remove the target directory and report the freed bytes",
             Self::Mooringctl => {
                 "build mooringctl and sign a copy, <target>/signed/mooringctl, with its reverse-DNS identifier (macOS only)"
+            }
+            Self::Fieldkit => {
+                "build fieldkit and sign a copy, <target>/signed/fieldkit, with its reverse-DNS identifier (macOS only)"
             }
             Self::App => {
                 "build Mooring.app at <target>/app with the signed mooringctl inside, Swift tests and warnings gated (macOS only)"
@@ -232,6 +239,7 @@ mod tests {
     #[test]
     fn mooringctl_is_spelt_as_documented() {
         assert_eq!(parse(&["mooringctl"]).unwrap(), Command::Mooringctl);
+        assert_eq!(parse(&["fieldkit"]).unwrap(), Command::Fieldkit);
     }
 
     #[test]

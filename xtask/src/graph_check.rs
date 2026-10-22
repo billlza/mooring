@@ -99,6 +99,15 @@ pub(crate) const ALLOWED_EDGES: &[AllowedEdges] = &[
         normal: &["mooring-export", "mooring-model"],
         dev: &[],
     },
+    // The M2b field measurements (dev-only, never shipped): the model's
+    // types for what they decide (`UplinkBaseline`, `Keepalive`, `Pairing`,
+    // `InterfaceSelector`), and macsys on macOS for the interface list and
+    // the open-files limit.
+    AllowedEdges {
+        krate: "fieldkit",
+        normal: &["mooring-model", "mooring-macsys"],
+        dev: &[],
+    },
 ];
 
 /// Crates that may only ever be dev-dependencies.

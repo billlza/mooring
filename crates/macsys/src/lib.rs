@@ -14,6 +14,13 @@
 //!   [`MacsysError::NeighbourTableEmpty`], and whether the kernel hid the
 //!   table from this process is the caller's judgement (design §15.6
 //!   rule 10);
+//! - [`interfaces`] and [`interface`]: the kernel's interface list
+//!   (`NET_RT_IFLIST2`), each interface's name, own link-layer address,
+//!   flags, MTU, 64-bit byte counters and IPv4 addresses (`fieldkit env`
+//!   and the uplink measurement's byte counts, design §22 M2);
+//! - [`open_files_limit`] and [`raise_open_files`]: the open-files limit
+//!   (`RLIMIT_NOFILE`), which `fieldkit port-ceiling` raises before it
+//!   holds thousands of connections;
 //! - [`controlling_terminal`] and [`EchoOff`]: the process's terminal, and
 //!   its echo switched off while a password is typed.
 //!
@@ -33,13 +40,17 @@
 #![deny(missing_docs)]
 
 mod error;
+mod iflist;
 mod interface;
+mod limits;
 mod route;
 mod terminal;
 #[cfg(test)]
 mod tests;
 
-pub use error::{MacsysError, MacsysErrorKind, RouteFault, TerminalCall};
+pub use error::{MacsysError, MacsysErrorKind, RlimitCall, RouteFault, TerminalCall};
+pub use iflist::{Interface, InterfaceAddrV4, interface, interfaces};
 pub use interface::interface_index;
+pub use limits::{OpenFilesLimit, open_files_limit, raise_open_files};
 pub use route::{default_gateway_v4, neighbour_v4};
 pub use terminal::{EchoOff, controlling_terminal};

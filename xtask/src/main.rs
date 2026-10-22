@@ -90,7 +90,8 @@ fn run(invocation: Invocation) -> Result<(), XtaskError> {
         Command::Acceptance => Ok(acceptance::run(&cargo, &mut out, Gate::Recorded)?),
         Command::ReleaseAcceptance => Ok(acceptance::run(&cargo, &mut out, Gate::Accepted)?),
         Command::Clean => Ok(clean::run(&cargo, &mut out)?),
-        Command::Mooringctl => Ok(mooringctl::run(&cargo, &mut out)?),
+        Command::Mooringctl => Ok(mooringctl::run(&cargo, mooringctl::MOORINGCTL, &mut out)?),
+        Command::Fieldkit => Ok(mooringctl::run(&cargo, mooringctl::FIELDKIT, &mut out)?),
         Command::App => Ok(app::build(&cargo, &mut out)?),
         Command::AgentInstall => match invocation.argument.as_deref() {
             Some(interface) => Ok(app::install_agent(&cargo, &mut out, interface)?),

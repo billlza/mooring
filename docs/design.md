@@ -445,7 +445,9 @@ mooring/
                                       interfaces, for goldens; never a normal or build dependency
     macsys/      mooring-macsys       macOS only (cfg(target_os = "macos"): empty elsewhere), the ONLY crate with unsafe (libc only). Built in revision 7: interface index, the IPv4
                                       default routes and neighbour table (PF_ROUTE sysctl), so the gateway's link-layer address, and the
-                                      terminal echo guard. Later: NET_RT_IFLIST2 (if_data64, AF_LINK) and the PF_ROUTE monitor (M5)
+                                      terminal echo guard. Built 2026-10-22 for fieldkit (M2b): the interface list (NET_RT_IFLIST2:
+                                      name, own link-layer address, flags, MTU, if_data64 byte counters, IPv4 addresses) and the
+                                      open-files limit (RLIMIT_NOFILE). Later: the PF_ROUTE monitor (M5)
     daemon-core/ mooring-daemon-core  daemon state machine, verdicts, probe primitive, latches, control protocol; traits for interfaces,
                                       engines, clock, power, secrets, ssh, router; console (revision 5, §15): MacStatusV1, event journal
                                       and availability, alert machine, SIM forecast, capacity monitor, the MR7450 `model.json` allowlist parser and redactor (revision 7),
@@ -458,10 +460,13 @@ mooring/
                        SecretStore (`LoginKeychain`) for the M7's admin password
     mooring-agent/ (bin, x86_64/aarch64-unknown-linux-musl) bootstrap, serve-ssh, txn, watch, reflect, target-check, accounting, self-test
     e2e/         (dev-only) netns harness and lab harness; never built for release
-    fieldkit/    (dev-only bin, darwin + linux-musl) M2 field measurements (the router capture is `mooringctl router capture` since revision 7); never shipped
+    fieldkit/    (dev-only bin, darwin + linux-musl) M2 field measurements (the router capture is `mooringctl router capture` since revision 7); never shipped.
+                 Built 2026-10-22: `serve` (the VPS side) and `env`, `udp-nat-timeout`, `nat-behaviour`, `public-ips`, `pooling`,
+                 `port-ceiling`, `uplink`, `rtt` (the Mac side), §22 M2b
   xtask/         M1: ci, graph-check, kinds-coverage, deny-skips, acceptance, release-acceptance, clean.
                  Revision 7: mooringctl (builds mooringctl and signs a copy, target/signed/mooringctl, as com.bill.mooring.mooringctl; macOS only, not a ci step; §15.6 rule 10).
                  Revision 9: app (builds target/app/Mooring.app with that copy inside), agent-install <bsd> and agent-uninstall (the development LaunchAgent); macOS only, not ci steps (§5.1).
+                 2026-10-22: fieldkit (builds fieldkit and signs a copy, target/signed/fieldkit, as com.bill.mooring.fieldkit, the same way; macOS only, not a ci step).
                  Later: engines {build,verify,upstream-tests,audit}, govulncheck, cfm-client, lane <name>, m0 …, release, release-verify
   apple/         project.yml (XcodeGen); Packages/MooringKit (swift-tools 6.2, macOS 15, .v6); App/; Power/; Tests/
                  Built in revision 9: project.yml, Packages/MooringKit (the console's Codable mirror, the status stream, its tests) and App/ (the overview and router screens, Localizable.xcstrings); the generated Mooring.xcodeproj is not kept
@@ -497,7 +502,7 @@ mooring/
 | `mooringctl` | `model`, `keys`, `render`, `export`, `agent-proto`, `store`, `macsys`, `daemon-core`. Built (revision 7): `model`, `store`, `macsys`, `daemon-core`; `export` with `user export` and `keys` with `user add` (M5); `render` and `agent-proto` join with the daemon (M5). A workspace member; this row's built part and `ALLOWED_EDGES` match | `fixtures` (M5: the user commands' tests) |
 | `mooring-agent` | `agent-proto` only, plus std, serde, serde_json, thiserror and sha2. **The VPS never renders.** For that reason the dead-man ping rule, which a node applies while the Mac may be gone, lives in agent-proto (`dead_man_pings`), and the notices the node sends are rendered on the Mac into agent-proto's notice grammar (§15.8) | |
 | `e2e` | `model`, `keys`, `render`, `export`, `agent-proto`, `daemon-core` | |
-| `fieldkit` | `model` | |
+| `fieldkit` | `model` (the types its measurements decide: `UplinkBaseline`, `Keepalive`, `Pairing`, `InterfaceSelector`), and `macsys` on macOS (the interface list and the open-files limit, 2026-10-22). This row and `ALLOWED_EDGES` match | |
 
 **The cost of xtask's product edges (D-9).** The xtask edges are normal dependencies, so every `cargo xtask` command, `clean` and `graph-check` included, first compiles `export` and `model` and their dependencies (x509-parser among them; about 60 crates instead of serde, serde_json and thiserror), and stops if they do not compile. While the tree does not build, free the disk with `rm -rf target` instead of `cargo xtask clean`. x509-parser is also built a second time with xtask's narrower feature set, which costs space in the bounded `target/` (D-7).
 
@@ -512,7 +517,7 @@ When the Linux e2e lane exists (M3, on the research computer or hosted CI), the 
 - `clippy -D warnings`.
 - `cargo deny --all-features --locked check -D warnings`: GPL-compatible licences only, and only those the graph uses (`unused-allowed-license = "deny"`); `multiple-versions = "deny"`; warn-level lints promoted to deny.
 - No `*` versions. Every file carries an SPDX header. JSON goldens, which cannot hold a comment, have a REUSE `.license` sidecar; insta snapshots carry it in their description line.
-- The agent links with `rust-lld` for musl *(inference; accepted in M0)*.
+- The agent links with `rust-lld` for musl *(inference; accepted in M0)*. Checked on 2026-10-22 with fieldkit: `.cargo/config.toml` sets `rust-lld` as the `x86_64-unknown-linux-musl` linker, and `cargo build -p fieldkit --release --target x86_64-unknown-linux-musl` on this Mac gave a static-pie ELF that ran on the London VPS (Debian 13). aarch64 is not checked yet.
 
 ### 6.3 Dependencies
 
@@ -2754,11 +2759,11 @@ Revision 5 splits M2 in two:
 - **M2a** needs only the M7, and starts on 2026-10-09.
 - **M2b** needs an hourly London VPS (D-2).
 
-`fieldkit` does not exist yet, and every `fieldkit` measurement needs a VPS sink, so M2a uses tools built into macOS and the M7's own web UI.
+Every `fieldkit` measurement needs a VPS sink, so M2a used tools built into macOS and the M7's own web UI. `fieldkit` exists since 2026-10-22 (below).
 
 **Deliverables:**
 - `docs/measurements/M2.md` with the raw logs. Raw M7 captures stay outside the repository (§15.6).
-- `fieldkit`, a dev-only darwin and linux-musl tool, for M2b. Its VPS-side sink is built on the research computer or in CI, because this Mac has only the `aarch64-apple-darwin` target and no musl linker (critique, section D). Its darwin loopback self-tests run here.
+- `fieldkit`, a dev-only darwin and linux-musl tool, for M2b. Its VPS-side sink was to be built on the research computer or in CI, because this Mac had only the `aarch64-apple-darwin` target and no musl linker (critique, section D); since 2026-10-22 it is built here with the `x86_64-unknown-linux-musl` target and `rust-lld` (§6.2). Its loopback self-tests run here.
 
 **Recorded decisions:**
 - **M2a:**
@@ -2878,13 +2883,16 @@ M2a recorded the M7 gateway's link-layer address (outside the repository), which
 
 **Verification commands** (the Mac is attached to the M7's 2.5GbE port through the USB-C adapter; `<bsd>` is that interface):
 ```
-fieldkit env --json                                   # NET_RT_IFLIST2 lladdr/gateway lladdr, stability across replug and reboot
+cargo xtask fieldkit                                  # builds fieldkit and signs a copy, target/signed/fieldkit (env reads the neighbour table)
+cargo build -p fieldkit --release --target x86_64-unknown-linux-musl   # the VPS copy; on the VPS: fieldkit serve --listen <vps4> --for 26h
+./target/signed/fieldkit env --bind <bsd> > env.json  # NET_RT_IFLIST2 lladdr/gateway lladdr; after replug or reboot: env --bind <bsd> --compare env.json
 fieldkit udp-nat-timeout --bind <bsd> --echo <vps4>:27950 --min 10 --max 300
+fieldkit nat-behaviour --bind <bsd> --echo <vps4>:27950   # mapping and filtering, with echo port B (27951)
 fieldkit pooling --bind <bsd> --reflectors <vpsA>:27900,<vpsB>:27900 --flows 32 --duration 1h
 fieldkit public-ips --bind <bsd> --reflector <vps4>:27900 --duration 24h --interval 5m   # then `whois` each IP → prefixes
 fieldkit port-ceiling --bind <bsd> --target <vps4>:27960 --max 8192
 ping -b <bsd> -D -s 1312 -c 20 <vps4>                 # outer path MTU ≥ 1340 (1312 + 28)
-fieldkit uplink --bind <bsd> --sink <vps4>:27970 --duration 24h --interval 15m          # p10/p50/p90
+fieldkit uplink --bind <bsd> --sink <vps4>:27970 --echo <vps4>:27950 --duration 24h --interval 15m   # p10/p50/p90, loaded RTT; --flows 1, 4, 16
 fieldkit rtt --bind <bsd> --targets <candidate provider IPs>
 # WireGuard over the SMARTY line: VPS kernel wg (ListenPort 27820) + mooring-exit from M0 with a test config (no egress rules):
 wg show wgexit latest-handshakes                      # on the VPS: handshake < 180 s, stable for 1 h across idle periods
@@ -2893,6 +2901,16 @@ nc -b <bsd> <vps4> 27900 ; sudo tcpdump -ni <cfm utun> host <vps4>   # prints th
 pmset -g log | grep -E "Sleep|Wake|DarkWake"          # clamshell on AC, with a NetworkClientActive test assertion held
 ```
 **Stop rule:** if UDP over the SMARTY line fails, stop. A redesign is the user's decision.
+
+**`fieldkit` (built 2026-10-22).** One crate, `crates/fieldkit`, built for macOS (the probes) and Linux musl (`serve`). Every probe binds its sockets to `--bind` (`IP_BOUND_IF` on macOS), writes one JSON line per sample as it is taken and a summary line last, exits 0 when it measured something, whatever it found, and 1 when it could not measure. What the commands and the servers say to each other (`src/wire.rs`):
+- UDP echo, ports A and B (27950, 27951): 32-byte requests and 32-byte answers carrying the source the server saw, so the server never sends more than it received; a request asks for an answer now, after a delay of up to ten minutes (`udp-nat-timeout`), or from the other port (`nat-behaviour`'s filtering test). At most 1024 delayed answers wait at once.
+- TCP reflector (27900): one line, `MFK1 <ipv4>:<port>`, the source seen.
+- TCP port-ceiling target (27960): one byte per connection it holds, so the probe can tell a connection the server holds from one only the kernel's backlog took; it holds at most `--ceiling-max`.
+- TCP sink (27970): after `MFK1 SINK <seconds>` it counts the bytes of each second, reports at the end of the window while the probe may still be sending, and drains the rest. The probe stops at the report and aborts the connection (`SO_LINGER` 0): the bytes still in its socket would otherwise keep the line busy after the sample, which on 2026-10-22 delayed the next sample's opening lines past the sink's first 5 s limit (now 30 s).
+- `serve --for` is required and at most 48 h; the log is counts, never addresses. The servers answer anyone who reaches their ports, so the ports are opened only for a session (M2.md, "Running fieldkit").
+- `udp-nat-timeout` repeats a probe that got no answer before it counts, and reports the largest keepalive §3 admits (half the longest idle time survived, at most 60 s). `nat-behaviour` cannot tell address-dependent filtering from none with one server address. `pooling` records each round's TCP and UDP addresses separately. `uplink` sets the interface's byte counter (macOS, read modulo 2^32 to 1 KiB, see macsys) against the bytes the sink counted.
+
+Not built: the real-path WireGuard goodput (needs `mooring-exit`, M0), the three-client fairness check (`uplink --flows` gives the Jain index of one Mac's flows only) and the CFM coexistence check.
 
 ### M3 — Netns e2e (this Mac via Lima, and hosted CI)
 
