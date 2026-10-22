@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Mooring.app (design §5.1, §6, M7). `cargo xtask app` generates the Xcode
+# project from this spec next to it (apple/Mooring.xcodeproj, not kept in
+# git) and builds it unsigned (CODE_SIGNING_ALLOWED=NO) into the target
+# directory; the bundle is then signed ad hoc there, with the hardened
+# runtime, and with the signed `mooringctl` inside it. Warnings are errors,
+# in Swift as in Rust (design §16).
+name: Mooring
+options:
+  deploymentTarget:
+    macOS: "15.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+packages:
+  MooringKit:
+    path: Packages/MooringKit
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+targets:
+  Mooring:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        excludes:
+          - Info.plist
+          - "*.license"
+    dependencies:
+      - package: MooringKit
+    settings:
+      base:
+        PRODUCT_NAME: Mooring
+        PRODUCT_BUNDLE_IDENTIFIER: com.bill.mooring
+        INFOPLIST_FILE: App/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        COMBINE_HIDPI_IMAGES: YES
+schemes:
+  Mooring:
+    build:
+      targets:
+        Mooring: all

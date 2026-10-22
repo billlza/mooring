@@ -139,7 +139,8 @@
                 "band": 20,
                 "dl_bandwidth": "mhz10"
               },
-              "secondary": []
+              "secondary": [],
+              "unassigned_slots": 0
             },
             "ca_secondary_count": 0,
             "lte": {

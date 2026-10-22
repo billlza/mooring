@@ -10,6 +10,7 @@ use std::io::Write;
 
 use crate::XtaskError;
 use crate::acceptance::{self, Gate};
+use crate::app;
 use crate::cargo::Cargo;
 use crate::output::say;
 use crate::{deny_skips, graph_check, kinds};
@@ -21,6 +22,7 @@ enum Step {
     KindsCoverage,
     DenySkips,
     Acceptance,
+    SwiftTests,
 }
 
 /// `cargo deny` runs with `-D warnings` so its warn-level diagnostics (for
@@ -50,6 +52,7 @@ const STEPS: &[Step] = &[
     Step::Acceptance,
     Step::Cargo(&["nextest", "run", "--workspace", "--locked"]),
     Step::Cargo(&["test", "--workspace", "--doc", "--locked"]),
+    Step::SwiftTests,
 ];
 
 pub(crate) fn run(cargo: &Cargo, out: &mut impl Write) -> Result<(), XtaskError> {
@@ -60,6 +63,7 @@ pub(crate) fn run(cargo: &Cargo, out: &mut impl Write) -> Result<(), XtaskError>
             Step::KindsCoverage => "cargo xtask kinds-coverage".to_owned(),
             Step::DenySkips => "cargo xtask deny-skips".to_owned(),
             Step::Acceptance => "cargo xtask acceptance".to_owned(),
+            Step::SwiftTests => "xcrun swift test (MooringKit, macOS only)".to_owned(),
         };
         say!(out, "==> [{}/{}] {label}", index + 1, STEPS.len())?;
         out.flush().map_err(crate::output::OutputError)?;
@@ -69,8 +73,35 @@ pub(crate) fn run(cargo: &Cargo, out: &mut impl Write) -> Result<(), XtaskError>
             Step::KindsCoverage => kinds::run(cargo, out)?,
             Step::DenySkips => deny_skips::run(cargo, out)?,
             Step::Acceptance => acceptance::run(cargo, out, Gate::Recorded)?,
+            Step::SwiftTests => app::swift_tests(cargo, out)?,
         }
     }
     say!(out, "ci: all {} steps passed", STEPS.len())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{STEPS, Step};
+
+    /// The gates run in this order: the static checks, the in-process
+    /// checks, the Rust tests, and last MooringKit's tests, the console
+    /// contract's other side.
+    #[test]
+    fn the_gates_end_with_the_swift_tests() {
+        assert_eq!(STEPS.len(), 10);
+        assert_eq!(STEPS[0], Step::Cargo(&["fmt", "--all", "--check"]));
+        assert_eq!(
+            STEPS[7],
+            Step::Cargo(&["nextest", "run", "--workspace", "--locked"])
+        );
+        assert_eq!(STEPS.last(), Some(&Step::SwiftTests));
+        assert_eq!(
+            STEPS
+                .iter()
+                .filter(|step| **step == Step::SwiftTests)
+                .count(),
+            1
+        );
+    }
 }

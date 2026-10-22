@@ -1,0 +1,84 @@
+{
+  "no_deployment": {
+    "version": 1,
+    "at": 1792639800,
+    "router": {
+      "available": {
+        "polled_at": 1792639780,
+        "status": {
+          "firmware": "NTGX75_10.04.43.01",
+          "web_app": null,
+          "uptime_secs": 523014,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "power": {
+            "state": "online",
+            "battery": {
+              "charge": 100,
+              "state": "normal",
+              "charging": false,
+              "source": "quick_charge",
+              "temperature_c": 33
+            }
+          },
+          "sim_spn": null,
+          "radio": {
+            "attached": {
+              "network_service": "lte",
+              "data_service": "lte_plus",
+              "band": "B3",
+              "lte_carriers": {
+                "primary": {
+                  "band": 3,
+                  "dl_bandwidth": "mhz20"
+                },
+                "secondary": [],
+                "unassigned_slots": 1
+              },
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1000,
+                "rsrq": -120,
+                "sinr": 20,
+                "rssi": -690
+              },
+              "nr": {
+                "rsrp": null,
+                "rsrq": null,
+                "sinr": null
+              },
+              "network": "3 UK",
+              "plmn": {
+                "mcc": "234",
+                "mnc": "20"
+              },
+              "session_secs": 86400
+            }
+          },
+          "counters": {
+            "rx_bytes": 81000000000,
+            "tx_bytes": 16412311040
+          },
+          "wifi": {
+            "enabled": false,
+            "main": "off",
+            "guest": "off",
+            "aux": "off",
+            "clients": 0
+          },
+          "settings": {
+            "wifi_offload": false,
+            "ethernet_offload": false,
+            "upnp": true,
+            "analytics": false,
+            "insight_active": false
+          },
+          "unread_sms": 0
+        }
+      }
+    },
+    "advisories": [
+      "upnp_on"
+    ]
+  }
+}

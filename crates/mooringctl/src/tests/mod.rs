@@ -8,6 +8,7 @@
 
 mod add;
 mod capture;
+mod daemon;
 mod export;
 mod flow;
 mod form;

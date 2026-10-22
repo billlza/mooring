@@ -666,10 +666,13 @@
     }
   ],
   "network_service": [
-    "nr5g"
+    "nr5g",
+    "lte"
   ],
   "data_service": [
-    "nr_sub6"
+    "nr_sub6",
+    "lte",
+    "lte_plus"
   ],
   "radio_state": [
     "no_service",
@@ -683,7 +686,8 @@
             "band": 3,
             "dl_bandwidth": "mhz20"
           },
-          "secondary": []
+          "secondary": [],
+          "unassigned_slots": 0
         },
         "ca_secondary_count": 0,
         "lte": {
@@ -734,7 +738,8 @@
     "auth_failed",
     "identity_mismatch",
     "unsupported",
-    "malformed"
+    "malformed",
+    "local_failure"
   ],
   "router_reading": [
     {
@@ -767,7 +772,8 @@
                   "band": 3,
                   "dl_bandwidth": "mhz20"
                 },
-                "secondary": []
+                "secondary": [],
+                "unassigned_slots": 0
               },
               "ca_secondary_count": 0,
               "lte": {
@@ -817,6 +823,13 @@
         "last_polled_at": null
       }
     }
+  ],
+  "router_advisory": [
+    "wifi_radio_on",
+    "wifi_offload_on",
+    "ethernet_offload_on",
+    "upnp_on",
+    "insight_active"
   ],
   "band": [
     "B3",

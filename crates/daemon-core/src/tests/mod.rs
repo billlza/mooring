@@ -7,6 +7,7 @@
 
 mod alerts;
 mod canary;
+mod control;
 mod netgear;
 mod notify;
 mod policy;

@@ -14,6 +14,10 @@
 //! - [`router`]: the M7's status types, and the MR7450 `model.json`
 //!   allowlist parser and redactor ([`router::netgear`]).
 //! - [`status`]: [`MacStatusV1`] itself.
+//! - [`console`]: [`ConsoleStatus`], the console's document: the
+//!   deployment's status, or the router alone before `exit init`.
+//! - [`control`]: the daemon's control channel, its requests, replies and
+//!   line bounds.
 //! - [`report`]: the remote viewer's report projected from it.
 //!
 //! # Purity
@@ -44,6 +48,8 @@
 
 pub mod alert;
 pub mod capacity;
+pub mod console;
+pub mod control;
 pub mod error;
 pub mod forecast;
 pub mod network;
@@ -65,12 +71,14 @@ pub use alert::{
     AlertTiming, OpenAlert, Severity,
 };
 pub use capacity::{CapacityMonitor, CapacitySample, CapacityStatus, CapacityThresholds};
+pub use console::{ConsoleStatus, UNDEPLOYED_STATUS_VERSION, UndeployedStatus};
+pub use control::{DaemonReply, DaemonRequest, Refusal};
 pub use error::{
-    AlertError, AlertErrorKind, CapacityError, CapacityErrorKind, CarrierFaultKind, FieldFaultKind,
-    FigureError, FigureErrorKind, ForecastError, ForecastErrorKind, NotifyError, NotifyErrorKind,
-    PolicyError, PolicyErrorKind, ReportError, ReportErrorKind, RouterParseError,
-    RouterParseErrorKind, RouterValueError, RouterValueErrorKind, StatusError, StatusErrorKind,
-    UsageError, UsageErrorKind,
+    AlertError, AlertErrorKind, CapacityError, CapacityErrorKind, CarrierFaultKind, ConsoleError,
+    ConsoleErrorKind, ControlError, ControlErrorKind, FieldFaultKind, FigureError, FigureErrorKind,
+    ForecastError, ForecastErrorKind, NotifyError, NotifyErrorKind, PolicyError, PolicyErrorKind,
+    ReportError, ReportErrorKind, RouterParseError, RouterParseErrorKind, RouterValueError,
+    RouterValueErrorKind, StatusError, StatusErrorKind, UsageError, UsageErrorKind,
 };
 pub use forecast::{DailySimBytes, SimForecast};
 pub use network::{ForeignNetworkFinding, NetworkSnapshot, foreign_networks};

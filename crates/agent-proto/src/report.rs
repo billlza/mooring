@@ -181,6 +181,10 @@ named_enum! {
     pub enum ReportDataService {
         /// The router's `5GSUB6`: a 5G sub-6 GHz data service.
         NrSub6,
+        /// The router's `4G`: an LTE data service.
+        Lte,
+        /// The router's `4GPLUS`: what it shows as 4G+.
+        LtePlus,
     }
 }
 
@@ -721,7 +725,7 @@ mod tests {
         );
         assert_eq!(ExitPhase::longest_name(), "Preflight".len());
         assert_eq!(ReportAccuracy::longest_name(), "LowerBound".len());
-        assert_eq!(ReportDataService::longest_name(), "NrSub6".len());
+        assert_eq!(ReportDataService::longest_name(), "LtePlus".len());
         assert_eq!(ReportRadioSystem::longest_name(), "Lte".len());
         assert_eq!(ReportUserStatus::longest_name(), "RevokePending".len());
         assert_eq!(ReportSeverity::longest_name(), "Critical".len());
@@ -731,7 +735,7 @@ mod tests {
         );
         // Pinned so that a change to the bound is deliberate; it is far
         // below both frame limits (1 MiB).
-        assert_eq!(MAX_MAC_REPORT_BYTES, 178_954);
+        assert_eq!(MAX_MAC_REPORT_BYTES, 178_955);
     }
 
     /// A band number is 1..=999, every `u16` checked, on decode too.

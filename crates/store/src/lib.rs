@@ -39,6 +39,12 @@
 //! 0600, under the same lock), and [`read_router_pin`] reads it back
 //! (design §15.6 rule 4).
 //!
+//! # The status snapshot
+//!
+//! [`write_status_snapshot`] replaces `status.json`, the daemon's copy of
+//! its latest console status for diagnosis, with the same durable write
+//! (design §10.1).
+//!
 //! # Secrets
 //!
 //! The state holds no secrets. They live in a [`SecretStore`]; the
@@ -59,6 +65,7 @@ mod migrate;
 mod ordered;
 mod router_pin;
 mod secrets;
+mod status_snapshot;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -74,4 +81,5 @@ pub use secrets::{
     InMemorySecretStore, SecretOp, SecretStore, SecretStoreError, SecretStoreErrorKind,
     SnapshotReadError, SnapshotReadErrorKind, read_snapshot,
 };
+pub use status_snapshot::{STATUS_SNAPSHOT_FILE, write_status_snapshot};
 pub use store::{LOCK_FILE, STATE_FILE, Store};

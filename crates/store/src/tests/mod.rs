@@ -20,6 +20,7 @@ mod ordering;
 mod properties;
 mod router_pin;
 mod secrets;
+mod status_snapshot;
 mod taxonomy;
 
 /// The raw bytes of `state.json`.

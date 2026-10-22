@@ -319,13 +319,13 @@ fn device_vocabularies_hold_the_observed_values_only() {
         NetworkService::ALL,
         NetworkService::wire,
         NetworkService::from_wire,
-        &[("Nr5gService", "nr5g")],
+        &[("Nr5gService", "nr5g"), ("LteService", "lte")],
     );
     check(
         DataService::ALL,
         DataService::wire,
         DataService::from_wire,
-        &[("5GSUB6", "nr_sub6")],
+        &[("5GSUB6", "nr_sub6"), ("4G", "lte"), ("4GPLUS", "lte_plus")],
     );
     check(
         ThermalState::ALL,
@@ -388,11 +388,23 @@ fn lte_carriers_are_bounded_and_primary_first_by_type() {
     let primary = carrier(3, LteBandwidth::Mhz20);
     let secondary = |count| vec![carrier(20, LteBandwidth::Mhz10); count];
     assert_eq!(LteCarriers::MAX_SECONDARY, 6);
-    let six = LteCarriers::new(primary, secondary(6)).unwrap();
+    let six = LteCarriers::new(primary, secondary(6), 0).unwrap();
     assert_eq!(six.primary(), primary);
     assert_eq!(six.secondary(), secondary(6).as_slice());
     assert_eq!(
-        LteCarriers::new(primary, secondary(7)),
+        LteCarriers::new(primary, secondary(7), 0),
+        Err(RouterValueError::TooManySecondaryCarriers { count: 7 })
+    );
+    // Unassigned slots count toward the bound.
+    let five_and_one = LteCarriers::new(primary, secondary(5), 1).unwrap();
+    assert_eq!(five_and_one.secondary().len(), 5);
+    assert_eq!(five_and_one.unassigned_slots(), 1);
+    assert_eq!(
+        LteCarriers::new(primary, secondary(6), 1),
+        Err(RouterValueError::TooManySecondaryCarriers { count: 7 })
+    );
+    assert_eq!(
+        LteCarriers::new(primary, Vec::new(), 7),
         Err(RouterValueError::TooManySecondaryCarriers { count: 7 })
     );
     let json = serde_json::to_string(&six).unwrap();
@@ -404,10 +416,33 @@ fn lte_carriers_are_bounded_and_primary_first_by_type() {
         1,
     );
     assert!(serde_json::from_str::<LteCarriers>(&seven).is_err());
-    let none = LteCarriers::new(primary, Vec::new()).unwrap();
+    let none = LteCarriers::new(primary, Vec::new(), 0).unwrap();
     assert_eq!(
         serde_json::to_string(&none).unwrap(),
-        r#"{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[]}"#
+        r#"{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[],"unassigned_slots":0}"#
+    );
+    let slot = LteCarriers::new(primary, Vec::new(), 1).unwrap();
+    let slot_json = serde_json::to_string(&slot).unwrap();
+    assert_eq!(
+        slot_json,
+        r#"{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[],"unassigned_slots":1}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<LteCarriers>(&slot_json).unwrap(),
+        slot
+    );
+    // The count is required, and bounded on decode too.
+    assert!(
+        serde_json::from_str::<LteCarriers>(
+            r#"{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[]}"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<LteCarriers>(
+            r#"{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[],"unassigned_slots":7}"#
+        )
+        .is_err()
     );
     assert!(
         serde_json::from_str::<LteCarriers>(r#"{"primary":{"band":3,"dl_bandwidth":"mhz20"}}"#)
@@ -441,7 +476,7 @@ pub(crate) fn status() -> RouterStatus {
             data_service: DataService::NrSub6,
             band: Band::Lte(BandNumber::new(3).unwrap()),
             lte_carriers: Some(
-                LteCarriers::new(carrier(3, LteBandwidth::Mhz20), Vec::new()).unwrap(),
+                LteCarriers::new(carrier(3, LteBandwidth::Mhz20), Vec::new(), 0).unwrap(),
             ),
             ca_secondary_count: 0,
             lte: LteSignal {
@@ -486,6 +521,51 @@ pub(crate) fn status() -> RouterStatus {
 }
 
 /// The M2a reading as the Mac polled it.
+/// Each setting the exit needs off gives its advisory, in their order;
+/// Analytics gives none.
+#[test]
+fn the_settings_the_exit_needs_off_give_advisories() {
+    use crate::router::RouterAdvisory as A;
+    assert_eq!(status().advisories(), []);
+    let with = |change: &dyn Fn(&mut RouterStatusParts)| {
+        let mut parts = status().into_parts();
+        change(&mut parts);
+        RouterStatus::new(parts).unwrap().advisories()
+    };
+    assert_eq!(with(&|p| p.wifi.enabled = true), [A::WifiRadioOn]);
+    assert_eq!(
+        with(&|p| p.settings.wifi_offload = true),
+        [A::WifiOffloadOn]
+    );
+    assert_eq!(
+        with(&|p| p.settings.ethernet_offload = true),
+        [A::EthernetOffloadOn]
+    );
+    assert_eq!(with(&|p| p.settings.upnp = true), [A::UpnpOn]);
+    assert_eq!(
+        with(&|p| p.settings.insight_active = true),
+        [A::InsightActive]
+    );
+    assert_eq!(with(&|p| p.settings.analytics = true), []);
+    assert_eq!(
+        with(&|p| {
+            p.settings.insight_active = true;
+            p.settings.upnp = true;
+            p.settings.ethernet_offload = true;
+            p.settings.wifi_offload = true;
+            p.wifi.enabled = true;
+            p.settings.analytics = true;
+        }),
+        [
+            A::WifiRadioOn,
+            A::WifiOffloadOn,
+            A::EthernetOffloadOn,
+            A::UpnpOn,
+            A::InsightActive
+        ]
+    );
+}
+
 pub(crate) fn reading() -> RouterReading {
     RouterReading::Available {
         polled_at: UnixTime::from_secs(1_791_919_200),
@@ -501,7 +581,7 @@ const READING_JSON: &str = concat!(
     r#""power":{"state":"online","battery":{"charge":100,"state":"normal","charging":false,"source":"quick_charge","temperature_c":32}},"#,
     r#""sim_spn":"CMLink","#,
     r#""radio":{"attached":{"network_service":"nr5g","data_service":"nr_sub6","band":"B3","#,
-    r#""lte_carriers":{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[]},"ca_secondary_count":0,"#,
+    r#""lte_carriers":{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[],"unassigned_slots":0},"ca_secondary_count":0,"#,
     r#""lte":{"rsrp":-1040,"rsrq":-170,"sinr":0,"rssi":-720},"nr":{"rsrp":null,"rsrq":null,"sinr":null},"#,
     r#""network":"CMLink","plmn":{"mcc":"234","mnc":"30"},"session_secs":359217}},"#,
     r#""counters":{"rx_bytes":591655199,"tx_bytes":188784597},"#,
@@ -538,7 +618,8 @@ fn the_router_reading_has_a_fixed_encoding() {
     for missing in [
         r#","sinr":null}"#,
         r#","rssi":-720"#,
-        r#""lte_carriers":{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[]},"#,
+        r#""lte_carriers":{"primary":{"band":3,"dl_bandwidth":"mhz20"},"secondary":[],"unassigned_slots":0},"#,
+        r#","unassigned_slots":0}"#,
     ] {
         assert!(json.contains(missing), "{missing}");
         let without = json.replacen(missing, if missing.ends_with('}') { "}" } else { "" }, 1);
@@ -650,6 +731,7 @@ fn every_router_value_error_kind_is_named_once() {
             LteCarriers::new(
                 carrier(3, LteBandwidth::Mhz20),
                 vec![carrier(1, LteBandwidth::Mhz5); 7],
+                0,
             )
             .unwrap_err(),
         ),
@@ -666,4 +748,62 @@ fn every_router_value_error_kind_is_named_once() {
         errors.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
         RouterValueErrorKind::ALL
     );
+}
+
+/// A poll's outcome becomes the panel: a status read is shown with its
+/// poll's time; a failed poll shows why, with the last successful poll
+/// carried over, and never an earlier status as if it were current.
+#[test]
+fn a_poll_outcome_becomes_the_panel() {
+    let first = UnixTime::from_secs(1_000);
+    let second = UnixTime::from_secs(1_060);
+    let third = UnixTime::from_secs(1_120);
+    let read = RouterReading::after_poll(None, first, Ok(status()));
+    assert_eq!(
+        read,
+        RouterReading::Available {
+            polled_at: first,
+            status: Box::new(status()),
+        }
+    );
+    assert_eq!(read.last_successful_poll(), Some(first));
+    let failed = RouterReading::after_poll(
+        Some(&read),
+        second,
+        Err(RouterUnavailableReason::Unreachable),
+    );
+    assert_eq!(
+        failed,
+        RouterReading::Unavailable {
+            reason: RouterUnavailableReason::Unreachable,
+            last_polled_at: Some(first),
+        }
+    );
+    // A second failure keeps the same last success and takes its own reason.
+    let again = RouterReading::after_poll(
+        Some(&failed),
+        third,
+        Err(RouterUnavailableReason::LocalFailure),
+    );
+    assert_eq!(
+        again,
+        RouterReading::Unavailable {
+            reason: RouterUnavailableReason::LocalFailure,
+            last_polled_at: Some(first),
+        }
+    );
+    assert_eq!(again.last_successful_poll(), Some(first));
+    // Before any success there is none to carry.
+    let never = RouterReading::after_poll(None, first, Err(RouterUnavailableReason::AuthFailed));
+    assert_eq!(never.last_successful_poll(), None);
+    let still_never = RouterReading::after_poll(
+        Some(&never),
+        second,
+        Err(RouterUnavailableReason::AuthFailed),
+    );
+    assert_eq!(still_never.last_successful_poll(), None);
+    // A success after failures is current again.
+    let recovered = RouterReading::after_poll(Some(&again), third, Ok(status()));
+    assert_eq!(recovered.last_successful_poll(), Some(third));
+    assert!(matches!(recovered, RouterReading::Available { .. }));
 }

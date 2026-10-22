@@ -48,6 +48,9 @@ pub(crate) struct Env<'a> {
     pub(crate) stdin: &'a mut dyn Read,
     /// Whether Time Machine excludes a folder (`tmutil` in the binary).
     pub(crate) backups: &'a dyn BackupCheck,
+    /// The id of this process's parent (`getppid` in the binary): when the
+    /// parent exits, launchd adopts the process and the id changes.
+    pub(crate) parent: &'a dyn Fn() -> u32,
 }
 
 /// The system clock, in whole seconds since the epoch.
@@ -90,6 +93,23 @@ pub(crate) fn run(
             format,
             out: path,
         }) => crate::user::export(env, out, err, &user, format.into(), &path),
+        Command::Status {
+            follow,
+            json,
+            until_parent_exits,
+        } => crate::status::status(
+            env,
+            out,
+            if follow {
+                crate::status::Reading::Follow { until_parent_exits }
+            } else {
+                crate::status::Reading::Once
+            },
+            json,
+        ),
+        Command::Daemon { router_interface } => {
+            crate::daemon::run(env, err, router_interface.as_ref())
+        }
     };
     let Err(error) = result else {
         return 0;
@@ -228,7 +248,7 @@ fn status(
         })
         .map_err(|error| output(io::Error::other(error)))?
     } else {
-        summary(interface, polled_at, &status).map_err(|_| LocalError::Clock)?
+        summary(Some(interface), polled_at, &status).map_err(|_| LocalError::Clock)?
     };
     out.write_all(text.as_bytes()).map_err(output)
 }

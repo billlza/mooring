@@ -32,6 +32,12 @@ const CONNECTED: &str = "Connected";
 /// The prefix of an LTE band in `wwanadv.curBand`.
 const LTE_BAND_PREFIX: &str = "LTE B";
 
+/// The band the M7 lists for an unassigned secondary-carrier slot.
+const UNASSIGNED_SLOT_BAND: u16 = 0;
+
+/// The downlink bandwidth the M7 lists for an unassigned slot.
+const UNASSIGNED_SLOT_BANDWIDTH: &str = "Unknown";
+
 /// The leaves one walk extracted, and the carrier list's elements.
 #[derive(Debug, Default)]
 pub(crate) struct Leaves {
@@ -500,7 +506,8 @@ fn current_band(leaves: &Leaves) -> Result<Band, RouterParseError> {
 
 /// `wwan.lteBandInfo`: the carriers, then exactly one empty object as a
 /// terminator (`[{}]` alone: no carrier); the first carrier is the primary,
-/// every other one secondary.
+/// every other entry a secondary carrier or an unassigned slot (band 0 and
+/// the bandwidth `Unknown` together; either alone is still refused).
 fn lte_carriers(leaves: &Leaves) -> Result<Option<LteCarriers>, RouterParseError> {
     let carriers = |fault| RouterParseError::Carriers { fault };
     let (last, entries) = leaves
@@ -528,15 +535,35 @@ fn lte_carriers(leaves: &Leaves) -> Result<Option<LteCarriers>, RouterParseError
     }
     let primary = lte_carrier(leaves, first)?;
     let mut secondary = Vec::with_capacity(rest.len());
+    let mut unassigned: usize = 0;
     for &index in rest {
         if leaves.bool_at(NetgearLeaf::LteCarrierPrimary, Some(index))? {
             return Err(carriers(CarrierFaultKind::SecondPrimary));
         }
-        secondary.push(lte_carrier(leaves, index)?);
+        if is_unassigned_slot(leaves, index)? {
+            unassigned += 1;
+        } else {
+            secondary.push(lte_carrier(leaves, index)?);
+        }
     }
-    LteCarriers::new(primary, secondary)
+    let too_many = || carriers(CarrierFaultKind::TooManySecondaries);
+    let unassigned = u8::try_from(unassigned).map_err(|_| too_many())?;
+    LteCarriers::new(primary, secondary, unassigned)
         .map(Some)
-        .map_err(|_| carriers(CarrierFaultKind::TooManySecondaries))
+        .map_err(|_| too_many())
+}
+
+/// Whether the secondary entry at `index` is an unassigned slot: band 0
+/// and the bandwidth `Unknown`, both exactly. Any other entry is read as a
+/// carrier, so band 0 with a bandwidth, or `Unknown` with a band, is still
+/// refused there.
+fn is_unassigned_slot(leaves: &Leaves, index: u16) -> Result<bool, RouterParseError> {
+    let element = Some(index);
+    Ok(
+        leaves.integer_at::<u16>(NetgearLeaf::LteCarrierBand, element)? == UNASSIGNED_SLOT_BAND
+            && leaves.text_at(NetgearLeaf::LteCarrierBandwidth, element)?
+                == UNASSIGNED_SLOT_BANDWIDTH,
+    )
 }
 
 fn lte_carrier(leaves: &Leaves, index: u16) -> Result<LteCarrier, RouterParseError> {

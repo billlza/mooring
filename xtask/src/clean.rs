@@ -16,6 +16,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use crate::app::{self, AppError};
 use crate::cargo::{Cargo, CommandError};
 use crate::metadata::{self, MetadataError};
 use crate::output::{OutputError, say};
@@ -39,9 +40,15 @@ pub(crate) enum CleanError {
     },
     #[error("{} still exists after cargo clean", path.display())]
     NotRemoved { path: PathBuf },
+    #[error(transparent)]
+    App(#[from] AppError),
 }
 
 pub(crate) fn run(cargo: &Cargo, out: &mut impl Write) -> Result<(), CleanError> {
+    if cfg!(target_os = "macos") {
+        // The development agent runs from the target directory.
+        app::refuse_while_agent_loaded_on_this_mac(cargo.workspace_root())?;
+    }
     let metadata = metadata::load(cargo, &["--no-deps"])?;
     let roots = distinct_roots([metadata.target_directory, metadata.build_directory]);
     let mut seen = BTreeSet::new();

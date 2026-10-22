@@ -17,7 +17,8 @@
 //! [`WebAppVersion::MAX_DIGIT_RUN`]).
 //!
 //! The M7 is not interpreted beyond what it reports: it names its network
-//! and data services itself (`Nr5gService`, `5GSUB6`), its LTE and NR
+//! and data services itself (`Nr5gService` and `5GSUB6` in M2a,
+//! `LteService` with `4G` or `4GPLUS` on the SMARTY SIM), its LTE and NR
 //! readings are kept apart, and a reading it reports as `-32768` is `None`
 //! (not reported). The M2a capture shows why: the M7 claimed `5GSUB6` while
 //! every NR reading was `-32768` and its only carrier was LTE band 3, so an
@@ -597,6 +598,9 @@ device_vocabulary! {
     pub enum NetworkService {
         /// `Nr5gService` (M2a).
         Nr5g = "Nr5gService",
+        /// `LteService` (the SMARTY SIM, 2026-10-16 and 17: every one of
+        /// 77 captures).
+        Lte = "LteService",
     }
 }
 
@@ -607,6 +611,12 @@ device_vocabulary! {
         /// `5GSUB6`: the M7 reports a 5G sub-6 GHz data service (M2a, with
         /// no NR reading reported and an LTE primary carrier).
         NrSub6 = "5GSUB6",
+        /// `4G`: an LTE data service (the SMARTY SIM, 2026-10-16 and 17).
+        Lte = "4G",
+        /// `4GPLUS`: what the M7's own screen shows as 4G+ (the SMARTY SIM,
+        /// 2026-10-16; *inference:* LTE-Advanced, which the M7 claimed while
+        /// it counted no secondary carrier, so it is kept as its claim).
+        LtePlus = "4GPLUS",
     }
 }
 
@@ -685,12 +695,21 @@ pub struct LteCarrier {
 }
 
 /// The LTE carriers: the primary first, then at most
-/// [`LteCarriers::MAX_SECONDARY`] secondary carriers.
+/// [`LteCarriers::MAX_SECONDARY`] secondary entries, each a secondary
+/// carrier or an unassigned slot.
+///
+/// An unassigned slot is an entry the M7 listed after the primary with
+/// band 0 and the bandwidth `Unknown`: it did so in 2 of 77 captures with
+/// the SMARTY SIM (2026-10-16 and 17), each time with `wwan.ca.SCCcount`
+/// 0, so it is read as a secondary-carrier slot that holds no carrier
+/// *(inference)*. It is counted, not listed as a carrier, so the carriers
+/// are only real ones and no entry is dropped unseen.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "LteCarriersRepr", into = "LteCarriersRepr")]
 pub struct LteCarriers {
     primary: LteCarrier,
     secondary: Vec<LteCarrier>,
+    unassigned_slots: u8,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -698,23 +717,33 @@ pub struct LteCarriers {
 struct LteCarriersRepr {
     primary: LteCarrier,
     secondary: Vec<LteCarrier>,
+    unassigned_slots: u8,
 }
 
 impl LteCarriers {
-    /// The most secondary carriers accepted: a plausibility bound
-    /// (inference; the M2a capture showed none), above what LTE modems of
-    /// the M7's class aggregate, that refuses a runaway list.
+    /// The most secondary entries accepted, carriers and unassigned slots
+    /// together: a plausibility bound (inference; the M2a capture showed
+    /// none), above what LTE modems of the M7's class aggregate, that
+    /// refuses a runaway list.
     pub const MAX_SECONDARY: usize = 6;
 
     /// Accepts a primary and at most [`Self::MAX_SECONDARY`] secondary
-    /// carriers; that bound is its only rule (`TooManySecondaryCarriers`).
-    pub fn new(primary: LteCarrier, secondary: Vec<LteCarrier>) -> Result<Self, RouterValueError> {
-        if secondary.len() > Self::MAX_SECONDARY {
-            return Err(RouterValueError::TooManySecondaryCarriers {
-                count: secondary.len(),
-            });
+    /// entries, carriers and unassigned slots together; that bound is its
+    /// only rule (`TooManySecondaryCarriers`).
+    pub fn new(
+        primary: LteCarrier,
+        secondary: Vec<LteCarrier>,
+        unassigned_slots: u8,
+    ) -> Result<Self, RouterValueError> {
+        let count = secondary.len() + usize::from(unassigned_slots);
+        if count > Self::MAX_SECONDARY {
+            return Err(RouterValueError::TooManySecondaryCarriers { count });
         }
-        Ok(Self { primary, secondary })
+        Ok(Self {
+            primary,
+            secondary,
+            unassigned_slots,
+        })
     }
 
     /// The primary carrier.
@@ -728,13 +757,19 @@ impl LteCarriers {
     pub fn secondary(&self) -> &[LteCarrier] {
         &self.secondary
     }
+
+    /// How many unassigned secondary slots the M7 listed.
+    #[must_use]
+    pub const fn unassigned_slots(&self) -> u8 {
+        self.unassigned_slots
+    }
 }
 
 impl TryFrom<LteCarriersRepr> for LteCarriers {
     type Error = RouterValueError;
 
     fn try_from(repr: LteCarriersRepr) -> Result<Self, Self::Error> {
-        Self::new(repr.primary, repr.secondary)
+        Self::new(repr.primary, repr.secondary, repr.unassigned_slots)
     }
 }
 
@@ -743,6 +778,7 @@ impl From<LteCarriers> for LteCarriersRepr {
         Self {
             primary: carriers.primary,
             secondary: carriers.secondary,
+            unassigned_slots: carriers.unassigned_slots,
         }
     }
 }
@@ -881,7 +917,8 @@ pub struct RouterWifi {
     pub clients: u16,
 }
 
-/// The M7 settings the exit depends on staying off.
+/// The M7's settings the console reads. All but Analytics are ones the
+/// exit needs off ([`RouterAdvisory`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouterSettings {
@@ -896,6 +933,26 @@ pub struct RouterSettings {
     /// Whether NETGEAR Insight, a cloud control path, is active
     /// (`insight.active`).
     pub insight_active: bool,
+}
+
+/// A setting the M7 reports on that the exit needs off: its Wi-Fi radio,
+/// offloads and UPnP (design §2), and NETGEAR Insight, a cloud control
+/// path to the uplink (§15.6). Each is reported, never acted on (§15.6 rule
+/// 8). NETGEAR Analytics is read and shown, but the design asks nothing of
+/// it, so it is not one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouterAdvisory {
+    /// The Wi-Fi radio is on.
+    WifiRadioOn,
+    /// Wi-Fi offload is on.
+    WifiOffloadOn,
+    /// Ethernet offload is on.
+    EthernetOffloadOn,
+    /// UPnP is on.
+    UpnpOn,
+    /// NETGEAR Insight is active.
+    InsightActive,
 }
 
 /// Every part of a [`RouterStatus`], unchecked. This is also its wire
@@ -944,6 +1001,26 @@ pub struct RouterStatusParts {
 pub struct RouterStatus(RouterStatusParts);
 
 impl RouterStatus {
+    /// The settings the exit needs off that are on, in the order of
+    /// [`RouterAdvisory`]'s variants.
+    #[must_use]
+    pub fn advisories(&self) -> Vec<RouterAdvisory> {
+        let parts = self.parts();
+        [
+            (parts.wifi.enabled, RouterAdvisory::WifiRadioOn),
+            (parts.settings.wifi_offload, RouterAdvisory::WifiOffloadOn),
+            (
+                parts.settings.ethernet_offload,
+                RouterAdvisory::EthernetOffloadOn,
+            ),
+            (parts.settings.upnp, RouterAdvisory::UpnpOn),
+            (parts.settings.insight_active, RouterAdvisory::InsightActive),
+        ]
+        .into_iter()
+        .filter_map(|(on, advisory)| on.then_some(advisory))
+        .collect()
+    }
+
     /// Checks `parts`: an attached radio's session is no longer than the
     /// uptime, its only rule (`SessionExceedsUptime`).
     pub fn new(parts: RouterStatusParts) -> Result<Self, RouterValueError> {
@@ -1001,6 +1078,10 @@ pub enum RouterUnavailableReason {
     Unsupported,
     /// The device's answer could not be read as a status.
     Malformed,
+    /// The Mac could not run the poll: its keychain or its kernel's tables
+    /// failed, so the M7 was not asked or its answer not kept. The daemon's
+    /// log names the cause.
+    LocalFailure,
 }
 
 /// The router panel: a status, or why there is none. Never a default.
@@ -1024,4 +1105,38 @@ pub enum RouterReading {
         #[serde(deserialize_with = "Option::deserialize")]
         last_polled_at: Option<UnixTime>,
     },
+}
+
+impl RouterReading {
+    /// The panel after a poll at `polled_at` that ended in `outcome`: the
+    /// status it read, or why there is none with the last successful poll
+    /// carried over from `previous` (none before the first poll). A failed
+    /// poll never keeps showing an earlier status as if it were current.
+    #[must_use]
+    pub fn after_poll(
+        previous: Option<&Self>,
+        polled_at: UnixTime,
+        outcome: Result<RouterStatus, RouterUnavailableReason>,
+    ) -> Self {
+        match outcome {
+            Ok(status) => Self::Available {
+                polled_at,
+                status: Box::new(status),
+            },
+            Err(reason) => Self::Unavailable {
+                reason,
+                last_polled_at: previous.and_then(Self::last_successful_poll),
+            },
+        }
+    }
+
+    /// When the last successful poll was: this status's, or the one an
+    /// unavailable panel carries.
+    #[must_use]
+    pub const fn last_successful_poll(&self) -> Option<UnixTime> {
+        match self {
+            Self::Available { polled_at, .. } => Some(*polled_at),
+            Self::Unavailable { last_polled_at, .. } => *last_polled_at,
+        }
+    }
 }

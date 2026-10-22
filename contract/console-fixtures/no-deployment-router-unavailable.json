@@ -1,0 +1,13 @@
+{
+  "no_deployment": {
+    "version": 1,
+    "at": 1792639800,
+    "router": {
+      "unavailable": {
+        "reason": "local_failure",
+        "last_polled_at": 1792639740
+      }
+    },
+    "advisories": []
+  }
+}
