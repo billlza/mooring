@@ -58,7 +58,7 @@ impl<'a> Sockaddr<'a> {
     /// Whether this socket address is long enough to name a family and
     /// names `family`. (The kernel writes an empty netmask with no family
     /// byte at all.)
-    fn is_family(&self, family: i32) -> bool {
+    pub(crate) fn is_family(&self, family: i32) -> bool {
         self.bytes
             .get(1)
             .is_some_and(|&found| i32::from(found) == family)
@@ -122,11 +122,11 @@ impl RouteMessage<'_> {
     }
 }
 
-fn u16_at(bytes: &[u8], at: usize) -> u16 {
+pub(crate) fn u16_at(bytes: &[u8], at: usize) -> u16 {
     u16::from_ne_bytes([bytes[at], bytes[at + 1]])
 }
 
-fn i32_at(bytes: &[u8], at: usize) -> i32 {
+pub(crate) fn i32_at(bytes: &[u8], at: usize) -> i32 {
     i32::from_ne_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
 }
 
@@ -158,9 +158,22 @@ pub(crate) fn parse_table(table: &[u8]) -> Result<Vec<RouteMessage<'_>>, RouteFa
 /// One message whose length is checked: at least a header, and all of it
 /// within the table.
 fn parse_message(message: &[u8]) -> Result<RouteMessage<'_>, RouteFault> {
-    let present = i32_at(message, ADDRS_AT);
+    Ok(RouteMessage {
+        index: u16_at(message, INDEX_AT),
+        flags: i32_at(message, FLAGS_AT),
+        addresses: parse_sockaddrs(i32_at(message, ADDRS_AT), &message[HEADER_LEN..])?,
+    })
+}
+
+/// The socket addresses that follow a routing message's header, by slot:
+/// one for each bit of `present` (`rtm_addrs`, `ifm_addrs` or
+/// `ifam_addrs`), in slot order, each rounded up to four bytes.
+pub(crate) fn parse_sockaddrs(
+    present: i32,
+    after_header: &[u8],
+) -> Result<[Option<Sockaddr<'_>>; ADDRESS_SLOTS], RouteFault> {
     let mut addresses = [None; ADDRESS_SLOTS];
-    let mut rest = &message[HEADER_LEN..];
+    let mut rest = after_header;
     for (slot, address) in addresses.iter_mut().enumerate() {
         if present & (1 << slot) == 0 {
             continue;
@@ -175,9 +188,5 @@ fn parse_message(message: &[u8]) -> Result<RouteMessage<'_>, RouteFault> {
         });
         rest = &rest[space..];
     }
-    Ok(RouteMessage {
-        index: u16_at(message, INDEX_AT),
-        flags: i32_at(message, FLAGS_AT),
-        addresses,
-    })
+    Ok(addresses)
 }

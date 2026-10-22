@@ -55,6 +55,14 @@ pub enum MacsysError {
     /// The neighbour table holds different entries for the address on the
     /// interface.
     AmbiguousNeighbour,
+    /// `getrlimit` or `setrlimit` for the open-files limit failed with
+    /// this `errno`.
+    Rlimit {
+        /// The call.
+        call: RlimitCall,
+        /// The `errno` value.
+        errno: i32,
+    },
     /// A terminal attribute call failed with this `errno`.
     Terminal {
         /// The call.
@@ -99,6 +107,12 @@ impl fmt::Display for MacsysError {
             Self::AmbiguousNeighbour => f.write_str(
                 "the neighbour table holds different entries for the gateway on the interface",
             ),
+            Self::Rlimit { call, errno } => {
+                write!(
+                    f,
+                    "{call} of the open-files limit failed with errno {errno}"
+                )
+            }
             Self::Terminal { call, errno } => write!(f, "{call} failed with errno {errno}"),
         }
     }
@@ -135,6 +149,8 @@ pub enum MacsysErrorKind {
     NotEthernet,
     /// See [`MacsysError::AmbiguousNeighbour`].
     AmbiguousNeighbour,
+    /// See [`MacsysError::Rlimit`].
+    Rlimit,
     /// See [`MacsysError::Terminal`].
     Terminal,
 }
@@ -155,6 +171,7 @@ impl MacsysErrorKind {
         Self::NeighbourIncomplete,
         Self::NotEthernet,
         Self::AmbiguousNeighbour,
+        Self::Rlimit,
         Self::Terminal,
     ];
 
@@ -175,6 +192,7 @@ impl MacsysErrorKind {
             Self::NeighbourIncomplete => "NeighbourIncomplete",
             Self::NotEthernet => "NotEthernet",
             Self::AmbiguousNeighbour => "AmbiguousNeighbour",
+            Self::Rlimit => "Rlimit",
             Self::Terminal => "Terminal",
         }
     }
@@ -204,6 +222,7 @@ impl MacsysError {
             Self::NeighbourIncomplete => MacsysErrorKind::NeighbourIncomplete,
             Self::NotEthernet { .. } => MacsysErrorKind::NotEthernet,
             Self::AmbiguousNeighbour => MacsysErrorKind::AmbiguousNeighbour,
+            Self::Rlimit { .. } => MacsysErrorKind::Rlimit,
             Self::Terminal { .. } => MacsysErrorKind::Terminal,
         }
     }
@@ -222,6 +241,23 @@ pub enum RouteFault {
     /// A socket address runs past the end of its message, or a link-layer
     /// address past the end of its socket address.
     SockaddrOverrun,
+    /// An interface list holds a message of a type it should not hold.
+    UnexpectedType {
+        /// The message's type (`ifm_type`).
+        rtm_type: u8,
+    },
+    /// An interface's message has no `AF_LINK` socket address.
+    MissingLink,
+    /// An interface's message names interface index 0.
+    ZeroIndex,
+    /// An interface's name is empty or not UTF-8.
+    InvalidName,
+    /// An address message names an interface the list has not given.
+    UnknownInterface,
+    /// The list gives the same interface twice.
+    DuplicateInterface,
+    /// A netmask's ones are not contiguous.
+    NonContiguousMask,
 }
 
 impl fmt::Display for RouteFault {
@@ -231,6 +267,36 @@ impl fmt::Display for RouteFault {
             Self::LengthOverrun => "runs past the end of the table",
             Self::Version => "is not of the routing message version this build reads",
             Self::SockaddrOverrun => "has a socket address that runs past its end",
+            Self::UnexpectedType { rtm_type } => {
+                return write!(
+                    f,
+                    "is of type {rtm_type}, which an interface list does not hold"
+                );
+            }
+            Self::MissingLink => "describes an interface without a link-layer socket address",
+            Self::ZeroIndex => "describes an interface with index 0",
+            Self::InvalidName => "names an interface with an empty or non-UTF-8 name",
+            Self::UnknownInterface => "gives an address of an interface the list has not given",
+            Self::DuplicateInterface => "repeats an interface the list has already given",
+            Self::NonContiguousMask => "has a netmask whose ones are not contiguous",
+        })
+    }
+}
+
+/// The resource-limit call that failed ([`MacsysError::Rlimit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RlimitCall {
+    /// `getrlimit`.
+    Get,
+    /// `setrlimit`.
+    Set,
+}
+
+impl fmt::Display for RlimitCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Get => "getrlimit",
+            Self::Set => "setrlimit",
         })
     }
 }

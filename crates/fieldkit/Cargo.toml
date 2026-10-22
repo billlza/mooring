@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "fieldkit"
+description = "Mooring's M2b field measurements: the Mac-side probes and the VPS-side servers they measure against (dev-only, never shipped)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+mooring-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+socket2.workspace = true
+thiserror.workspace = true
+
+# The interface list and the open-files limit (design §6.1): macOS only,
+# as the crate itself is.
+[target.'cfg(target_os = "macos")'.dependencies]
+mooring-macsys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

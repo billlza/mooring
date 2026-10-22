@@ -23,7 +23,7 @@ const MAX_TABLE_BYTES: usize = 16 << 20;
 const GROWTH_RETRIES: usize = 3;
 
 /// A PF_ROUTE `sysctl` name: six integers.
-type Mib = [libc::c_int; 6];
+pub(crate) type Mib = [libc::c_int; 6];
 
 /// The length of a [`Mib`], as `sysctl` takes it.
 const MIB_LEN: libc::c_uint = 6;
@@ -50,7 +50,7 @@ const NEIGHBOUR_DUMP: Mib = [
 
 /// Reads one PF_ROUTE table: its size first, then the table into a buffer
 /// with a quarter more room, retrying when it grew past even that.
-fn dump(mib: Mib) -> Result<Vec<u8>, MacsysError> {
+pub(crate) fn dump(mib: Mib) -> Result<Vec<u8>, MacsysError> {
     let mut name = mib;
     for _attempt in 0..=GROWTH_RETRIES {
         let mut size: libc::size_t = 0;

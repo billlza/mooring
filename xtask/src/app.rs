@@ -544,7 +544,7 @@ fn remove_tree(path: &Path) -> Result<(), AppError> {
 /// `cargo xtask app`.
 pub(crate) fn build(cargo: &Cargo, out: &mut impl Write) -> Result<(), AppError> {
     require_macos("app", std::env::consts::OS)?;
-    mooringctl::run(cargo, out)?;
+    mooringctl::run(cargo, mooringctl::MOORINGCTL, out)?;
     let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
     let root = cargo.workspace_root().to_path_buf();
     let paths = AppPaths::new(&root, &target);
