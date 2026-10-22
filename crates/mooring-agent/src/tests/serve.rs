@@ -7,8 +7,9 @@
 use std::io::Cursor;
 
 use mooring_agent_proto::{
-    AgentError, BlobLen, ClearableHold, GateReason, Holds, LineRequest, Reply, Request,
-    RequestKind, Response, Role, ShutdownReason, read_reply, write_put_blob, write_request,
+    AgentError, AgentEvent, AgentEventKind, BlobLen, ClearableHold, EventSeq, GateReason, Holds,
+    LineRequest, Reply, Request, RequestKind, Response, Role, ShutdownReason, UnixTime, read_reply,
+    write_put_blob, write_request,
 };
 
 use super::{FakeNode, nft_set, ok, scratch};
@@ -267,13 +268,12 @@ fn the_mac_report_is_stored_with_the_nodes_time_and_read_back() {
 
 /// The requests this slice does not serve yet; the list shrinks as M4's
 /// slices land, and `NotServedYet` goes when it is empty.
-const NOT_SERVED_YET: [RequestKind; 7] = [
+const NOT_SERVED_YET: [RequestKind; 6] = [
     RequestKind::Bootstrap,
     RequestKind::RevokeBootstrap,
     RequestKind::Status,
     RequestKind::Usage,
     RequestKind::UsageSeries,
-    RequestKind::Events,
     RequestKind::TargetCheck,
 ];
 
@@ -314,6 +314,7 @@ fn requests_of_later_slices_are_answered_not_served_yet() {
             RequestKind::Apply,
             RequestKind::TxnStatus,
             RequestKind::Rollback,
+            RequestKind::Events,
             RequestKind::GateSet,
             RequestKind::ClearHold,
             RequestKind::Shutdown,
@@ -321,5 +322,50 @@ fn requests_of_later_slices_are_answered_not_served_yet() {
             RequestKind::PutMacReport,
             RequestKind::MacReport,
         ]
+    );
+}
+
+#[test]
+fn events_are_served_from_the_journal_to_ops_and_the_viewer() {
+    let (_dir, paths) = scratch();
+    let node = FakeNode::new(0);
+    let request = LineRequest::Events {
+        since: EventSeq::new(1),
+    };
+    let Ok(Response::Events(empty)) = ask(&paths, &node, Role::Ops, frame(&request)) else {
+        panic!("no page");
+    };
+    assert!(empty.events().is_empty());
+    assert_eq!(empty.end(), EventSeq::FIRST, "no journal yet");
+    let mut journal = crate::journal::Journal::open(&paths).unwrap();
+    journal
+        .append(
+            UnixTime::from_secs(9),
+            &[AgentEventKind::HostBooted, AgentEventKind::GateOpened],
+        )
+        .unwrap();
+    let Ok(Response::Events(page)) = ask(&paths, &node, Role::Ops, frame(&request)) else {
+        panic!("no page");
+    };
+    assert_eq!(
+        page.events(),
+        &[AgentEvent {
+            seq: EventSeq::new(1),
+            at: UnixTime::from_secs(9),
+            kind: AgentEventKind::GateOpened,
+        }]
+    );
+    assert_eq!(page.end(), EventSeq::new(2));
+    assert_eq!(
+        ask(&paths, &node, Role::Viewer, frame(&request)),
+        Ok(Response::Events(page)),
+        "the remote viewer reads the journal too"
+    );
+    assert_eq!(
+        ask(&paths, &node, Role::Bootstrap, frame(&request)),
+        Err(AgentError::RoleNotPermitted {
+            role: Role::Bootstrap,
+            request: RequestKind::Events,
+        })
     );
 }

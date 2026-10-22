@@ -64,6 +64,7 @@ fn the_commands_parse_as_the_units_and_keys_write_them() {
         Ok(Invocation::TxnRevert(Generation::new(12)))
     );
     assert_eq!(parse(&args(&["txn-recover"])), Ok(Invocation::TxnRecover));
+    assert_eq!(parse(&args(&["watch"])), Ok(Invocation::Watch));
     for bad in ["0", "-1", "+2", "x", ""] {
         assert!(parse(&args(&["txn", bad])).is_err(), "txn {bad:?}");
     }
@@ -73,6 +74,7 @@ fn the_commands_parse_as_the_units_and_keys_write_them() {
         &["serve-ssh", "--role", "root"],
         &["serve-ssh", "--role", "ops", "extra"],
         &["txn-recover", "1"],
+        &["watch", "--once"],
         &["reflect", "--listen", "::1"],
         &["reflect", "--listen", "1.2.3.4", "--port", "70000"],
         &["halted-check", "now"],

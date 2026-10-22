@@ -14,6 +14,7 @@ mod requests;
 mod serve;
 mod store;
 mod txn;
+mod watch;
 
 use std::cell::{Cell, RefCell};
 use std::io;

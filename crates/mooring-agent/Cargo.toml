@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 name = "mooring-agent"
-description = "Mooring's VPS agent: the forced SSH command, the gate's holds and halt, the blob store and the reflector (design §11)"
+description = "Mooring's VPS agent: the forced SSH command, the blob store, transactions with commit-confirm, the gate and its watch, the event journal and the reflector (design §11)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

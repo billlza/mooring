@@ -34,6 +34,11 @@ pub(crate) fn holds(paths: &Paths) -> Result<Holds, AgentError> {
     Ok(read_json(&paths.holds())?.unwrap_or(Holds::NONE))
 }
 
+/// Writes the holds (under `gate.lock`, which the caller holds).
+pub(crate) fn write_holds(paths: &Paths, held: &Holds) -> Result<(), AgentError> {
+    write_json(&paths.holds(), held, STATE_MODE)
+}
+
 /// The halt marker, if the node is halted.
 pub(crate) fn halted(paths: &Paths) -> Result<Option<Halt>, AgentError> {
     read_json(&paths.halted())
@@ -75,16 +80,20 @@ pub(crate) fn close(node: &dyn Node) -> Result<(), AgentError> {
 
 /// Whether `wgexit` is in `exit_closed`, from `nft -j list set`.
 pub(crate) fn state(node: &dyn Node) -> Result<GateState, AgentError> {
-    let stdout = match run_ok(
+    match run_ok(
         node,
         Tool::Nft,
         &["-j", "list", "set", "inet", NFT_TABLE, NFT_GATE_SET],
     )? {
-        Ok(stdout) => stdout,
-        Err(_) => return Err(crate::store::malformed(IoOp::ReadState)),
-    };
+        Ok(stdout) => parse_set(&stdout),
+        Err(_) => Err(crate::store::malformed(IoOp::ReadState)),
+    }
+}
+
+/// The gate from `nft -j list set inet mooring exit_closed`'s output.
+pub(crate) fn parse_set(stdout: &[u8]) -> Result<GateState, AgentError> {
     let listing: serde_json::Value =
-        serde_json::from_slice(&stdout).map_err(|_| crate::store::malformed(IoOp::ReadState))?;
+        serde_json::from_slice(stdout).map_err(|_| crate::store::malformed(IoOp::ReadState))?;
     let sets: Vec<&serde_json::Value> = listing["nftables"]
         .as_array()
         .map(|items| items.iter().filter_map(|item| item.get("set")).collect())
@@ -104,25 +113,6 @@ pub(crate) fn state(node: &dyn Node) -> Result<GateState, AgentError> {
     } else {
         GateState::Open
     })
-}
-
-/// The Mac peer's latest handshake from `wg show wgexit latest-handshakes`
-/// (one peer; 0 means none yet).
-fn latest_handshake(node: &dyn Node) -> Result<Option<UnixTime>, AgentError> {
-    let stdout = run_ok(node, Tool::Wg, &["show", WG_INTERFACE, "latest-handshakes"])?
-        .map_err(|_| crate::store::malformed(IoOp::ReadState))?;
-    let text =
-        std::str::from_utf8(&stdout).map_err(|_| crate::store::malformed(IoOp::ReadState))?;
-    let mut peers = text.lines().filter(|line| !line.trim().is_empty());
-    let (Some(peer), None) = (peers.next(), peers.next()) else {
-        return Err(crate::store::malformed(IoOp::ReadState));
-    };
-    let seconds: u64 = peer
-        .split('\t')
-        .nth(1)
-        .and_then(|field| field.trim().parse().ok())
-        .ok_or(crate::store::malformed(IoOp::ReadState))?;
-    Ok((seconds > 0).then(|| UnixTime::from_secs(seconds)))
 }
 
 /// `GateSet` from the ops role: records the hold and closes the gate, both
@@ -145,9 +135,11 @@ pub(crate) fn set_by_ops(
                 generation: current_generation(paths)?,
             });
         }
-        GateReason::MacDrain => match latest_handshake(node) {
-            Ok(handshake_at_drain) => {
-                held.mac_drain = Some(MacDrainHold { handshake_at_drain });
+        GateReason::MacDrain => match crate::wg::peer(node) {
+            Ok(peer) => {
+                held.mac_drain = Some(MacDrainHold {
+                    handshake_at_drain: peer.latest_handshake,
+                });
             }
             Err(error) => {
                 // The Mac asked to close: close, but record no hold whose
@@ -157,17 +149,18 @@ pub(crate) fn set_by_ops(
             }
         },
     }
-    write_json(&paths.holds(), &held, STATE_MODE)?;
+    write_holds(paths, &held)?;
     close(node)?;
     Ok(held)
 }
 
 /// `GateSet{Operator}` from the viewer role, which cannot write the holds
-/// or the set: hands the stop to the watch and answers `GateClosed` only
-/// once the Operator hold is recorded at or after the request and the gate
-/// is closed, looking once a second, else `GateStopUnconfirmed` after
-/// [`VIEWER_STOP_WAIT_SECS`] seconds of waiting (counted in the sleeps
-/// themselves), leaving the request for the watch.
+/// or read the set: hands the stop to the watch and answers `GateClosed`
+/// only once the Operator hold is recorded at or after the request and the
+/// watch's view from a tick at or after it shows the gate closed, looking
+/// once a second, else `GateStopUnconfirmed` after [`VIEWER_STOP_WAIT_SECS`]
+/// seconds of waiting (counted in the sleeps themselves), leaving the
+/// request for the watch.
 pub(crate) fn set_by_viewer(paths: &Paths, node: &dyn Node) -> Result<Holds, AgentError> {
     let asked = node.now();
     {
@@ -178,7 +171,9 @@ pub(crate) fn set_by_viewer(paths: &Paths, node: &dyn Node) -> Result<Holds, Age
     loop {
         let held = holds(paths)?;
         let recorded = held.operator.is_some_and(|hold| hold.at >= asked);
-        if recorded && state(node)? == GateState::Closed {
+        let closed = crate::watch::status::read(paths)?
+            .is_some_and(|view| view.at >= asked && view.observed.gate == GateState::Closed);
+        if recorded && closed {
             return Ok(held);
         }
         if waited_secs >= VIEWER_STOP_WAIT_SECS {
@@ -199,7 +194,7 @@ pub(crate) fn clear(paths: &Paths, hold: ClearableHold) -> Result<Holds, AgentEr
         ClearableHold::EgressViolation => held.egress_violation = None,
         ClearableHold::Operator => held.operator = None,
     }
-    write_json(&paths.holds(), &held, STATE_MODE)?;
+    write_holds(paths, &held)?;
     Ok(held)
 }
 

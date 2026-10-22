@@ -188,6 +188,49 @@ impl Paths {
         self.proc_sys(&format!("net/ipv4/conf/{WG_INTERFACE}/accept_local"))
     }
 
+    /// A file of the kernel's `/proc`.
+    pub(crate) fn proc(&self, name: &str) -> PathBuf {
+        self.at("/proc").join(name)
+    }
+
+    /// The watch's state, `/var/lib/mooring/watch` (design §11.3).
+    pub(crate) fn watch_dir(&self) -> PathBuf {
+        self.var_lib().join("watch")
+    }
+
+    /// The watch's view at its latest tick,
+    /// `/var/lib/mooring/watch/status.json`.
+    pub(crate) fn watch_status(&self) -> PathBuf {
+        self.watch_dir().join("status.json")
+    }
+
+    /// The node's event journal, `/var/lib/mooring/watch/journal.jsonl`
+    /// (design §15.7).
+    pub(crate) fn journal(&self) -> PathBuf {
+        self.watch_dir().join("journal.jsonl")
+    }
+
+    /// The current generation's `watch.json`.
+    pub(crate) fn watch_config(&self) -> PathBuf {
+        self.at(ManagedFile::WatchConfig.path())
+    }
+
+    /// `/run/reboot-required`, which an upgrade that needs a reboot
+    /// creates.
+    pub(crate) fn reboot_required(&self) -> PathBuf {
+        self.at("/run/reboot-required")
+    }
+
+    /// journald's persistent journal, `/var/log/journal`.
+    pub(crate) fn persistent_journal(&self) -> PathBuf {
+        self.at("/var/log/journal")
+    }
+
+    /// The log unattended-upgrades writes when it installs packages.
+    pub(crate) fn unattended_upgrades_log(&self) -> PathBuf {
+        self.at("/var/log/unattended-upgrades/unattended-upgrades-dpkg.log")
+    }
+
     /// `/etc/os-release`.
     pub(crate) fn os_release(&self) -> PathBuf {
         self.at("/etc/os-release")
