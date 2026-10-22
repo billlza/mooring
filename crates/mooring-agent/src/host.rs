@@ -5,6 +5,7 @@
 //! so tests stand in for it.
 
 use std::io;
+use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -25,13 +26,20 @@ pub(crate) enum Tool {
     Ip,
     /// `sshd -T` (the effective sshd configuration).
     Sshd,
-    /// `wg` (the Mac peer's handshake).
+    /// `wg` (the Mac peer's handshake, `syncconf`).
     Wg,
+    /// `wg-quick` (`strip`).
+    WgQuick,
+    /// `systemd-run` (transaction units and timers).
+    SystemdRun,
+    /// `ss` (the health gate's listeners).
+    Ss,
 }
 
 impl Tool {
     /// The tool's absolute path on Debian 13 (checked on the London VPS on
-    /// 2026-10-22, except `wg`, which `wireguard-tools` installs there).
+    /// 2026-10-22, except `wg` and `wg-quick`, which `wireguard-tools`
+    /// installs there).
     pub(crate) const fn path(self) -> &'static str {
         match self {
             Self::Nft => "/usr/sbin/nft",
@@ -39,6 +47,9 @@ impl Tool {
             Self::Ip => "/usr/bin/ip",
             Self::Sshd => "/usr/sbin/sshd",
             Self::Wg => "/usr/bin/wg",
+            Self::WgQuick => "/usr/bin/wg-quick",
+            Self::SystemdRun => "/usr/bin/systemd-run",
+            Self::Ss => "/usr/bin/ss",
         }
     }
 }
@@ -58,6 +69,15 @@ pub(crate) struct ToolOutput {
 pub(crate) trait Node {
     /// Runs `tool` with `args`, waits for it and returns its output.
     fn run(&self, tool: Tool, args: &[&str]) -> io::Result<ToolOutput>;
+    /// Runs a staged program (an engine binary or a new agent) by its
+    /// absolute path, with `env` as its only environment besides `PATH` and
+    /// `LC_ALL`.
+    fn run_program(
+        &self,
+        program: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> io::Result<ToolOutput>;
     /// The time now.
     fn now(&self) -> UnixTime;
     /// Waits `duration`.
@@ -72,11 +92,21 @@ pub(crate) struct RealNode;
 #[cfg(target_os = "linux")]
 impl Node for RealNode {
     fn run(&self, tool: Tool, args: &[&str]) -> io::Result<ToolOutput> {
-        let output = Command::new(tool.path())
+        self.run_program(Path::new(tool.path()), args, &[])
+    }
+
+    fn run_program(
+        &self,
+        program: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> io::Result<ToolOutput> {
+        let output = Command::new(program)
             .args(args)
             .env_clear()
             .env("PATH", "/usr/sbin:/usr/bin")
             .env("LC_ALL", "C")
+            .envs(env.iter().copied())
             .stdin(Stdio::null())
             .output()?;
         Ok(ToolOutput {

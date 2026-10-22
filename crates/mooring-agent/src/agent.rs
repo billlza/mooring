@@ -6,12 +6,12 @@ use std::io::{self, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::process::ExitCode;
 
-use mooring_agent_proto::{HostProfile, PROTOCOL, Role};
+use mooring_agent_proto::{AgentError, Generation, HostProfile, PROTOCOL, Role};
 
 use crate::host::Node;
 use crate::paths::Paths;
 use crate::serve::Session;
-use crate::{fail, gate, reflect, serve, store};
+use crate::{fail, gate, reflect, serve, store, txn};
 
 /// The reflector's port (design §5.3).
 const REFLECTOR_PORT: u16 = 27900;
@@ -29,6 +29,12 @@ pub(crate) enum Invocation {
     GateClose,
     /// `self-test`.
     SelfTest,
+    /// `txn <N>`, the transaction unit.
+    Txn(Generation),
+    /// `txn-revert <N>`, the confirm timer.
+    TxnRevert(Generation),
+    /// `txn-recover`, at boot.
+    TxnRecover,
 }
 
 /// Parses the arguments after the program name.
@@ -44,8 +50,22 @@ pub(crate) fn parse(args: &[String]) -> Result<Invocation, String> {
         ["halted-check"] => Ok(Invocation::HaltedCheck),
         ["gate-close"] => Ok(Invocation::GateClose),
         ["self-test"] => Ok(Invocation::SelfTest),
-        _ => Err("usage: mooring-agent serve-ssh --role <bootstrap|ops|viewer> | reflect --listen <ipv4> [--port <port>] | halted-check | gate-close | self-test".to_owned()),
+        ["txn", generation] => generation_arg(generation).map(Invocation::Txn),
+        ["txn-revert", generation] => generation_arg(generation).map(Invocation::TxnRevert),
+        ["txn-recover"] => Ok(Invocation::TxnRecover),
+        _ => Err("usage: mooring-agent serve-ssh --role <bootstrap|ops|viewer> | reflect --listen <ipv4> [--port <port>] | halted-check | gate-close | self-test | txn <N> | txn-revert <N> | txn-recover".to_owned()),
     }
+}
+
+/// A generation number: digits only, at least 1.
+fn generation_arg(text: &str) -> Result<Generation, String> {
+    text.bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then(|| text.parse::<u64>().ok())
+        .flatten()
+        .filter(|&generation| generation > 0)
+        .map(Generation::new)
+        .ok_or_else(|| format!("{text:?} is not a generation"))
 }
 
 fn listen(address: &str, port: Option<&str>) -> Result<Invocation, String> {
@@ -103,6 +123,31 @@ pub(crate) fn run(
                 Err(error) => fail(stderr, &format!("closing the gate failed: {error}")),
             }
         }
+        Invocation::Txn(generation) => match txn::run(paths, node, generation) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => fail(
+                stderr,
+                &format!("transaction {} could not run: {error}", generation.get()),
+            ),
+        },
+        Invocation::TxnRevert(generation) => {
+            match txn::revert_pending(paths, node, txn::Why::Unconfirmed(generation)) {
+                // Confirmed, rolled back or failed before the timer fired.
+                Ok(_) | Err(AgentError::NotAwaitingConfirm) => ExitCode::SUCCESS,
+                Err(error) => fail(
+                    stderr,
+                    &format!("reverting {} failed: {error}", generation.get()),
+                ),
+            }
+        }
+        Invocation::TxnRecover => match txn::revert_pending(paths, node, txn::Why::Rebooted) {
+            // Nothing was pending.
+            Ok(_) | Err(AgentError::NotAwaitingConfirm) => ExitCode::SUCCESS,
+            Err(error) => fail(
+                stderr,
+                &format!("reverting the change pending at boot failed: {error}"),
+            ),
+        },
         Invocation::SelfTest => match self_test(paths) {
             Ok(()) => {
                 let printed = writeln!(io::stdout().lock(), "{PROTOCOL}");
@@ -120,7 +165,7 @@ pub(crate) fn run(
 /// The self-test `ActivateAgent` runs on a new agent before switching to
 /// it (design §11.2): the embedded host profile renders, and the state
 /// files this agent reads parse.
-pub(crate) fn self_test(paths: &Paths) -> Result<(), mooring_agent_proto::AgentError> {
+pub(crate) fn self_test(paths: &Paths) -> Result<(), AgentError> {
     let _files = HostProfile::CURRENT.files();
     gate::holds(paths)?;
     gate::halted(paths)?;

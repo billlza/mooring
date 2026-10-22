@@ -6,7 +6,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::process::ExitCode;
 
-use mooring_agent_proto::{Halt, Role, ShutdownReason, UnixTime};
+use mooring_agent_proto::{Generation, Halt, Role, ShutdownReason, UnixTime};
 
 use super::{FakeNode, failed, scratch};
 use crate::agent::{Invocation, parse, run, self_test};
@@ -55,11 +55,24 @@ fn the_commands_parse_as_the_units_and_keys_write_them() {
     assert_eq!(parse(&args(&["halted-check"])), Ok(Invocation::HaltedCheck));
     assert_eq!(parse(&args(&["gate-close"])), Ok(Invocation::GateClose));
     assert_eq!(parse(&args(&["self-test"])), Ok(Invocation::SelfTest));
+    assert_eq!(
+        parse(&args(&["txn", "3"])),
+        Ok(Invocation::Txn(Generation::new(3)))
+    );
+    assert_eq!(
+        parse(&args(&["txn-revert", "12"])),
+        Ok(Invocation::TxnRevert(Generation::new(12)))
+    );
+    assert_eq!(parse(&args(&["txn-recover"])), Ok(Invocation::TxnRecover));
+    for bad in ["0", "-1", "+2", "x", ""] {
+        assert!(parse(&args(&["txn", bad])).is_err(), "txn {bad:?}");
+    }
     for bad in [
         &[][..],
         &["serve-ssh"],
         &["serve-ssh", "--role", "root"],
         &["serve-ssh", "--role", "ops", "extra"],
+        &["txn-recover", "1"],
         &["reflect", "--listen", "::1"],
         &["reflect", "--listen", "1.2.3.4", "--port", "70000"],
         &["halted-check", "now"],
