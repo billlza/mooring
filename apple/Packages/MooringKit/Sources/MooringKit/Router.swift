@@ -28,6 +28,17 @@ public struct UnixTime: Decodable, Hashable, Comparable, Sendable {
     }
 }
 
+/// A setting the M7 reports on that the exit needs off. The daemon decides
+/// which (`RouterStatus::advisories` in `daemon-core`) and the document
+/// carries them; the app only shows them (design §15.6 rule 8: advisory).
+public enum RouterAdvisory: String, Decodable, Sendable, CaseIterable {
+    case wifiRadioOn = "wifi_radio_on"
+    case wifiOffloadOn = "wifi_offload_on"
+    case ethernetOffloadOn = "ethernet_offload_on"
+    case upnpOn = "upnp_on"
+    case insightActive = "insight_active"
+}
+
 /// The network service type the M7 reports (`wwan.currentNWserviceType`).
 public enum NetworkService: String, Decodable, Sendable, CaseIterable {
     case nr5g = "nr5g"
@@ -495,19 +506,6 @@ public struct RouterStatus: Decodable, Hashable, Sendable {
         wifi = try object.decode(RouterWifi.self, forKey: .wifi)
         settings = try object.decode(RouterSettings.self, forKey: .settings)
         unreadSms = try object.decode(UInt32.self, forKey: .unreadSms)
-    }
-
-    /// Settings the exit depends on that are on, by name: each is reported
-    /// as a warning, never acted on (design §15.6 rule 8: advisory).
-    public var settingsOn: [String] {
-        var on: [String] = []
-        if wifi.enabled { on.append("Wi-Fi radio") }
-        if settings.wifiOffload { on.append("Wi-Fi offload") }
-        if settings.ethernetOffload { on.append("Ethernet offload") }
-        if settings.upnp { on.append("UPnP") }
-        if settings.analytics { on.append("Analytics") }
-        if settings.insightActive { on.append("NETGEAR Insight") }
-        return on
     }
 }
 

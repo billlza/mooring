@@ -75,7 +75,7 @@ pub(crate) const SIGNING_IDENTIFIER: &str = "com.bill.mooring.mooringctl";
 const PACKAGE: &str = "mooringctl";
 
 /// `codesign`, by its absolute path.
-const CODESIGN: &str = "/usr/bin/codesign";
+pub(crate) const CODESIGN: &str = "/usr/bin/codesign";
 
 /// The directory of the signed copy, under the target directory. Cargo
 /// writes a profile's output to the directory named after the profile, so
@@ -141,7 +141,7 @@ pub(crate) enum MooringctlError {
     #[error("{} is not signed as {SIGNING_IDENTIFIER}: {fault}", path.display())]
     Signature {
         path: PathBuf,
-        fault: IdentifierFault,
+        fault: SignatureFault,
     },
     #[error("cannot rename {} to {}", from.display(), to.display())]
     Rename {
@@ -159,23 +159,26 @@ pub(crate) enum MooringctlError {
     },
 }
 
-/// What is wrong with the identifier `codesign -dv` reports.
+/// What is wrong with the signature `codesign -dv` reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum IdentifierFault {
+pub(crate) enum SignatureFault {
     /// No `Identifier=` line.
     Missing,
     /// More than one `Identifier=` line.
     Repeated,
     /// Another identifier.
     Different(String),
+    /// The code directory's flags do not include the hardened runtime.
+    NotHardened,
 }
 
-impl fmt::Display for IdentifierFault {
+impl fmt::Display for SignatureFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Missing => f.write_str("codesign -dv reported no identifier"),
             Self::Repeated => f.write_str("codesign -dv reported more than one identifier"),
             Self::Different(found) => write!(f, "its identifier is {found:?}"),
+            Self::NotHardened => f.write_str("it is not signed with the hardened runtime"),
         }
     }
 }
@@ -402,12 +405,16 @@ fn built_executable(messages: &[u8]) -> Result<PathBuf, MooringctlError> {
 }
 
 /// `codesign`'s arguments to replace the file's signature with an ad-hoc
-/// one carrying [`SIGNING_IDENTIFIER`].
-fn sign_args(file: &AbsolutePath) -> [&OsStr; 6] {
+/// one carrying [`SIGNING_IDENTIFIER`] and the hardened runtime, which
+/// refuses injected libraries (`DYLD_INSERT_LIBRARIES`): this binary is
+/// the one the keychain item trusts.
+fn sign_args(file: &AbsolutePath) -> [&OsStr; 8] {
     [
         OsStr::new("--force"),
         OsStr::new("--sign"),
         OsStr::new("-"),
+        OsStr::new("--options"),
+        OsStr::new("runtime"),
         OsStr::new("--identifier"),
         OsStr::new(SIGNING_IDENTIFIER),
         file.as_path().as_os_str(),
@@ -421,7 +428,7 @@ fn display_args(file: &AbsolutePath) -> [&OsStr; 2] {
 
 /// Runs [`CODESIGN`] with `args` and returns what it wrote to standard
 /// error; fails, with that text, unless it exits 0.
-pub(crate) fn codesign(args: &[&OsStr]) -> Result<Vec<u8>, MooringctlError> {
+fn codesign(args: &[&OsStr]) -> Result<Vec<u8>, MooringctlError> {
     let output = Command::new(CODESIGN)
         .args(args)
         .stdin(Stdio::null())
@@ -444,29 +451,46 @@ pub(crate) fn codesign(args: &[&OsStr]) -> Result<Vec<u8>, MooringctlError> {
     }
 }
 
-/// Checks `codesign -dv`'s report: exactly one `Identifier=` line, naming
-/// [`SIGNING_IDENTIFIER`].
-fn check_signature(report: &[u8]) -> Result<(), IdentifierFault> {
-    check_identifier(report, SIGNING_IDENTIFIER)
+/// Checks `codesign -dv`'s report: [`SIGNING_IDENTIFIER`] and the hardened
+/// runtime ([`check_signed_as`]).
+fn check_signature(report: &[u8]) -> Result<(), SignatureFault> {
+    check_signed_as(report, SIGNING_IDENTIFIER)
 }
 
 /// Checks `codesign -dv`'s report: exactly one `Identifier=` line, naming
-/// `expected`.
-pub(crate) fn check_identifier(report: &[u8], expected: &str) -> Result<(), IdentifierFault> {
+/// `expected`, and a code directory whose flags include `runtime`.
+pub(crate) fn check_signed_as(report: &[u8], expected: &str) -> Result<(), SignatureFault> {
     let mut identifiers = report
         .split(|&byte| byte == b'\n')
         .filter_map(|line| line.strip_prefix(b"Identifier="));
-    let identifier = identifiers.next().ok_or(IdentifierFault::Missing)?;
+    let identifier = identifiers.next().ok_or(SignatureFault::Missing)?;
     if identifiers.next().is_some() {
-        return Err(IdentifierFault::Repeated);
+        return Err(SignatureFault::Repeated);
     }
-    if identifier == expected.as_bytes() {
+    if identifier != expected.as_bytes() {
+        return Err(SignatureFault::Different(
+            String::from_utf8_lossy(identifier).into_owned(),
+        ));
+    }
+    if hardened(report) {
         Ok(())
     } else {
-        Err(IdentifierFault::Different(
-            String::from_utf8_lossy(identifier).into_owned(),
-        ))
+        Err(SignatureFault::NotHardened)
     }
+}
+
+/// Whether the report's `CodeDirectory` line lists `runtime` among its
+/// flags (`flags=0x10002(adhoc,runtime)`).
+fn hardened(report: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(report);
+    text.lines()
+        .filter_map(|line| line.strip_prefix("CodeDirectory "))
+        .filter_map(|line| {
+            line.split(' ')
+                .find_map(|field| field.strip_prefix("flags="))
+        })
+        .filter_map(|flags| flags.split_once('(')?.1.strip_suffix(')'))
+        .any(|names| names.split(',').any(|name| name == "runtime"))
 }
 
 /// The signed copy this command places under `target`:
@@ -487,7 +511,7 @@ mod tests {
     use std::process::ExitStatus;
 
     use super::{
-        AbsolutePath, BUILD_ARGS, CODESIGN, IdentifierFault, MooringctlError, SIGNING_IDENTIFIER,
+        AbsolutePath, BUILD_ARGS, CODESIGN, MooringctlError, SIGNING_IDENTIFIER, SignatureFault,
         Tools, built_executable, check_signature, display_args, require_macos, sign_args,
         sign_copy,
     };
@@ -502,10 +526,11 @@ mod tests {
     const SIGNED: &str = "Executable=/w/target/signed/mooringctl.7.partial
 Identifier=com.bill.mooring.mooringctl
 Format=Mach-O thin (arm64)
-CodeDirectory v=20400 size=12788 flags=0x2(adhoc) hashes=394+2 location=embedded
+CodeDirectory v=20500 size=44028 flags=0x10002(adhoc,runtime) hashes=1370+2 location=embedded
 Signature=adhoc
 Info.plist=not bound
 TeamIdentifier=not set
+Runtime Version=27.0.0
 Sealed Resources=none
 Internal requirements count=0 size=12
 ";
@@ -547,6 +572,8 @@ Internal requirements=none
                 "--force",
                 "--sign",
                 "-",
+                "--options",
+                "runtime",
                 "--identifier",
                 "com.bill.mooring.mooringctl",
                 "/w/target/signed/mooringctl.7.partial",
@@ -564,7 +591,7 @@ Internal requirements=none
         assert_eq!(check_signature(SIGNED.as_bytes()), Ok(()));
         assert_eq!(
             check_signature(LINKER_SIGNED.as_bytes()),
-            Err(IdentifierFault::Different(
+            Err(SignatureFault::Different(
                 "mooringctl-020ac5c52e8594c4".to_owned()
             ))
         );
@@ -573,7 +600,7 @@ Internal requirements=none
         let missing = SIGNED.replace("Identifier=com.bill.mooring.mooringctl\n", "");
         assert_eq!(
             check_signature(missing.as_bytes()),
-            Err(IdentifierFault::Missing)
+            Err(SignatureFault::Missing)
         );
         let longer = SIGNED.replace(
             "Identifier=com.bill.mooring.mooringctl\n",
@@ -581,16 +608,33 @@ Internal requirements=none
         );
         assert_eq!(
             check_signature(longer.as_bytes()),
-            Err(IdentifierFault::Different(
+            Err(SignatureFault::Different(
                 "com.bill.mooring.mooringctl.copy".to_owned()
             ))
         );
         let repeated = format!("{SIGNED}Identifier=com.bill.mooring.mooringctl\n");
         assert_eq!(
             check_signature(repeated.as_bytes()),
-            Err(IdentifierFault::Repeated)
+            Err(SignatureFault::Repeated)
         );
-        assert_eq!(check_signature(b""), Err(IdentifierFault::Missing));
+        assert_eq!(check_signature(b""), Err(SignatureFault::Missing));
+        // The right identifier without the hardened runtime, or with no
+        // code directory line, is refused too.
+        for unhardened in [
+            SIGNED.replace("flags=0x10002(adhoc,runtime)", "flags=0x2(adhoc)"),
+            SIGNED.replace("flags=0x10002(adhoc,runtime)", "flags=0x10002(adhoc,runtimes)"),
+            SIGNED.replace(
+                "CodeDirectory v=20500 size=44028 flags=0x10002(adhoc,runtime) hashes=1370+2 location=embedded\n",
+                "",
+            ),
+            SIGNED.replace("CodeDirectory v=20500", "Code v=20500"),
+        ] {
+            assert_eq!(
+                check_signature(unhardened.as_bytes()),
+                Err(SignatureFault::NotHardened),
+                "{unhardened}"
+            );
+        }
     }
 
     /// Cargo's messages for `cargo build --package mooringctl`, shortened:
@@ -810,7 +854,7 @@ Internal requirements=none
                 call("metadata".to_owned(), None),
                 call(
                     format!(
-                        "codesign --force --sign - --identifier com.bill.mooring.mooringctl {}",
+                        "codesign --force --sign - --options runtime --identifier com.bill.mooring.mooringctl {}",
                         partial.display()
                     ),
                     Some(b"linker-signed"),
@@ -867,7 +911,7 @@ Internal requirements=none
                     &error,
                     MooringctlError::Signature {
                         path,
-                        fault: IdentifierFault::Different(found),
+                        fault: SignatureFault::Different(found),
                     } if *path == partial && found == "mooringctl-020ac5c52e8594c4"
                 ),
                 "{error:?}"
@@ -1065,7 +1109,7 @@ Internal requirements=none
         let path = PathBuf::from;
         let signature = || MooringctlError::Signature {
             path: path("/w/target/signed/mooringctl.7.partial"),
-            fault: IdentifierFault::Different("mooringctl-020ac5c52e8594c4".to_owned()),
+            fault: SignatureFault::Different("mooringctl-020ac5c52e8594c4".to_owned()),
         };
         for (error, text) in [
             (
@@ -1166,15 +1210,15 @@ Internal requirements=none
         }
         for (fault, text) in [
             (
-                IdentifierFault::Missing,
+                SignatureFault::Missing,
                 "codesign -dv reported no identifier",
             ),
             (
-                IdentifierFault::Repeated,
+                SignatureFault::Repeated,
                 "codesign -dv reported more than one identifier",
             ),
             (
-                IdentifierFault::Different("x".to_owned()),
+                SignatureFault::Different("x".to_owned()),
                 "its identifier is \"x\"",
             ),
         ] {

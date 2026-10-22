@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The router screen (design §15.6): everything the allowlist keeps of the
-// M7's status, as the M7 reported it, with the time it was polled. A
-// setting the exit depends on staying off is flagged when it is on; the
-// console never changes it (rule 8: advisory only).
+// M7's status, as the M7 reported it, with the time it was polled. The
+// settings the exit needs off that are on are flagged as the daemon lists
+// them; the console never changes them (rule 8: advisory only).
 
 import MooringKit
 import SwiftUI
@@ -22,7 +22,8 @@ struct RouterView: View {
         case .unavailable(let reason, let lastPolledAt)?:
             RouterUnavailableView(reason: reason, lastPolledAt: lastPolledAt)
         case .available(let polledAt, let status)?:
-            RouterStatusForm(polledAt: polledAt, status: status)
+            RouterStatusForm(
+                polledAt: polledAt, status: status, advisories: model.status?.advisories ?? [])
         }
     }
 }
@@ -52,13 +53,15 @@ struct RouterUnavailableView: View {
 struct RouterStatusForm: View {
     let polledAt: UnixTime
     let status: RouterStatus
+    /// The settings the exit needs off that are on, as the daemon says.
+    let advisories: [RouterAdvisory]
 
     var body: some View {
         Form {
-            if !status.settingsOn.isEmpty {
+            if !advisories.isEmpty {
                 Section {
                     Label(
-                        "On: \(status.settingsOn.joined(separator: ", ")). The exit needs these off; turn them off in the M7's web interface.",
+                        "On: \(advisories.names). The exit needs these off; turn them off in the M7's web interface.",
                         systemImage: "exclamationmark.triangle.fill"
                     )
                     .foregroundStyle(.orange)
@@ -78,7 +81,7 @@ struct RouterStatusForm: View {
                 LabeledContent("Model", value: "NETGEAR MR7450")
                 LabeledContent("Firmware", value: status.firmware)
                 LabeledContent("Web app", value: status.webApp ?? String(localized: "not reported"))
-                LabeledContent("Up", value: Readings.span(status.uptimeSecs))
+                LabeledContent("Up") { spanText(status.uptimeSecs) }
                 LabeledContent("Temperature", value: "\(status.temperatureC) °C")
                 LabeledContent("Thermal state", value: status.thermal.wire)
             }
@@ -106,11 +109,11 @@ struct RouterStatusForm: View {
             }
             Section("Wi-Fi and settings") {
                 flag("Wi-Fi radio", on: status.wifi.enabled)
-                LabeledContent(
-                    "Access points",
-                    value:
+                LabeledContent("Access points") {
+                    Text(
                         "main \(status.wifi.main.wire), guest \(status.wifi.guest.wire), aux \(status.wifi.aux.wire)"
-                )
+                    )
+                }
                 LabeledContent("Wi-Fi clients", value: "\(status.wifi.clients)")
                 flag("Wi-Fi offload", on: status.settings.wifiOffload)
                 flag("Ethernet offload", on: status.settings.ethernetOffload)
@@ -141,7 +144,7 @@ struct RouterStatusForm: View {
             LabeledContent("Band", value: radio.band.text)
             LabeledContent("LTE carriers", value: carriers(radio.lteCarriers))
             LabeledContent("Secondary carriers counted", value: "\(radio.caSecondaryCount)")
-            LabeledContent("Session", value: Readings.span(radio.sessionSecs))
+            LabeledContent("Session") { spanText(radio.sessionSecs) }
         }
     }
 
@@ -265,7 +268,34 @@ extension RouterUnavailableReason {
         case .malformed:
             "The M7's answer did not match what this build reads; the daemon's log names the field."
         case .localFailure:
-            "The keychain, the kernel's tables or the clock failed on this Mac; the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause."
+            "The keychain or the kernel's tables failed on this Mac; the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause."
         }
+    }
+}
+
+/// A span as `mooringctl` spells it (`4d 03:46:57`), its day unit in the
+/// user's language.
+func spanText(_ seconds: UInt64) -> Text {
+    let (days, clock) = Readings.span(seconds)
+    return Text("\(days) d \(clock)")
+}
+
+extension RouterAdvisory {
+    /// The setting, in the user's language.
+    var name: String {
+        switch self {
+        case .wifiRadioOn: String(localized: "Wi-Fi radio")
+        case .wifiOffloadOn: String(localized: "Wi-Fi offload")
+        case .ethernetOffloadOn: String(localized: "Ethernet offload")
+        case .upnpOn: String(localized: "UPnP")
+        case .insightActive: String(localized: "NETGEAR Insight")
+        }
+    }
+}
+
+extension [RouterAdvisory] {
+    /// The settings, as a list in the user's language.
+    var names: String {
+        ListFormatter.localizedString(byJoining: map(\.name))
     }
 }

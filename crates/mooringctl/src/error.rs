@@ -217,6 +217,16 @@ pub(crate) enum LocalError {
         #[source]
         source: io::Error,
     },
+    /// Something other than a directory, a symbolic link for one, is at
+    /// the daemon's run directory's path.
+    #[error(
+        "the daemon's run directory {} is not a directory (a link or another file is there)",
+        path.display()
+    )]
+    RunDirNotDirectory {
+        /// The path.
+        path: PathBuf,
+    },
     /// The daemon's instance lock could not be opened or taken.
     #[error("cannot lock {}", path.display())]
     DaemonLock {
@@ -310,6 +320,21 @@ pub(crate) enum LocalError {
         /// How long it was silent.
         secs: u64,
     },
+    /// The daemon's newest status is older than a follow accepts: its poll
+    /// has not finished since.
+    #[error(
+        "the daemon's latest status is from {at}, more than {max_secs} s ago: its poll of the M7 has not finished (macOS may be waiting for an answer to a keychain or local network prompt)"
+    )]
+    StatusStale {
+        /// When the daemon made it, in UTC.
+        at: String,
+        /// The most a follow accepts.
+        max_secs: u64,
+    },
+    /// The CLI could not encode a control line of its own (a request, or a
+    /// status it prints).
+    #[error("mooringctl could not encode a control line")]
+    ClientEncode(#[source] ControlError),
     /// The daemon reported a deployment's status, which this build prints
     /// only as JSON.
     #[error("this build prints a deployment's status only as JSON (use --json)")]

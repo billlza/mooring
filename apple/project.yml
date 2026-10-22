@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Mooring.app (design §5.1, §6, M7). `cargo xtask app` generates the Xcode
-# project from this spec into the target directory and builds it unsigned
-# (CODE_SIGNING_ALLOWED=NO); the bundle is then signed ad hoc there, with the
-# signed `mooringctl` inside it. Warnings are errors, in Swift as in Rust
-# (design §16).
+# project from this spec next to it (apple/Mooring.xcodeproj, not kept in
+# git) and builds it unsigned (CODE_SIGNING_ALLOWED=NO) into the target
+# directory; the bundle is then signed ad hoc there, with the hardened
+# runtime, and with the signed `mooringctl` inside it. Warnings are errors,
+# in Swift as in Rust (design §16).
 name: Mooring
 options:
   deploymentTarget:
@@ -43,7 +44,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.bill.mooring
         INFOPLIST_FILE: App/Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
 schemes:
   Mooring:

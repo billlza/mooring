@@ -93,7 +93,20 @@ pub(crate) fn run(
             format,
             out: path,
         }) => crate::user::export(env, out, err, &user, format.into(), &path),
-        Command::Status { follow, json } => crate::status::status(env, out, follow, json),
+        Command::Status {
+            follow,
+            json,
+            until_parent_exits,
+        } => crate::status::status(
+            env,
+            out,
+            if follow {
+                crate::status::Reading::Follow { until_parent_exits }
+            } else {
+                crate::status::Reading::Once
+            },
+            json,
+        ),
         Command::Daemon { router_interface } => {
             crate::daemon::run(env, err, router_interface.as_ref())
         }

@@ -10,13 +10,20 @@ import SwiftUI
 
 @main
 struct MooringApp: App {
-    @State private var model = ConsoleModel.forMainBundle()
+    @State private var model: ConsoleModel
+
+    /// The model reads from launch, whether or not the window is shown: the
+    /// menu bar's summary needs it too.
+    init() {
+        let model = ConsoleModel.forMainBundle()
+        model.start()
+        _model = State(initialValue: model)
+    }
 
     var body: some Scene {
         Window("Mooring", id: ConsoleWindow.id) {
             ConsoleView(model: model)
                 .frame(minWidth: 780, minHeight: 540)
-                .task { model.start() }
         }
         .defaultSize(width: 980, height: 680)
 

@@ -16,6 +16,8 @@ import Testing
             return
         }
         #expect(undeployed.at == UnixTime(seconds: 1_792_639_800))
+        #expect(undeployed.advisories == [.upnpOn])
+        #expect(status.advisories == [.upnpOn])
         guard case .available(let polledAt, let router) = undeployed.router else {
             Issue.record("the router is not available")
             return
@@ -34,7 +36,8 @@ import Testing
         #expect(router.counters.txBytes == 16_412_311_040)
         #expect(router.wifi.enabled == false)
         #expect(router.wifi.clients == 0)
-        #expect(router.settingsOn.isEmpty)
+        #expect(router.settings.upnp)
+        #expect(!router.settings.analytics && !router.settings.insightActive)
         #expect(router.unreadSms == 0)
         guard case .attached(let radio) = router.radio else {
             Issue.record("the radio is not attached")
@@ -67,6 +70,7 @@ import Testing
         #expect(
             status.router
                 == .unavailable(reason: .localFailure, lastPolledAt: UnixTime(seconds: 1_792_639_740)))
+        #expect(status.advisories == [])
     }
 
     /// A deployment's document is refused whole: this build has no mirror
@@ -109,6 +113,8 @@ import Testing
             ("\"web_app\": null,", ""),
             ("\"unassigned_slots\": 1", "\"unassigned_slots\": 256"),
             ("\"temperature_c\": 44", "\"temperature_c\": 44.5"),
+            ("\"upnp_on\"", "\"upnp_off\""),
+            (",\n    \"advisories\": [\n      \"upnp_on\"\n    ]", ""),
         ] {
             #expect(line.contains(from), "\(from)")
             #expect(throws: (any Error).self, "\(to)") {

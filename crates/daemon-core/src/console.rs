@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use mooring_model::UnixTime;
 
 use crate::error::ConsoleError;
-use crate::router::RouterReading;
+use crate::router::{RouterAdvisory, RouterReading};
 use crate::status::MacStatusV1;
 
 /// The version [`UndeployedStatus`] documents carry.
@@ -55,14 +55,18 @@ impl ConsoleStatus {
     }
 }
 
-/// The status before a deployment exists: when the daemon produced it, and
-/// the router panel. On the wire it carries its version, which must be
-/// [`UNDEPLOYED_STATUS_VERSION`], and refuses an unknown key.
+/// The status before a deployment exists: when the daemon produced it, the
+/// router panel, and the settings the exit needs off that the panel shows
+/// on ([`RouterStatus::advisories`](crate::router::RouterStatus::advisories)),
+/// so the app shows them without a rule of its own. On the wire it carries
+/// its version, which must be [`UNDEPLOYED_STATUS_VERSION`], refuses an
+/// unknown key, and refuses advisories that do not follow from its panel.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "UndeployedRepr", into = "UndeployedRepr")]
 pub struct UndeployedStatus {
     at: UnixTime,
     router: RouterReading,
+    advisories: Vec<RouterAdvisory>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -71,13 +75,27 @@ struct UndeployedRepr {
     version: u32,
     at: UnixTime,
     router: RouterReading,
+    advisories: Vec<RouterAdvisory>,
+}
+
+/// The advisories of a router panel: the status's, or none without one.
+fn advisories_of(router: &RouterReading) -> Vec<RouterAdvisory> {
+    match router {
+        RouterReading::Available { status, .. } => status.advisories(),
+        RouterReading::Unavailable { .. } => Vec::new(),
+    }
 }
 
 impl UndeployedStatus {
     /// The status the daemon produced at `at` with `router`.
     #[must_use]
-    pub const fn new(at: UnixTime, router: RouterReading) -> Self {
-        Self { at, router }
+    pub fn new(at: UnixTime, router: RouterReading) -> Self {
+        let advisories = advisories_of(&router);
+        Self {
+            at,
+            router,
+            advisories,
+        }
     }
 
     /// When the daemon produced it.
@@ -91,6 +109,12 @@ impl UndeployedStatus {
     pub const fn router(&self) -> &RouterReading {
         &self.router
     }
+
+    /// The settings the exit needs off that the panel shows on.
+    #[must_use]
+    pub fn advisories(&self) -> &[RouterAdvisory] {
+        &self.advisories
+    }
 }
 
 impl TryFrom<UndeployedRepr> for UndeployedStatus {
@@ -102,7 +126,11 @@ impl TryFrom<UndeployedRepr> for UndeployedStatus {
                 found: repr.version,
             });
         }
-        Ok(Self::new(repr.at, repr.router))
+        let status = Self::new(repr.at, repr.router);
+        if status.advisories != repr.advisories {
+            return Err(ConsoleError::AdvisoriesMismatch);
+        }
+        Ok(status)
     }
 }
 
@@ -112,6 +140,7 @@ impl From<UndeployedStatus> for UndeployedRepr {
             version: UNDEPLOYED_STATUS_VERSION,
             at: status.at,
             router: status.router,
+            advisories: status.advisories,
         }
     }
 }

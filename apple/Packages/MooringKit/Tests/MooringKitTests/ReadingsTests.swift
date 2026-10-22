@@ -12,14 +12,14 @@ import Testing
         #expect(Readings.tenths(0) == "0")
         #expect(Readings.tenths(120) == "12")
         #expect(Readings.tenths(Int16.min) == "-3276.8")
-        #expect(Readings.reading(nil, unit: "dBm") == "not reported")
         #expect(Readings.reading(-990, unit: "dBm") == "-99 dBm")
     }
 
     @Test func spansAreDaysAndAClock() {
-        #expect(Readings.span(0) == "0d 00:00:00")
-        #expect(Readings.span(359_217) == "4d 03:46:57")
-        #expect(Readings.span(86_399) == "0d 23:59:59")
+        #expect(Readings.span(0) == (0, "00:00:00"))
+        #expect(Readings.span(359_217) == (4, "03:46:57"))
+        #expect(Readings.span(86_399) == (0, "23:59:59"))
+        #expect(Readings.span(86_400) == (1, "00:00:00"))
     }
 
     @Test func bytesUseDecimalUnitsRoundedDown() {

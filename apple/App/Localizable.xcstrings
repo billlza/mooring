@@ -17,6 +17,16 @@
     "%d °C, %@": {
       "shouldTranslate": false
     },
+    "%llu d %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%llu 天 %@"
+          }
+        }
+      }
+    },
     "%u %%%@": {
       "shouldTranslate": false
     },
@@ -46,6 +56,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "1 个未分配槽位"
+          }
+        }
+      }
+    },
+    "A line from mooringctl could not be read: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 mooringctl 输出的一行：%@"
+          }
+        }
+      }
+    },
+    "A line from mooringctl was longer than 1 MiB, so the app stopped reading it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mooringctl 输出的一行超过了 1 MiB，应用已停止读取。"
           }
         }
       }
@@ -200,16 +230,6 @@
         }
       }
     },
-    "It ended without a message.": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "它退出时没有留下信息。"
-          }
-        }
-      }
-    },
     "LTE RSRP": {
       "localizations": {
         "zh-Hans": {
@@ -266,16 +286,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "上次读取于 %@。"
-          }
-        }
-      }
-    },
-    "Last status %@": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "最近一次状态 %@"
           }
         }
       }
@@ -469,6 +479,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "非实时：mooringctl 已停止"
+          }
+        }
+      }
+    },
+    "Not live: the latest status cannot be shown": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "非实时：无法显示最新状态"
+          }
+        }
+      }
+    },
+    "Not reading the daemon's status": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未在读取守护进程的状态"
           }
         }
       }
@@ -673,6 +703,16 @@
         }
       }
     },
+    "Status from %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "状态时间 %@"
+          }
+        }
+      }
+    },
     "Temperature": {
       "localizations": {
         "zh-Hans": {
@@ -773,12 +813,32 @@
         }
       }
     },
+    "The daemon reports a deployment, which this build of Mooring.app does not show yet.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程报告了一个部署，这个版本的 Mooring.app 还不能显示部署状态。"
+          }
+        }
+      }
+    },
     "The daemon reports after its first poll of the M7, which waits while macOS asks you to allow keychain or local network access.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "守护进程要在第一次读取 M7 之后才开始报告；如果 macOS 正在请你允许钥匙串或本地网络访问，这次读取会一直等着。"
+          }
+        }
+      }
+    },
+    "The daemon's document is version %u; this build reads version 1.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程的文档是第 %u 版；这个版本只能读取第 1 版。"
           }
         }
       }
@@ -823,12 +883,12 @@
         }
       }
     },
-    "The keychain, the kernel's tables or the clock failed on this Mac; the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause.": {
+    "The keychain or the kernel's tables failed on this Mac; the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这台 Mac 上的钥匙串、内核表或时钟出了问题；原因见守护进程日志（~/Library/Logs/Mooring/daemon.log）。"
+            "value": "这台 Mac 上的钥匙串或内核表出了问题；原因见守护进程日志（~/Library/Logs/Mooring/daemon.log）。"
           }
         }
       }
@@ -1009,6 +1069,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "好"
+          }
+        }
+      }
+    },
+    "main %@, guest %@, aux %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主 %@，访客 %@，辅助 %@"
+          }
+        }
+      }
+    },
+    "mooringctl could not be started: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法启动 mooringctl：%@"
+          }
+        }
+      }
+    },
+    "mooringctl exited with code %d.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mooringctl 已退出，退出码 %d。"
+          }
+        }
+      }
+    },
+    "mooringctl was ended by signal %d.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mooringctl 被信号 %d 终止。"
           }
         }
       }

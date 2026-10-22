@@ -521,6 +521,51 @@ pub(crate) fn status() -> RouterStatus {
 }
 
 /// The M2a reading as the Mac polled it.
+/// Each setting the exit needs off gives its advisory, in their order;
+/// Analytics gives none.
+#[test]
+fn the_settings_the_exit_needs_off_give_advisories() {
+    use crate::router::RouterAdvisory as A;
+    assert_eq!(status().advisories(), []);
+    let with = |change: &dyn Fn(&mut RouterStatusParts)| {
+        let mut parts = status().into_parts();
+        change(&mut parts);
+        RouterStatus::new(parts).unwrap().advisories()
+    };
+    assert_eq!(with(&|p| p.wifi.enabled = true), [A::WifiRadioOn]);
+    assert_eq!(
+        with(&|p| p.settings.wifi_offload = true),
+        [A::WifiOffloadOn]
+    );
+    assert_eq!(
+        with(&|p| p.settings.ethernet_offload = true),
+        [A::EthernetOffloadOn]
+    );
+    assert_eq!(with(&|p| p.settings.upnp = true), [A::UpnpOn]);
+    assert_eq!(
+        with(&|p| p.settings.insight_active = true),
+        [A::InsightActive]
+    );
+    assert_eq!(with(&|p| p.settings.analytics = true), []);
+    assert_eq!(
+        with(&|p| {
+            p.settings.insight_active = true;
+            p.settings.upnp = true;
+            p.settings.ethernet_offload = true;
+            p.settings.wifi_offload = true;
+            p.wifi.enabled = true;
+            p.settings.analytics = true;
+        }),
+        [
+            A::WifiRadioOn,
+            A::WifiOffloadOn,
+            A::EthernetOffloadOn,
+            A::UpnpOn,
+            A::InsightActive
+        ]
+    );
+}
+
 pub(crate) fn reading() -> RouterReading {
     RouterReading::Available {
         polled_at: UnixTime::from_secs(1_791_919_200),

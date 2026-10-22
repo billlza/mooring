@@ -35,6 +35,7 @@ import Testing
         #expect(
             try decode(RouterUnavailableReason.self, "router_unavailable_reason")
                 == RouterUnavailableReason.allCases)
+        #expect(try decode(RouterAdvisory.self, "router_advisory") == RouterAdvisory.allCases)
     }
 
     @Test func everyRouterReadingRadioStateAndBandIsRead() throws {

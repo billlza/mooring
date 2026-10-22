@@ -38,7 +38,9 @@ use serde::Deserialize;
 
 use crate::cargo::Cargo;
 use crate::metadata::{self, MetadataError};
-use crate::mooringctl::{self, IdentifierFault, MooringctlError, check_identifier, signed_copy};
+use crate::mooringctl::{
+    self, CODESIGN, MooringctlError, SignatureFault, check_signed_as, signed_copy,
+};
 use crate::output::{OutputError, say};
 
 /// The app's bundle identifier (`apple/project.yml`).
@@ -75,6 +77,12 @@ const XCRUN: &str = "/usr/bin/xcrun";
 /// the first of several matching destinations, which it warns about.
 const DESTINATION: &str = "platform=macOS,arch=arm64";
 const DITTO: &str = "/usr/bin/ditto";
+const PLUTIL: &str = "/usr/bin/plutil";
+
+/// The Info.plist keys whose text macOS shows in its own alerts, each of
+/// which the built app must carry in Simplified Chinese
+/// (`apple/App/InfoPlist.xcstrings`): the local network alert's.
+const ALERT_KEYS: [&str; 1] = ["NSLocalNetworkUsageDescription"];
 const LAUNCHCTL: &str = "/bin/launchctl";
 const ID: &str = "/usr/bin/id";
 
@@ -120,7 +128,7 @@ pub(crate) enum AppError {
     Signature {
         path: PathBuf,
         expected: &'static str,
-        fault: IdentifierFault,
+        fault: SignatureFault,
     },
     #[error("{interface:?} is not a BSD interface name (for example en9)")]
     Interface { interface: String },
@@ -138,6 +146,20 @@ pub(crate) enum AppError {
         "`launchctl bootout {service}` returned, but the service was still loaded {waited:?} later"
     )]
     AgentStillLoaded { service: String, waited: Duration },
+    #[error(
+        "{service} is loaded, but its plist {} is gone, so it cannot be started again on this build; run `cargo xtask agent-install <bsd>`",
+        path.display()
+    )]
+    AgentPlistMissing { service: String, path: PathBuf },
+    #[error(
+        "{service} is loaded and runs from the target directory; run `cargo xtask agent-uninstall` first"
+    )]
+    AgentLoaded { service: String },
+    #[error(
+        "{} gives no Simplified Chinese text for {missing:?}, which macOS shows in its own alerts",
+        path.display()
+    )]
+    AlertStrings { path: PathBuf, missing: Vec<String> },
     #[error("the app's strings {0}")]
     Catalog(CatalogFaults),
 }
@@ -319,22 +341,46 @@ fn step(program: impl Into<PathBuf>, args: &[&OsStr], dir: &Path) -> Step {
     }
 }
 
+/// MooringKit's tests, built under the target directory.
+fn swift_test_step(root: &Path, paths: &AppPaths) -> Step {
+    step(
+        XCRUN,
+        &[
+            OsStr::new("swift"),
+            OsStr::new("test"),
+            OsStr::new("--package-path"),
+            paths.package.as_os_str(),
+            OsStr::new("--scratch-path"),
+            paths.swift_scratch.as_os_str(),
+        ],
+        root,
+    )
+}
+
+/// `ci`'s last step: MooringKit's tests. They decode the console's
+/// fixtures with the app's mirror, so a change to the documents on the
+/// Rust side that the mirror does not follow fails `ci`, not only `app`.
+/// They need macOS; elsewhere the step says that it did not run.
+pub(crate) fn swift_tests(cargo: &Cargo, out: &mut impl Write) -> Result<(), AppError> {
+    if std::env::consts::OS != "macos" {
+        say!(
+            out,
+            "ci: MooringKit's Swift tests were not run: they need macOS"
+        )?;
+        return Ok(());
+    }
+    let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
+    let root = cargo.workspace_root().to_path_buf();
+    let paths = AppPaths::new(&root, &target);
+    System.run(&swift_test_step(&root, &paths), Capture::Inherit)?;
+    Ok(())
+}
+
 /// The builds, in order: MooringKit's tests, the Xcode project, the app.
 /// Every path is absolute; build products stay under the target directory.
 pub(crate) fn build_steps(root: &Path, paths: &AppPaths, xcodegen: &Path) -> [Step; 3] {
     [
-        step(
-            XCRUN,
-            &[
-                OsStr::new("swift"),
-                OsStr::new("test"),
-                OsStr::new("--package-path"),
-                paths.package.as_os_str(),
-                OsStr::new("--scratch-path"),
-                paths.swift_scratch.as_os_str(),
-            ],
-            root,
-        ),
+        swift_test_step(root, paths),
         step(
             xcodegen,
             &[
@@ -364,6 +410,11 @@ pub(crate) fn build_steps(root: &Path, paths: &AppPaths, xcodegen: &Path) -> [St
                 paths.result_bundle.as_os_str(),
                 OsStr::new("CODE_SIGNING_ALLOWED=NO"),
                 OsStr::new("ONLY_ACTIVE_ARCH=YES"),
+                // Clean first: Xcode reports a warning only from the task
+                // that emits it, and skips tasks that are up to date, so an
+                // incremental build would pass the warning gate a second
+                // time without a fix.
+                OsStr::new("clean"),
                 OsStr::new("build"),
             ],
             root,
@@ -498,7 +549,70 @@ pub(crate) fn build(cargo: &Cargo, out: &mut impl Write) -> Result<(), AppError>
     let root = cargo.workspace_root().to_path_buf();
     let paths = AppPaths::new(&root, &target);
     let xcodegen = find_xcodegen(std::env::var_os("PATH"))?;
-    assemble(&mut System, &root, &paths, &xcodegen, out)
+    assemble(&mut System, &root, &paths, &xcodegen, out)?;
+    restart_loaded_agent(&mut System, &root, &paths, STOP_WAIT, out)
+}
+
+/// After a build, starts the development agent again if it is loaded: it
+/// runs the `mooringctl` inside the app, which the build has replaced, and
+/// a daemon left on the old build answers the new CLI in its old shape.
+/// macOS asks again for the keychain item, as the ad-hoc signature changed.
+pub(crate) fn restart_loaded_agent(
+    programs: &mut impl Programs,
+    root: &Path,
+    paths: &AppPaths,
+    wait: StopWait,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let domain = gui_domain(programs, root)?;
+    let service = format!("{domain}/{AGENT_LABEL}");
+    if !agent_loaded(programs, root, &service)? {
+        return Ok(());
+    }
+    if !paths.agent_plist.is_file() {
+        return Err(AppError::AgentPlistMissing {
+            service,
+            path: paths.agent_plist.clone(),
+        });
+    }
+    stop_agent(programs, root, &domain, wait)?;
+    programs.run(
+        &step(
+            LAUNCHCTL,
+            &[
+                OsStr::new("bootstrap"),
+                OsStr::new(&domain),
+                paths.agent_plist.as_os_str(),
+            ],
+            root,
+        ),
+        Capture::Inherit,
+    )?;
+    say!(
+        out,
+        "app: {AGENT_LABEL} restarted on this build; macOS asks again to let mooringctl use the keychain item"
+    )?;
+    Ok(())
+}
+
+/// `AgentLoaded` while the development agent is loaded: removing the
+/// target directory would pull its executable away from under it.
+pub(crate) fn refuse_while_agent_loaded(
+    programs: &mut impl Programs,
+    root: &Path,
+) -> Result<(), AppError> {
+    let domain = gui_domain(programs, root)?;
+    let service = format!("{domain}/{AGENT_LABEL}");
+    if agent_loaded(programs, root, &service)? {
+        return Err(AppError::AgentLoaded { service });
+    }
+    Ok(())
+}
+
+/// [`refuse_while_agent_loaded`] against the real `launchctl`, from
+/// `root`.
+pub(crate) fn refuse_while_agent_loaded_on_this_mac(root: &Path) -> Result<(), AppError> {
+    refuse_while_agent_loaded(&mut System, root)
 }
 
 /// The build after `mooringctl` is signed: the steps, the result bundle's
@@ -544,13 +658,18 @@ pub(crate) fn assemble(
         Capture::Inherit,
     )?;
     fs::copy(&paths.signed, &paths.embedded).map_err(file_error("copy", &paths.signed))?;
+    check_alert_strings(programs, root, paths)?;
+    // The hardened runtime refuses injected libraries, here as for the
+    // `mooringctl` inside (`mooringctl::sign_args`).
     programs.run(
         &step(
-            "/usr/bin/codesign",
+            CODESIGN,
             &[
                 OsStr::new("--force"),
                 OsStr::new("--sign"),
                 OsStr::new("-"),
+                OsStr::new("--options"),
+                OsStr::new("runtime"),
                 paths.app.as_os_str(),
             ],
             root,
@@ -559,7 +678,7 @@ pub(crate) fn assemble(
     )?;
     programs.run(
         &step(
-            "/usr/bin/codesign",
+            CODESIGN,
             &[
                 OsStr::new("--verify"),
                 OsStr::new("--strict"),
@@ -574,14 +693,10 @@ pub(crate) fn assemble(
         (&paths.embedded, mooringctl::SIGNING_IDENTIFIER),
     ] {
         let report = programs.run(
-            &step(
-                "/usr/bin/codesign",
-                &[OsStr::new("-dv"), path.as_os_str()],
-                root,
-            ),
+            &step(CODESIGN, &[OsStr::new("-dv"), path.as_os_str()], root),
             Capture::Stderr,
         )?;
-        check_identifier(&report, expected).map_err(|fault| AppError::Signature {
+        check_signed_as(&report, expected).map_err(|fault| AppError::Signature {
             path: path.clone(),
             expected,
             fault,
@@ -594,6 +709,48 @@ pub(crate) fn assemble(
         paths.embedded.display()
     )?;
     Ok(())
+}
+
+/// Checks that the built app's Simplified Chinese `InfoPlist.strings`,
+/// read as JSON through `plutil`, gives each of [`ALERT_KEYS`] a text.
+fn check_alert_strings(
+    programs: &mut impl Programs,
+    root: &Path,
+    paths: &AppPaths,
+) -> Result<(), AppError> {
+    let strings = paths
+        .app
+        .join("Contents/Resources/zh-Hans.lproj/InfoPlist.strings");
+    let json = programs.run(
+        &step(
+            PLUTIL,
+            &[
+                OsStr::new("-convert"),
+                OsStr::new("json"),
+                OsStr::new("-o"),
+                OsStr::new("-"),
+                strings.as_os_str(),
+            ],
+            root,
+        ),
+        Capture::Stdout,
+    )?;
+    // Output that is not a table of texts gives none of them: every key is
+    // then missing, and the assembly stops.
+    let table: BTreeMap<String, String> = serde_json::from_slice(&json).unwrap_or_default();
+    let missing: Vec<String> = ALERT_KEYS
+        .iter()
+        .filter(|key| table.get(**key).is_none_or(String::is_empty))
+        .map(|key| (*key).to_owned())
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::AlertStrings {
+            path: strings,
+            missing,
+        })
+    }
 }
 
 /// The `.stringsdata` files Xcode extracted the app's localizable strings
@@ -655,9 +812,14 @@ struct StringUnit {
     value: String,
 }
 
-/// The format specifiers of `text`, sorted: `%@`, `%lld`, `%u`, `%1$@` and
-/// the like; `%%` is a literal, not a specifier.
-pub(crate) fn specifiers(text: &str) -> Vec<String> {
+/// The format specifiers of `text` by the argument each formats: a plain
+/// one (`%@`, `%lld`, `%u`) takes the next argument, a positional one
+/// (`%2$@`) the one it names. Each is listed as its argument's position
+/// and its type without the position (`%2$@` is `(2, "%@")`), in the order
+/// of positions, so a translation may reorder its arguments by position
+/// but not change what type an argument is formatted as. `%%` is a
+/// literal, not a specifier.
+pub(crate) fn specifiers(text: &str) -> Vec<(usize, String)> {
     let mut found = Vec::new();
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -676,7 +838,15 @@ pub(crate) fn specifiers(text: &str) -> Vec<String> {
                 break;
             }
         }
-        found.push(specifier);
+        let position = found.len() + 1;
+        found.push(match specifier[1..].split_once('$') {
+            Some((index, rest))
+                if !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                (index.parse().unwrap_or(usize::MAX), format!("%{rest}"))
+            }
+            _ => (position, specifier),
+        });
     }
     found.sort();
     found
@@ -760,6 +930,10 @@ fn xml(text: &str) -> String {
 /// The LaunchAgent's property list (design §5.1): the app's `mooringctl
 /// daemon` polling `interface`, kept alive, its stderr appended to `log`,
 /// and the app named as its responsible code for local network privacy.
+/// launchd starts it again no sooner than a minute after its last start,
+/// so a daemon that keeps failing still asks the M7 at most once a minute
+/// (§15.6 rule 7) and logs a line a minute; at a stop it has 5 s after
+/// SIGTERM before SIGKILL, inside [`STOP_WAIT`].
 pub(crate) fn agent_plist(program: &Path, interface: &BsdName, log: &Path) -> String {
     let program = xml(&program.to_string_lossy());
     let log = xml(&log.to_string_lossy());
@@ -789,7 +963,9 @@ pub(crate) fn agent_plist(program: &Path, interface: &BsdName, log: &Path) -> St
 	<key>ProcessType</key>
 	<string>Standard</string>
 	<key>ThrottleInterval</key>
-	<integer>10</integer>
+	<integer>60</integer>
+	<key>ExitTimeOut</key>
+	<integer>5</integer>
 	<key>StandardOutPath</key>
 	<string>/dev/null</string>
 	<key>StandardErrorPath</key>
@@ -994,9 +1170,10 @@ mod tests {
 
     use super::{
         AGENT_LABEL, AppError, AppPaths, Capture, Programs, Step, StopWait, agent_plist, assemble,
-        build_steps, check_build_results, find_xcodegen, install, require_macos, tail, uninstall,
+        build_steps, check_build_results, find_xcodegen, install, refuse_while_agent_loaded,
+        require_macos, restart_loaded_agent, tail, uninstall,
     };
-    use crate::mooringctl::IdentifierFault;
+    use crate::mooringctl::SignatureFault;
     use crate::testing::Scratch;
     use mooring_model::iface::BsdName;
 
@@ -1073,7 +1250,7 @@ mod tests {
             [
                 "/usr/bin/xcrun swift test --package-path /r/apple/Packages/MooringKit --scratch-path /t/swift/MooringKit",
                 "/opt/bin/xcodegen generate --quiet --spec /r/apple/project.yml",
-                "/usr/bin/xcrun xcodebuild -quiet -project /r/apple/Mooring.xcodeproj -scheme Mooring -configuration Release -destination platform=macOS,arch=arm64 -derivedDataPath /t/apple/DerivedData -resultBundlePath /t/apple/result.xcresult CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES build",
+                "/usr/bin/xcrun xcodebuild -quiet -project /r/apple/Mooring.xcodeproj -scheme Mooring -configuration Release -destination platform=macOS,arch=arm64 -derivedDataPath /t/apple/DerivedData -resultBundlePath /t/apple/result.xcresult CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES clean build",
             ]
         );
         assert!(steps.iter().all(|step| step.dir == Path::new("/r")));
@@ -1149,10 +1326,11 @@ mod tests {
             Ok(Vec::new()),
             Ok(CLEAN.as_bytes().to_vec()),
             Ok(Vec::new()),
+            Ok(ALERT_STRINGS.to_vec()),
             Ok(Vec::new()),
             Ok(Vec::new()),
-            Ok(b"Executable=x\nIdentifier=com.bill.mooring\n".to_vec()),
-            Ok(b"Identifier=com.bill.mooring.mooringctl\n".to_vec()),
+            Ok(signed_report("com.bill.mooring")),
+            Ok(signed_report("com.bill.mooring.mooringctl")),
         ] {
             fake.outputs.push_back(output);
         }
@@ -1161,7 +1339,7 @@ mod tests {
         let app = paths.app.display().to_string();
         let embedded = paths.embedded.display().to_string();
         let steps: Vec<String> = fake.steps.iter().map(|(line, _)| line.clone()).collect();
-        assert_eq!(steps.len(), 9, "{steps:#?}");
+        assert_eq!(steps.len(), 10, "{steps:#?}");
         assert!(steps[0].starts_with("/usr/bin/xcrun swift test "));
         assert!(steps[1].starts_with("/x/xcodegen generate "));
         assert!(steps[2].starts_with("/usr/bin/xcrun xcodebuild "));
@@ -1172,16 +1350,23 @@ mod tests {
         );
         assert_eq!(
             steps[5],
-            format!("/usr/bin/codesign --force --sign - {app}")
+            format!(
+                "/usr/bin/plutil -convert json -o - {app}/Contents/Resources/zh-Hans.lproj/InfoPlist.strings"
+            )
         );
         assert_eq!(
             steps[6],
+            format!("/usr/bin/codesign --force --sign - --options runtime {app}")
+        );
+        assert_eq!(
+            steps[7],
             format!("/usr/bin/codesign --verify --strict {app}")
         );
-        assert_eq!(steps[7], format!("/usr/bin/codesign -dv {app}"));
-        assert_eq!(steps[8], format!("/usr/bin/codesign -dv {embedded}"));
+        assert_eq!(steps[8], format!("/usr/bin/codesign -dv {app}"));
+        assert_eq!(steps[9], format!("/usr/bin/codesign -dv {embedded}"));
         assert_eq!(fake.steps[3].1, Capture::Stdout);
-        assert_eq!(fake.steps[7].1, Capture::Stderr);
+        assert_eq!(fake.steps[5].1, Capture::Stdout);
+        assert_eq!(fake.steps[8].1, Capture::Stderr);
         assert_eq!(fs::read(&paths.embedded).unwrap(), b"signed mooringctl");
         assert_eq!(
             String::from_utf8(out).unwrap(),
@@ -1222,10 +1407,11 @@ mod tests {
             Ok(Vec::new()),
             Ok(CLEAN.as_bytes().to_vec()),
             Ok(Vec::new()),
+            Ok(ALERT_STRINGS.to_vec()),
             Ok(Vec::new()),
             Ok(Vec::new()),
-            Ok(b"Identifier=com.bill.mooring\n".to_vec()),
-            Ok(b"Identifier=mooringctl-020ac5c52e8594c4\n".to_vec()),
+            Ok(signed_report("com.bill.mooring")),
+            Ok(signed_report("mooringctl-020ac5c52e8594c4")),
         ] {
             fake.outputs.push_back(output);
         }
@@ -1234,11 +1420,93 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                AppError::Signature { path, expected: "com.bill.mooring.mooringctl", fault: IdentifierFault::Different(found) }
+                AppError::Signature { path, expected: "com.bill.mooring.mooringctl", fault: SignatureFault::Different(found) }
                     if *path == paths.embedded && found == "mooringctl-020ac5c52e8594c4"
             ),
             "{error:?}"
         );
+
+        // An app signed without the hardened runtime fails it too.
+        let mut fake = Fake::default();
+        for output in [
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(CLEAN.as_bytes().to_vec()),
+            Ok(Vec::new()),
+            Ok(ALERT_STRINGS.to_vec()),
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(String::from_utf8(signed_report("com.bill.mooring"))
+                .unwrap()
+                .replace("(adhoc,runtime)", "(adhoc)")
+                .into_bytes()),
+        ] {
+            fake.outputs.push_back(output);
+        }
+        let error =
+            assemble(&mut fake, &root, &paths, Path::new("/x"), &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                AppError::Signature { path, expected: "com.bill.mooring", fault: SignatureFault::NotHardened }
+                    if *path == paths.app
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// The built app's Simplified Chinese Info.plist texts, as `plutil`
+    /// prints them as JSON.
+    const ALERT_STRINGS: &[u8] =
+        "{\"NSLocalNetworkUsageDescription\":\"Mooring 守护进程读取路由器的状态。\"}".as_bytes();
+
+    /// An app whose Chinese Info.plist texts lack the local network alert's,
+    /// or give it none, or cannot be read, is not signed.
+    #[test]
+    fn an_alert_text_without_chinese_stops_the_assembly() {
+        let scratch = Scratch::new("app-alert");
+        let (root, paths) = paths(&scratch);
+        strings(&paths);
+        fs::create_dir_all(paths.signed.parent().unwrap()).unwrap();
+        fs::write(&paths.signed, b"signed").unwrap();
+        for answer in [
+            &b"{\"CFBundleName\":\"Mooring\"}"[..],
+            b"{\"NSLocalNetworkUsageDescription\":\"\"}",
+            b"not json",
+        ] {
+            let mut fake = Fake::default();
+            for output in [
+                Ok(Vec::new()),
+                Ok(Vec::new()),
+                Ok(Vec::new()),
+                Ok(CLEAN.as_bytes().to_vec()),
+                Ok(Vec::new()),
+                Ok(answer.to_vec()),
+            ] {
+                fake.outputs.push_back(output);
+            }
+            let error =
+                assemble(&mut fake, &root, &paths, Path::new("/x"), &mut Vec::new()).unwrap_err();
+            assert!(
+                matches!(&error, AppError::AlertStrings { missing, .. } if *missing == ["NSLocalNetworkUsageDescription"]),
+                "{error:?}"
+            );
+            assert!(
+                fake.steps
+                    .iter()
+                    .all(|(line, _)| !line.starts_with("/usr/bin/codesign"))
+            );
+        }
+    }
+
+    /// `codesign -dv`'s report of an ad-hoc hardened-runtime signature with
+    /// `identifier`, as macOS 27 writes it.
+    fn signed_report(identifier: &str) -> Vec<u8> {
+        format!(
+            "Executable=x\nIdentifier={identifier}\nFormat=Mach-O thin (arm64)\nCodeDirectory v=20500 size=44028 flags=0x10002(adhoc,runtime) hashes=1370+2 location=embedded\nSignature=adhoc\n"
+        )
+        .into_bytes()
     }
 
     #[test]
@@ -1254,6 +1522,7 @@ mod tests {
             "<string>/t/app/Mooring.app/Contents/MacOS/mooringctl</string>\n\t\t<string>daemon</string>\n\t\t<string>--router-interface</string>\n\t\t<string>en9</string>",
             "<key>KeepAlive</key>\n\t<true/>\n\t<key>ProcessType</key>\n\t<string>Standard</string>",
             "<key>StandardErrorPath</key>\n\t<string>/Users/u/Library/Logs/Mooring/daemon.log</string>",
+            "<key>ThrottleInterval</key>\n\t<integer>60</integer>\n\t<key>ExitTimeOut</key>\n\t<integer>5</integer>",
         ] {
             assert!(plist.contains(part), "{part}\n{plist}");
         }
@@ -1420,6 +1689,88 @@ mod tests {
         );
     }
 
+    /// After a build a loaded agent is started again from its plist; one
+    /// that is not loaded is left alone, and one whose plist is gone is
+    /// left running, with an error.
+    #[test]
+    fn a_build_restarts_a_loaded_agent() {
+        let scratch = Scratch::new("app-restart");
+        let (root, paths) = paths(&scratch);
+        let print = format!("/bin/launchctl print gui/501/{AGENT_LABEL}");
+        let mut fake = Fake::default();
+        fake.outputs.push_back(Ok(b"501\n".to_vec()));
+        fake.statuses.push_back(Some(113));
+        let mut out = Vec::new();
+        restart_loaded_agent(&mut fake, &root, &paths, NO_WAIT, &mut out).unwrap();
+        let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
+        assert_eq!(steps, ["/usr/bin/id -u", print.as_str()]);
+        assert!(out.is_empty());
+
+        let mut fake = Fake::default();
+        fake.outputs.push_back(Ok(b"501\n".to_vec()));
+        fake.statuses.push_back(Some(0));
+        let error =
+            restart_loaded_agent(&mut fake, &root, &paths, NO_WAIT, &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(&error, AppError::AgentPlistMissing { path, .. } if *path == paths.agent_plist),
+            "{error:?}"
+        );
+        assert!(
+            fake.steps
+                .iter()
+                .all(|(line, _)| !line.contains(" bootout "))
+        );
+
+        fs::create_dir_all(paths.agent_plist.parent().unwrap()).unwrap();
+        fs::write(&paths.agent_plist, b"plist").unwrap();
+        let mut fake = Fake::default();
+        fake.outputs.push_back(Ok(b"501\n".to_vec()));
+        fake.statuses.extend([Some(0), Some(0), Some(113)]);
+        let mut out = Vec::new();
+        restart_loaded_agent(&mut fake, &root, &paths, NO_WAIT, &mut out).unwrap();
+        let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
+        let bootstrap = format!(
+            "/bin/launchctl bootstrap gui/501 {}",
+            paths.agent_plist.display()
+        );
+        assert_eq!(
+            steps,
+            [
+                "/usr/bin/id -u",
+                print.as_str(),
+                print.as_str(),
+                &format!("/bin/launchctl bootout gui/501/{AGENT_LABEL}"),
+                print.as_str(),
+                bootstrap.as_str(),
+            ]
+        );
+        assert!(fake.statuses.is_empty());
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .starts_with(&format!("app: {AGENT_LABEL} restarted on this build"))
+        );
+    }
+
+    /// Clean is refused while the agent is loaded.
+    #[test]
+    fn clean_is_refused_while_the_agent_is_loaded() {
+        let scratch = Scratch::new("app-clean");
+        let (root, _) = paths(&scratch);
+        for (status, refused) in [(113, false), (0, true)] {
+            let mut fake = Fake::default();
+            fake.outputs.push_back(Ok(b"501\n".to_vec()));
+            fake.statuses.push_back(Some(status));
+            let result = refuse_while_agent_loaded(&mut fake, &root);
+            assert_eq!(
+                matches!(&result, Err(AppError::AgentLoaded { service }) if *service == format!("gui/501/{AGENT_LABEL}")),
+                refused,
+                "{result:?}"
+            );
+            assert_eq!(result.is_ok(), !refused);
+        }
+    }
+
     #[test]
     fn uninstall_stops_a_loaded_agent_and_removes_its_plist() {
         let scratch = Scratch::new("agent-uninstall");
@@ -1553,11 +1904,18 @@ mod catalog_tests {
 
     #[test]
     fn specifiers_are_read_as_cocoa_formats_are() {
-        assert_eq!(specifiers("Retrying in %lld s."), ["%lld"]);
-        assert_eq!(specifiers("%u %%%@"), ["%@", "%u"]);
-        assert_eq!(specifiers("%1$@ and %2$d"), ["%1$@", "%2$d"]);
-        assert_eq!(specifiers("100%% done"), Vec::<String>::new());
-        assert_eq!(specifiers("↓ %@  ↑ %@"), ["%@", "%@"]);
+        let s = |list: &[(usize, &str)]| -> Vec<(usize, String)> {
+            list.iter().map(|(i, t)| (*i, (*t).to_owned())).collect()
+        };
+        assert_eq!(specifiers("Retrying in %lld s."), s(&[(1, "%lld")]));
+        assert_eq!(specifiers("%u %%%@"), s(&[(1, "%u"), (2, "%@")]));
+        assert_eq!(specifiers("%1$@ and %2$d"), s(&[(1, "%@"), (2, "%d")]));
+        assert_eq!(specifiers("100%% done"), Vec::new());
+        assert_eq!(specifiers("↓ %@  ↑ %@"), s(&[(1, "%@"), (2, "%@")]));
+        // A translation may reorder its arguments by position...
+        assert_eq!(specifiers("%2$lld then %1$@"), specifiers("%@ then %lld"));
+        // ...but not swap their types.
+        assert_ne!(specifiers("%lld then %@"), specifiers("%@ then %lld"));
     }
 
     #[test]

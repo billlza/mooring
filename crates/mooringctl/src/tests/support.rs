@@ -396,12 +396,19 @@ impl FakeParent {
         }
     }
 
+    /// A parent the command must never ask about: asking fails the test.
+    pub(crate) fn never_asked() -> Self {
+        Self {
+            ids: RefCell::new(VecDeque::new()),
+        }
+    }
+
     fn id(&self) -> u32 {
         let mut ids = self.ids.borrow_mut();
         if ids.len() > 1 {
             ids.pop_front().unwrap()
         } else {
-            *ids.front().unwrap()
+            *ids.front().expect("the command asked about its parent")
         }
     }
 }
@@ -476,6 +483,18 @@ impl Harness {
     pub(crate) fn run(&mut self, args: &[&str]) -> Outcome {
         let cli =
             Cli::try_parse_from(std::iter::once("mooringctl").chain(args.iter().copied())).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let code = self.with_env(|env| run(cli.command, env, &mut stdout, &mut stderr));
+        Outcome {
+            code,
+            stdout: String::from_utf8(stdout).unwrap(),
+            stderr: String::from_utf8(stderr).unwrap(),
+        }
+    }
+
+    /// Runs `work` against the environment a command gets.
+    pub(crate) fn with_env<T>(&mut self, work: impl FnOnce(&mut Env<'_>) -> T) -> T {
         let clock = || Ok(UnixTime::from_secs(NOW));
         let parent = || self.parent.id();
         let mut env = Env {
@@ -492,13 +511,6 @@ impl Harness {
             backups: &self.backups,
             parent: &parent,
         };
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let code = run(cli.command, &mut env, &mut stdout, &mut stderr);
-        Outcome {
-            code,
-            stdout: String::from_utf8(stdout).unwrap(),
-            stderr: String::from_utf8(stderr).unwrap(),
-        }
+        work(&mut env)
     }
 }

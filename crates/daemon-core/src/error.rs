@@ -892,6 +892,10 @@ pub enum ConsoleError {
         /// The version found.
         found: u32,
     },
+    /// The document's advisories are not the ones its router panel calls
+    /// for.
+    #[error("an undeployed status document's advisories do not follow from its router panel")]
+    AdvisoriesMismatch,
 }
 
 kinds! {
@@ -899,6 +903,8 @@ kinds! {
     pub enum ConsoleErrorKind {
         /// See [`ConsoleError::UnsupportedVersion`].
         UnsupportedVersion,
+        /// See [`ConsoleError::AdvisoriesMismatch`].
+        AdvisoriesMismatch,
     }
 }
 
@@ -908,6 +914,7 @@ impl ConsoleError {
     pub const fn kind(&self) -> ConsoleErrorKind {
         match self {
             Self::UnsupportedVersion { .. } => ConsoleErrorKind::UnsupportedVersion,
+            Self::AdvisoriesMismatch => ConsoleErrorKind::AdvisoriesMismatch,
         }
     }
 }

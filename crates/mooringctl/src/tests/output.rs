@@ -37,6 +37,62 @@ unread SMS 0
     );
 }
 
+/// The settings the exit needs off that are on are named after the
+/// settings, in their order; Analytics is shown but never named.
+#[test]
+fn the_settings_the_exit_needs_off_are_named() {
+    let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
+    let body = serde_json::to_vec(&document).unwrap();
+    let text = summary(
+        None,
+        UnixTime::from_secs(NOW),
+        &parse_netgear_model_json(&body).unwrap(),
+    )
+    .unwrap();
+    assert!(!text.contains("needs these off"), "{text}");
+    document["router"]["UPNPenabled"] = serde_json::json!(true);
+    document["insight"]["active"] = serde_json::json!(true);
+    document["ra"]["enabled"] = serde_json::json!(true);
+    let body = serde_json::to_vec(&document).unwrap();
+    let text = summary(
+        None,
+        UnixTime::from_secs(NOW),
+        &parse_netgear_model_json(&body).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        text.contains(
+            "offload Wi-Fi off, Ethernet off; UPnP on; Analytics on; Insight active\nthe exit needs these off: UPnP, NETGEAR Insight\nunread SMS 0\n"
+        ),
+        "{text}"
+    );
+}
+
+/// Unassigned secondary slots are counted after the carriers, never listed
+/// as carriers.
+#[test]
+fn unassigned_slots_are_counted_in_the_summary() {
+    let unassigned = serde_json::json!({
+        "band": 0, "channel": "REDACTED", "dlBandwidth": "Unknown", "isPcc": false,
+        "phyCid": "REDACTED", "sccId": 0, "sccState": 0, "sccUlBandwidth": "REDACTED",
+        "sccUlCaEnabled": "REDACTED", "sccUlChannel": 0
+    });
+    for (slots, said) in [
+        (1, "LTE carriers B3 20MHz (primary), 1 unassigned slot; "),
+        (2, "LTE carriers B3 20MHz (primary), 2 unassigned slots; "),
+    ] {
+        let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
+        let list = document["wwan"]["lteBandInfo"].as_array_mut().unwrap();
+        for _ in 0..slots {
+            list.insert(1, unassigned.clone());
+        }
+        let body = serde_json::to_vec(&document).unwrap();
+        let status = parse_netgear_model_json(&body).unwrap();
+        let text = summary(None, UnixTime::from_secs(NOW), &status).unwrap();
+        assert!(text.contains(said), "{text}");
+    }
+}
+
 /// What the M7 reports as the empty string reads as not reported, never as
 /// an empty name: the SPN and the web app's version, both empty with the
 /// SMARTY SIM (2026-10-16).

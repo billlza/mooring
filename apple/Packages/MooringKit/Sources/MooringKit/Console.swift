@@ -16,17 +16,19 @@ public enum ConsoleDecodingError: Error, Equatable, Sendable {
     case unsupportedVersion(UInt32)
 }
 
-/// The status before a deployment exists: when the daemon made it, and the
-/// router panel.
+/// The status before a deployment exists: when the daemon made it, the
+/// router panel, and the settings the exit needs off that the panel shows
+/// on.
 public struct UndeployedStatus: Decodable, Hashable, Sendable {
     /// The version this build reads.
     public static let version: UInt32 = 1
 
     public let at: UnixTime
     public let router: RouterReading
+    public let advisories: [RouterAdvisory]
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case version, at, router
+        case version, at, router, advisories
     }
 
     public init(from decoder: any Decoder) throws {
@@ -37,6 +39,7 @@ public struct UndeployedStatus: Decodable, Hashable, Sendable {
         }
         at = try object.decode(UnixTime.self, forKey: .at)
         router = try object.decode(RouterReading.self, forKey: .router)
+        advisories = try object.decode([RouterAdvisory].self, forKey: .advisories)
     }
 }
 
@@ -73,6 +76,13 @@ public enum ConsoleStatus: Decodable, Hashable, Sendable {
     public var at: UnixTime {
         switch self {
         case .noDeployment(let status): status.at
+        }
+    }
+
+    /// The settings the exit needs off that the router panel shows on.
+    public var advisories: [RouterAdvisory] {
+        switch self {
+        case .noDeployment(let status): status.advisories
         }
     }
 }

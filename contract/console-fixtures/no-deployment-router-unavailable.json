@@ -7,6 +7,7 @@
         "reason": "local_failure",
         "last_polled_at": 1792639740
       }
-    }
+    },
+    "advisories": []
   }
 }

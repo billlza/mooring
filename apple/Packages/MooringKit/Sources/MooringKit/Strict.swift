@@ -2,10 +2,13 @@
 
 // Strict decoding: the console's documents are Rust types with
 // `deny_unknown_fields` and closed enums (design §15.2), so the mirror
-// refuses what they refuse. An object with a key its type does not name is
-// an error, a value the Rust type spells as `Option` with a required key
-// must be present (as `null` when it is none), and an externally tagged
-// enum is an object with exactly one known key.
+// refuses the shapes they refuse. An object with a key its type does not
+// name is an error, a value the Rust type spells as `Option` with a
+// required key must be present (as `null` when it is none), and an
+// externally tagged enum is an object with exactly one known key. The
+// values' own rules (ranges, lengths, which advisories a panel calls for)
+// are the Rust types' alone: every line the app reads, `mooringctl` has
+// decoded with them and encoded again, so the mirror does not repeat them.
 
 import Foundation
 

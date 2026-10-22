@@ -69,13 +69,16 @@
           "settings": {
             "wifi_offload": false,
             "ethernet_offload": false,
-            "upnp": false,
+            "upnp": true,
             "analytics": false,
             "insight_active": false
           },
           "unread_sms": 0
         }
       }
-    }
+    },
+    "advisories": [
+      "upnp_on"
+    ]
   }
 }

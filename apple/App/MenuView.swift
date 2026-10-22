@@ -41,8 +41,12 @@ struct MenuView: View {
             return Text(reason.title)
         case (.live, nil), (.connecting, _):
             return Text("Waiting for the Mooring daemon…")
+        case (.refusing, _):
+            return Text("Not live: the latest status cannot be shown")
         case (.ended, _):
             return Text("Not live: mooringctl stopped")
+        case (.stopped, _):
+            return Text("Not reading the daemon's status")
         case (.noCommand, _):
             return Text("No mooringctl in this app")
         }

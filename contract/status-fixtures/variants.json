@@ -824,6 +824,13 @@
       }
     }
   ],
+  "router_advisory": [
+    "wifi_radio_on",
+    "wifi_offload_on",
+    "ethernet_offload_on",
+    "upnp_on",
+    "insight_active"
+  ],
   "band": [
     "B3",
     "n78"

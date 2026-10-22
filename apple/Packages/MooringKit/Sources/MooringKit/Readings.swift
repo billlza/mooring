@@ -3,7 +3,8 @@
 // How the console writes the M7's numbers: readings from tenths and
 // durations as `mooringctl`'s summary spells them, so the app and the CLI
 // can be compared, and byte counts in decimal units. Deterministic (no
-// locale), so tests pin them.
+// locale), so tests pin them; the app words what is not a number (a span's
+// day unit, "not reported") in the user's language.
 
 import Foundation
 
@@ -17,22 +18,19 @@ public enum Readings {
         return tenth == 0 ? "\(sign)\(whole)" : "\(sign)\(whole).\(tenth)"
     }
 
-    /// A reading with its unit, or "not reported".
-    public static func reading(_ value: Int16?, unit: String) -> String {
-        guard let value else {
-            return "not reported"
-        }
-        return "\(tenths(value)) \(unit)"
+    /// A reading with its unit.
+    public static func reading(_ value: Int16, unit: String) -> String {
+        "\(tenths(value)) \(unit)"
     }
 
-    /// A duration in seconds as `<days>d <hh>:<mm>:<ss>`.
-    public static func span(_ seconds: UInt64) -> String {
-        let days = seconds / 86_400
+    /// A duration in seconds as whole days and the `<hh>:<mm>:<ss>` after
+    /// them, which `mooringctl` prints as `<days>d <hh>:<mm>:<ss>`.
+    public static func span(_ seconds: UInt64) -> (days: UInt64, clock: String) {
         let rest = seconds % 86_400
         let clock = [rest / 3600, rest % 3600 / 60, rest % 60]
             .map { $0 < 10 ? "0\($0)" : "\($0)" }
             .joined(separator: ":")
-        return "\(days)d \(clock)"
+        return (seconds / 86_400, clock)
     }
 
     /// Bytes in decimal units with one decimal above a kilobyte:

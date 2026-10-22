@@ -11,8 +11,8 @@ use std::fmt::{self, Write as _};
 
 use mooring_daemon_core::router::netgear::NETGEAR_MODEL;
 use mooring_daemon_core::router::{
-    CarrierName, LteCarrier, LteCarriers, LteSignal, NrSignal, Radio, RadioState, RouterReading,
-    RouterStatus, WebAppVersion,
+    CarrierName, LteCarrier, LteCarriers, LteSignal, NrSignal, Radio, RadioState, RouterAdvisory,
+    RouterReading, RouterStatus, WebAppVersion,
 };
 use mooring_model::date::CalendarDate;
 use mooring_model::error::ModelError;
@@ -247,10 +247,29 @@ pub(crate) fn summary(
             "inactive"
         },
     ));
+    let advisories = status.advisories();
+    if !advisories.is_empty() {
+        let names: Vec<&str> = advisories
+            .iter()
+            .map(|advisory| advisory_name(*advisory))
+            .collect();
+        lines.push(format!("the exit needs these off: {}", names.join(", ")));
+    }
     lines.push(format!("unread SMS {}", parts.unread_sms));
     let mut text = lines.join("\n");
     text.push('\n');
     Ok(text)
+}
+
+/// The setting an advisory names.
+const fn advisory_name(advisory: RouterAdvisory) -> &'static str {
+    match advisory {
+        RouterAdvisory::WifiRadioOn => "Wi-Fi radio",
+        RouterAdvisory::WifiOffloadOn => "Wi-Fi offload",
+        RouterAdvisory::EthernetOffloadOn => "Ethernet offload",
+        RouterAdvisory::UpnpOn => "UPnP",
+        RouterAdvisory::InsightActive => "NETGEAR Insight",
+    }
 }
 
 /// One line of JSON: the reading and a newline.

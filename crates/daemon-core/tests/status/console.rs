@@ -16,8 +16,8 @@ use std::path::Path;
 use mooring_daemon_core::control::{DaemonReply, MAX_REPLY_LINE_BYTES, decode_reply, encode_line};
 use mooring_daemon_core::router::{
     Band, BandNumber, DataService, LteBandwidth, LteCarrier, LteCarriers, LteSignal,
-    NetworkService, NrSignal, Plmn, Radio, RadioState, RouterReading, RouterUnavailableReason,
-    Rsrp, Rsrq, Rssi, Sinr,
+    NetworkService, NrSignal, Plmn, Radio, RadioState, RouterAdvisory, RouterReading, RouterStatus,
+    RouterUnavailableReason, Rsrp, Rsrq, Rssi, Sinr,
 };
 use mooring_daemon_core::router::{CarrierName, Mcc, Mnc};
 use mooring_daemon_core::{
@@ -92,10 +92,23 @@ fn smarty_radio() -> RadioState {
     })
 }
 
+/// `reading` with UPnP on, so the document carries an advisory.
+fn with_upnp_on(reading: RouterReading) -> RouterReading {
+    let RouterReading::Available { polled_at, status } = reading else {
+        panic!("an available reading");
+    };
+    let mut parts = status.parts().clone();
+    parts.settings.upnp = true;
+    RouterReading::Available {
+        polled_at,
+        status: Box::new(RouterStatus::new(parts).unwrap()),
+    }
+}
+
 /// Every console fixture, in file order.
 fn all() -> Vec<(&'static str, ConsoleStatus)> {
     let polled_at = UnixTime::from_secs(produced().as_secs() - 20);
-    let available = scenarios::router(polled_at, None, smarty_radio(), 44, 100);
+    let available = with_upnp_on(scenarios::router(polled_at, None, smarty_radio(), 44, 100));
     let unavailable = RouterReading::Unavailable {
         reason: RouterUnavailableReason::LocalFailure,
         last_polled_at: Some(UnixTime::from_secs(produced().as_secs() - 60)),
@@ -200,7 +213,7 @@ fn an_undeployed_document_is_version_1_with_every_key() {
         ConsoleError::UnsupportedVersion { found: 2 }.kind(),
         ConsoleErrorKind::UnsupportedVersion
     );
-    for key in ["version", "at", "router"] {
+    for key in ["version", "at", "router", "advisories"] {
         let mut missing = json.clone();
         missing["no_deployment"]
             .as_object_mut()
@@ -218,6 +231,47 @@ fn an_undeployed_document_is_version_1_with_every_key() {
         serde_json::from_slice::<Value>(FIXTURES[2].1).unwrap()["deployed"].clone(),
     );
     assert!(serde_json::from_value::<ConsoleStatus>(Value::Object(both)).is_err());
+}
+
+/// The advisories follow from the router panel: the document carries
+/// them, and refuses any others.
+#[test]
+fn the_advisories_follow_from_the_router_panel() {
+    let json: Value = serde_json::from_slice(FIXTURES[0].1).unwrap();
+    assert_eq!(
+        json["no_deployment"]["advisories"],
+        serde_json::json!(["upnp_on"])
+    );
+    let ConsoleStatus::NoDeployment(undeployed) =
+        serde_json::from_value::<ConsoleStatus>(json.clone()).unwrap()
+    else {
+        panic!("an undeployed document");
+    };
+    assert_eq!(undeployed.advisories(), [RouterAdvisory::UpnpOn]);
+    let unavailable: Value = serde_json::from_slice(FIXTURES[1].1).unwrap();
+    assert_eq!(
+        unavailable["no_deployment"]["advisories"],
+        serde_json::json!([])
+    );
+    for others in [
+        serde_json::json!([]),
+        serde_json::json!(["upnp_on", "upnp_on"]),
+        serde_json::json!(["wifi_radio_on"]),
+    ] {
+        let mut changed = json.clone();
+        changed["no_deployment"]["advisories"] = others.clone();
+        let error = serde_json::from_value::<ConsoleStatus>(changed).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&ConsoleError::AdvisoriesMismatch.to_string()),
+            "{others}: {error}"
+        );
+    }
+    assert_eq!(
+        ConsoleError::AdvisoriesMismatch.kind(),
+        ConsoleErrorKind::AdvisoriesMismatch
+    );
 }
 
 /// The router panel and the production time read the same from both

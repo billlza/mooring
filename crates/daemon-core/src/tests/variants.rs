@@ -2,7 +2,7 @@
 
 //! `contract/status-fixtures/variants.json`: one value of every variant of
 //! every enum a `MacStatusV1` carries, the model's and agent-proto's
-//! included. The scenario fixtures reach only the states their scenarios
+//! included, and of the console document's `RouterAdvisory`. The scenario fixtures reach only the states their scenarios
 //! are in, so this document gives Mooring.app's Codable mirror a fixture
 //! for every variant, and pins each variant's encoding byte for byte: a
 //! renamed variant fails here.
@@ -46,7 +46,8 @@ use crate::period::UsagePeriods;
 use crate::policy::{ExpiryState, QuotaState};
 use crate::router::{
     Band, BandNumber, BatteryState, ChargeSource, DataService, LteBandwidth, NetworkService,
-    PowerState, RadioState, RouterReading, RouterUnavailableReason, ThermalState, WifiApStatus,
+    PowerState, RadioState, RouterAdvisory, RouterReading, RouterUnavailableReason, ThermalState,
+    WifiApStatus,
 };
 use crate::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, ForecastView,
@@ -100,6 +101,7 @@ struct Variants {
     lte_bandwidth: Vec<LteBandwidth>,
     router_unavailable_reason: Vec<RouterUnavailableReason>,
     router_reading: Vec<RouterReading>,
+    router_advisory: Vec<RouterAdvisory>,
     band: Vec<Band>,
     active_now: Vec<ActiveNow>,
     forecast_error_kind: Vec<ForecastErrorKind>,
@@ -427,6 +429,13 @@ fn variants() -> Variants {
                 reason: RouterUnavailableReason::IdentityMismatch,
                 last_polled_at: None,
             },
+        ],
+        router_advisory: vec![
+            RouterAdvisory::WifiRadioOn,
+            RouterAdvisory::WifiOffloadOn,
+            RouterAdvisory::EthernetOffloadOn,
+            RouterAdvisory::UpnpOn,
+            RouterAdvisory::InsightActive,
         ],
         band: vec![
             Band::Lte(BandNumber::new(3).unwrap()),
@@ -929,6 +938,18 @@ fn the_variants_fixture_lists_every_variant() {
             RouterUnavailableReason::LocalFailure => 6,
         },
         7,
+    );
+    every_variant(
+        "router_advisory",
+        &v.router_advisory,
+        |value| match value {
+            RouterAdvisory::WifiRadioOn => 0,
+            RouterAdvisory::WifiOffloadOn => 1,
+            RouterAdvisory::EthernetOffloadOn => 2,
+            RouterAdvisory::UpnpOn => 3,
+            RouterAdvisory::InsightActive => 4,
+        },
+        5,
     );
     every_variant(
         "router_reading",

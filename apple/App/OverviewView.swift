@@ -66,7 +66,8 @@ struct OverviewView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             case .available(let polledAt, let status)?:
-                RouterGlance(polledAt: polledAt, status: status)
+                RouterGlance(
+                    polledAt: polledAt, status: status, advisories: model.status?.advisories ?? [])
             }
         } label: {
             Label("M7 router", systemImage: "antenna.radiowaves.left.and.right")
@@ -79,6 +80,8 @@ struct OverviewView: View {
 struct RouterGlance: View {
     let polledAt: UnixTime
     let status: RouterStatus
+    /// The settings the exit needs off that are on, as the daemon says.
+    let advisories: [RouterAdvisory]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -126,9 +129,9 @@ struct RouterGlance: View {
                     Text(polledAt.date.formatted(date: .omitted, time: .standard))
                 }
             }
-            if !status.settingsOn.isEmpty {
+            if !advisories.isEmpty {
                 Label(
-                    "On: \(status.settingsOn.joined(separator: ", ")); the exit needs these off.",
+                    "On: \(advisories.names); the exit needs these off.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .foregroundStyle(.orange)

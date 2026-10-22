@@ -32,13 +32,19 @@ pub(crate) enum Command {
     User(UserCommand),
     /// The console's status, from the daemon.
     Status {
-        /// Keep printing each new status until the daemon stops.
+        /// Keep printing each new status while it is fresh, until the
+        /// daemon stops.
         #[arg(long)]
         follow: bool,
         /// Print each status as one JSON line (what Mooring.app reads)
         /// instead of a summary.
         #[arg(long)]
         json: bool,
+        /// With --follow, also end, with success, once the process that
+        /// started this one has exited (Mooring.app passes it, so its
+        /// follower never outlives it).
+        #[arg(long, requires = "follow")]
+        until_parent_exits: bool,
     },
     /// Run the daemon (launchd starts it): poll the M7 and serve the
     /// console's status on the control socket.

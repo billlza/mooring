@@ -79,7 +79,7 @@ impl Command {
     const fn summary(self) -> &'static str {
         match self {
             Self::Ci => {
-                "fmt, clippy, cargo deny, graph-check, kinds-coverage, deny-skips, acceptance, nextest, doc tests"
+                "fmt, clippy, cargo deny, graph-check, kinds-coverage, deny-skips, acceptance, nextest, doc tests, MooringKit (macOS)"
             }
             Self::GraphCheck => "assert the workspace crate edges equal the allowed-edge table",
             Self::KindsCoverage => "require every error Kind variant to be named by a test",

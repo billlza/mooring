@@ -917,7 +917,8 @@ pub struct RouterWifi {
     pub clients: u16,
 }
 
-/// The M7 settings the exit depends on staying off.
+/// The M7's settings the console reads. All but Analytics are ones the
+/// exit needs off ([`RouterAdvisory`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouterSettings {
@@ -932,6 +933,26 @@ pub struct RouterSettings {
     /// Whether NETGEAR Insight, a cloud control path, is active
     /// (`insight.active`).
     pub insight_active: bool,
+}
+
+/// A setting the M7 reports on that the exit needs off: its Wi-Fi radio,
+/// offloads and UPnP (design §2), and NETGEAR Insight, a cloud control
+/// path to the uplink (§15.6). Each is reported, never acted on (§15.6 rule
+/// 8). NETGEAR Analytics is read and shown, but the design asks nothing of
+/// it, so it is not one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouterAdvisory {
+    /// The Wi-Fi radio is on.
+    WifiRadioOn,
+    /// Wi-Fi offload is on.
+    WifiOffloadOn,
+    /// Ethernet offload is on.
+    EthernetOffloadOn,
+    /// UPnP is on.
+    UpnpOn,
+    /// NETGEAR Insight is active.
+    InsightActive,
 }
 
 /// Every part of a [`RouterStatus`], unchecked. This is also its wire
@@ -980,6 +1001,26 @@ pub struct RouterStatusParts {
 pub struct RouterStatus(RouterStatusParts);
 
 impl RouterStatus {
+    /// The settings the exit needs off that are on, in the order of
+    /// [`RouterAdvisory`]'s variants.
+    #[must_use]
+    pub fn advisories(&self) -> Vec<RouterAdvisory> {
+        let parts = self.parts();
+        [
+            (parts.wifi.enabled, RouterAdvisory::WifiRadioOn),
+            (parts.settings.wifi_offload, RouterAdvisory::WifiOffloadOn),
+            (
+                parts.settings.ethernet_offload,
+                RouterAdvisory::EthernetOffloadOn,
+            ),
+            (parts.settings.upnp, RouterAdvisory::UpnpOn),
+            (parts.settings.insight_active, RouterAdvisory::InsightActive),
+        ]
+        .into_iter()
+        .filter_map(|(on, advisory)| on.then_some(advisory))
+        .collect()
+    }
+
     /// Checks `parts`: an attached radio's session is no longer than the
     /// uptime, its only rule (`SessionExceedsUptime`).
     pub fn new(parts: RouterStatusParts) -> Result<Self, RouterValueError> {
@@ -1037,9 +1078,9 @@ pub enum RouterUnavailableReason {
     Unsupported,
     /// The device's answer could not be read as a status.
     Malformed,
-    /// The Mac could not run the poll: its keychain, its kernel's tables or
-    /// its clock failed, so the M7 was not asked or its answer not kept.
-    /// The daemon's log names the cause.
+    /// The Mac could not run the poll: its keychain or its kernel's tables
+    /// failed, so the M7 was not asked or its answer not kept. The daemon's
+    /// log names the cause.
     LocalFailure,
 }
 

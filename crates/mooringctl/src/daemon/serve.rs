@@ -2,15 +2,16 @@
 
 //! The control socket's connections (design §10.1): each client sends one
 //! request line and gets its replies; a client beyond [`MAX_CLIENTS`] is
-//! told the daemon is busy. Every read and write is bounded in time, so a
-//! stalled client holds a thread for a bounded while only.
+//! told the daemon is busy. The request line and each reply line have a
+//! deadline, however slowly their bytes go, so a stalled or dripping client
+//! holds a thread for a bounded while only.
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mooring_daemon_core::control::{
     DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, Refusal,
@@ -26,9 +27,9 @@ pub(crate) const MAX_CLIENTS: usize = 8;
 /// The time limits of a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Limits {
-    /// How long a client has to send its request line.
+    /// How long a client has to send its whole request line.
     pub(crate) request: Duration,
-    /// How long one reply line may take to write.
+    /// How long one whole reply line may take to write.
     pub(crate) write: Duration,
     /// How often a subscription with nothing new checks that its client is
     /// still there.
@@ -130,28 +131,30 @@ pub(crate) fn serve(mut stream: UnixStream, hub: &Hub, limits: Limits) -> End {
         Err(end) => return end,
     };
     let result = match request {
-        DaemonRequest::Status => answer_status(&mut stream, hub),
+        DaemonRequest::Status => answer_status(&mut stream, hub, limits),
         DaemonRequest::Subscribe => subscribe(&mut stream, hub, limits),
     };
     result.unwrap_or_else(|end| end)
 }
 
 /// Reads the one request line, a byte at a time so nothing after its
-/// newline is consumed, within the request time limit and line bound. A
-/// line that is malformed, too long or late is refused as `BadRequest`.
+/// newline is consumed, within the line bound and before the request's
+/// deadline: each read waits only for what is left of it. A line that is
+/// malformed, too long or late is refused as `BadRequest`.
 fn read_request(stream: &mut UnixStream, limits: Limits) -> Result<DaemonRequest, End> {
     stream
-        .set_read_timeout(Some(limits.request))
-        .and_then(|()| stream.set_write_timeout(Some(limits.write)))
-        .map_err(|error| match error.kind() {
-            // setsockopt(2) on macOS: "[EINVAL] The socket has been shut
-            // down", as it is when the client closed before this read.
-            ErrorKind::InvalidInput => End::ClientLeft,
-            kind => End::Io(kind),
-        })?;
+        .set_write_timeout(Some(limits.write))
+        .map_err(setsockopt_end)?;
+    let deadline = Instant::now() + limits.request;
     let mut line = Vec::with_capacity(32);
     let mut byte = [0_u8; 1];
     loop {
+        let Some(left) = time_left(deadline) else {
+            return Err(refused(stream, Refusal::BadRequest));
+        };
+        stream
+            .set_read_timeout(Some(left))
+            .map_err(setsockopt_end)?;
         match stream.read(&mut byte) {
             Ok(0) => return Err(End::ClientLeft),
             Ok(_) => {
@@ -173,6 +176,22 @@ fn read_request(stream: &mut UnixStream, limits: Limits) -> Result<DaemonRequest
     decode_request(&line).map_err(|_| refused(stream, Refusal::BadRequest))
 }
 
+/// How long is left before `deadline`; `None` once it has passed.
+fn time_left(deadline: Instant) -> Option<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+}
+
+/// The end for a failed setsockopt(2). On macOS it fails with "[EINVAL] The
+/// socket has been shut down" when the client has closed its side.
+fn setsockopt_end(error: io::Error) -> End {
+    match error.kind() {
+        ErrorKind::InvalidInput => End::ClientLeft,
+        kind => End::Io(kind),
+    }
+}
+
 /// Writes the refusal and reports it as the connection's end; the caller
 /// then closes the connection.
 fn refused(stream: &mut UnixStream, reason: Refusal) -> End {
@@ -188,10 +207,10 @@ fn refused(stream: &mut UnixStream, reason: Refusal) -> End {
 }
 
 /// `Status`: the latest line, or `NoStatusYet` before the first poll.
-fn answer_status(stream: &mut UnixStream, hub: &Hub) -> Result<End, End> {
+fn answer_status(stream: &mut UnixStream, hub: &Hub, limits: Limits) -> Result<End, End> {
     match hub.latest()? {
         Some(published) => {
-            write_line(stream, &published.line)?;
+            write_line(stream, &published.line, limits)?;
             Ok(End::Answered)
         }
         None => Err(refused(stream, Refusal::NoStatusYet)),
@@ -207,7 +226,7 @@ fn subscribe(stream: &mut UnixStream, hub: &Hub, limits: Limits) -> Result<End, 
     loop {
         match hub.newer_than(seen, limits.idle_check)? {
             Some(published) => {
-                write_line(stream, &published.line)?;
+                write_line(stream, &published.line, limits)?;
                 seen = published.seq;
             }
             None => client_still_there(stream)?,
@@ -215,11 +234,47 @@ fn subscribe(stream: &mut UnixStream, hub: &Hub, limits: Limits) -> Result<End, 
     }
 }
 
-fn write_line(stream: &mut UnixStream, line: &[u8]) -> Result<(), End> {
-    stream.write_all(line).map_err(|error| match error.kind() {
-        ErrorKind::BrokenPipe | ErrorKind::ConnectionReset => End::ClientLeft,
-        kind => End::Io(kind),
-    })
+/// How long a write waits before it tries again while the client's
+/// socket buffer is full.
+const WRITE_RETRY: Duration = Duration::from_millis(2);
+
+/// Writes one reply line before its deadline, with the socket non-blocking
+/// meanwhile. A blocking send(2) waits for buffer space again each time
+/// the reader drains a little, and SO_SNDTIMEO bounds each of those waits,
+/// not the call, so a reader draining a long line in small reads could
+/// stretch it without end. Past the deadline the end is `Io(TimedOut)`.
+fn write_line(stream: &mut UnixStream, line: &[u8], limits: Limits) -> Result<(), End> {
+    let deadline = Instant::now() + limits.write;
+    stream
+        .set_nonblocking(true)
+        .map_err(|error| End::Io(error.kind()))?;
+    let written = write_before(stream, line, deadline);
+    stream
+        .set_nonblocking(false)
+        .map_err(|error| End::Io(error.kind()))?;
+    written
+}
+
+fn write_before(stream: &mut UnixStream, line: &[u8], deadline: Instant) -> Result<(), End> {
+    let mut rest = line;
+    while !rest.is_empty() {
+        if time_left(deadline).is_none() {
+            return Err(End::Io(ErrorKind::TimedOut));
+        }
+        match stream.write(rest) {
+            Ok(0) => return Err(End::Io(ErrorKind::WriteZero)),
+            Ok(written) => rest = &rest[written..],
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == ErrorKind::WouldBlock => thread::sleep(WRITE_RETRY),
+            Err(error) => {
+                return Err(match error.kind() {
+                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset => End::ClientLeft,
+                    kind => End::Io(kind),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether the client is still connected and silent, without waiting: the

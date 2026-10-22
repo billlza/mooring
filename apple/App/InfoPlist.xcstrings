@@ -1,0 +1,24 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSLocalNetworkUsageDescription": {
+      "comment": "Quoted by macOS's local network alert, which the daemon's first poll of the M7 raises.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mooring's daemon reads the status of the NETGEAR M7 router through the Mac's Ethernet link to it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mooring 守护进程通过 Mac 与 NETGEAR M7 路由器之间的以太网连接，读取路由器的状态。"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}
