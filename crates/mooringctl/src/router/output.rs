@@ -106,6 +106,11 @@ fn carriers(carriers: Option<&LteCarriers>) -> String {
                 text.push_str(", ");
                 text.push_str(&carrier(*secondary));
             }
+            match carriers.unassigned_slots() {
+                0 => {}
+                1 => text.push_str(", 1 unassigned slot"),
+                slots => text.push_str(&format!(", {slots} unassigned slots")),
+            }
             text
         }
     }
@@ -149,16 +154,29 @@ fn radio_lines(lines: &mut Vec<String>, radio: &Radio, sim_spn: &str) {
     lines.push(format!("{}; {}", lte_line(&radio.lte), nr_line(&radio.nr)));
 }
 
-/// The human summary of `status`, read on `interface` at `polled_at`: one
-/// line per topic, each ending in a newline. `Err` only if `polled_at` is
-/// past the year 9999.
+/// `time` as `<yyyy-mm-dd> <hh>:<mm>:<ss> UTC`. `Err` only past the year
+/// 9999.
+pub(crate) fn utc_stamp(time: UnixTime) -> Result<String, ModelError> {
+    let date = CalendarDate::utc_of(time)?;
+    let of_day = time.as_secs() % SECONDS_PER_DAY;
+    Ok(format!(
+        "{date} {:02}:{:02}:{:02} UTC",
+        of_day / 3600,
+        of_day % 3600 / 60,
+        of_day % 60
+    ))
+}
+
+/// The human summary of `status`, read at `polled_at` on `interface` when
+/// it is known (the daemon's status does not name it): one line per topic,
+/// each ending in a newline. `Err` only if `polled_at` is past the year
+/// 9999.
 pub(crate) fn summary(
-    interface: &BsdName,
+    interface: Option<&BsdName>,
     polled_at: UnixTime,
     status: &RouterStatus,
 ) -> Result<String, ModelError> {
-    let date = CalendarDate::utc_of(polled_at)?;
-    let of_day = polled_at.as_secs() % SECONDS_PER_DAY;
+    let polled = utc_stamp(polled_at)?;
     let parts = status.parts();
     // What the M7 reported as the empty string reads as not reported,
     // never as an empty name.
@@ -170,14 +188,11 @@ pub(crate) fn summary(
         parts.sim_spn.as_ref().map(CarrierName::as_str),
         "name not reported",
     );
+    let on = interface.map_or_else(String::new, |interface| {
+        format!(" on {}", interface.as_str())
+    });
     let mut lines = vec![
-        format!(
-            "M7 {NETGEAR_MODEL} on {}, polled {date} {:02}:{:02}:{:02} UTC",
-            interface.as_str(),
-            of_day / 3600,
-            of_day % 3600 / 60,
-            of_day % 60
-        ),
+        format!("M7 {NETGEAR_MODEL}{on}, polled {polled}"),
         format!(
             "firmware {}, web app {web_app}; up {}; {} °C, thermal {}",
             Quoted(parts.firmware.as_str()),

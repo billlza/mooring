@@ -67,6 +67,8 @@ pub(crate) const fn report_band_number(number: BandNumber) -> Result<ReportBandN
 pub(crate) const fn report_data_service(service: DataService) -> ReportDataService {
     match service {
         DataService::NrSub6 => ReportDataService::NrSub6,
+        DataService::Lte => ReportDataService::Lte,
+        DataService::LtePlus => ReportDataService::LtePlus,
     }
 }
 

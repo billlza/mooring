@@ -146,7 +146,7 @@ fn login_success_reads_the_status() {
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     assert_eq!(outcome.stderr, "");
     let status = parse_netgear_model_json(FIXTURE).unwrap();
-    let expected = summary(&lo0_name(), UnixTime::from_secs(NOW), &status).unwrap();
+    let expected = summary(Some(&lo0_name()), UnixTime::from_secs(NOW), &status).unwrap();
     assert_eq!(outcome.stdout, expected);
     assert_eq!(request_lines(&received), [GET, POST, GET]);
     assert_eq!(harness.link.neighbour_calls.get(), 1);
@@ -999,7 +999,7 @@ fn an_empty_spn_or_web_app_version_is_read_as_not_reported() {
         let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
         edit(&mut document);
         let status = parse_netgear_model_json(&serde_json::to_vec(&document).unwrap()).unwrap();
-        let expected = summary(&lo0_name(), UnixTime::from_secs(NOW), &status).unwrap();
+        let expected = summary(Some(&lo0_name()), UnixTime::from_secs(NOW), &status).unwrap();
         assert_eq!(outcome.stdout, expected);
         let stub = Stub::start_for(login_script(edited_admin_document(edit)));
         let mut harness = Harness::configured(stub.port());
@@ -1074,7 +1074,7 @@ fn status_follows_the_session_set_up_then_logs_in() {
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     assert_eq!(outcome.stderr, "");
     let status = parse_netgear_model_json(FIXTURE).unwrap();
-    let expected = summary(&lo0_name(), UnixTime::from_secs(NOW), &status).unwrap();
+    let expected = summary(Some(&lo0_name()), UnixTime::from_secs(NOW), &status).unwrap();
     assert_eq!(outcome.stdout, expected);
     assert!(!outcome.stdout.contains(REDIRECT_BODY_CANARY));
     let version = env!("CARGO_PKG_VERSION");

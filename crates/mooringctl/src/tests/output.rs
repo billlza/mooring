@@ -16,7 +16,7 @@ use crate::router::output::{Tenths, json_line, summary};
 fn the_human_summary_of_the_fixture() {
     let status = parse_netgear_model_json(FIXTURE).unwrap();
     let text = summary(
-        &BsdName::parse("en9").unwrap(),
+        Some(&BsdName::parse("en9").unwrap()),
         UnixTime::from_secs(NOW),
         &status,
     )
@@ -48,7 +48,7 @@ fn the_human_summary_says_what_the_m7_did_not_report() {
     let body = serde_json::to_vec(&document).unwrap();
     let text = parse_netgear_model_json(&body).map(|status| {
         summary(
-            &BsdName::parse("en9").unwrap(),
+            Some(&BsdName::parse("en9").unwrap()),
             UnixTime::from_secs(NOW),
             &status,
         )
@@ -87,7 +87,7 @@ fn without_service_the_summary_names_the_sim_or_says_it_was_not_reported() {
         let mut parts = parts.clone();
         parts.sim_spn = sim_spn;
         let text = summary(
-            &BsdName::parse("en9").unwrap(),
+            Some(&BsdName::parse("en9").unwrap()),
             UnixTime::from_secs(NOW),
             &RouterStatus::new(parts).unwrap(),
         )
@@ -108,7 +108,7 @@ fn reported_text_is_quoted_so_it_never_reads_as_the_summarys_words() {
         edit(&mut document);
         let body = serde_json::to_vec(&document).unwrap();
         summary(
-            &BsdName::parse("en9").unwrap(),
+            Some(&BsdName::parse("en9").unwrap()),
             UnixTime::from_secs(NOW),
             &parse_netgear_model_json(&body).unwrap(),
         )
@@ -155,7 +155,7 @@ fn tenths_print_one_decimal_only_when_they_have_one() {
     )
     .unwrap();
     let text = summary(
-        &BsdName::parse("en9").unwrap(),
+        Some(&BsdName::parse("en9").unwrap()),
         UnixTime::from_secs(59),
         &status,
     )
@@ -164,7 +164,7 @@ fn tenths_print_one_decimal_only_when_they_have_one() {
     assert!(text.starts_with("M7 MR7450 on en9, polled 1970-01-01 00:00:59 UTC\n"));
     assert!(
         summary(
-            &BsdName::parse("en9").unwrap(),
+            Some(&BsdName::parse("en9").unwrap()),
             UnixTime::from_secs(u64::MAX),
             &status
         )

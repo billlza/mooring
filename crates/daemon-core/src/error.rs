@@ -502,9 +502,10 @@ pub enum RouterValueError {
         /// Which text.
         field: RouterTextField,
     },
-    /// More secondary LTE carriers than [`LteCarriers::MAX_SECONDARY`].
+    /// More secondary LTE entries (carriers and unassigned slots) than
+    /// [`LteCarriers::MAX_SECONDARY`].
     #[error(
-        "{count} secondary LTE carriers are more than {max}",
+        "{count} secondary LTE entries are more than {max}",
         max = LteCarriers::MAX_SECONDARY
     )]
     TooManySecondaryCarriers {
@@ -736,7 +737,7 @@ kinds! {
         PrimaryNotFirst,
         /// An entry after the first claims to be the primary carrier.
         SecondPrimary,
-        /// More secondary carriers than
+        /// More secondary entries (carriers and unassigned slots) than
         /// [`LteCarriers::MAX_SECONDARY`].
         TooManySecondaries,
     }
@@ -756,7 +757,7 @@ impl CarrierFaultKind {
             Self::MisplacedTerminator => "an empty object before the end",
             Self::PrimaryNotFirst => "the first carrier is not the primary",
             Self::SecondPrimary => "a second primary carrier",
-            Self::TooManySecondaries => "too many secondary carriers",
+            Self::TooManySecondaries => "too many secondary entries",
         }
     }
 }
@@ -878,6 +879,79 @@ impl ReportError {
     pub const fn kind(&self) -> ReportErrorKind {
         match self {
             Self::Wire(_) => ReportErrorKind::Wire,
+        }
+    }
+}
+
+/// An [`crate::console::UndeployedStatus`] document cannot be decoded.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ConsoleError {
+    /// The document is not version 1.
+    #[error("an undeployed status document has version 1, not {found}")]
+    UnsupportedVersion {
+        /// The version found.
+        found: u32,
+    },
+}
+
+kinds! {
+    /// The kind of a [`ConsoleError`].
+    pub enum ConsoleErrorKind {
+        /// See [`ConsoleError::UnsupportedVersion`].
+        UnsupportedVersion,
+    }
+}
+
+impl ConsoleError {
+    /// The kind of this error.
+    #[must_use]
+    pub const fn kind(&self) -> ConsoleErrorKind {
+        match self {
+            Self::UnsupportedVersion { .. } => ConsoleErrorKind::UnsupportedVersion,
+        }
+    }
+}
+
+/// A control-channel line cannot be encoded or decoded
+/// ([`crate::control`]). Nothing of the line is echoed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ControlError {
+    /// The line is longer than its bound.
+    #[error("a control line of {bytes} bytes is longer than {max}")]
+    LineTooLong {
+        /// The line's length, its newline included.
+        bytes: usize,
+        /// The bound.
+        max: usize,
+    },
+    /// The line is not one JSON document of the expected type.
+    #[error("a control line is not a well-formed request or reply")]
+    Malformed,
+    /// The value could not be written as JSON.
+    #[error("a control line could not be written as JSON")]
+    Unencodable,
+}
+
+kinds! {
+    /// The kind of a [`ControlError`].
+    pub enum ControlErrorKind {
+        /// See [`ControlError::LineTooLong`].
+        LineTooLong,
+        /// See [`ControlError::Malformed`].
+        Malformed,
+        /// See [`ControlError::Unencodable`].
+        Unencodable,
+    }
+}
+
+impl ControlError {
+    /// The kind of this error.
+    #[must_use]
+    pub const fn kind(&self) -> ControlErrorKind {
+        match self {
+            Self::LineTooLong { .. } => ControlErrorKind::LineTooLong,
+            Self::Malformed => ControlErrorKind::Malformed,
+            Self::Unencodable => ControlErrorKind::Unencodable,
         }
     }
 }

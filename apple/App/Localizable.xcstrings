@@ -1,0 +1,1101 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "%@ (primary)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@（主载波）"
+          }
+        }
+      }
+    },
+    "%@ · %@": {
+      "shouldTranslate": false
+    },
+    "%d °C, %@": {
+      "shouldTranslate": false
+    },
+    "%u %%%@": {
+      "shouldTranslate": false
+    },
+    "%u unassigned slots": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%u 个未分配槽位"
+          }
+        }
+      }
+    },
+    ", charging": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "，充电中"
+          }
+        }
+      }
+    },
+    "1 unassigned slot": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 个未分配槽位"
+          }
+        }
+      }
+    },
+    "Access points": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接入点"
+          }
+        }
+      }
+    },
+    "Analytics": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analytics（数据分析）"
+          }
+        }
+      }
+    },
+    "Band": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "频段"
+          }
+        }
+      }
+    },
+    "Battery": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电池"
+          }
+        }
+      }
+    },
+    "Battery temperature": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电池温度"
+          }
+        }
+      }
+    },
+    "Capacity": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "容量"
+          }
+        }
+      }
+    },
+    "Charging": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "充电"
+          }
+        }
+      }
+    },
+    "Colours follow common LTE rules of thumb (RSRP −80/−90/−100 dBm, SINR 20/13/0 dB); they only help with placing the antenna.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "颜色按常见的 LTE 经验值标注（RSRP −80/−90/−100 dBm，SINR 20/13/0 dB），只用来帮助摆放天线。"
+          }
+        }
+      }
+    },
+    "Connection": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接"
+          }
+        }
+      }
+    },
+    "Device": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备"
+          }
+        }
+      }
+    },
+    "Ethernet offload": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以太网卸载（Ethernet offload）"
+          }
+        }
+      }
+    },
+    "Events": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "事件"
+          }
+        }
+      }
+    },
+    "Exit": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口"
+          }
+        }
+      }
+    },
+    "Expected at %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应当位于 %@。"
+          }
+        }
+      }
+    },
+    "Firmware": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "固件"
+          }
+        }
+      }
+    },
+    "It ended without a message.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "它退出时没有留下信息。"
+          }
+        }
+      }
+    },
+    "LTE RSRP": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LTE RSRP"
+          }
+        }
+      }
+    },
+    "LTE RSRQ": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LTE RSRQ"
+          }
+        }
+      }
+    },
+    "LTE RSSI": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LTE RSSI"
+          }
+        }
+      }
+    },
+    "LTE SINR": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LTE SINR"
+          }
+        }
+      }
+    },
+    "LTE carriers": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LTE 载波"
+          }
+        }
+      }
+    },
+    "Last read %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上次读取于 %@。"
+          }
+        }
+      }
+    },
+    "Last status %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近一次状态 %@"
+          }
+        }
+      }
+    },
+    "Live from the Mooring daemon": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mooring 守护进程实时状态"
+          }
+        }
+      }
+    },
+    "M7 router": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 路由器"
+          }
+        }
+      }
+    },
+    "M7: no service": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7：无服务"
+          }
+        }
+      }
+    },
+    "Model": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "型号"
+          }
+        }
+      }
+    },
+    "Mooring": {
+      "shouldTranslate": false
+    },
+    "NETGEAR Insight": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NETGEAR Insight"
+          }
+        }
+      }
+    },
+    "NR RSRP": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NR RSRP"
+          }
+        }
+      }
+    },
+    "NR RSRQ": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NR RSRQ"
+          }
+        }
+      }
+    },
+    "NR SINR": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NR SINR"
+          }
+        }
+      }
+    },
+    "Network": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网络"
+          }
+        }
+      }
+    },
+    "Never read since the daemon started.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程启动后还没有读到过。"
+          }
+        }
+      }
+    },
+    "No deployment on this Mac yet": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 上还没有部署"
+          }
+        }
+      }
+    },
+    "No mooringctl in this app": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用里没有 mooringctl"
+          }
+        }
+      }
+    },
+    "No poll of the M7 has been reported yet.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有收到读取 M7 的结果。"
+          }
+        }
+      }
+    },
+    "No router status yet": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有路由器状态"
+          }
+        }
+      }
+    },
+    "No service": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无服务"
+          }
+        }
+      }
+    },
+    "No status from the daemon yet": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程还没有发来状态"
+          }
+        }
+      }
+    },
+    "Nodes": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点"
+          }
+        }
+      }
+    },
+    "Not a supported M7": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不是受支持的 M7"
+          }
+        }
+      }
+    },
+    "Not live: mooringctl stopped": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "非实时：mooringctl 已停止"
+          }
+        }
+      }
+    },
+    "On: %@. The exit needs these off; turn them off in the M7's web interface.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已开启：%@。出口要求这些保持关闭，请在 M7 的网页管理界面里关掉。"
+          }
+        }
+      }
+    },
+    "On: %@; the exit needs these off.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已开启：%@；出口要求这些保持关闭。"
+          }
+        }
+      }
+    },
+    "Only the count is read; read messages in the M7's web interface.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只读取条数；短信内容请在 M7 的网页管理界面查看。"
+          }
+        }
+      }
+    },
+    "Open Console": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开控制台"
+          }
+        }
+      }
+    },
+    "Overview": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "概览"
+          }
+        }
+      }
+    },
+    "Pin the M7 (`mooringctl router pin --interface en9`), store its admin password (`mooringctl router set-password`), and give the daemon the interface.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先固定 M7 的身份（`mooringctl router pin --interface en9`），保存它的管理员密码（`mooringctl router set-password`），再把接口交给守护进程。"
+          }
+        }
+      }
+    },
+    "Polled": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取时间"
+          }
+        }
+      }
+    },
+    "Power": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电源"
+          }
+        }
+      }
+    },
+    "Quit Mooring": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "退出 Mooring"
+          }
+        }
+      }
+    },
+    "Radio": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无线"
+          }
+        }
+      }
+    },
+    "Received": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接收"
+          }
+        }
+      }
+    },
+    "Retrying in %lld s.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 秒后重试。"
+          }
+        }
+      }
+    },
+    "Router": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "路由器"
+          }
+        }
+      }
+    },
+    "SIM": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIM"
+          }
+        }
+      }
+    },
+    "Secondary carriers counted": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 统计的辅载波数"
+          }
+        }
+      }
+    },
+    "Sent": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发送"
+          }
+        }
+      }
+    },
+    "Service": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务类型"
+          }
+        }
+      }
+    },
+    "Session": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次数据连接时长"
+          }
+        }
+      }
+    },
+    "Signal": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "信号"
+          }
+        }
+      }
+    },
+    "State": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "状态"
+          }
+        }
+      }
+    },
+    "Temperature": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "温度"
+          }
+        }
+      }
+    },
+    "The M7 did not answer on its interface. Check that it is on and that the USB Ethernet adapter is connected.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 在它的接口上没有应答。请检查 M7 是否开机、USB 网卡是否插好。"
+          }
+        }
+      }
+    },
+    "The M7 did not grant an administrator's session. If its admin password changed, store it again with `mooringctl router set-password`.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 没有给出管理员会话。如果改过管理员密码，请用 `mooringctl router set-password` 重新保存。"
+          }
+        }
+      }
+    },
+    "The M7 is unreachable": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连不上 M7"
+          }
+        }
+      }
+    },
+    "The M7 refused the login": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 拒绝了登录"
+          }
+        }
+      }
+    },
+    "The M7's answer could not be read": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读不懂 M7 的应答"
+          }
+        }
+      }
+    },
+    "The M7's answer did not match what this build reads; the daemon's log names the field.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 的应答和这个版本能读的格式不符；守护进程日志里写明了是哪个字段。"
+          }
+        }
+      }
+    },
+    "The M7's own counters (wwan.dataTransferredRx/Tx).": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 自己的计数器（wwan.dataTransferredRx/Tx）。"
+          }
+        }
+      }
+    },
+    "The Mac could not poll the M7": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 没能读取 M7"
+          }
+        }
+      }
+    },
+    "The daemon has not reported a poll of the M7 yet.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程还没有报告读取 M7 的结果。"
+          }
+        }
+      }
+    },
+    "The daemon reports after its first poll of the M7, which waits while macOS asks you to allow keychain or local network access.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程要在第一次读取 M7 之后才开始报告；如果 macOS 正在请你允许钥匙串或本地网络访问，这次读取会一直等着。"
+          }
+        }
+      }
+    },
+    "The device answering at the gateway is not the M7 that was pinned, so no password was sent.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网关上应答的设备不是固定过的那台 M7，所以没有发送密码。"
+          }
+        }
+      }
+    },
+    "The device answering is not an MR7450 speaking the API this build reads.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应答的设备不是这个版本能读取的 MR7450 接口。"
+          }
+        }
+      }
+    },
+    "The exit, its nodes, users and SIM meter appear once `mooringctl exit init` has created a deployment. Until then the daemon reads the M7 only.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口、节点、用户和 SIM 流量表要等 `mooringctl exit init` 建好部署后才会出现。在那之前，守护进程只读取 M7。"
+          }
+        }
+      }
+    },
+    "The gateway is not the pinned M7": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网关不是固定过的那台 M7"
+          }
+        }
+      }
+    },
+    "The keychain, the kernel's tables or the clock failed on this Mac; the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 上的钥匙串、内核表或时钟出了问题；原因见守护进程日志（~/Library/Logs/Mooring/daemon.log）。"
+          }
+        }
+      }
+    },
+    "The router adapter is not set up": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "路由器读取还没有配置"
+          }
+        }
+      }
+    },
+    "Thermal state": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "散热状态"
+          }
+        }
+      }
+    },
+    "This app carries no mooringctl": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用里没有 mooringctl"
+          }
+        }
+      }
+    },
+    "This screen fills in once a deployment exists on this Mac. `mooringctl exit init` creates it; until then the console shows the M7 router only.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 上有了部署后，这一页才会有内容。部署由 `mooringctl exit init` 创建；在那之前，控制台只显示 M7 路由器。"
+          }
+        }
+      }
+    },
+    "Traffic": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "流量"
+          }
+        }
+      }
+    },
+    "UPnP": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UPnP"
+          }
+        }
+      }
+    },
+    "Unread SMS": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未读短信"
+          }
+        }
+      }
+    },
+    "Up": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已运行"
+          }
+        }
+      }
+    },
+    "Users": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户"
+          }
+        }
+      }
+    },
+    "Waiting for the Mooring daemon…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等待 Mooring 守护进程…"
+          }
+        }
+      }
+    },
+    "Web app": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网页程序版本"
+          }
+        }
+      }
+    },
+    "Wi-Fi and settings": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wi-Fi 与设置"
+          }
+        }
+      }
+    },
+    "Wi-Fi clients": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wi-Fi 客户端"
+          }
+        }
+      }
+    },
+    "Wi-Fi offload": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wi-Fi 卸载（Wi-Fi offload）"
+          }
+        }
+      }
+    },
+    "Wi-Fi radio": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wi-Fi 射频"
+          }
+        }
+      }
+    },
+    "excellent": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "很好"
+          }
+        }
+      }
+    },
+    "fair": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一般"
+          }
+        }
+      }
+    },
+    "good": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "好"
+          }
+        }
+      }
+    },
+    "name not reported": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未报告名称"
+          }
+        }
+      }
+    },
+    "no": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "否"
+          }
+        }
+      }
+    },
+    "none listed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未列出"
+          }
+        }
+      }
+    },
+    "not reported": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未报告"
+          }
+        }
+      }
+    },
+    "off": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关"
+          }
+        }
+      }
+    },
+    "on": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开"
+          }
+        }
+      }
+    },
+    "poor": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "差"
+          }
+        }
+      }
+    },
+    "yes, %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "是，%@"
+          }
+        }
+      }
+    },
+    "↓ %@  ↑ %@": {
+      "shouldTranslate": false
+    }
+  },
+  "version": "1.0"
+}

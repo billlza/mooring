@@ -127,6 +127,8 @@ pub(crate) enum Missing {
     Pin,
     /// No admin password is stored.
     Password,
+    /// The daemon was not given the interface to the M7.
+    Interface,
 }
 
 impl fmt::Display for Missing {
@@ -134,6 +136,9 @@ impl fmt::Display for Missing {
         f.write_str(match self {
             Self::Pin => "no router identity is pinned (mooringctl router pin)",
             Self::Password => "no M7 admin password is stored (mooringctl router set-password)",
+            Self::Interface => {
+                "the daemon was given no interface to the M7 (mooringctl daemon --router-interface)"
+            }
         })
     }
 }
@@ -716,6 +721,7 @@ pub(crate) const fn reason_phrase(reason: RouterUnavailableReason) -> &'static s
         RouterUnavailableReason::IdentityMismatch => "the gateway is not the pinned M7",
         RouterUnavailableReason::Unsupported => "the device is not a supported M7",
         RouterUnavailableReason::Malformed => "the M7's answer is malformed",
+        RouterUnavailableReason::LocalFailure => "the Mac could not poll the M7",
     }
 }
 

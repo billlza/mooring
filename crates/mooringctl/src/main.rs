@@ -27,8 +27,18 @@
 //!   user's file for CFM with mode 0600, never overwriting one, reading
 //!   only that user's secrets and only once every check has passed.
 //!
-//! Nothing is logged: the only output is what a command prints and its
-//! error on stderr.
+//! The console's first slice adds the daemon and its client (design §10.1,
+//! §15):
+//!
+//! - `daemon [--router-interface <bsd>]`, which launchd runs, polls the M7
+//!   every 60 s while no deployment exists and serves the console's status
+//!   on `run/control.sock`;
+//! - `status [--follow] [--json]` reads that status from the daemon, as
+//!   Mooring.app does.
+//!
+//! Nothing is logged by a command: its only output is what it prints and
+//! its error on stderr. The daemon writes one line to stderr (launchd's
+//! log file) when it starts and when the M7's poll fails or recovers.
 //!
 //! On any other target the binary only says that it runs on macOS and
 //! exits 1, so the workspace builds and its gates run on the ubuntu L0
@@ -41,6 +51,8 @@ mod backup;
 #[cfg(target_os = "macos")]
 mod cli;
 #[cfg(target_os = "macos")]
+mod daemon;
+#[cfg(target_os = "macos")]
 mod error;
 #[cfg(target_os = "macos")]
 mod keychain;
@@ -50,6 +62,8 @@ mod paths;
 mod prompt;
 #[cfg(target_os = "macos")]
 mod router;
+#[cfg(target_os = "macos")]
+mod status;
 #[cfg(target_os = "macos")]
 #[cfg(test)]
 mod tests;

@@ -7,6 +7,8 @@
 use std::io;
 use std::path::PathBuf;
 
+use mooring_daemon_core::ControlError;
+use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_export::ExportError;
 use mooring_keys::KeysError;
@@ -206,6 +208,121 @@ pub(crate) enum LocalError {
     /// The output could not be encoded or written.
     #[error("writing the output failed")]
     Output(#[source] io::Error),
+    /// The daemon's run directory could not be created.
+    #[error("cannot create the daemon's run directory {}", path.display())]
+    RunDir {
+        /// The directory.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The daemon's instance lock could not be opened or taken.
+    #[error("cannot lock {}", path.display())]
+    DaemonLock {
+        /// The lock file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// Another daemon holds the instance lock.
+    #[error("another mooringctl daemon is running (it holds {})", path.display())]
+    DaemonAlreadyRunning {
+        /// The lock file.
+        path: PathBuf,
+    },
+    /// A deployment exists, and this build's daemon serves only the router
+    /// console before `exit init`.
+    #[error(
+        "a deployment exists ({}), and this build's daemon serves only the router console, before `exit init`",
+        path.display()
+    )]
+    DeploymentNotServed {
+        /// The state file.
+        path: PathBuf,
+    },
+    /// Whether `state.json` exists could not be told.
+    #[error("cannot inspect {}", path.display())]
+    StateInspect {
+        /// The state file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// Something other than a socket is at the control socket's path; it is
+    /// left as it is.
+    #[error("{} exists and is not a socket; it is left as it is", path.display())]
+    SocketPathTaken {
+        /// The path.
+        path: PathBuf,
+    },
+    /// The control socket could not be set up.
+    #[error("cannot set up the control socket {}", path.display())]
+    Socket {
+        /// The socket's path.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The daemon's status could not be encoded as a reply line.
+    #[error("the daemon could not encode its status")]
+    StatusEncode(#[source] ControlError),
+    /// A thread panicked while it held the daemon's status, so the status
+    /// can no longer be trusted.
+    #[error("the daemon's status was left inconsistent by a failed thread")]
+    StatusPoisoned,
+    /// The daemon's control socket stopped accepting connections.
+    #[error("the daemon's control socket stopped accepting connections")]
+    Acceptor(#[source] io::Error),
+    /// No daemon listens on the control socket.
+    #[error("the Mooring daemon is not running (nothing listens on {})", path.display())]
+    DaemonNotRunning {
+        /// The socket's path.
+        path: PathBuf,
+    },
+    /// Talking to the daemon failed.
+    #[error("talking to the daemon on {} failed", path.display())]
+    DaemonIo {
+        /// The socket's path.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The daemon refused the request.
+    #[error("the daemon refused the request: {}", refusal_text(*reason))]
+    DaemonRefused {
+        /// Why.
+        reason: Refusal,
+    },
+    /// A line from the daemon could not be read as a reply.
+    #[error("the daemon's reply could not be read")]
+    DaemonReply(#[source] ControlError),
+    /// The daemon closed the status stream.
+    #[error("the daemon closed the status stream")]
+    DaemonClosed,
+    /// The daemon sent nothing for longer than a poll takes.
+    #[error("the daemon sent no status for {secs} s")]
+    DaemonSilent {
+        /// How long it was silent.
+        secs: u64,
+    },
+    /// The daemon reported a deployment's status, which this build prints
+    /// only as JSON.
+    #[error("this build prints a deployment's status only as JSON (use --json)")]
+    DeployedSummary,
+}
+
+/// What a refusal means, in words.
+pub(crate) const fn refusal_text(reason: Refusal) -> &'static str {
+    match reason {
+        Refusal::Busy => "it already serves as many clients as it accepts; try again",
+        Refusal::BadRequest => "the request was malformed",
+        Refusal::NoStatusYet => "its first poll of the M7 has not finished yet",
+    }
 }
 
 /// Why a pin was not confirmed.
@@ -255,7 +372,10 @@ impl CommandError {
     }
 }
 
-/// The exit code of a router failure with `reason`.
+/// The exit code of a router failure with `reason`. A command reports a
+/// failure on the Mac as a `LocalError` (exit 1), never as a router
+/// failure; `LocalFailure` is the daemon's reason for one, and maps to the
+/// same code.
 pub(crate) const fn reason_exit_code(reason: RouterUnavailableReason) -> u8 {
     match reason {
         RouterUnavailableReason::NotConfigured => 3,
@@ -264,5 +384,6 @@ pub(crate) const fn reason_exit_code(reason: RouterUnavailableReason) -> u8 {
         RouterUnavailableReason::IdentityMismatch => 6,
         RouterUnavailableReason::Unsupported => 7,
         RouterUnavailableReason::Malformed => 8,
+        RouterUnavailableReason::LocalFailure => EXIT_LOCAL,
     }
 }

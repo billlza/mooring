@@ -90,6 +90,10 @@ pub(crate) fn run(
             format,
             out: path,
         }) => crate::user::export(env, out, err, &user, format.into(), &path),
+        Command::Status { follow, json } => crate::status::status(env, out, follow, json),
+        Command::Daemon { router_interface } => {
+            crate::daemon::run(env, err, router_interface.as_ref())
+        }
     };
     let Err(error) = result else {
         return 0;
@@ -228,7 +232,7 @@ fn status(
         })
         .map_err(|error| output(io::Error::other(error)))?
     } else {
-        summary(interface, polled_at, &status).map_err(|_| LocalError::Clock)?
+        summary(Some(interface), polled_at, &status).map_err(|_| LocalError::Clock)?
     };
     out.write_all(text.as_bytes()).map_err(output)
 }

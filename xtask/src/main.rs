@@ -6,6 +6,7 @@
 //! any failure; the error and its causes go to standard error.
 
 mod acceptance;
+mod app;
 mod cargo;
 mod ci;
 mod clean;
@@ -27,9 +28,10 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use crate::acceptance::{AcceptanceError, Gate};
+use crate::app::AppError;
 use crate::cargo::{Cargo, CommandError, EnvironmentError};
 use crate::clean::CleanError;
-use crate::cli::{Command, UsageError};
+use crate::cli::{Command, Invocation, UsageError};
 use crate::deny_skips::DenySkipsError;
 use crate::graph_check::GraphCheckError;
 use crate::kinds::KindsError;
@@ -59,6 +61,8 @@ enum XtaskError {
     #[error(transparent)]
     Mooringctl(#[from] MooringctlError),
     #[error(transparent)]
+    App(#[from] AppError),
+    #[error(transparent)]
     Output(#[from] output::OutputError),
 }
 
@@ -75,10 +79,10 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(command: Command) -> Result<(), XtaskError> {
+fn run(invocation: Invocation) -> Result<(), XtaskError> {
     let cargo = Cargo::from_env()?;
     let mut out = io::stdout().lock();
-    match command {
+    match invocation.command {
         Command::Ci => ci::run(&cargo, &mut out),
         Command::GraphCheck => Ok(graph_check::run(&cargo, &mut out)?),
         Command::KindsCoverage => Ok(kinds::run(&cargo, &mut out)?),
@@ -87,6 +91,16 @@ fn run(command: Command) -> Result<(), XtaskError> {
         Command::ReleaseAcceptance => Ok(acceptance::run(&cargo, &mut out, Gate::Accepted)?),
         Command::Clean => Ok(clean::run(&cargo, &mut out)?),
         Command::Mooringctl => Ok(mooringctl::run(&cargo, &mut out)?),
+        Command::App => Ok(app::build(&cargo, &mut out)?),
+        Command::AgentInstall => match invocation.argument.as_deref() {
+            Some(interface) => Ok(app::install_agent(&cargo, &mut out, interface)?),
+            // `Command::parse` gives `agent-install` its argument or fails.
+            None => Err(XtaskError::Usage(UsageError::MissingArgument {
+                command: Command::AgentInstall,
+                argument: "<bsd>",
+            })),
+        },
+        Command::AgentUninstall => Ok(app::uninstall_agent(&cargo, &mut out)?),
     }
 }
 

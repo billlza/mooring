@@ -283,7 +283,7 @@ fn capacity(
 /// serving one M2a's version. The SIM is on MCC 234 MNC 20, as the
 /// operator reported, with a network name not yet recorded *(inference:
 /// `SMARTY`)*.
-fn router(
+pub(crate) fn router(
     polled_at: UnixTime,
     web_app: Option<&str>,
     radio: RadioState,
@@ -337,10 +337,9 @@ fn router(
 
 /// Attached on LTE band `band` (the M7's one carrier, of `dl_bandwidth`),
 /// with the LTE readings given in tenths and no NR reading, as the M7
-/// reported in M2a while claiming a 5G data service. The service types the
-/// M7 reported with the SMARTY SIM (`LteService`, and `4G` or `4GPLUS`,
-/// 2026-10-16) are not yet values the status holds, so the scenarios keep
-/// M2a's.
+/// reported in M2a while claiming a 5G data service. The scenarios keep
+/// M2a's service types; those the M7 reported with the SMARTY SIM
+/// (`LteService`, and `4G` or `4GPLUS`, 2026-10-16) are in `variants.json`.
 fn attached(band: u16, dl_bandwidth: LteBandwidth, lte: [Option<i16>; 4]) -> RadioState {
     let number = BandNumber::new(band).unwrap();
     RadioState::Attached(Radio {
@@ -354,6 +353,7 @@ fn attached(band: u16, dl_bandwidth: LteBandwidth, lte: [Option<i16>; 4]) -> Rad
                     dl_bandwidth,
                 },
                 Vec::new(),
+                0,
             )
             .unwrap(),
         ),
@@ -415,7 +415,7 @@ fn fixture_users(fixture: &Fixture) -> Vec<UserId> {
 }
 
 /// Two nodes and three users on an ordinary morning: serving, nothing open.
-fn serving() -> MacStatusV1 {
+pub(crate) fn serving() -> MacStatusV1 {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
     let ids = fixture_users(&fixture);
     let (u1, u2, u3) = (&ids[0], &ids[1], &ids[2]);

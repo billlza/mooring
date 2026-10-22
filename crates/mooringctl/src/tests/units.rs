@@ -74,6 +74,7 @@ fn exit_codes_follow_the_reasons() {
         (RouterUnavailableReason::IdentityMismatch, 6),
         (RouterUnavailableReason::Unsupported, 7),
         (RouterUnavailableReason::Malformed, 8),
+        (RouterUnavailableReason::LocalFailure, EXIT_LOCAL),
     ] {
         assert_eq!(reason_exit_code(reason), code, "{reason:?}");
     }

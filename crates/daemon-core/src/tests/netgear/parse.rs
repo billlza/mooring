@@ -14,8 +14,8 @@ use crate::router::netgear::{
     parse_netgear_session,
 };
 use crate::router::{
-    BandNumber, LteBandwidth, LteCarrier, LteCarriers, RadioState, RouterStatus,
-    RouterUnavailableReason,
+    BandNumber, DataService, LteBandwidth, LteCarrier, LteCarriers, NetworkService, RadioState,
+    RouterStatus, RouterUnavailableReason,
 };
 use crate::tests::router;
 
@@ -336,6 +336,43 @@ fn a_repeated_allowlisted_key_is_refused() {
     assert_eq!(parse(&body), Ok(router::status()));
 }
 
+/// The service types the M7 reported with the SMARTY SIM (2026-10-16 and
+/// 17) are read as such: `LteService` with `4G`, and with `4GPLUS`.
+#[test]
+fn the_smarty_service_types_are_read() {
+    use NetgearLeaf as L;
+    for (network, data, network_service, data_service) in [
+        ("LteService", "4G", NetworkService::Lte, DataService::Lte),
+        (
+            "LteService",
+            "4GPLUS",
+            NetworkService::Lte,
+            DataService::LtePlus,
+        ),
+        (
+            "Nr5gService",
+            "5GSUB6",
+            NetworkService::Nr5g,
+            DataService::NrSub6,
+        ),
+    ] {
+        let body = edited(|value| {
+            *value
+                .pointer_mut(&pointer(L::WwanNetworkService, 0))
+                .unwrap() = json!(network);
+            *value.pointer_mut(&pointer(L::WwanDataService, 0)).unwrap() = json!(data);
+        });
+        let status = parse(&body).unwrap();
+        let RadioState::Attached(radio) = &status.parts().radio else {
+            panic!("the reading is attached");
+        };
+        assert_eq!(radio.network_service, network_service, "{network}");
+        assert_eq!(radio.data_service, data_service, "{data}");
+        assert_eq!(network_service.wire(), network);
+        assert_eq!(data_service.wire(), data);
+    }
+}
+
 /// Every device enumeration accepts exactly the values the M2a capture
 /// showed; any other spelling, in another case too, is `UnknownValue`
 /// naming the path, never the value.
@@ -346,7 +383,11 @@ fn unknown_enum_values_name_the_path_not_the_value() {
         (L::WifiStatus, "Off", &["On", "off", "OFF"]),
         (L::WifiGuestStatus, "Off", &["On"]),
         (L::WifiAuxStatus, "Off", &["On"]),
-        (L::WwanDataService, "5GSUB6", &["LTE", "5gsub6", "5GMMW"]),
+        (
+            L::WwanDataService,
+            "5GSUB6",
+            &["LTE", "5gsub6", "5GMMW", "4g", "4G+", "4GPlus"],
+        ),
         (
             L::WwanConnection,
             "Connected",
@@ -355,7 +396,7 @@ fn unknown_enum_values_name_the_path_not_the_value() {
         (
             L::WwanNetworkService,
             "Nr5gService",
-            &["LteService", "nr5gservice"],
+            &["lteservice", "LTEService", "nr5gservice", "UmtsService"],
         ),
         (
             L::BatteryChargeSource,
@@ -571,11 +612,11 @@ fn lte_carriers_follow_the_terminator_convention() {
     assert_eq!(lte_carriers(&with_carriers(json!([{}])).unwrap()), None);
     assert_eq!(
         lte_carriers(&with_carriers(json!([pcc(), {}])).unwrap()),
-        Some(LteCarriers::new(primary, Vec::new()).unwrap())
+        Some(LteCarriers::new(primary, Vec::new(), 0).unwrap())
     );
     assert_eq!(
         lte_carriers(&with_carriers(json!([pcc(), scc(20), {}])).unwrap()),
-        Some(LteCarriers::new(primary, vec![carrier(20, LteBandwidth::Mhz10)]).unwrap())
+        Some(LteCarriers::new(primary, vec![carrier(20, LteBandwidth::Mhz10)], 0).unwrap())
     );
     let six: Vec<Value> = std::iter::once(pcc())
         .chain((1..=6).map(scc))
@@ -643,6 +684,104 @@ fn lte_carriers_follow_the_terminator_convention() {
     assert_eq!(
         carriers_fault(CarrierFaultKind::MissingTerminator).to_string(),
         "router field wwan.lteBandInfo: no terminating empty object"
+    );
+}
+
+/// The entry the M7 listed after the primary in 2 of 77 captures with the
+/// SMARTY SIM (2026-10-16 and 17), each with `wwan.ca.SCCcount` 0, in
+/// that capture's shape (the redactor's placeholders included).
+fn unassigned() -> Value {
+    json!({
+        "band": 0, "channel": "REDACTED", "dlBandwidth": "Unknown", "isPcc": false,
+        "phyCid": "REDACTED", "sccId": 0, "sccState": 0, "sccUlBandwidth": "REDACTED",
+        "sccUlCaEnabled": "REDACTED", "sccUlChannel": 0
+    })
+}
+
+/// Band 0 with the bandwidth `Unknown` after the primary is an unassigned
+/// slot: counted, never listed as a carrier. Either alone is still refused
+/// with the fault a carrier's leaf has, the primary is never one, and the
+/// slots count toward the bound on secondary entries.
+#[test]
+fn an_unassigned_slot_is_counted_not_listed() {
+    use NetgearLeaf as L;
+    let carrier = |band, dl_bandwidth| LteCarrier {
+        band: BandNumber::new(band).unwrap(),
+        dl_bandwidth,
+    };
+    let primary = carrier(3, LteBandwidth::Mhz20);
+    let b20 = carrier(20, LteBandwidth::Mhz10);
+    for (list, secondary, slots) in [
+        (json!([pcc(), unassigned(), {}]), vec![], 1),
+        (json!([pcc(), scc(20), unassigned(), {}]), vec![b20], 1),
+        (json!([pcc(), unassigned(), scc(20), {}]), vec![b20], 1),
+        (json!([pcc(), unassigned(), unassigned(), {}]), vec![], 2),
+    ] {
+        assert_eq!(
+            lte_carriers(&with_carriers(list.clone()).unwrap()),
+            Some(LteCarriers::new(primary, secondary, slots).unwrap()),
+            "{list}"
+        );
+    }
+    let six_slots: Vec<Value> = std::iter::once(pcc())
+        .chain(std::iter::repeat_with(unassigned).take(6))
+        .chain(std::iter::once(json!({})))
+        .collect();
+    assert_eq!(
+        lte_carriers(&with_carriers(Value::Array(six_slots)).unwrap())
+            .unwrap()
+            .unassigned_slots(),
+        6
+    );
+    let seven_slots: Vec<Value> = std::iter::once(pcc())
+        .chain(std::iter::repeat_with(unassigned).take(7))
+        .chain(std::iter::once(json!({})))
+        .collect();
+    assert_eq!(
+        with_carriers(Value::Array(seven_slots)).map(|_| ()),
+        Err(carriers_fault(CarrierFaultKind::TooManySecondaries))
+    );
+    let mut band_alone = unassigned();
+    band_alone["dlBandwidth"] = json!("10MHz");
+    assert_eq!(
+        with_carriers(json!([pcc(), band_alone, {}])).map(|_| ()),
+        Err(field(
+            L::LteCarrierBand,
+            Some(1),
+            FieldFaultKind::OutOfRange
+        ))
+    );
+    let mut bandwidth_alone = unassigned();
+    bandwidth_alone["band"] = json!(20);
+    assert_eq!(
+        with_carriers(json!([pcc(), bandwidth_alone, {}])).map(|_| ()),
+        Err(field(
+            L::LteCarrierBandwidth,
+            Some(1),
+            FieldFaultKind::UnknownValue
+        ))
+    );
+    // Not the primary: first and not primary, or first and claiming to be.
+    assert_eq!(
+        with_carriers(json!([unassigned(), {}])).map(|_| ()),
+        Err(carriers_fault(CarrierFaultKind::PrimaryNotFirst))
+    );
+    let mut claimed = unassigned();
+    claimed["isPcc"] = json!(true);
+    assert_eq!(
+        with_carriers(json!([claimed, {}])).map(|_| ()),
+        Err(field(
+            L::LteCarrierBand,
+            Some(0),
+            FieldFaultKind::OutOfRange
+        ))
+    );
+    // A second primary is refused before its band is read.
+    let mut second = unassigned();
+    second["isPcc"] = json!(true);
+    assert_eq!(
+        with_carriers(json!([pcc(), second, {}])).map(|_| ()),
+        Err(carriers_fault(CarrierFaultKind::SecondPrimary))
     );
 }
 

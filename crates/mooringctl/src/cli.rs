@@ -30,6 +30,24 @@ pub(crate) enum Command {
     /// Users: what the operator records about them.
     #[command(subcommand)]
     User(UserCommand),
+    /// The console's status, from the daemon.
+    Status {
+        /// Keep printing each new status until the daemon stops.
+        #[arg(long)]
+        follow: bool,
+        /// Print each status as one JSON line (what Mooring.app reads)
+        /// instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the daemon (launchd starts it): poll the M7 and serve the
+    /// console's status on the control socket.
+    Daemon {
+        /// The Mac's interface to the M7, polled while no deployment
+        /// exists (a BSD name, for example en9).
+        #[arg(long, value_name = "BSD_NAME")]
+        router_interface: Option<BsdName>,
+    },
 }
 
 /// A user command.

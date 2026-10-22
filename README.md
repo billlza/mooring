@@ -9,6 +9,8 @@ Mooring 让少数受信任的大陆用户经运营者在英国的移动网络出
 
 ## 当前状态
 
+设计第 9 版（2026-10-22）落地控制台的第一块：路由器控制台。`mooringctl daemon --router-interface <接口>` 在还没有部署时作为 LaunchAgent 运行，每 60 秒读取一次 M7，在 `run/control.sock` 上提供控制台状态；`mooringctl status [--follow] [--json]` 读取它，输出的文档是 `ConsoleStatus`（无部署时只含路由器面板，有部署时为 `MacStatusV1`；样例见 `contract/console-fixtures/`）。`Mooring.app`（`apple/`，SwiftUI，英文与简体中文）显示概览和路由器页面，其余页面说明需要先有部署。解析器已能读取 SMARTY 卡上实测的 `LteService`、`4G`、`4GPLUS` 和“未分配的副载波槽位”。实测发现 macOS 的本地网络隐私对 LaunchAgent 生效：未关联 App 时连接 M7 得到 `EHOSTUNREACH`；现在 plist 用 `AssociatedBundleIdentifiers` 关联 App，App 声明 `NSLocalNetworkUsageDescription`，首次读取时需要运营者允许钥匙串和本地网络访问。使用方法见 [docs/runbooks/console.md](docs/runbooks/console.md)。
+
 设计第 8 版（2026-10-15）记录运营者交由推荐最佳实践默认值决定的 F7、F9–F11：导出前须记录用户已接受当前版本的《Mooring 使用约定》（`mooring-export` 已强制检查，缺少或修订不符时以 `AgreementNotAccepted` 拒绝）；用户在端到端加密通话中口头确认约定；配置只以文件交付（当面 AirDrop，或 AES-256 加密磁盘映像，放在 U 盘里或发送，口令经该通话口头告知），不用二维码、HTML 页面、链接或订阅，也不经微信、QQ 或中国大陆 Apple ID 的 iMessage 传递任何与本服务有关的内容；客户端限 macOS 上带“中国大陆直连”开关的 CFM 0.5.x（该开关以 `d828f92` 实现，已随 2026-10-18 发布的 CFM 0.5.0 上线；导出合同于同日改为锁定 0.5.0 的发布提交 `502adf9`）；M8 试点只有一个节点，被封即更换节点并给每位用户重发文件；数据保存期限采用 F7 的推荐默认值：节点上的流量明细保存 48 小时、每月合计保存到次月第 7 天，已作废用户在运营者电脑上的记录在作废 13 个月后删除，或应用户要求立即删除（节点上的记录按上述期限自动过期）。交付流程、用户指南与使用约定见 [docs/runbooks/](docs/runbooks/)。Go 引擎固定为 Go 1.27.2。
 
 设计第 7 版（2026-10-13）：M1（纯 Rust 核心，4a95ee0）以及其上的控制台基础与第 6 版落实的运营者决策（71af715）均已提交。M2a 在 SMARTY 卡到货前完成了步骤 1–3（记录见 [docs/measurements/M2.md](docs/measurements/M2.md)）：M7 的 JSON 接口为 `GET /api/model.json?internalapi=1`，状态字段需要登录，登录后的文档以明文携带管理员密码、Wi-Fi 密钥与设备和用户标识，M7 时钟不可信。`crates/daemon-core` 据此实现了 MR7450 `model.json` 的白名单解析器与脱敏器（共用一张白名单表），路由器状态类型按设备实际上报的字段重塑。`crates/macsys` 读取内核路由表与邻居表；`mooringctl` 首批路由器命令 `router pin | set-password | status | capture`（只读访问 M7，仅 macOS）已实现并在本机回环桩服务器上测试；2026-10-14 首次对真实 M7 运行 `router pin` 时，普通 `cargo` 构建的预热连接已到达 M7，但内核对它返回空的邻居表，命令因此失败；现须使用 `cargo xtask mooringctl` 签名的副本 `target/signed/mooringctl`（见“构建约定”）。同日稍后 `router pin` 已在本机记录 M7 身份；`router capture --anonymous` 与 `router status` 则在第一个请求即以退出码 8 失败：M7 对不带会话 cookie 的 JSON 请求先以 302 重定向到会话建立地址 `/sess_cd_tmp…`，再重定向回 JSON（实测记录见 M2.md）。客户端现只跟随这一会话建立序列，每次读取 JSON 至多一次、至多三个请求，其他重定向一律拒绝（设计 §15.6 规则 9）。登录被拒时 M7 以 302 跳到 `/index.html?loginfailed&errno=2&errdetail=session.password`，客户端据此直接报告密码被拒；存入正确的管理员密码后，当晚 `router status`（含 `--json`）与两种 `router capture` 均已在真实 M7 上成功运行，两份脱敏抓取经检查不含任何标识，结构与 fixture 一致（见 M2.md）。第 7 版的代码与这次实机运行记录已提交（89d2cdf，2026-10-15）。尚未构建引擎、未部署任何 VPS。
@@ -26,10 +28,11 @@ Mooring 让少数受信任的大陆用户经运营者在英国的移动网络出
 | `crates/fixtures` | 仅供测试的确定性部署样例（只能作为 dev-dependency） |
 | `crates/daemon-core` | 控制台纯逻辑与数据模型：`mooringctl status --follow --json` 的 `MacStatusV1`、SIM 预测、上行容量判定、按用户用量汇总（UTC 周期）、告警状态机、外部网络检查、配额与到期评估、M7 状态类型与 M7 `model.json` 白名单解析与脱敏；`contract/status-fixtures/` 为 App 解码用样例，`contract/router-fixtures/` 为脱敏后的 M2a 抓取 |
 | `crates/macsys` | 仅 macOS（其他平台上为空 crate，工作区仍可在 ubuntu 上构建）、唯一允许 `unsafe` 的 crate（只依赖 libc）：接口索引、IPv4 默认网关及其链路层地址（PF_ROUTE sysctl）、终端回显开关 |
-| `crates/mooringctl` | 命令行工具（仅 macOS；其他平台上只提示后以退出码 1 结束）。第 7 版首批命令：`router pin`（记录网关链路层地址为 M7 身份；iOS 用来代替真实地址的占位值 `02:00:00:00:00:00` 永不记录、永不匹配）、`router set-password`（管理员密码存入登录钥匙串，仅从终端或 stdin 读取）、`router status`（绑定接口的 HTTP/1.1 客户端，身份核对后才登录）、`router capture`（只写脱敏器输出；形状不符的白名单值以占位符代替，并按路径列出） |
-| `xtask` | 开发任务：`ci`、`graph-check`、`kinds-coverage`、`deny-skips`、`acceptance`、`release-acceptance`（发布门槛）、`clean`、`mooringctl`（构建 `mooringctl` 并签名一份副本 `target/signed/mooringctl`，仅 macOS） |
+| `crates/mooringctl` | 命令行工具（仅 macOS；其他平台上只提示后以退出码 1 结束）。第 9 版：`daemon`（守护进程，部署前只读取 M7 并提供控制台状态）与 `status [--follow] [--json]`（读取守护进程的状态）。第 7 版首批命令：`router pin`（记录网关链路层地址为 M7 身份；iOS 用来代替真实地址的占位值 `02:00:00:00:00:00` 永不记录、永不匹配）、`router set-password`（管理员密码存入登录钥匙串，仅从终端或 stdin 读取）、`router status`（绑定接口的 HTTP/1.1 客户端，身份核对后才登录）、`router capture`（只写脱敏器输出；形状不符的白名单值以占位符代替，并按路径列出） |
+| `xtask` | 开发任务：`ci`、`graph-check`、`kinds-coverage`、`deny-skips`、`acceptance`、`release-acceptance`（发布门槛）、`clean`、`mooringctl`（构建 `mooringctl` 并签名一份副本 `target/signed/mooringctl`，仅 macOS）；第 9 版：`app`（构建 `target/app/Mooring.app`，内含签名的 `mooringctl`；要求 Swift 测试通过、Xcode 报告零错误零警告、界面文字都有中文）、`agent-install <接口>` 与 `agent-uninstall`（开发用 LaunchAgent），均仅 macOS |
+| `apple/` | `Mooring.app`：`project.yml`（XcodeGen 生成工程，工程本身不入库）、`Packages/MooringKit`（控制台文档的严格解码、状态流、测试）、`App/`（概览与路由器页面、`Localizable.xcstrings` 中文翻译） |
 | `engines.lock.toml` | Go 引擎的固定输入（Xray v26.9.30 + REALITY e1986a4、sing-box v1.14.2、Go 1.27.2） |
-| `docs/runbooks/` | 运维手册：`delivery.md`（配置交付，英文）、`user-onboarding.md` 与 `user-agreement.md`（给用户的指南与使用约定，简体中文） |
+| `docs/runbooks/` | 运维手册：`console.md`（控制台的构建、启动与排障，英文）、`delivery.md`（配置交付，英文）、`user-onboarding.md` 与 `user-agreement.md`（给用户的指南与使用约定，简体中文） |
 
 ## 构建约定
 

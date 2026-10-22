@@ -421,7 +421,7 @@ fn display_args(file: &AbsolutePath) -> [&OsStr; 2] {
 
 /// Runs [`CODESIGN`] with `args` and returns what it wrote to standard
 /// error; fails, with that text, unless it exits 0.
-fn codesign(args: &[&OsStr]) -> Result<Vec<u8>, MooringctlError> {
+pub(crate) fn codesign(args: &[&OsStr]) -> Result<Vec<u8>, MooringctlError> {
     let output = Command::new(CODESIGN)
         .args(args)
         .stdin(Stdio::null())
@@ -447,6 +447,12 @@ fn codesign(args: &[&OsStr]) -> Result<Vec<u8>, MooringctlError> {
 /// Checks `codesign -dv`'s report: exactly one `Identifier=` line, naming
 /// [`SIGNING_IDENTIFIER`].
 fn check_signature(report: &[u8]) -> Result<(), IdentifierFault> {
+    check_identifier(report, SIGNING_IDENTIFIER)
+}
+
+/// Checks `codesign -dv`'s report: exactly one `Identifier=` line, naming
+/// `expected`.
+pub(crate) fn check_identifier(report: &[u8], expected: &str) -> Result<(), IdentifierFault> {
     let mut identifiers = report
         .split(|&byte| byte == b'\n')
         .filter_map(|line| line.strip_prefix(b"Identifier="));
@@ -454,13 +460,19 @@ fn check_signature(report: &[u8]) -> Result<(), IdentifierFault> {
     if identifiers.next().is_some() {
         return Err(IdentifierFault::Repeated);
     }
-    if identifier == SIGNING_IDENTIFIER.as_bytes() {
+    if identifier == expected.as_bytes() {
         Ok(())
     } else {
         Err(IdentifierFault::Different(
             String::from_utf8_lossy(identifier).into_owned(),
         ))
     }
+}
+
+/// The signed copy this command places under `target`:
+/// `<target>/signed/mooringctl`.
+pub(crate) fn signed_copy(target: &Path) -> PathBuf {
+    target.join(SIGNED_DIR).join(PACKAGE)
 }
 
 #[cfg(test)]
