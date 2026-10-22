@@ -99,6 +99,12 @@ pub(crate) const ALLOWED_EDGES: &[AllowedEdges] = &[
         normal: &["mooring-export", "mooring-model"],
         dev: &[],
     },
+    // The VPS agent (M4): agent-proto only. The VPS never renders.
+    AllowedEdges {
+        krate: "mooring-agent",
+        normal: &["mooring-agent-proto"],
+        dev: &[],
+    },
     // The M2b field measurements (dev-only, never shipped): the model's
     // types for what they decide (`UplinkBaseline`, `Keepalive`, `Pairing`,
     // `InterfaceSelector`), and macsys on macOS for the interface list and

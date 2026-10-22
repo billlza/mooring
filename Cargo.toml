@@ -12,6 +12,7 @@ members = [
   "crates/macsys",
   "crates/mooringctl",
   "crates/fieldkit",
+  "crates/mooring-agent",
   "xtask",
 ]
 resolver = "3"
