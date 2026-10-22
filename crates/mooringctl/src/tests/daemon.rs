@@ -6,6 +6,7 @@
 //! short temporary directory (a socket path has at most 104 bytes); the M7
 //! and the live keychain are never touched.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -15,6 +16,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use mooring_daemon_core::ControlError;
 use mooring_daemon_core::console::{ConsoleStatus, UndeployedStatus};
 use mooring_daemon_core::control::{
     DaemonReply, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, Refusal, decode_reply, encode_line,
@@ -31,6 +33,7 @@ use crate::daemon::serve::{End, Limits, accept, serve};
 use crate::daemon::{LoopState, RunPaths, after_poll, start, unavailable_reason};
 use crate::error::{CommandError, EXIT_LOCAL, LocalError};
 use crate::router::error::{Missing, RouterError, UnreachableCause};
+use crate::status::{Next, PARENT_CHECK, Wait, read_reply_line};
 
 /// Short limits, so the tests of time-outs are quick.
 const QUICK: Limits = Limits {
@@ -673,6 +676,156 @@ fn follow_prints_each_status_until_the_daemon_closes() {
         outcome.stderr,
         "mooringctl: the daemon closed the status stream\n"
     );
+}
+
+/// A daemon on the harness's control socket that reads the request,
+/// sends `first`, waits `pause`, sends `then`, and keeps the connection
+/// until the client leaves.
+fn lingering_daemon(
+    harness: &Harness,
+    first: Vec<u8>,
+    pause: Duration,
+    then: Vec<u8>,
+) -> Running<()> {
+    let paths = RunPaths::under(&harness.support_dir());
+    fs::create_dir_all(&paths.dir).unwrap();
+    let listener = UnixListener::bind(&paths.socket).unwrap();
+    Running::start(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request = Vec::new();
+        reader.read_until(b'\n', &mut request).unwrap();
+        assert_eq!(request, b"\"subscribe\"\n");
+        let mut stream = stream;
+        stream.write_all(&first).unwrap();
+        thread::sleep(pause);
+        stream.write_all(&then).unwrap();
+        let mut rest = Vec::new();
+        reader.read_to_end(&mut rest).unwrap();
+        assert!(rest.is_empty());
+    })
+}
+
+/// `--follow` ends, quietly and with success, once the process that
+/// started it is gone (Mooring.app quit, crashed or was killed): nothing
+/// reads what it prints any more, and it would otherwise wait for the
+/// next status to fail its write.
+#[test]
+fn follow_ends_once_its_parent_is_gone() {
+    let mut harness = harness();
+    // Started by 700, then adopted by launchd.
+    harness.parent.ids.replace(VecDeque::from([700, 1]));
+    let daemon = lingering_daemon(&harness, available_line(NOW), Duration::ZERO, Vec::new());
+    let outcome = Running::start(move || harness.run(&["status", "--follow", "--json"])).result();
+    daemon.result();
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stdout, document_of(&available_line(NOW)));
+    assert_eq!(outcome.stderr, "");
+}
+
+/// A line that arrives in parts across the checks of the parent is read
+/// whole.
+#[test]
+fn a_line_split_across_parent_checks_is_read_whole() {
+    let mut harness = harness();
+    // The parent is still there at the check while the line is in parts,
+    // and gone at the one after it.
+    harness.parent.ids.replace(VecDeque::from([700, 700, 1]));
+    let mut second = available_line(NOW + 60);
+    let rest = second.split_off(second.len() / 2);
+    let mut first = available_line(NOW);
+    first.extend_from_slice(&second);
+    let daemon = lingering_daemon(&harness, first, PARENT_CHECK + PARENT_CHECK / 2, rest);
+    let outcome = Running::start(move || harness.run(&["status", "--follow", "--json"])).result();
+    daemon.result();
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "{}{}",
+            document_of(&available_line(NOW)),
+            document_of(&available_line(NOW + 60))
+        )
+    );
+}
+
+/// Quick waits for the reads below: a tick of 50 ms, silence after 300.
+const QUICK_WAIT: Wait = Wait {
+    silence: Duration::from_millis(300),
+    tick: Duration::from_millis(50),
+};
+
+/// A reader on one end of a socket pair whose reads wait one tick of
+/// [`QUICK_WAIT`], as `connect` sets them, and the other end.
+fn quick_reader() -> (BufReader<UnixStream>, UnixStream) {
+    let (client, daemon) = UnixStream::pair().unwrap();
+    client.set_read_timeout(Some(QUICK_WAIT.tick)).unwrap();
+    (BufReader::new(client), daemon)
+}
+
+/// Silence is measured over the whole wait, not a tick, and asks after
+/// the parent at every tick on the way.
+#[test]
+fn silence_beyond_the_wait_is_reported_after_every_tick() {
+    let (mut reader, daemon) = quick_reader();
+    let (read, waited, asked) = Running::start(move || {
+        let asked = std::cell::Cell::new(0);
+        let parent_there = || {
+            asked.set(asked.get() + 1);
+            true
+        };
+        let started = std::time::Instant::now();
+        let read = read_reply_line(&mut reader, Path::new("/s"), QUICK_WAIT, &parent_there);
+        (read, started.elapsed(), asked.get())
+    })
+    .result();
+    drop(daemon);
+    assert!(
+        matches!(read, Err(LocalError::DaemonSilent { secs: 0 })),
+        "{read:?}"
+    );
+    assert!(waited >= QUICK_WAIT.silence, "{waited:?}");
+    assert!(asked >= 2, "{asked}");
+}
+
+/// The bound holds across a line's parts: it is refused one byte past it,
+/// however its parts arrived.
+#[test]
+fn a_long_line_in_parts_is_refused_at_the_bound() {
+    let (mut reader, mut daemon) = quick_reader();
+    let writer = Running::start(move || {
+        let part = vec![b'x'; MAX_REPLY_LINE_BYTES / 2 + 10];
+        daemon.write_all(&part).unwrap();
+        thread::sleep(QUICK_WAIT.tick * 3);
+        // The reader stops at the bound, so this may not all be read.
+        let _ = daemon.write_all(&part);
+        daemon
+    });
+    // Silence only well past the pause, so a slow machine cannot end the
+    // read early.
+    let wait = Wait {
+        silence: DEADLINE / 2,
+        tick: QUICK_WAIT.tick,
+    };
+    let read = read_reply_line(&mut reader, Path::new("/s"), wait, &|| true);
+    assert!(
+        matches!(
+            read,
+            Err(LocalError::DaemonReply(ControlError::LineTooLong { bytes, max }))
+                if bytes == MAX_REPLY_LINE_BYTES + 1 && max == MAX_REPLY_LINE_BYTES
+        ),
+        "{read:?}"
+    );
+    drop(reader);
+    drop(writer.result());
+}
+
+/// A parent gone ends the wait at the next tick, without a line.
+#[test]
+fn a_parent_gone_ends_the_wait() {
+    let (mut reader, _daemon) = quick_reader();
+    let read = read_reply_line(&mut reader, Path::new("/s"), QUICK_WAIT, &|| false);
+    assert_eq!(read.unwrap(), Next::ParentGone);
 }
 
 #[test]

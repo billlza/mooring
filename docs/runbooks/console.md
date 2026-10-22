@@ -42,6 +42,8 @@ cargo xtask agent-install en9
 
 This runs `mooringctl daemon --router-interface en9` as a LaunchAgent until logout. It polls the M7 every 60 s. Its log is `~/Library/Logs/Mooring/daemon.log`, one line when it starts and one each time the poll's outcome changes.
 
+If the agent is already loaded, the command stops it first and starts the new one once launchd no longer lists the old one. It waits up to 10 s for that, and otherwise stops and says so.
+
 On the first poll, macOS asks two questions. Allow both:
 1. **The keychain:** "mooringctl wants to use your confidential information stored in "com.bill.mooring.dev"". Choose **Always Allow**; it asks for the Mac's login password. This is the M7's admin password, which only `mooringctl` reads.
 2. **Local network:** "Mooring would like to find and connect to devices on your local network". Choose **Allow**. Without it the daemon's connection to the M7 fails with "host unreachable": macOS applies local network privacy to a LaunchAgent (design §5.1).

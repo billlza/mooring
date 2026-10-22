@@ -381,6 +381,31 @@ impl BackupCheck for FakeBackups {
     }
 }
 
+/// The CLI's parent: the ids it reports, one per question, the last one
+/// for ever after.
+#[derive(Debug)]
+pub(crate) struct FakeParent {
+    pub(crate) ids: RefCell<VecDeque<u32>>,
+}
+
+impl FakeParent {
+    /// A parent that stays.
+    pub(crate) fn staying() -> Self {
+        Self {
+            ids: RefCell::new(VecDeque::from([700])),
+        }
+    }
+
+    fn id(&self) -> u32 {
+        let mut ids = self.ids.borrow_mut();
+        if ids.len() > 1 {
+            ids.pop_front().unwrap()
+        } else {
+            *ids.front().unwrap()
+        }
+    }
+}
+
 /// Everything a command runs against, owned by the test.
 pub(crate) struct Harness {
     pub(crate) home: TempDir,
@@ -391,6 +416,7 @@ pub(crate) struct Harness {
     pub(crate) port: u16,
     pub(crate) timeouts: Timeouts,
     pub(crate) backups: FakeBackups,
+    pub(crate) parent: FakeParent,
 }
 
 impl Harness {
@@ -408,6 +434,7 @@ impl Harness {
                 answer: BackupAnswer::Excluded,
                 asked: RefCell::new(Vec::new()),
             },
+            parent: FakeParent::staying(),
         }
     }
 
@@ -450,6 +477,7 @@ impl Harness {
         let cli =
             Cli::try_parse_from(std::iter::once("mooringctl").chain(args.iter().copied())).unwrap();
         let clock = || Ok(UnixTime::from_secs(NOW));
+        let parent = || self.parent.id();
         let mut env = Env {
             router: RouterEnv {
                 link: &self.link,
@@ -462,6 +490,7 @@ impl Harness {
             console: &mut self.console,
             stdin: &mut self.stdin,
             backups: &self.backups,
+            parent: &parent,
         };
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

@@ -48,6 +48,9 @@ pub(crate) struct Env<'a> {
     pub(crate) stdin: &'a mut dyn Read,
     /// Whether Time Machine excludes a folder (`tmutil` in the binary).
     pub(crate) backups: &'a dyn BackupCheck,
+    /// The id of this process's parent (`getppid` in the binary): when the
+    /// parent exits, launchd adopts the process and the id changes.
+    pub(crate) parent: &'a dyn Fn() -> u32,
 }
 
 /// The system clock, in whole seconds since the epoch.

@@ -30,6 +30,8 @@ use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use mooring_model::iface::BsdName;
 use serde::Deserialize;
@@ -48,6 +50,23 @@ pub(crate) const AGENT_LABEL: &str = "com.bill.mooring.daemon";
 /// `launchctl print`'s exit status for a service that is not loaded
 /// (observed on macOS 27.0.1, 2026-10-22).
 const LAUNCHCTL_NOT_FOUND: i32 = 113;
+
+/// How long a stop waits for launchd to unload the agent: `launchctl
+/// print` is asked up to `checks` times, `interval` apart. `launchctl
+/// bootout` can return while the old process is still exiting, and a
+/// `bootstrap` then fails with "Input/output error" (5) (observed on macOS
+/// 27.0.1, 2026-10-22, with the old daemon waiting at a keychain prompt).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StopWait {
+    pub(crate) checks: u32,
+    pub(crate) interval: Duration,
+}
+
+/// Up to ten seconds, a tenth of a second apart.
+pub(crate) const STOP_WAIT: StopWait = StopWait {
+    checks: 100,
+    interval: Duration::from_millis(100),
+};
 
 const XCRUN: &str = "/usr/bin/xcrun";
 
@@ -115,6 +134,10 @@ pub(crate) enum AppError {
         "`launchctl print {service}` ended with {code:?}, neither found (0) nor not found ({LAUNCHCTL_NOT_FOUND})"
     )]
     AgentState { service: String, code: Option<i32> },
+    #[error(
+        "`launchctl bootout {service}` returned, but the service was still loaded {waited:?} later"
+    )]
+    AgentStillLoaded { service: String, waited: Duration },
     #[error("the app's strings {0}")]
     Catalog(CatalogFaults),
 }
@@ -788,28 +811,52 @@ fn gui_domain(programs: &mut impl Programs, root: &Path) -> Result<String, AppEr
     }
 }
 
-/// Stops the agent if it is loaded; `true` if it was.
-fn stop_agent(programs: &mut impl Programs, root: &Path, domain: &str) -> Result<bool, AppError> {
+/// Stops the agent if it is loaded, and waits until launchd no longer
+/// lists it; `true` if it was loaded.
+fn stop_agent(
+    programs: &mut impl Programs,
+    root: &Path,
+    domain: &str,
+    wait: StopWait,
+) -> Result<bool, AppError> {
     let service = format!("{domain}/{AGENT_LABEL}");
-    let print = step(
-        LAUNCHCTL,
-        &[OsStr::new("print"), OsStr::new(&service)],
-        root,
-    );
-    match programs.status(&print)? {
-        Some(0) => {
-            programs.run(
-                &step(
-                    LAUNCHCTL,
-                    &[OsStr::new("bootout"), OsStr::new(&service)],
-                    root,
-                ),
-                Capture::Inherit,
-            )?;
-            Ok(true)
+    if !agent_loaded(programs, root, &service)? {
+        return Ok(false);
+    }
+    programs.run(
+        &step(
+            LAUNCHCTL,
+            &[OsStr::new("bootout"), OsStr::new(&service)],
+            root,
+        ),
+        Capture::Inherit,
+    )?;
+    for _ in 0..wait.checks {
+        if !agent_loaded(programs, root, &service)? {
+            return Ok(true);
         }
+        thread::sleep(wait.interval);
+    }
+    Err(AppError::AgentStillLoaded {
+        service,
+        waited: wait.interval * wait.checks,
+    })
+}
+
+/// Whether launchd lists `service`, by `launchctl print`'s exit status.
+fn agent_loaded(
+    programs: &mut impl Programs,
+    root: &Path,
+    service: &str,
+) -> Result<bool, AppError> {
+    let print = step(LAUNCHCTL, &[OsStr::new("print"), OsStr::new(service)], root);
+    match programs.status(&print)? {
+        Some(0) => Ok(true),
         Some(LAUNCHCTL_NOT_FOUND) => Ok(false),
-        code => Err(AppError::AgentState { service, code }),
+        code => Err(AppError::AgentState {
+            service: service.to_owned(),
+            code,
+        }),
     }
 }
 
@@ -832,6 +879,7 @@ pub(crate) fn install_agent(
         &AppPaths::new(&root, &target),
         &home,
         interface,
+        STOP_WAIT,
         out,
     )
 }
@@ -843,6 +891,7 @@ pub(crate) fn install(
     paths: &AppPaths,
     home: &Path,
     interface: &str,
+    wait: StopWait,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     let interface = BsdName::parse(interface).map_err(|_| AppError::Interface {
@@ -869,7 +918,7 @@ pub(crate) fn install(
     )
     .map_err(file_error("write", &paths.agent_plist))?;
     let domain = gui_domain(programs, root)?;
-    let replaced = stop_agent(programs, root, &domain)?;
+    let replaced = stop_agent(programs, root, &domain, wait)?;
     programs.run(
         &step(
             LAUNCHCTL,
@@ -901,7 +950,13 @@ pub(crate) fn uninstall_agent(cargo: &Cargo, out: &mut impl Write) -> Result<(),
     require_macos("agent-uninstall", std::env::consts::OS)?;
     let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
     let root = cargo.workspace_root().to_path_buf();
-    uninstall(&mut System, &root, &AppPaths::new(&root, &target), out)
+    uninstall(
+        &mut System,
+        &root,
+        &AppPaths::new(&root, &target),
+        STOP_WAIT,
+        out,
+    )
 }
 
 /// The uninstall after the paths are known.
@@ -909,10 +964,11 @@ pub(crate) fn uninstall(
     programs: &mut impl Programs,
     root: &Path,
     paths: &AppPaths,
+    wait: StopWait,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     let domain = gui_domain(programs, root)?;
-    let stopped = stop_agent(programs, root, &domain)?;
+    let stopped = stop_agent(programs, root, &domain, wait)?;
     let removed = match fs::remove_file(&paths.agent_plist) {
         Ok(()) => true,
         Err(error) if error.kind() == io::ErrorKind::NotFound => false,
@@ -937,7 +993,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        AGENT_LABEL, AppError, AppPaths, Capture, Programs, Step, agent_plist, assemble,
+        AGENT_LABEL, AppError, AppPaths, Capture, Programs, Step, StopWait, agent_plist, assemble,
         build_steps, check_build_results, find_xcodegen, install, require_macos, tail, uninstall,
     };
     use crate::mooringctl::IdentifierFault;
@@ -976,6 +1032,12 @@ mod tests {
             Ok(self.statuses.pop_front().unwrap())
         }
     }
+
+    /// Three checks, no pause between them.
+    const NO_WAIT: StopWait = StopWait {
+        checks: 3,
+        interval: std::time::Duration::ZERO,
+    };
 
     const CLEAN: &str = r#"{"actionTitle":"Build","status":"succeeded","errorCount":0,"errors":[],"warningCount":0,"warnings":[],"analyzerWarningCount":0,"analyzerWarnings":[],"destination":{}}"#;
 
@@ -1215,14 +1277,31 @@ mod tests {
         let home = scratch.0.join("home");
         fs::create_dir_all(&home).unwrap();
         let mut fake = Fake::default();
-        let error = install(&mut fake, &root, &paths, &home, "en9", &mut Vec::new()).unwrap_err();
+        let error = install(
+            &mut fake,
+            &root,
+            &paths,
+            &home,
+            "en9",
+            NO_WAIT,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert!(matches!(error, AppError::AppNotBuilt { .. }), "{error:?}");
         fs::create_dir_all(paths.embedded.parent().unwrap()).unwrap();
         fs::write(&paths.embedded, b"cli").unwrap();
         for bad in ["", "en 9", "../en9", "en9/x"] {
             assert!(
                 matches!(
-                    install(&mut fake, &root, &paths, &home, bad, &mut Vec::new()),
+                    install(
+                        &mut fake,
+                        &root,
+                        &paths,
+                        &home,
+                        bad,
+                        NO_WAIT,
+                        &mut Vec::new()
+                    ),
                     Err(AppError::Interface { .. })
                 ),
                 "{bad:?}"
@@ -1230,22 +1309,29 @@ mod tests {
         }
         assert!(fake.steps.is_empty());
 
-        for (status, verb, booted_out) in
-            [(Some(113), "started", false), (Some(0), "restarted", true)]
-        {
+        // A loaded agent is booted out, and the new one is bootstrapped only
+        // once launchd no longer lists the old one, however many checks
+        // that takes within the wait.
+        let print = format!("/bin/launchctl print gui/501/{AGENT_LABEL}");
+        let bootout = format!("/bin/launchctl bootout gui/501/{AGENT_LABEL}");
+        for (statuses, verb, after_id) in [
+            (&[113][..], "started", vec![&print]),
+            (&[0, 113], "restarted", vec![&print, &bootout, &print]),
+            (
+                &[0, 0, 0, 113],
+                "restarted",
+                vec![&print, &bootout, &print, &print, &print],
+            ),
+        ] {
             let mut fake = Fake::default();
             fake.outputs.push_back(Ok(b"501\n".to_vec()));
-            fake.statuses.push_back(status);
+            fake.statuses.extend(statuses.iter().copied().map(Some));
             let mut out = Vec::new();
-            install(&mut fake, &root, &paths, &home, "en9", &mut out).unwrap();
+            install(&mut fake, &root, &paths, &home, "en9", NO_WAIT, &mut out).unwrap();
+            assert!(fake.statuses.is_empty(), "{statuses:?}");
             let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
-            let mut expected = vec![
-                "/usr/bin/id -u".to_owned(),
-                format!("/bin/launchctl print gui/501/{AGENT_LABEL}"),
-            ];
-            if booted_out {
-                expected.push(format!("/bin/launchctl bootout gui/501/{AGENT_LABEL}"));
-            }
+            let mut expected = vec!["/usr/bin/id -u".to_owned()];
+            expected.extend(after_id.into_iter().cloned());
             expected.push(format!(
                 "/bin/launchctl bootstrap gui/501 {}",
                 paths.agent_plist.display()
@@ -1268,18 +1354,66 @@ mod tests {
             );
         }
 
-        // Any other answer from `launchctl print` is an error, not a guess.
+        // An agent still listed after every check stops the install before
+        // its bootstrap, which would fail.
         let mut fake = Fake::default();
         fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.push_back(Some(5));
-        let error = install(&mut fake, &root, &paths, &home, "en9", &mut Vec::new()).unwrap_err();
+        fake.statuses.extend([Some(0); 4]);
+        let error = install(
+            &mut fake,
+            &root,
+            &paths,
+            &home,
+            "en9",
+            NO_WAIT,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert!(
-            matches!(&error, AppError::AgentState { code: Some(5), .. }),
+            matches!(&error, AppError::AgentStillLoaded { service, .. } if *service == format!("gui/501/{AGENT_LABEL}")),
             "{error:?}"
         );
+        assert!(fake.statuses.is_empty());
+        assert!(
+            fake.steps
+                .iter()
+                .all(|(line, _)| !line.contains(" bootstrap "))
+        );
+
+        // Any other answer from `launchctl print`, before the bootout or
+        // after it, is an error, not a guess.
+        for statuses in [&[Some(5)][..], &[Some(0), None]] {
+            let mut fake = Fake::default();
+            fake.outputs.push_back(Ok(b"501\n".to_vec()));
+            fake.statuses.extend(statuses.iter().copied());
+            let error = install(
+                &mut fake,
+                &root,
+                &paths,
+                &home,
+                "en9",
+                NO_WAIT,
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&error, AppError::AgentState { code, .. } if code == statuses.last().unwrap()),
+                "{error:?}"
+            );
+            assert!(fake.statuses.is_empty());
+        }
         let mut fake = Fake::default();
         fake.outputs.push_back(Ok(b"root\n".to_vec()));
-        let error = install(&mut fake, &root, &paths, &home, "en9", &mut Vec::new()).unwrap_err();
+        let error = install(
+            &mut fake,
+            &root,
+            &paths,
+            &home,
+            "en9",
+            NO_WAIT,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert!(
             matches!(&error, AppError::UserId(text) if text == "root"),
             "{error:?}"
@@ -1294,13 +1428,22 @@ mod tests {
         fs::write(&paths.agent_plist, b"plist").unwrap();
         let mut fake = Fake::default();
         fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.push_back(Some(0));
+        fake.statuses.extend([Some(0), Some(0), Some(113)]);
         let mut out = Vec::new();
-        uninstall(&mut fake, &root, &paths, &mut out).unwrap();
+        uninstall(&mut fake, &root, &paths, NO_WAIT, &mut out).unwrap();
         assert!(!paths.agent_plist.exists());
+        assert!(fake.statuses.is_empty());
+        let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
+        let print = format!("/bin/launchctl print gui/501/{AGENT_LABEL}");
         assert_eq!(
-            fake.steps.last().unwrap().0,
-            format!("/bin/launchctl bootout gui/501/{AGENT_LABEL}")
+            steps,
+            [
+                "/usr/bin/id -u",
+                &print,
+                &format!("/bin/launchctl bootout gui/501/{AGENT_LABEL}"),
+                &print,
+                &print,
+            ]
         );
         assert!(String::from_utf8(out).unwrap().contains(" stopped; "));
         // Again: nothing loaded, nothing to remove.
@@ -1308,7 +1451,7 @@ mod tests {
         fake.outputs.push_back(Ok(b"501\n".to_vec()));
         fake.statuses.push_back(Some(113));
         let mut out = Vec::new();
-        uninstall(&mut fake, &root, &paths, &mut out).unwrap();
+        uninstall(&mut fake, &root, &paths, NO_WAIT, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
         assert!(
             out.contains(" was not loaded; ") && out.ends_with(" was not there\n"),

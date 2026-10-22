@@ -104,6 +104,7 @@ fn main() -> ExitCode {
         console: &mut console,
         stdin: &mut stdin,
         backups: &backups,
+        parent: &std::os::unix::process::parent_id,
     };
     let code = run(
         cli.command,
