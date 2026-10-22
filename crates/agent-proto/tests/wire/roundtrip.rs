@@ -649,6 +649,7 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
         Just(AgentError::MacReportMissing),
         Just(AgentError::UnknownRequest),
         Just(AgentError::RequestTooLarge),
+        select(RequestKind::ALL).prop_map(|request| AgentError::NotServedYet { request }),
     ]
 }
 

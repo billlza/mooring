@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "mooring-agent"
+description = "Mooring's VPS agent: the forced SSH command, the gate's holds and halt, the blob store and the reflector (design §11)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Design §6.1: agent-proto only, plus std, serde, serde_json, thiserror and
+# sha2. The VPS never renders.
+[dependencies]
+mooring-agent-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

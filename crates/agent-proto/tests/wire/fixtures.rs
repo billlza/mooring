@@ -711,5 +711,8 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         },
         AgentErrorKind::UnknownRequest => AgentError::UnknownRequest,
         AgentErrorKind::RequestTooLarge => AgentError::RequestTooLarge,
+        AgentErrorKind::NotServedYet => AgentError::NotServedYet {
+            request: RequestKind::Apply,
+        },
     }
 }
