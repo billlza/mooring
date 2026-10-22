@@ -886,8 +886,9 @@ fn the_variants_fixture_lists_every_variant() {
         &v.power_state,
         |value| match value {
             PowerState::Online => 0,
+            PowerState::Standby => 1,
         },
-        1,
+        2,
     );
     every_variant(
         "battery_state",
@@ -902,8 +903,9 @@ fn the_variants_fixture_lists_every_variant() {
         &v.charge_source,
         |value| match value {
             ChargeSource::QuickCharge => 0,
+            ChargeSource::NoSource => 1,
         },
-        1,
+        2,
     );
     every_variant(
         "wifi_ap_status",

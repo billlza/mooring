@@ -633,6 +633,10 @@ device_vocabulary! {
     pub enum PowerState {
         /// `Online` (M2a).
         Online = "Online",
+        /// `Standby` (the SMARTY SIM, 2026-10-22: the M7 on its battery, within
+        /// two and a half minutes of reading `Online` that way, still attached
+        /// with its data session connected; one capture).
+        Standby = "Standby",
     }
 }
 
@@ -649,6 +653,10 @@ device_vocabulary! {
     pub enum ChargeSource {
         /// `QuickCharge` (M2a).
         QuickCharge = "QuickCharge",
+        /// `None` (the SMARTY SIM, 2026-10-22: the battery at 100 % and not
+        /// charging while the M7 ran on its battery, by the operator's
+        /// statement; one capture).
+        NoSource = "None",
     }
 }
 

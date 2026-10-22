@@ -84,11 +84,13 @@ public enum ThermalState: String, Decodable, Sendable, CaseIterable {
 /// The M7's power management state.
 public enum PowerState: String, Decodable, Sendable, CaseIterable {
     case online = "online"
+    case standby = "standby"
 
     /// The M7's own spelling.
     public var wire: String {
         switch self {
         case .online: "Online"
+        case .standby: "Standby"
         }
     }
 }
@@ -108,11 +110,13 @@ public enum BatteryState: String, Decodable, Sendable, CaseIterable {
 /// What charges the battery.
 public enum ChargeSource: String, Decodable, Sendable, CaseIterable {
     case quickCharge = "quick_charge"
+    case noSource = "no_source"
 
     /// The M7's own spelling.
     public var wire: String {
         switch self {
         case .quickCharge: "QuickCharge"
+        case .noSource: "None"
         }
     }
 }

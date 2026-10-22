@@ -714,13 +714,15 @@
     "normal"
   ],
   "power_state": [
-    "online"
+    "online",
+    "standby"
   ],
   "battery_state": [
     "normal"
   ],
   "charge_source": [
-    "quick_charge"
+    "quick_charge",
+    "no_source"
   ],
   "wifi_ap_status": [
     "off"

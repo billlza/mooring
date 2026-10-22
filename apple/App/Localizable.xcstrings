@@ -140,6 +140,16 @@
         }
       }
     },
+    "Charge source": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "充电来源"
+          }
+        }
+      }
+    },
     "Charging": {
       "localizations": {
         "zh-Hans": {
@@ -1183,12 +1193,12 @@
         }
       }
     },
-    "yes, %@": {
+    "yes": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "是，%@"
+            "value": "是"
           }
         }
       }

@@ -337,7 +337,7 @@ fn device_vocabularies_hold_the_observed_values_only() {
         PowerState::ALL,
         PowerState::wire,
         PowerState::from_wire,
-        &[("Online", "online")],
+        &[("Online", "online"), ("Standby", "standby")],
     );
     check(
         BatteryState::ALL,
@@ -349,7 +349,7 @@ fn device_vocabularies_hold_the_observed_values_only() {
         ChargeSource::ALL,
         ChargeSource::wire,
         ChargeSource::from_wire,
-        &[("QuickCharge", "quick_charge")],
+        &[("QuickCharge", "quick_charge"), ("None", "no_source")],
     );
     check(
         WifiApStatus::ALL,

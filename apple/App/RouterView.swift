@@ -93,10 +93,9 @@ struct RouterStatusForm: View {
                 )
                 LabeledContent(
                     "Charging",
-                    value: status.power.battery.charging
-                        ? String(localized: "yes, \(status.power.battery.source.wire)")
-                        : String(localized: "no")
+                    value: status.power.battery.charging ? String(localized: "yes") : String(localized: "no")
                 )
+                LabeledContent("Charge source", value: status.power.battery.source.wire)
                 LabeledContent("Battery temperature", value: "\(status.power.battery.temperatureC) °C")
             }
             Section {

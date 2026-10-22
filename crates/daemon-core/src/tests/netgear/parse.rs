@@ -373,6 +373,30 @@ fn the_smarty_service_types_are_read() {
     }
 }
 
+/// The power states and charge sources the M7 has reported are read as
+/// such: `Online` with `QuickCharge` (M2a), and, while the M7 ran on its
+/// battery (2026-10-22), `Online` and then `Standby`, each with `None`.
+#[test]
+fn the_power_values_seen_are_read() {
+    use NetgearLeaf as L;
+    for (state, source) in [
+        ("Online", "QuickCharge"),
+        ("Online", "None"),
+        ("Standby", "None"),
+    ] {
+        let body = edited(|value| {
+            *value.pointer_mut(&pointer(L::PowerState, 0)).unwrap() = json!(state);
+            *value
+                .pointer_mut(&pointer(L::BatteryChargeSource, 0))
+                .unwrap() = json!(source);
+        });
+        let status = parse(&body).unwrap();
+        let power = &status.parts().power;
+        assert_eq!(power.state.wire(), state, "{state}");
+        assert_eq!(power.battery.source.wire(), source, "{source}");
+    }
+}
+
 /// Every device enumeration accepts exactly the values the M2a capture
 /// showed; any other spelling, in another case too, is `UnknownValue`
 /// naming the path, never the value.
@@ -401,9 +425,13 @@ fn unknown_enum_values_name_the_path_not_the_value() {
         (
             L::BatteryChargeSource,
             "QuickCharge",
-            &["Standard", "quickcharge"],
+            &["Standard", "quickcharge", "none", "NONE"],
         ),
-        (L::PowerState, "Online", &["Standby", "online"]),
+        (
+            L::PowerState,
+            "Online",
+            &["Sleep", "online", "standby", "STANDBY"],
+        ),
         (L::WwanThermalState, "Normal", &["Hot", "normal"]),
         (
             L::CurrentBand,

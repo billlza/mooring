@@ -58,9 +58,9 @@ import Testing
         #expect(NetworkService.allCases.map(\.wire) == ["Nr5gService", "LteService"])
         #expect(DataService.allCases.map(\.wire) == ["5GSUB6", "4G", "4GPLUS"])
         #expect(ThermalState.allCases.map(\.wire) == ["Normal"])
-        #expect(PowerState.allCases.map(\.wire) == ["Online"])
+        #expect(PowerState.allCases.map(\.wire) == ["Online", "Standby"])
         #expect(BatteryState.allCases.map(\.wire) == ["Normal"])
-        #expect(ChargeSource.allCases.map(\.wire) == ["QuickCharge"])
+        #expect(ChargeSource.allCases.map(\.wire) == ["QuickCharge", "None"])
         #expect(WifiApStatus.allCases.map(\.wire) == ["Off"])
     }
 
