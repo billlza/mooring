@@ -457,7 +457,7 @@ mooring/
                                       and availability, alert machine, SIM forecast, capacity monitor, the MR7450 `model.json` allowlist parser and redactor (revision 7),
                                       the foreign-network check (P0-2); revision 6: automatic quotas, push notices and the digest,
                                       the remote viewer's report
-    mooringctl/  (bin) cli, daemon wiring, supervise, ssh (incl. dial-bound), provision, usage, status stream; the read-only
+    mooringctl/  (bin) cli, daemon wiring, supervise, ssh (incl. the bound dial and its relay), provision, usage, status stream; the read-only
                        M7 HTTP client bound to the egress; journal and Mac usage files. Built in revision 7 (macOS only; elsewhere a stub
                        that exits 1):
                        `router pin | set-password | status | capture`, the bound HTTP/1.1 client, the legacy login-keychain
@@ -1544,7 +1544,7 @@ The L7 lab cannot prove the bypass, because a VM subnet is a connected route tha
 
 ```
 /usr/bin/ssh -F /dev/null -i <ssh/<node>/ops_ed25519> -o IdentitiesOnly=yes
-  -o ProxyCommand="<mooringctl> dial-bound --selector uplink %h %p"
+  -o ProxyCommand="<mooringctl> ssh-relay <ssh/<node>/relay-<pid>-<n>.sock>"
   -o UserKnownHostsFile=<ssh/<node>/known_hosts> -o StrictHostKeyChecking=yes
   -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ClearAllForwardings=yes
   -o ForwardAgent=no -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 root@<ipv4>
@@ -1561,9 +1561,10 @@ The L7 lab cannot prove the bypass, because a VM subnet is a connected route tha
   - *(revision 6; plan, M5)* with that poll, a `PutMacReport` push of the remote viewer's report to each node (F5, §15.9), and, once M4 adds the request, the notices the Mac rendered (§15.8).
 
   Everything else is an explicit CLI action.
-- Every call leaves through the uplink-bound dialler, never over Wi-Fi or Janet (P0-2, §10.2).
-- *Built 2026-10-23 (M7):* a session may carry a deadline, and only the sleep drain's does (§10.3). ssh then runs in a process group of its own, which a watcher kills with the dialler when the deadline passes; a session killed before its reply arrived whole fails as `PastDeadline` (`AgentUnreachable::Timeout` in a poll), and a whole reply stands. Every other session runs in the caller's process group, as before, so Ctrl-C in a terminal still ends ssh with `mooringctl`. A group whose members are all exiting as the deadline passes (`killpg` answers `EPERM`) ended by itself.
+- Every call leaves over a connection bound to the M7's interface, never over Wi-Fi or Janet (P0-2, §10.2).
+- *Built 2026-10-23 (M7):* a session may carry a deadline, and only the sleep drain's does (§10.3). the session's connection opens within what is left of it, and ssh then runs in a process group of its own, which a watcher kills with its ProxyCommand when the deadline passes; a session killed before its reply arrived whole fails as `PastDeadline` (`AgentUnreachable::Timeout` in a poll), and a whole reply stands. Every other session runs in the caller's process group, as before, so Ctrl-C in a terminal still ends ssh with `mooringctl`. A group whose members are all exiting as the deadline passes (`killpg` answers `EPERM`) ended by itself.
 - *Built 2026-10-23 (M5b):* the dialler is `mooringctl dial-bound --interface <bsd> %h %p`, the interface given to the node command rather than resolved from the uplink selector. Before it connects it checks that the interface's default gateway is the pinned M7 (the check `exit init` makes), so a connection cannot leave by Wi-Fi or campus Ethernet; it binds the socket to that interface (`IP_BOUND_IF`) and relays stdin and stdout. The ssh line above also carries `-o BatchMode=yes`, so ssh never asks at the terminal. Each request is one session, as the forced command serves one; ssh's stderr is escaped and capped at 4 KiB, and a session without a reply is reported with ssh's exit status and that stderr.
+- *Revised 2026-10-23 (the first live `node adopt` of lon1):* the dialler could not run as ssh's ProxyCommand. On macOS 27.0.1 the kernel's neighbour table, which proves the gateway is the M7, was empty to `mooringctl dial-bound` under `mooringctl`'s ssh, from Terminal.app and from other shells alike, while `mooringctl` itself, ssh, and a ProxyCommand under a shell's ssh all read it; a copy of `mooringctl` signed with the operator's Apple Development identity read none, even itself. So the process that starts ssh now does what the dialler did. It checks that the interface's default gateway is the pinned M7 when a node command or a daemon poll begins (`M7Egress`, which only that check makes, so no session can be opened through an unchecked interface), and opens each session's TCP connection itself, bound to that interface (`IP_BOUND_IF`), within `ConnectTimeout` or what is left of the session's deadline. ssh's ProxyCommand, `mooringctl ssh-relay <socket>`, connects to a one-time Unix socket in the node's directory (`ssh/<node>/`, 0700), which is unlinked as soon as it connects, and relays its standard input and output there; the process that opened the connection splices the socket to it. Once ssh closes its standard output, the relay stops: it no longer waits for a ProxyCommand that never connected, and the node's connection is shut, so a node that keeps its end open cannot hold the session. A relay socket that cannot be bound or served fails the session as `Relay`, before ssh's own failure; a splice that ended in an error is noted after ssh's stderr. The M7 check therefore runs once per command or poll rather than before every connection; every connection is still bound to the checked interface.
 
 ---
 

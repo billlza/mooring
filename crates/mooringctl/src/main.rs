@@ -128,7 +128,7 @@ fn main() -> ExitCode {
         stdin: &mut stdin,
         backups: &backups,
         parent: &std::os::unix::process::parent_id,
-        nodes: &SshLinks,
+        nodes: &SshLinks::SYSTEM,
         engine_pins: &node::engines::PINS,
         mac_pins: &node::engines::MAC_PINS,
         power_helper: &runtime::power::spawn,

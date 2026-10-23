@@ -5,7 +5,8 @@
 //! its `.pub`, the pinned host key as `known_hosts` (0600) and, while the
 //! node is adopted, the one-time bootstrap key `bootstrap_ed25519` (0600).
 //! `/usr/bin/ssh` reads keys from files only, so these keys are files, not
-//! keychain items.
+//! keychain items. Each ssh session's one-time relay socket is bound there
+//! too, so only the operator reaches it (`crate::node::dial::RelaySocket`).
 
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{self, Write};
@@ -34,6 +35,11 @@ impl NodeFiles {
         Self {
             dir: support.join("ssh").join(node.as_str()),
         }
+    }
+
+    /// The directory, private to the operator (mode 0700, [`Self::create_dir`]).
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// The operations key.

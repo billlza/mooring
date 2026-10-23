@@ -7,9 +7,13 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+use std::net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use mooring_agent_proto::{
     AcceptLocal, AgentError, Arch, HelloInfo, Holds, HostFacts, HostProfileVersion, IfName,
@@ -28,9 +32,9 @@ use mooring_store::{SecretStore, Store};
 use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
-use crate::node::NodeError;
-use crate::node::dial::relay;
-use crate::node::ssh::{Remote, Session, SshTarget, escaped, reply};
+use crate::node::dial::{CONNECT_TIMEOUT, M7Egress, RelaySocket, Served, relay};
+use crate::node::ssh::{Connect, Remote, Session, SshLinks, SshTarget, escaped, reply};
+use crate::node::{NodeError, NodeLinks};
 use crate::prompt::Answer;
 
 const ADDRESS: &str = "45.67.89.10";
@@ -464,7 +468,8 @@ fn adopt_bootstraps_with_the_root_key_and_records_the_node_adopted() {
             target.address,
             PublicIpv4::new(ADDRESS.parse().unwrap()).unwrap()
         );
-        assert_eq!(target.interface.as_str(), "lo0");
+        assert_eq!(target.egress, M7Egress::for_tests(super::support::lo0()));
+        assert_eq!(target.relay_dir, dir);
         assert_eq!(target.known_hosts, dir.join("known_hosts"));
         assert_eq!(target.mooringctl, std::env::current_exe().unwrap());
     }
@@ -634,13 +639,14 @@ fn the_ssh_command_line_is_the_designs() {
         address: PublicIpv4::new(ADDRESS.parse().unwrap()).unwrap(),
         identity: PathBuf::from("/s/ssh/lon1/ops_ed25519"),
         known_hosts: PathBuf::from("/s/ssh/lon1/known_hosts"),
-        interface: mooring_model::iface::BsdName::parse("en9").unwrap(),
+        egress: M7Egress::for_tests(super::support::lo0()),
+        relay_dir: PathBuf::from("/s/ssh/lon1"),
         mooringctl: PathBuf::from("/Applications/Mooring.app/Contents/MacOS/mooringctl"),
         remote: Remote::ForcedCommand,
         deadline: None,
     };
     let args: Vec<String> = target
-        .args()
+        .args(Path::new("/s/ssh/lon1/relay-7-0.sock"))
         .iter()
         .map(|arg| arg.to_str().unwrap().to_owned())
         .collect();
@@ -654,7 +660,7 @@ fn the_ssh_command_line_is_the_designs() {
             "-o",
             "IdentitiesOnly=yes",
             "-o",
-            "ProxyCommand='/Applications/Mooring.app/Contents/MacOS/mooringctl' dial-bound --interface en9 %h %p",
+            "ProxyCommand='/Applications/Mooring.app/Contents/MacOS/mooringctl' ssh-relay '/s/ssh/lon1/relay-7-0.sock'",
             "-o",
             "UserKnownHostsFile='/s/ssh/lon1/known_hosts'",
             "-o",
@@ -684,98 +690,124 @@ fn the_ssh_command_line_is_the_designs() {
         ..target
     };
     let args: Vec<String> = quoted
-        .args()
+        .args(Path::new("/Users/o'brien/s/relay-7-1.sock"))
         .iter()
         .map(|arg| arg.to_str().unwrap().to_owned())
         .collect();
     assert_eq!(
         args[7],
-        r"ProxyCommand='/Users/o'\''brien/mooringctl' dial-bound --interface en9 %h %p"
+        r"ProxyCommand='/Users/o'\''brien/mooringctl' ssh-relay '/Users/o'\''brien/s/relay-7-1.sock'"
     );
     assert_eq!(args.last().map(String::as_str), Some("true"));
 }
 
-/// A session past its deadline is ended with its dialler, however long
-/// ssh's own timeouts would wait, and fails as such: here the dialler never
-/// connects, and ssh would wait 15 s (`ConnectTimeout`). Without a
-/// deadline, a dialler that fails ends the session as ssh's own failure.
-#[test]
-fn a_session_past_its_deadline_is_ended_with_its_dialler() {
-    use std::time::{Duration, Instant};
+/// A directory private to the operator, as a node's is.
+fn private_dir(parent: &Path) -> PathBuf {
+    let dir = parent.join("lon1");
+    fs::create_dir(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    dir
+}
 
-    use crate::node::NodeLinks;
-    use crate::node::ssh::SshLinks;
+/// An executable script at `path`, run once with `warm`: a new script's
+/// first run waits on the system's scan of it, seconds on a loaded Mac, and
+/// that run is spent before a test's clock starts.
+fn script(path: &Path, body: &str) {
+    fs::write(path, body).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    std::process::Command::new(path)
+        .arg("warm")
+        .status()
+        .unwrap();
+}
 
-    let dir = tempfile::tempdir().unwrap();
-    let dialler = dir.path().join("dialler");
-    let pid_file = dir.path().join("dialler.pid");
-    fs::write(
-        &dialler,
-        format!(
-            "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\necho $$ > '{}'\nexec /bin/sleep 30\n",
-            pid_file.display()
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&dialler, fs::Permissions::from_mode(0o755)).unwrap();
-    // A new script's first run waits on the system's scan of it, seconds on
-    // a loaded Mac: that run is spent before the clock starts.
-    assert!(
-        std::process::Command::new(&dialler)
-            .arg("warm")
-            .status()
-            .unwrap()
-            .success()
-    );
-    let deadline = Duration::from_secs(3);
-    let started = Instant::now();
-    let target = SshTarget {
+/// A session's target through lo0, its relay socket in `relay_dir`, with
+/// `mooringctl` standing in for the ProxyCommand.
+fn session_target(
+    dir: &Path,
+    relay_dir: &Path,
+    mooringctl: &Path,
+    deadline: Option<Instant>,
+) -> SshTarget {
+    SshTarget {
         address: PublicIpv4::new(ADDRESS.parse().unwrap()).unwrap(),
-        identity: dir.path().join("ops_ed25519"),
-        known_hosts: dir.path().join("known_hosts"),
-        interface: mooring_model::iface::BsdName::parse("en9").unwrap(),
-        mooringctl: dialler.clone(),
+        identity: dir.join("ops_ed25519"),
+        known_hosts: dir.join("known_hosts"),
+        egress: M7Egress::for_tests(super::support::lo0()),
+        relay_dir: relay_dir.to_path_buf(),
+        mooringctl: mooringctl.to_path_buf(),
         remote: Remote::ForcedCommand,
-        deadline: Some(started + deadline),
-    };
-    let session = std::thread::spawn({
-        let target = target.clone();
-        move || SshLinks.open(target).request(&LineRequest::Hello)
-    });
-    // The dialler runs while ssh waits for a banner that never comes.
-    let until = started + deadline;
-    let pid: u32 = loop {
-        if let Some(pid) = fs::read_to_string(&pid_file)
-            .ok()
-            .and_then(|text| text.trim().parse().ok())
-        {
-            break pid;
-        }
-        assert!(Instant::now() < until, "ssh did not start the dialler");
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    let error = session.join().unwrap().unwrap_err();
-    let took = started.elapsed();
-    assert!(matches!(error, NodeError::PastDeadline), "{error:?}");
-    assert!(
-        took >= deadline && took < deadline + Duration::from_secs(5),
-        "{took:?}"
-    );
-    // The dialler, in ssh's group, went with it.
-    let until = Instant::now() + Duration::from_secs(5);
-    while mooring_macsys::process_path(pid).unwrap().is_some() {
-        assert!(Instant::now() < until, "the dialler outlived the session");
-        std::thread::sleep(Duration::from_millis(10));
+        deadline,
     }
+}
 
-    fs::write(&dialler, "#!/bin/sh\nexit 1\n").unwrap();
-    let error = SshLinks
-        .open(SshTarget {
-            deadline: None,
-            ..target
-        })
-        .request(&LineRequest::Hello)
-        .unwrap_err();
+/// `SshLinks` whose sessions open their connections with `connect`, for as
+/// long as the test process lives.
+fn links(
+    connect: impl Fn(&M7Egress, SocketAddrV4, Duration) -> Result<TcpStream, NodeError> + Sync + 'static,
+) -> SshLinks<'static> {
+    let connect: &'static Connect = Box::leak(Box::new(connect));
+    SshLinks { connect }
+}
+
+/// What `run` returns, or the test's failure when it takes longer than
+/// `limit`: a session that never ends is a defect, not a test that hangs.
+fn within<T: Send + 'static>(limit: Duration, run: impl FnOnce() -> T + Send + 'static) -> T {
+    let (sent, received) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sent.send(run());
+    });
+    received
+        .recv_timeout(limit)
+        .expect("the session did not end")
+}
+
+/// A session's ssh reaches the node over the connection this process
+/// opened to it, through the checked egress, on the node's SSH port, within
+/// ssh's `ConnectTimeout`; its ProxyCommand only relays over the one-time
+/// socket, which is unlinked once the ProxyCommand connected, before any of
+/// ssh's bytes reach the node. Here nc stands in for `mooringctl
+/// ssh-relay`, and the node answers ssh's identification with its own and
+/// hangs up, so ssh fails after its own reached the node.
+#[test]
+fn a_session_runs_ssh_over_the_connection_this_process_opened() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay_dir = private_dir(dir.path());
+    let helper = dir.path().join("mooringctl");
+    script(
+        &helper,
+        "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\n[ \"$1\" = ssh-relay ] || exit 64\nexec /usr/bin/nc -U \"$2\"\n",
+    );
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let node = std::thread::spawn({
+        let relay_dir = relay_dir.clone();
+        move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut identification = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !identification.ends_with(b"\r\n") && identification.len() < 255 {
+                stream.read_exact(&mut byte).unwrap();
+                identification.push(byte[0]);
+            }
+            let left = fs::read_dir(&relay_dir).unwrap().count();
+            stream.write_all(b"SSH-2.0-node\r\n").unwrap();
+            (identification, left)
+        }
+    });
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let links = links({
+        let asked = Arc::clone(&asked);
+        move |egress: &M7Egress, target: SocketAddrV4, within: Duration| {
+            asked.lock().unwrap().push((*egress, target, within));
+            TcpStream::connect((Ipv4Addr::LOCALHOST, port)).map_err(NodeError::Connect)
+        }
+    });
+    let target = session_target(dir.path(), &relay_dir, &helper, None);
+    let error = within(Duration::from_secs(30), move || {
+        links.open(target).request(&LineRequest::Hello)
+    })
+    .unwrap_err();
     assert!(
         matches!(
             error,
@@ -786,11 +818,339 @@ fn a_session_past_its_deadline_is_ended_with_its_dialler() {
         ),
         "{error:?}"
     );
+    let (identification, left) = node.join().unwrap();
+    assert!(
+        identification.starts_with(b"SSH-2.0-OpenSSH"),
+        "{identification:?}"
+    );
+    assert_eq!(
+        left, 0,
+        "the relay socket outlived the ProxyCommand's connection"
+    );
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [(
+            M7Egress::for_tests(super::support::lo0()),
+            SocketAddrV4::new(ADDRESS.parse().unwrap(), 22),
+            CONNECT_TIMEOUT
+        )]
+    );
+    assert_eq!(fs::read_dir(&relay_dir).unwrap().count(), 0);
+}
+
+/// A node that keeps its end open after ssh has ended does not hold the
+/// session: the node's connection is shut, which ends the ProxyCommand.
+/// Here the node answers with a protocol ssh refuses, and stays.
+#[test]
+fn a_node_that_keeps_its_end_open_does_not_hold_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay_dir = private_dir(dir.path());
+    let helper = dir.path().join("mooringctl");
+    script(
+        &helper,
+        "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\nexec /usr/bin/nc -U \"$2\"\n",
+    );
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (keep, kept) = mpsc::channel::<()>();
+    let node = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.write_all(b"SSH-1.5-node\r\n").unwrap();
+        // Holds the connection until the test ends.
+        let _ = kept.recv();
+    });
+    let links = links(move |_: &M7Egress, _: SocketAddrV4, _: Duration| {
+        TcpStream::connect((Ipv4Addr::LOCALHOST, port)).map_err(NodeError::Connect)
+    });
+    let target = session_target(dir.path(), &relay_dir, &helper, None);
+    let error = within(Duration::from_secs(10), move || {
+        links.open(target).request(&LineRequest::Hello)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            NodeError::Ssh {
+                code: Some(255),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    drop(keep);
+    node.join().unwrap();
+}
+
+/// A session past its deadline is ended with its ProxyCommand, however long
+/// ssh's own timeouts would wait, and fails as such: here the ProxyCommand
+/// never relays, and ssh would wait 15 s (`ConnectTimeout`) for the node's
+/// identification. Without a deadline, a ProxyCommand that fails ends the
+/// session as ssh's own failure. Neither leaves its relay socket behind.
+#[test]
+fn a_session_past_its_deadline_is_ended_with_its_proxy_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay_dir = private_dir(dir.path());
+    let helper = dir.path().join("mooringctl");
+    let pid_file = dir.path().join("helper.pid");
+    script(
+        &helper,
+        &format!(
+            "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\necho $$ > '{}'\nexec /bin/sleep 30\n",
+            pid_file.display()
+        ),
+    );
+    // The node takes the connection and says nothing.
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let links = links(move |_: &M7Egress, _: SocketAddrV4, _: Duration| {
+        TcpStream::connect((Ipv4Addr::LOCALHOST, port)).map_err(NodeError::Connect)
+    });
+    let deadline = Duration::from_secs(3);
+    let started = Instant::now();
+    let target = session_target(dir.path(), &relay_dir, &helper, Some(started + deadline));
+    let (sent, session) = mpsc::channel();
+    std::thread::spawn({
+        let target = target.clone();
+        move || {
+            let _ = sent.send(links.open(target).request(&LineRequest::Hello));
+        }
+    });
+    // The ProxyCommand runs while ssh waits for an identification that
+    // never comes.
+    let until = started + deadline;
+    let pid: u32 = loop {
+        if let Some(pid) = fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(Instant::now() < until, "ssh did not start its ProxyCommand");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let error = session
+        .recv_timeout(deadline + Duration::from_secs(10))
+        .expect("the session did not end")
+        .unwrap_err();
+    let took = started.elapsed();
+    assert!(matches!(error, NodeError::PastDeadline), "{error:?}");
+    assert!(
+        took >= deadline && took < deadline + Duration::from_secs(5),
+        "{took:?}"
+    );
+    // The ProxyCommand, in ssh's group, went with it.
+    let until = Instant::now() + Duration::from_secs(5);
+    while mooring_macsys::process_path(pid).unwrap().is_some() {
+        assert!(
+            Instant::now() < until,
+            "the ProxyCommand outlived the session"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(fs::read_dir(&relay_dir).unwrap().count(), 0);
+
+    script(&helper, "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\nexit 1\n");
+    let error = within(Duration::from_secs(30), move || {
+        links
+            .open(SshTarget {
+                deadline: None,
+                ..target
+            })
+            .request(&LineRequest::Hello)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            NodeError::Ssh {
+                code: Some(255),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(fs::read_dir(&relay_dir).unwrap().count(), 0);
+    drop(listener);
+}
+
+/// A session whose connection to the node cannot be opened fails as that
+/// connection's failure, before ssh starts, and binds no relay socket.
+#[test]
+fn a_session_whose_connection_fails_starts_no_ssh() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay_dir = private_dir(dir.path());
+    let helper = dir.path().join("mooringctl");
+    let ran = dir.path().join("ran");
+    script(
+        &helper,
+        &format!(
+            "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\ntouch '{}'\nexit 1\n",
+            ran.display()
+        ),
+    );
+    let links = links(|_: &M7Egress, _: SocketAddrV4, _: Duration| {
+        Err(NodeError::Connect(std::io::Error::from(
+            std::io::ErrorKind::ConnectionRefused,
+        )))
+    });
+    let error = links
+        .open(session_target(dir.path(), &relay_dir, &helper, None))
+        .request(&LineRequest::Hello)
+        .unwrap_err();
+    assert!(
+        matches!(&error, NodeError::Connect(source) if source.kind() == std::io::ErrorKind::ConnectionRefused),
+        "{error:?}"
+    );
+    assert!(!ran.exists(), "ssh ran its ProxyCommand");
+    assert_eq!(fs::read_dir(&relay_dir).unwrap().count(), 0);
+}
+
+/// A session whose relay socket cannot be bound fails as that, before ssh
+/// starts: here the node's directory cannot be written.
+#[test]
+fn a_session_whose_relay_socket_cannot_be_bound_starts_no_ssh() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay_dir = private_dir(dir.path());
+    let helper = dir.path().join("mooringctl");
+    let ran = dir.path().join("ran");
+    script(
+        &helper,
+        &format!(
+            "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\ntouch '{}'\nexit 1\n",
+            ran.display()
+        ),
+    );
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let links = links(move |_: &M7Egress, _: SocketAddrV4, _: Duration| {
+        TcpStream::connect((Ipv4Addr::LOCALHOST, port)).map_err(NodeError::Connect)
+    });
+    fs::set_permissions(&relay_dir, fs::Permissions::from_mode(0o500)).unwrap();
+    let error = links
+        .open(session_target(dir.path(), &relay_dir, &helper, None))
+        .request(&LineRequest::Hello)
+        .unwrap_err();
+    fs::set_permissions(&relay_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        matches!(&error, NodeError::Relay(source) if source.kind() == std::io::ErrorKind::PermissionDenied),
+        "{error:?}"
+    );
+    assert!(!ran.exists(), "ssh ran its ProxyCommand");
+    drop(listener);
+}
+
+/// A session whose deadline has passed opens no connection, and one whose
+/// deadline passes while its connection opens gives the connection only
+/// what was left: both are past their deadline, not a connection failure.
+#[test]
+fn a_session_whose_deadline_passes_while_connecting_is_past_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay_dir = private_dir(dir.path());
+    let helper = dir.path().join("mooringctl");
+    script(&helper, "#!/bin/sh\nexit 1\n");
+    let tries = Arc::new(AtomicUsize::new(0));
+    let links = links({
+        let tries = Arc::clone(&tries);
+        move |_: &M7Egress, _: SocketAddrV4, within: Duration| {
+            tries.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(within);
+            Err(NodeError::Connect(std::io::Error::from(
+                std::io::ErrorKind::TimedOut,
+            )))
+        }
+    });
+    let passed = session_target(dir.path(), &relay_dir, &helper, Some(Instant::now()));
+    assert!(matches!(
+        links.open(passed).request(&LineRequest::Hello),
+        Err(NodeError::PastDeadline)
+    ));
+    assert_eq!(tries.load(Ordering::SeqCst), 0);
+    let left = Duration::from_millis(300);
+    let started = Instant::now();
+    let passing = session_target(dir.path(), &relay_dir, &helper, Some(started + left));
+    assert!(matches!(
+        links.open(passing).request(&LineRequest::Hello),
+        Err(NodeError::PastDeadline)
+    ));
+    assert_eq!(tries.load(Ordering::SeqCst), 1);
+    assert!(started.elapsed() < left + Duration::from_secs(1));
+    assert_eq!(fs::read_dir(&relay_dir).unwrap().count(), 0);
+}
+
+/// A relay socket whose ssh ended before its ProxyCommand connected stops
+/// waiting once stopped, and shuts the node's connection, which the node
+/// then reads to its end; the socket is gone once it is dropped.
+#[test]
+fn a_relay_socket_stops_waiting_once_stopped_and_shuts_the_node_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay_dir = private_dir(dir.path());
+    let relay = Arc::new(RelaySocket::bind(&relay_dir).unwrap());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let node = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut far, _) = listener.accept().unwrap();
+    let handle = node.try_clone().unwrap();
+    let (sent, served) = mpsc::channel();
+    let serving = std::thread::spawn({
+        let relay = Arc::clone(&relay);
+        move || {
+            let _ = sent.send(relay.serve(node));
+        }
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(served.try_recv().is_err(), "it stopped waiting unstopped");
+    relay.stop(&handle).unwrap();
+    let served = served
+        .recv_timeout(Duration::from_secs(5))
+        .expect("it kept waiting");
+    assert!(matches!(served, Ok(Served::Stopped)), "{served:?}");
+    serving.join().unwrap();
+    let mut rest = Vec::new();
+    far.read_to_end(&mut rest).unwrap();
+    assert!(rest.is_empty());
+    drop(relay);
+    assert_eq!(fs::read_dir(&relay_dir).unwrap().count(), 0);
+}
+
+/// A relay socket splices its ProxyCommand to the node and passes each
+/// direction's end on. The socket it accepts blocks though its listener
+/// does not, so a ProxyCommand that writes only after a pause still reaches
+/// the node; the node replies once it has read to the ProxyCommand's end,
+/// and the ProxyCommand reads the reply to the node's end.
+#[test]
+fn a_relay_socket_splices_a_late_proxy_command_and_passes_each_end_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay_dir = private_dir(dir.path());
+    let relay = RelaySocket::bind(&relay_dir).unwrap();
+    let path = relay.path().to_path_buf();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let node = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut far, _) = listener.accept().unwrap();
+    let far_end = std::thread::spawn(move || {
+        let mut received = Vec::new();
+        far.read_to_end(&mut received).unwrap();
+        far.write_all(b"reply:").unwrap();
+        far.write_all(&received).unwrap();
+    });
+    let proxy_command = std::thread::spawn(move || {
+        let mut stream = UnixStream::connect(&path).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        stream.write_all(b"request bytes").unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
+        let mut output = Vec::new();
+        stream.read_to_end(&mut output).unwrap();
+        output
+    });
+    let served = within(Duration::from_secs(10), move || relay.serve(node)).unwrap();
+    assert!(matches!(served, Served::Spliced(Ok(()))), "{served:?}");
+    far_end.join().unwrap();
+    assert_eq!(proxy_command.join().unwrap(), b"reply:request bytes");
+    assert_eq!(fs::read_dir(&relay_dir).unwrap().count(), 0);
 }
 
 /// What a session left decides its outcome: a session killed at its
-/// deadline is `PastDeadline` unless its reply had arrived whole, and one
-/// that was not is ssh's own failure or the reply's.
+/// deadline is `PastDeadline` unless its reply had arrived whole; one that
+/// was not is, without a whole reply, its relay socket's own failure if it
+/// had one, then ssh's own failure or the reply's.
 #[test]
 fn a_session_killed_at_its_deadline_is_past_it_unless_its_reply_was_whole() {
     let session = |past_deadline, stdout: &[u8]| Session {
@@ -799,6 +1159,7 @@ fn a_session_killed_at_its_deadline_is_past_it_unless_its_reply_was_whole() {
         stdout: stdout.to_vec(),
         stderr: "Connection closed".to_owned(),
         written: Ok(()),
+        relay: Ok(()),
     };
     let whole = b"{\"Ok\":\"BootstrapRevoked\"}\n";
     let cut = b"{\"Ok\":\"Bootst";
@@ -842,6 +1203,30 @@ fn a_session_killed_at_its_deadline_is_past_it_unless_its_reply_was_whole() {
         ..session(false, b"")
     };
     ran.ran().unwrap();
+    // The relay socket's own failure is the cause of a session without its
+    // outcome, after the deadline; a whole reply still stands.
+    let relay_failed = |past_deadline, stdout: &[u8]| Session {
+        relay: Err(NodeError::Relay(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        ))),
+        ..session(past_deadline, stdout)
+    };
+    assert!(matches!(
+        relay_failed(false, b"").replied(),
+        Err(NodeError::Relay(source)) if source.kind() == std::io::ErrorKind::PermissionDenied
+    ));
+    assert!(matches!(
+        relay_failed(false, b"").ran(),
+        Err(NodeError::Relay(_))
+    ));
+    assert!(matches!(
+        relay_failed(true, b"").replied(),
+        Err(NodeError::PastDeadline)
+    ));
+    assert_eq!(
+        relay_failed(false, whole).replied().unwrap(),
+        Response::BootstrapRevoked
+    );
 }
 
 #[test]
@@ -879,12 +1264,37 @@ fn the_relay_copies_both_ways_until_both_end() {
         stream.write_all(&received).unwrap();
     });
     let stream = crate::node::dial::connect(
-        super::support::lo0(),
+        &M7Egress::for_tests(super::support::lo0()),
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+        CONNECT_TIMEOUT,
     )
     .unwrap();
     let mut output = Vec::new();
     relay(stream, &b"request bytes"[..], &mut output).unwrap();
+    server.join().unwrap();
+    assert_eq!(output, b"reply:request bytes");
+}
+
+/// The ProxyCommand's relay works the same over its Unix socket.
+#[test]
+fn the_relay_copies_both_ways_over_a_unix_socket_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("relay.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut received = Vec::new();
+        stream.read_to_end(&mut received).unwrap();
+        stream.write_all(b"reply:").unwrap();
+        stream.write_all(&received).unwrap();
+    });
+    let mut output = Vec::new();
+    relay(
+        UnixStream::connect(&path).unwrap(),
+        &b"request bytes"[..],
+        &mut output,
+    )
+    .unwrap();
     server.join().unwrap();
     assert_eq!(output, b"reply:request bytes");
 }
