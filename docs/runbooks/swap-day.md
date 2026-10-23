@@ -1,0 +1,126 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+# Runbook: swap day (the 1pMobile SIM goes into the M7)
+
+This runbook is for the operator. It takes the pilot from "the 1pMobile SIM has arrived" to "users connect through it", and lists what must be in place before that day.
+
+The design is §7 (the plan and its cycles), §10.1 and §10.2 (the daemon, preflight, probes, latches), §13.2 (provisioning) and §15.6 (the M7). Every command runs from Terminal.app's own shell in the workspace root, with the signed `mooringctl` (`cargo xtask mooringctl` builds `./target/signed/mooringctl`; below it is written `mooringctl`). `en9` stands for the Mac's interface to the M7, the USB Ethernet adapter: check it with `ifconfig`, it is the one with the address `192.168.1.x`.
+
+What this build does not do yet (M5d): the in-chain probes through `mooring-probe`, so the exit stays `verifying` and never shows `serving`; the node polls, so `status` shows no node report and no usage; the Mac's report to the phone. None of them is needed for traffic to flow: the exit runs, and the direct probe guards the carrier address every 30 s.
+
+## 0. Before the SIM arrives
+
+Do these in order; each is done once. They run over the M7's current line (the old SIM), never over a campus network (design §10.2, P0-2).
+
+### 0.1 The engines
+
+Download the hosted engine build that matches `engines.lock.toml`'s pins (run 39918017282, 2026-10-23, which rebuilt the engines and verified them against the pins) into a new directory, check it, and install it where the daemon runs `mooring-exit` from:
+
+```
+mkdir -p ~/mooring-engines/out
+gh run download 39918017282 -R billlza/mooring -n engines-xray-v26.9.30-sing-box-v1.14.2 -D ~/mooring-engines/out
+cargo xtask engines-verify ~/mooring-engines
+ditto ~/mooring-engines/out ~/Library/Application\ Support/Mooring/engines
+```
+
+`engines-verify` must print `every engine output matches engines.lock.toml`. The daemon checks `engines/darwin-arm64/mooring-exit` against its pin again before every start, and `node apply` checks the node's engines the same way: a file changed after the check never runs.
+
+### 0.2 The deployment
+
+```
+mooringctl exit init --interface en9 --cycle-anchor <YYYY-MM-DD> --flow-cap 1024
+```
+
+The cycle anchor is the day you will buy the Unlimited Data Boost (cycles are 30 days from it). It can be corrected later with `sim set-anchor` (section 2, step 5). The summary it prints shows the SIM thresholds: a warning at 200 GB and a hard stop at 240 GB per cycle, twice of which stays below the 500 GB rolling line (design §7). It records no carrier check: the exit serves nothing until section 2 records one.
+
+### 0.3 lon1
+
+```
+mooringctl node new lon1 --role primary --host-key <lon1's ssh_host_ed25519_key.pub>
+cargo build -p mooring-agent --release --target x86_64-unknown-linux-musl
+mooringctl node adopt lon1 --address <lon1's IPv4> --interface en9 --root-identity ~/.ssh/mooring_m2b_ed25519 --agent target/x86_64-unknown-linux-musl/release/mooring-agent
+```
+
+The host key and the address are in `mooring/ops-local`. **`node adopt` removes your own root key from lon1**: afterwards only Mooring's bootstrap and operations keys log in, and the provider's console is the way in if they are lost. After `Bootstrap`, reboot lon1 from DigitalOcean's console when it asks; if it stops after `Bootstrap`, run it again with `--resume`.
+
+Then the REALITY target, and the first configuration:
+
+```
+mooringctl node target check lon1 <candidate host> --interface en9 --engines ~/mooring-engines/out
+mooringctl node target set lon1 <host> --interface en9 --engines ~/mooring-engines/out --same-asn --not-cdn --evidence <url>
+mooringctl node apply lon1 --interface en9 --engines ~/mooring-engines/out
+```
+
+### 0.4 The users
+
+For each user (at most 5 active):
+
+```
+mooringctl user add --client cfm05
+mooringctl node apply lon1 --interface en9 --engines ~/mooring-engines/out
+mooringctl user agree <user id>
+mooringctl user export <user id> --format singbox --out <file>
+```
+
+`user add` asks for the label at the terminal. Every `user add` is a configuration change, so `node apply` follows it; add every user first and apply once. The export's `--out` must be in a folder Time Machine excludes, outside iCloud Drive, the Desktop and Documents (`delivery.md`). Deliver each file by the channels of `delivery.md`; the user imports it into CFM.
+
+### 0.5 The daemon
+
+```
+cargo xtask app
+cargo xtask agent-install en9
+```
+
+As in `console.md`, section 2. With the deployment present the daemon serves the exit from its start. On the first start of the engine macOS asks once for each node's WireGuard key in the keychain; choose **Always Allow**.
+
+### 0.6 The Mac and the M7
+
+- The Mac is on no other network: Wi-Fi off, no campus Ethernet, no VPN, Tailscale quit, no virtual machine (its `bridge100`), CFM's TUN mode off. The daemon checks this (design §10.2, P0-2) and keeps the exit down, naming the interface, while any of them has an address.
+- The M7's Wi-Fi radio and its Wi-Fi and Ethernet offloads are off, so the SIM meter counts every byte (`router status` shows them; the status marks the meter a lower bound otherwise).
+- The Mac stays on mains power and does not sleep (`pmset -g` shows `sleep 0`).
+
+## 1. Check before the swap
+
+```
+mooringctl status --json
+```
+
+The exit is `down` with `carrier_check_unrecorded`, or `disabled`: both are right before the swap. The router panel shows the M7.
+
+## 2. Swap day
+
+1. **Buy the Boost** in the 1pMobile app. Note the UTC date: it is the cycle anchor.
+2. **Swap the SIM.** Power the M7 off, put the 1pMobile SIM in, power it on. Wait until `mooringctl router status --interface en9` shows a data service.
+3. **Observe the carrier address:**
+   ```
+   mooringctl exit observe --interface en9
+   ```
+   It prints the address lon1's reflector sees, for example `lon1: the reflector sees 31.94.12.34 (no carrier check is recorded yet)`. Run it a few times over some minutes. If the address changes between runs while staying in one range, the carrier pools addresses: use `--pairing unpaired` below; otherwise `paired`.
+4. **Record the carrier check.** Look the address up in the RIPE database (`whois -h whois.ripe.net <address>`) and take the `inetnum` range of EE's public pool that holds it, never the whole ASN. Record it as one or more CIDR prefixes:
+   ```
+   mooringctl exit record-carrier --prefix <cidr> --pairing paired
+   ```
+   Then `exit observe` again: each address must read `inside the recorded carrier prefixes`.
+5. **Correct the cycle anchor**, if the Boost was bought on another day than `exit init` was given:
+   ```
+   mooringctl sim set-anchor <YYYY-MM-DD>
+   mooringctl node apply lon1 --interface en9 --engines ~/mooring-engines/out
+   ```
+   It is a configuration change, so the node is applied again. The SIM meter keeps its bytes per day, so no byte is lost or moved.
+6. **Enable the exit:**
+   ```
+   mooringctl exit enable
+   mooringctl status --json
+   ```
+   Within a few seconds the exit is `starting`, then `verifying` with the egress, the carrier check (the address, inside the prefixes) and `mooring-exit`'s pid. The daemon's log (`~/Library/Logs/Mooring/daemon.log`) says the same, one line per state.
+7. **Ask a user to connect** with the file they imported. lon1's gate opens once the Mac's WireGuard handshake is live.
+
+## 3. When something is wrong
+
+- **`down` with a reason:** the reason says which check failed (design §14). `egress_interface_absent`: the M7 is unplugged or has no address. `foreign_network_attached`: an interface is named; take it off. `direct_probe_failed`: the line or lon1's reflector does not answer. `engine_spawn_failed`: `engines/darwin-arm64/mooring-exit` is missing or does not match its pin (section 0.1). `secrets_unavailable`: the keychain would have had to ask; open a session and allow it.
+- **A violation** (`down` with `violation`): the carrier address left the recorded prefixes, or was a node's address. The engine stopped at once and every node's gate was closed, with a hold. It stays down until you act: find the cause (the M7 switched its WAN to Wi-Fi? the carrier changed its pool?), fix it or record the new prefixes, then
+  ```
+  mooringctl exit retry
+  ```
+  The daemon clears the latch, probes afresh, asks the nodes to clear their holds, and starts the engine if the address passes. A node halted because the egress showed its own address stays halted; resume it only after finding out why.
+- **SIM hard stop** (`down` with `sim_cap_reached`): the cycle's bytes reached 240 GB. The exit stays down until the next cycle starts; nothing is to be done.
+- **Stop the exit** at any time: `mooringctl exit disable` (the daemon stops the engine within 2 s), or stop the daemon: `cargo xtask agent-uninstall`.
