@@ -80,8 +80,8 @@ mod watch;
 pub use deadman::{DeadManCheck, dead_man_pings};
 pub use digest::{BlobLen, MAX_BLOB_BYTES, Sha256Hex};
 pub use error::{
-    AgentError, AgentErrorKind, ApplyStep, HealthCheck, IoOp, RollbackCause, SystemdOp, TargetTool,
-    ValidationTool, ValueError, ValueErrorKind,
+    AgentError, AgentErrorKind, ApplyStep, BootstrapStep, HealthCheck, IoOp, RollbackCause,
+    SystemdOp, TargetTool, ValidationTool, ValueError, ValueErrorKind,
 };
 pub use event::{AgentEvent, AgentEventKind, EventSeq, EventsV1, MAX_EVENTS};
 pub use framing::{
@@ -105,8 +105,9 @@ pub use notice::{
     NtfyPriority, NtfyTag,
 };
 pub use profile::{
-    HostFile, HostProfile, HostProfileVersion, JournaldSetting, SshdDirective, Sysctl,
-    TmpfilesEntry, TmpfilesType, UnattendedUpgrades, ViewerAccount,
+    ENABLED_UNITS, HostAccount, HostFile, HostProfile, HostProfileVersion, JournaldSetting,
+    PACKAGES, SETGID, SearchGrant, SshdDirective, StateDir, Sysctl, TmpfilesEntry, TmpfilesType,
+    UnattendedUpgrades, XRAY_ASSET_DIR,
 };
 pub use report::{
     ExitPhase, MAX_MAC_REPORT_BYTES, MAX_REPORT_ALERTS, MAX_REPORT_USERS, MacAlertKind,
@@ -135,7 +136,7 @@ pub use usage::{
 };
 pub use vps::{
     EXIT_ROUTE_TABLE, EXIT_RULE_PRIORITY, EngineUser, NFT_GATE_SET, NFT_TABLE, NftCounter,
-    VIEWER_ACCOUNT, WG_INTERFACE,
+    STATE_GROUP, VIEWER_ACCOUNT, WATCH_ACCOUNT, WG_INTERFACE,
 };
 pub use watch::{
     ACCOUNTING_INTERVAL_SECS, DISK_LOW_FREE_BYTES, DISK_LOW_FREE_PERCENT, GATE_SET_REREAD_SECS,

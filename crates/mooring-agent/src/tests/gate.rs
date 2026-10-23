@@ -77,7 +77,7 @@ fn a_current_link_not_naming_a_generation_is_an_error() {
 /// `wg show wgexit dump` with the Mac peer's latest handshake.
 fn dump(handshake: &str) -> String {
     format!(
-        "PRIVATE=\tPUBLIC=\t27820\toff\nMAC=\t(none)\t92.40.201.7:4500\t10.66.0.2/32\t{handshake}\t100\t200\t10\n"
+        "PRIVATE=\tPUBLIC=\t27820\toff\nMAC=\t(none)\t198.51.100.7:4500\t10.66.0.2/32\t{handshake}\t100\t200\t10\n"
     )
 }
 

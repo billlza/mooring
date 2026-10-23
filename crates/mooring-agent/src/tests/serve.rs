@@ -18,7 +18,7 @@ use crate::host::Tool;
 use crate::paths::Paths;
 use crate::serve::{Session, answer, serve};
 
-const SSH: &str = "92.40.201.97 51234 176.126.246.203 22";
+const SSH: &str = "198.51.100.97 51234 203.0.113.203 22";
 
 fn session(role: Role) -> Session<'static> {
     Session {
@@ -268,11 +268,7 @@ fn the_mac_report_is_stored_with_the_nodes_time_and_read_back() {
 
 /// The requests this slice does not serve yet; the list shrinks as M4's
 /// slices land, and `NotServedYet` goes when it is empty.
-const NOT_SERVED_YET: [RequestKind; 3] = [
-    RequestKind::Bootstrap,
-    RequestKind::RevokeBootstrap,
-    RequestKind::TargetCheck,
-];
+const NOT_SERVED_YET: [RequestKind; 1] = [RequestKind::TargetCheck];
 
 #[test]
 fn requests_of_later_slices_are_answered_not_served_yet() {
@@ -282,14 +278,9 @@ fn requests_of_later_slices_are_answered_not_served_yet() {
         include_str!("../../../../contract/agent-proto-golden/hello.request.snap");
     assert!(golden_requests.contains("Hello"));
     for kind in NOT_SERVED_YET {
-        let role = if kind == RequestKind::Bootstrap {
-            Role::Bootstrap
-        } else {
-            Role::Ops
-        };
         let request = super::requests::of(kind);
         assert_eq!(
-            ask(&paths, &node, role, frame(&request)),
+            ask(&paths, &node, Role::Ops, frame(&request)),
             Err(AgentError::NotServedYet { request: kind }),
             "{kind:?}"
         );
@@ -308,6 +299,8 @@ fn requests_of_later_slices_are_answered_not_served_yet() {
             RequestKind::PutBlob,
             RequestKind::ActivateAgent,
             RequestKind::Confirm,
+            RequestKind::Bootstrap,
+            RequestKind::RevokeBootstrap,
             RequestKind::Apply,
             RequestKind::TxnStatus,
             RequestKind::Rollback,

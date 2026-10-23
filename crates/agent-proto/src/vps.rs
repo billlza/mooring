@@ -48,6 +48,16 @@ pub(crate) use viewer_account;
 /// and forces `serve-ssh --role viewer` (see [`crate::HostProfile`]).
 pub const VIEWER_ACCOUNT: &str = viewer_account!();
 
+/// The `mooring-watch` unit's account (design §5.2): the only process that
+/// opens the gate.
+pub const WATCH_ACCOUNT: &str = "mooring-watch";
+
+/// The group that reads the node's state (the watch's view and journal,
+/// the holds, the halt marker, the transaction records, the usage files
+/// and the Mac report): the primary group of [`WATCH_ACCOUNT`] and
+/// [`VIEWER_ACCOUNT`], and of no one else.
+pub const STATE_GROUP: &str = "mooring";
+
 closed_enum! {
     /// A named counter in [`NFT_TABLE`].
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -99,6 +109,15 @@ impl EngineUser {
             Self::Hy2 => "mooring-hy2",
         }
     }
+
+    /// The engine's program in a generation, `engines/<name>`, a link into
+    /// the engine store (design §11.2 step 4).
+    pub const fn program(self) -> &'static str {
+        match self {
+            Self::Xray => "xray",
+            Self::Hy2 => "mooring-hy2",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -133,6 +152,11 @@ mod tests {
         let users: Vec<&str> = EngineUser::ALL.iter().map(|user| user.name()).collect();
         assert_eq!(users, ["mooring-xray", "mooring-hy2"]);
         assert_eq!(VIEWER_ACCOUNT, "mooring-view");
-        assert!(!users.contains(&VIEWER_ACCOUNT));
+        assert_eq!((WATCH_ACCOUNT, STATE_GROUP), ("mooring-watch", "mooring"));
+        let mut accounts = users.clone();
+        accounts.extend([VIEWER_ACCOUNT, WATCH_ACCOUNT, STATE_GROUP]);
+        accounts.sort_unstable();
+        accounts.dedup();
+        assert_eq!(accounts.len(), 5);
     }
 }

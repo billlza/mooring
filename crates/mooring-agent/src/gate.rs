@@ -20,7 +20,7 @@ use crate::store::{Lock, read_json, write_json};
 const STATE_MODE: u32 = 0o640;
 
 /// A viewer's emergency stop, waiting for the watch
-/// (`/var/lib/mooring/gate/stop-request.json`): the watch records the
+/// (`/var/lib/mooring/stop/request.json`): the watch records the
 /// Operator hold at `at` or later and closes the gate (design §11.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

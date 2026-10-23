@@ -23,7 +23,7 @@ const ROUTE: &str = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMa
 eth0\t00000000\t01F67EB0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n\
 eth0\t00F67EB0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n";
 
-const IP_ADDR: &str = r#"[{"ifindex":2,"ifname":"eth0","addr_info":[{"family":"inet","local":"176.126.246.203","prefixlen":24,"scope":"global"}]}]"#;
+const IP_ADDR: &str = r#"[{"ifindex":2,"ifname":"eth0","addr_info":[{"family":"inet","local":"203.0.113.203","prefixlen":24,"scope":"global"}]}]"#;
 
 /// `sshd -T` as Debian prints it with the profile in force, plus lines
 /// for directives the profile does not set.
@@ -75,14 +75,14 @@ fn hello_reports_the_agent_the_host_and_the_gate() {
     let info = hello(
         &paths,
         &node(),
-        Some("92.40.201.97 51234 176.126.246.203 22"),
+        Some("198.51.100.97 51234 203.0.113.203 22"),
     )
     .unwrap();
     assert_eq!(info.protocol, PROTOCOL);
     assert_eq!(info.agent_sha, digest_of(&b"the agent binary"[..]).unwrap());
     assert_eq!(info.host_profile_version, HostProfile::CURRENT.version);
     assert_eq!(info.host.uplink, IfName::new("eth0").unwrap());
-    assert_eq!(info.host.vps4, Ipv4Addr::new(176, 126, 246, 203));
+    assert_eq!(info.host.vps4, Ipv4Addr::new(203, 0, 113, 203));
     assert_eq!(
         info.host.ip_local_port_range,
         PortRange::new(32768, 60999).unwrap()
@@ -101,7 +101,7 @@ fn hello_reports_the_agent_the_host_and_the_gate() {
     assert!(info.sshd_mismatches.is_empty());
     assert_eq!(info.halted, None);
     assert!(info.holds.is_empty());
-    assert_eq!(info.client_ip, Ipv4Addr::new(92, 40, 201, 97));
+    assert_eq!(info.client_ip, Ipv4Addr::new(198, 51, 100, 97));
 }
 
 #[test]
@@ -244,8 +244,8 @@ fn the_architecture_is_this_builds() {
 #[test]
 fn the_client_is_the_first_field_of_ssh_connection() {
     assert_eq!(
-        client_ip(Some("92.40.201.97 51234 176.126.246.203 22")),
-        Ok(Ipv4Addr::new(92, 40, 201, 97))
+        client_ip(Some("198.51.100.97 51234 203.0.113.203 22")),
+        Ok(Ipv4Addr::new(198, 51, 100, 97))
     );
     let refused = Err(AgentError::Io {
         op: IoOp::ReadRequest,

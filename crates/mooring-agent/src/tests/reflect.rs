@@ -11,8 +11,8 @@ use crate::reflect::{MAX_CONNECTIONS, line, serve};
 #[test]
 fn the_line_is_the_address_and_a_newline() {
     assert_eq!(
-        line(SocketAddrV4::new(Ipv4Addr::new(92, 40, 201, 97), 5)),
-        "92.40.201.97\n"
+        line(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 97), 5)),
+        "198.51.100.97\n"
     );
     assert_eq!(MAX_CONNECTIONS, 16);
 }

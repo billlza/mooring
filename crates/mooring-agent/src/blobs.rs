@@ -107,7 +107,8 @@ fn receive(
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o640)
+        // The blobs hold the bundle's secrets: root's alone.
+        .mode(0o600)
         .open(temporary)
         .map_err(|error| io_error(IoOp::WriteBlob, &error))?;
     let mut sink = Hashing {

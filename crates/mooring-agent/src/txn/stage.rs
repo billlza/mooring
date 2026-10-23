@@ -6,7 +6,11 @@
 //! read the viewer keys as `mooring-view`, §8.6), holds:
 //! - the six managed files under their file names, each copied from its
 //!   verified blob (`wgexit.conf` 0600, `viewer_authorized_keys` 0644, the
-//!   rest 0640);
+//!   rest 0640), an engine's configuration in the engine's group and
+//!   `watch.json` in the state group, so each is read by its consumer and
+//!   no one else;
+//! - `host/`, the host profile's files (design §8.6), which the swap
+//!   installs;
 //! - `bundle.json`, the header it was installed from (its digest answers
 //!   the next `Apply` with `Unchanged`);
 //! - `engines/xray` and `engines/mooring-hy2`, and `geodata/geoip.dat` and
@@ -24,9 +28,12 @@ use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
-use mooring_agent_proto::{AgentError, BundleHeader, Generation, IoOp, ManagedFile, Sha256Hex};
+use mooring_agent_proto::{
+    AgentError, BundleHeader, Generation, HostAccount, HostProfile, IoOp, ManagedFile, Sha256Hex,
+};
 
 use crate::blobs::digest_of;
+use crate::hostfiles::{self, HOST_DIR};
 use crate::paths::Paths;
 use crate::store::{io_error, write_json};
 
@@ -93,6 +100,17 @@ pub(crate) const fn file_mode(file: ManagedFile) -> u32 {
     }
 }
 
+/// The account whose group reads a managed file; the others are root's
+/// alone (sshd reads the viewer keys as the viewer, by their 0644 mode).
+pub(crate) const fn file_reader(file: ManagedFile) -> Option<HostAccount> {
+    match file {
+        ManagedFile::XrayConfig => Some(HostAccount::Xray),
+        ManagedFile::Hy2Config => Some(HostAccount::Hy2),
+        ManagedFile::WatchConfig => Some(HostAccount::Watch),
+        ManagedFile::WgConf | ManagedFile::Nftables | ManagedFile::ViewerKeys => None,
+    }
+}
+
 /// The store path of an artifact.
 pub(crate) fn store_path(paths: &Paths, artifact: Artifact, sha256: &Sha256Hex) -> PathBuf {
     paths
@@ -131,13 +149,16 @@ pub(crate) fn stage(
             .map_err(|error| stage_error(&error))?;
     }
     for (file, sha256) in header.files.iter() {
-        copy_blob(
-            &paths.blob(sha256),
-            &dir.join(file.file_name()),
-            file_mode(file),
-        )?;
+        let target = dir.join(file.file_name());
+        copy_blob(&paths.blob(sha256), &target, file_mode(file))?;
+        if let Some(reader) = file_reader(file) {
+            let gid = crate::accounts::primary_group(paths, reader)?;
+            std::os::unix::fs::chown(&target, None, Some(gid))
+                .map_err(|error| stage_error(&error))?;
+        }
     }
     write_json(&dir.join(BUNDLE_FILE), header, 0o644)?;
+    hostfiles::stage(&dir.join(HOST_DIR), &HostProfile::CURRENT)?;
     for (artifact, sha256) in artifacts(header) {
         let stored = store_path(paths, artifact, &sha256);
         if !stored_intact(&stored, &sha256)? {

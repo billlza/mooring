@@ -12,7 +12,7 @@ use std::net::Ipv4Addr;
 
 use mooring_agent_proto::{
     AcceptLocal, AgentError, Arch, HelloInfo, HostFact, HostFacts, HostProfile, HostProfileVersion,
-    IfName, IoOp, KernelIdent, KernelRelease, PROTOCOL, PortRange, SshdDirective,
+    IfName, IoOp, KernelIdent, KernelRelease, PROTOCOL, PortRange, Sha256Hex, SshdDirective,
 };
 
 use crate::blobs::digest_of;
@@ -27,11 +27,9 @@ pub(crate) fn hello(
     node: &dyn Node,
     ssh_connection: Option<&str>,
 ) -> Result<HelloInfo, AgentError> {
-    let own =
-        File::open(paths.own_executable()).map_err(|error| io_error(IoOp::ReadBlob, &error))?;
     Ok(HelloInfo {
         protocol: PROTOCOL,
-        agent_sha: digest_of(own).map_err(|error| io_error(IoOp::ReadBlob, &error))?,
+        agent_sha: own_sha(paths)?,
         host_profile_version: installed_profile(paths)?,
         host: host_facts(paths, node)?,
         wgexit_accept_local: accept_local(paths)?,
@@ -40,6 +38,13 @@ pub(crate) fn hello(
         holds: gate::holds(paths)?,
         client_ip: client_ip(ssh_connection)?,
     })
+}
+
+/// The digest of the running agent's own executable.
+pub(crate) fn own_sha(paths: &Paths) -> Result<Sha256Hex, AgentError> {
+    let own =
+        File::open(paths.own_executable()).map_err(|error| io_error(IoOp::ReadBlob, &error))?;
+    digest_of(own).map_err(|error| io_error(IoOp::ReadBlob, &error))
 }
 
 /// The host profile version the agent installed
@@ -176,7 +181,7 @@ pub(crate) fn uplink(paths: &Paths) -> Result<IfName, AgentError> {
 }
 
 /// The one global IPv4 address on `uplink`, from `ip -j -4 addr show dev`.
-fn vps4(node: &dyn Node, uplink: &IfName) -> Result<Ipv4Addr, AgentError> {
+pub(crate) fn vps4(node: &dyn Node, uplink: &IfName) -> Result<Ipv4Addr, AgentError> {
     let field = HostFact::Vps4;
     let stdout = run_ok(
         node,

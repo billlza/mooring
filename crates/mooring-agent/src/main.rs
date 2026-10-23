@@ -2,15 +2,16 @@
 
 //! `mooring-agent`, the VPS side of Mooring (design §5.2, §11): a static
 //! Linux musl binary run by sshd's forced command and by its own systemd
-//! units. Built so far (M4a to M4d):
+//! units. Built so far (M4a to M4e):
 //!
 //! - `serve-ssh --role bootstrap|ops|viewer`: one request on stdin, one
-//!   reply on stdout. `Hello`, the blobs, the gate's requests, `Shutdown`,
-//!   the transactions (`Apply`, `TxnStatus`, `Confirm`, `Rollback`),
-//!   `ActivateAgent`, `Resume`, `Status`, `Usage`, `UsageSeries`, `Events`
-//!   and the Mac report are served; the rest are answered `NotServedYet`
-//!   until their slices land;
-//! - `reflect --listen <vps4> [--port 27900]`, the reflector unit;
+//!   reply on stdout. `Hello`, `Bootstrap`, `RevokeBootstrap`, the blobs,
+//!   the gate's requests, `Shutdown`, the transactions (`Apply`,
+//!   `TxnStatus`, `Confirm`, `Rollback`), `ActivateAgent`, `Resume`,
+//!   `Status`, `Usage`, `UsageSeries`, `Events` and the Mac report are
+//!   served; `TargetCheck` is answered `NotServedYet` until its slice
+//!   lands;
+//! - `reflect [--port 27900]`, the reflector unit, on the uplink's address;
 //! - `halted-check`, the engines' `ExecCondition`: exit 0 when they may
 //!   start, 1 while the node is halted (or its marker cannot be read);
 //! - `gate-close`, the watch's `ExecStopPost`: close the gate;
@@ -27,9 +28,13 @@
 #[cfg(any(target_os = "linux", test))]
 mod accounting;
 #[cfg(any(target_os = "linux", test))]
+mod accounts;
+#[cfg(any(target_os = "linux", test))]
 mod agent;
 #[cfg(any(target_os = "linux", test))]
 mod blobs;
+#[cfg(any(target_os = "linux", test))]
+mod bootstrap;
 #[cfg(any(target_os = "linux", test))]
 mod gate;
 #[cfg(any(target_os = "linux", test))]
@@ -37,7 +42,11 @@ mod hello;
 #[cfg(any(target_os = "linux", test))]
 mod host;
 #[cfg(any(target_os = "linux", test))]
+mod hostfiles;
+#[cfg(any(target_os = "linux", test))]
 mod journal;
+#[cfg(any(target_os = "linux", test))]
+mod layout;
 #[cfg(any(target_os = "linux", test))]
 mod paths;
 #[cfg(any(target_os = "linux", test))]
