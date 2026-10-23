@@ -565,6 +565,7 @@ fn check_go(lock: &Lock) -> Result<(), EnginesError> {
 /// lets Go record the sums the build needs, and writes the change as
 /// `<dir>/xray-reality.patch`.
 pub(crate) fn prepare(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(), EnginesError> {
+    let dir = &absolute(dir)?;
     let lock = Lock::read(&root.join(LOCK))?;
     check_go(&lock)?;
     check_commit(dir, "xray", &lock.xray.commit)?;
@@ -607,8 +608,18 @@ pub(crate) fn prepare(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(
     })
 }
 
+/// `dir` made absolute: each `go build` runs in its source directory, and
+/// a relative output path would land inside it.
+fn absolute(dir: &Path) -> Result<PathBuf, EnginesError> {
+    std::path::absolute(dir).map_err(|source| EnginesError::Read {
+        path: dir.to_path_buf(),
+        source,
+    })
+}
+
 /// `engines-build <dir>`.
 pub(crate) fn build(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(), EnginesError> {
+    let dir = &absolute(dir)?;
     let lock = Lock::read(&root.join(LOCK))?;
     check_go(&lock)?;
     check_commit(dir, "xray", &lock.xray.commit)?;
