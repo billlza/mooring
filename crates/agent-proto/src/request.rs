@@ -116,6 +116,9 @@ pub enum LineRequest {
     TargetCheck {
         /// The target's name.
         host: TargetHost,
+        /// The stored Xray blob that runs `xray tls ping`: a node is checked
+        /// before its first `Apply`, when no generation holds an Xray yet.
+        xray: Sha256Hex,
     },
     /// Close the gate and record a hold. There is no way to open it. The
     /// viewer role may send it for [`GateReason::Operator`] only

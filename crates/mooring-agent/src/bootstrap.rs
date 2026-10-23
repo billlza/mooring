@@ -155,8 +155,8 @@ fn packages(node: &dyn Node) -> Result<(), AgentError> {
 /// The host profile: staged in scratch space, validated (the units that
 /// run a generation's programs wait for the first transaction), installed,
 /// and applied, sshd's reload aside, which comes once the keys are in
-/// place; then every profile unit enabled, and the watch and the reflector
-/// started.
+/// place; then every profile unit enabled, and the watch, the reflector
+/// and the target check's timer started.
 fn host_profile(paths: &Paths, node: &dyn Node) -> Result<(), AgentError> {
     let staged = paths.validate_dir().join("bootstrap-host");
     let _stale = fs::remove_dir_all(&staged);
@@ -178,7 +178,12 @@ fn host_profile(paths: &Paths, node: &dyn Node) -> Result<(), AgentError> {
         node,
         BootstrapStep::Units,
         Tool::Systemctl,
-        &["start", "mooring-watch.service", "mooring-reflect.service"],
+        &[
+            "start",
+            "mooring-watch.service",
+            "mooring-reflect.service",
+            "mooring-target-check.timer",
+        ],
     )
 }
 

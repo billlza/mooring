@@ -2,8 +2,7 @@
 
 //! `serve-ssh --role <role>`, the forced command (design §11.1): one request
 //! on stdin, checked against the role before anything is done, one reply on
-//! stdout. A request this build does not serve yet is answered
-//! `NotServedYet`, never with a guess.
+//! stdout. Every request kind has its handler: the dispatch names each.
 
 use std::io::{BufRead, Write};
 
@@ -15,7 +14,7 @@ use mooring_agent_proto::{
 use crate::host::Node;
 use crate::paths::Paths;
 use crate::store::{read_json, write_json};
-use crate::{accounting, blobs, bootstrap, gate, hello, journal, status, txn};
+use crate::{accounting, blobs, bootstrap, gate, hello, journal, status, target, txn};
 
 /// Who sent the request: the role its key's forced command names, and
 /// `SSH_CONNECTION` as sshd set it.
@@ -154,8 +153,8 @@ fn line_reply(paths: &Paths, node: &dyn Node, session: Session<'_>, line: LineRe
             bootstrap::revoke(paths)?;
             Ok(Response::BootstrapRevoked)
         }
-        LineRequest::TargetCheck { .. } => Err(AgentError::NotServedYet {
-            request: line.kind(),
-        }),
+        LineRequest::TargetCheck { host, xray } => Ok(Response::TargetFacts(Box::new(
+            target::check(paths, node, host, xray)?,
+        ))),
     }
 }

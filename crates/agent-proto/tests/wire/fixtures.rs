@@ -525,6 +525,7 @@ pub(crate) fn line_request(kind: RequestKind) -> LineRequest {
         },
         RequestKind::TargetCheck => LineRequest::TargetCheck {
             host: TargetHost::new("www.example.com").unwrap(),
+            xray: digest(4),
         },
         RequestKind::GateSet => LineRequest::GateSet {
             reason: GateReason::MacDrain,
@@ -734,8 +735,5 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         },
         AgentErrorKind::UnknownRequest => AgentError::UnknownRequest,
         AgentErrorKind::RequestTooLarge => AgentError::RequestTooLarge,
-        AgentErrorKind::NotServedYet => AgentError::NotServedYet {
-            request: RequestKind::Apply,
-        },
     }
 }

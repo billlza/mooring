@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The forced command end to end: one frame in, one reply out, the role
-//! checked before anything is done, and every request either served or
-//! answered `NotServedYet`.
+//! checked before anything is done, and every request served.
 
 use std::io::Cursor;
 
@@ -263,58 +262,6 @@ fn the_mac_report_is_stored_with_the_nodes_time_and_read_back() {
             role: Role::Viewer,
             request: RequestKind::PutMacReport,
         })
-    );
-}
-
-/// The requests this slice does not serve yet; the list shrinks as M4's
-/// slices land, and `NotServedYet` goes when it is empty.
-const NOT_SERVED_YET: [RequestKind; 1] = [RequestKind::TargetCheck];
-
-#[test]
-fn requests_of_later_slices_are_answered_not_served_yet() {
-    let (_dir, paths) = scratch();
-    let node = FakeNode::new(0);
-    let golden_requests =
-        include_str!("../../../../contract/agent-proto-golden/hello.request.snap");
-    assert!(golden_requests.contains("Hello"));
-    for kind in NOT_SERVED_YET {
-        let request = super::requests::of(kind);
-        assert_eq!(
-            ask(&paths, &node, Role::Ops, frame(&request)),
-            Err(AgentError::NotServedYet { request: kind }),
-            "{kind:?}"
-        );
-    }
-    assert!(node.calls().is_empty());
-    let served: Vec<RequestKind> = RequestKind::ALL
-        .iter()
-        .copied()
-        .filter(|kind| !NOT_SERVED_YET.contains(kind))
-        .collect();
-    assert_eq!(
-        served,
-        [
-            RequestKind::Hello,
-            RequestKind::HaveBlobs,
-            RequestKind::PutBlob,
-            RequestKind::ActivateAgent,
-            RequestKind::Confirm,
-            RequestKind::Bootstrap,
-            RequestKind::RevokeBootstrap,
-            RequestKind::Apply,
-            RequestKind::TxnStatus,
-            RequestKind::Rollback,
-            RequestKind::Status,
-            RequestKind::Usage,
-            RequestKind::UsageSeries,
-            RequestKind::Events,
-            RequestKind::GateSet,
-            RequestKind::ClearHold,
-            RequestKind::Shutdown,
-            RequestKind::Resume,
-            RequestKind::PutMacReport,
-            RequestKind::MacReport,
-        ]
     );
 }
 

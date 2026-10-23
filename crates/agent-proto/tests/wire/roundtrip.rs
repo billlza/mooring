@@ -658,7 +658,6 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
         Just(AgentError::MacReportMissing),
         Just(AgentError::UnknownRequest),
         Just(AgentError::RequestTooLarge),
-        select(RequestKind::ALL).prop_map(|request| AgentError::NotServedYet { request }),
     ]
 }
 
@@ -695,7 +694,7 @@ fn line_request() -> impl Strategy<Value = LineRequest> {
         any::<u64>().prop_map(|since| LineRequest::Events {
             since: EventSeq::new(since)
         }),
-        target_host().prop_map(|host| LineRequest::TargetCheck { host }),
+        (target_host(), digest()).prop_map(|(host, xray)| LineRequest::TargetCheck { host, xray }),
         select(GateReason::ALL).prop_map(|reason| LineRequest::GateSet { reason }),
         select(ClearableHold::ALL).prop_map(|hold| LineRequest::ClearHold { hold }),
         select(ShutdownReason::ALL).prop_map(|reason| LineRequest::Shutdown { reason }),

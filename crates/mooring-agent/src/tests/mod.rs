@@ -12,9 +12,9 @@ mod gate;
 mod health;
 mod hello;
 mod reflect;
-mod requests;
 mod serve;
 mod store;
+mod target;
 mod txn;
 mod watch;
 
@@ -130,16 +130,23 @@ impl Node for FakeNode {
 pub(crate) fn ok(stdout: &[u8]) -> ToolOutput {
     ToolOutput {
         success: true,
+        code: Some(0),
         stdout: stdout.to_vec(),
         stderr: Vec::new(),
     }
 }
 
-/// A failed tool run printing `stderr`.
+/// A failed tool run (exit status 1) printing `stderr`.
 pub(crate) fn failed(stderr: &[u8]) -> ToolOutput {
+    exited(1, b"", stderr)
+}
+
+/// A tool run that exited with `code`, printing `stdout` and `stderr`.
+pub(crate) fn exited(code: i32, stdout: &[u8], stderr: &[u8]) -> ToolOutput {
     ToolOutput {
-        success: false,
-        stdout: Vec::new(),
+        success: code == 0,
+        code: Some(code),
+        stdout: stdout.to_vec(),
         stderr: stderr.to_vec(),
     }
 }

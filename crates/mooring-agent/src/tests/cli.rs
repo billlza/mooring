@@ -37,6 +37,7 @@ fn the_commands_parse_as_the_units_and_keys_write_them() {
         Ok(Invocation::Reflect(4000))
     );
     assert_eq!(parse(&args(&["halted-check"])), Ok(Invocation::HaltedCheck));
+    assert_eq!(parse(&args(&["target-watch"])), Ok(Invocation::TargetWatch));
     assert_eq!(parse(&args(&["gate-close"])), Ok(Invocation::GateClose));
     assert_eq!(parse(&args(&["self-test"])), Ok(Invocation::SelfTest));
     assert_eq!(
