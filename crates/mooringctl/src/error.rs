@@ -371,6 +371,27 @@ pub(crate) enum LocalError {
     /// The daemon's control socket stopped accepting connections.
     #[error("the daemon's control socket stopped accepting connections")]
     Acceptor(#[source] io::Error),
+    /// The daemon's log directory could not be created.
+    #[error("cannot create the daemon's log directory {}", path.display())]
+    LogDir {
+        /// The directory.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The daemon's log could not be opened.
+    #[error("cannot open the daemon's log {}", path.display())]
+    LogFile {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// Standard error could not be pointed at the daemon's log.
+    #[error("cannot send the daemon's standard error to its log")]
+    LogRedirect(#[source] MacsysError),
     /// No daemon listens on the control socket.
     #[error("the Mooring daemon is not running (nothing listens on {})", path.display())]
     DaemonNotRunning {

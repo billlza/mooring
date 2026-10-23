@@ -24,19 +24,19 @@ use mooring_daemon_core::control::{
 };
 use mooring_daemon_core::router::netgear::parse_netgear_model_json;
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
-use mooring_model::iface::BsdName;
 use mooring_model::time::UnixTime;
-use mooring_store::{STATE_FILE, STATUS_SNAPSHOT_FILE};
+use mooring_store::{ROUTER_PIN_FILE, STATE_FILE, STATUS_SNAPSHOT_FILE};
 use tempfile::TempDir;
 
 use super::support::FakeParent;
 use super::support::{FIXTURE, Harness, NOW};
 use crate::cli::Cli;
 use crate::daemon::hub::Hub;
+use crate::daemon::log::LOG_FILE;
 use crate::daemon::serve::{End, Limits, accept, serve};
 use crate::daemon::{
-    Control, LoopState, Polled, RunPaths, Waited, after_poll, poll_once, start, unavailable_reason,
-    wait_for_next_poll,
+    Control, LoopState, PollOutcome, Polled, RunPaths, Waited, after_poll, poll_once, poll_router,
+    start, unavailable_reason, wait_for_next_poll,
 };
 use crate::error::{CommandError, EXIT_LOCAL, LocalError};
 use crate::router::error::{Missing, RouterError, UnreachableCause};
@@ -432,13 +432,12 @@ fn a_deployment_that_appears_ends_the_router_console_at_its_next_poll() {
     let mut harness = harness();
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
-    let interface = BsdName::parse("lo0").unwrap();
     let hub = Hub::default();
     let mut state = LoopState::default();
     let mut log = Vec::new();
     assert_eq!(
         harness
-            .with_env(|env| poll_once(env, &support, Some(&interface), &hub, &mut log, &mut state))
+            .with_env(|env| poll_once(env, &support, &hub, &mut log, &mut state))
             .unwrap(),
         Polled::Published
     );
@@ -446,11 +445,49 @@ fn a_deployment_that_appears_ends_the_router_console_at_its_next_poll() {
     fs::write(support.join(STATE_FILE), b"{}").unwrap();
     assert_eq!(
         harness
-            .with_env(|env| poll_once(env, &support, Some(&interface), &hub, &mut log, &mut state))
+            .with_env(|env| poll_once(env, &support, &hub, &mut log, &mut state))
             .unwrap(),
         Polled::DeploymentAppeared
     );
     assert_eq!(hub.latest().unwrap().unwrap().seq, 1);
+}
+
+/// The daemon polls on the interface the router pin records, read at each
+/// poll: without a pin, and with a version-1 pin, which records none, the
+/// panel says the adapter is not set up and the log names what is missing;
+/// once `router pin --interface` records it, the next poll reads the M7.
+#[test]
+fn the_daemon_polls_on_the_interface_the_pin_records() {
+    let mut harness = harness();
+    let support = harness.support_dir();
+    let poll = |harness: &mut Harness| harness.with_env(|env| poll_router(env, &support));
+    let missing = |outcome: PollOutcome| match outcome {
+        Err(CommandError::Router(RouterError::NotConfigured { missing })) => missing,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(missing(poll(&mut harness)), Missing::Pin);
+    fs::create_dir_all(&support).unwrap();
+    fs::write(
+        support.join(ROUTER_PIN_FILE),
+        "{\"version\": 1, \"gateway_lladdr\": \"02:00:5e:10:20:30\", \"pinned_at\": 1791900000}\n",
+    )
+    .unwrap();
+    assert_eq!(missing(poll(&mut harness)), Missing::Interface);
+    assert_eq!(
+        unavailable_reason(&CommandError::Router(RouterError::NotConfigured {
+            missing: Missing::Interface
+        })),
+        RouterUnavailableReason::NotConfigured
+    );
+    // Pinned with the interface: the poll goes to the M7 on it, and only
+    // the password is missing now.
+    let outcome = harness.run(&["router", "pin", "--interface", "lo0"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        harness.console.asked.is_empty(),
+        "the identity did not change"
+    );
+    assert_eq!(missing(poll(&mut harness)), Missing::Password);
 }
 
 /// The wait for the next poll ends early when the acceptor ends, or when
@@ -500,7 +537,7 @@ fn failures_map_to_panel_reasons() {
     );
     assert_eq!(
         Missing::Interface.to_string(),
-        "the daemon was given no interface to the M7 (mooringctl daemon --router-interface)"
+        "the router pin records no interface to the M7 (mooringctl router pin --interface <bsd>)"
     );
 }
 
@@ -1367,15 +1404,29 @@ fn status_without_a_daemon_says_it_is_not_running() {
 }
 
 /// A deployment whose state cannot be read stops the daemon, through the
-/// command line: it never serves an exit it cannot read.
+/// command line: it never serves an exit it cannot read. The command opens
+/// its log in the home it is given first, and points stderr at it (here a
+/// stand-in that counts); its last error still reaches `err`, which in the
+/// binary is that log.
 #[test]
 fn the_daemon_stops_on_a_state_it_cannot_read() {
     let mut harness = harness();
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
     fs::write(support.join(STATE_FILE), b"{}").unwrap();
-    let outcome =
-        Running::start(move || harness.run(&["daemon", "--router-interface", "lo0"])).result();
+    let log = harness
+        .home
+        .path()
+        .join("Library")
+        .join("Logs")
+        .join("Mooring")
+        .join(LOG_FILE);
+    // Read before the harness, and its home, go with the thread.
+    let (outcome, redirected, log_mode) = Running::start(move || {
+        let outcome = harness.run(&["daemon"]);
+        (outcome, harness.redirected.get(), mode(&log))
+    })
+    .result();
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert!(
         outcome
@@ -1384,4 +1435,6 @@ fn the_daemon_stops_on_a_state_it_cannot_read() {
         "{}",
         outcome.stderr
     );
+    assert_eq!(redirected, 1);
+    assert_eq!(log_mode, 0o600);
 }

@@ -12,9 +12,10 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 use mooring_macsys::MacsysError;
+use mooring_model::iface::BsdName;
 use mooring_model::iface::MacAddr;
 use mooring_model::time::UnixTime;
-use mooring_store::{ROUTER_PIN_FILE, RouterPin, read_router_pin};
+use mooring_store::{ROUTER_PIN_FILE, RouterPin, StoredPin, read_router_pin};
 
 use super::stub::{Received, Stub};
 use super::support::{
@@ -45,15 +46,16 @@ fn one_empty_connection() -> [Received; 1] {
     [Received(Vec::new())]
 }
 
-fn pinned(harness: &Harness) -> Option<RouterPin> {
+fn pinned(harness: &Harness) -> Option<StoredPin> {
     read_router_pin(&harness.support_dir()).unwrap()
 }
 
-fn pin_of(lladdr: [u8; 6], at: u64) -> RouterPin {
-    RouterPin {
+fn pin_of(lladdr: [u8; 6], at: u64) -> StoredPin {
+    StoredPin::Current(RouterPin {
         gateway_lladdr: MacAddr::from_bytes(lladdr).unwrap(),
+        interface: BsdName::parse("lo0").unwrap(),
         pinned_at: UnixTime::from_secs(at),
-    }
+    })
 }
 
 #[test]
@@ -105,7 +107,7 @@ fn pin_requires_confirmation_and_replace() {
         0o700
     );
     assert!(outcome.stdout.ends_with(&format!(
-        "pinned as the M7's identity in {}\n",
+        "pinned as the M7's identity, on lo0, in {}\n",
         file.display()
     )));
     // A different gateway is refused without --replace...
@@ -343,7 +345,7 @@ fn an_address_found_after_a_refused_warm_up_is_pinned() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "interface lo0: gateway 127.0.0.1, link-layer address 02:00:5e:10:20:30\npinned as the M7's identity in {}\n",
+            "interface lo0: gateway 127.0.0.1, link-layer address 02:00:5e:10:20:30\npinned as the M7's identity, on lo0, in {}\n",
             harness.support_dir().join(ROUTER_PIN_FILE).display()
         )
     );
@@ -408,4 +410,54 @@ fn the_privacy_placeholder_is_never_pinned() {
     assert_eq!(harness.link.neighbour_calls.get(), 2);
     assert_eq!(pinned(&harness), None);
     assert!(!harness.support_dir().exists(), "nothing was created");
+}
+
+/// The same address pinned without the interface (a version-1 pin) or with
+/// another one gets the interface recorded, without asking: the identity
+/// does not change. Another address still needs `--replace`.
+#[test]
+fn the_interface_is_recorded_with_the_same_address_without_asking() {
+    let mut harness = Harness::new(9);
+    let dir = harness.support_dir();
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(ROUTER_PIN_FILE);
+    fs::write(
+        &file,
+        "{\"version\": 1, \"gateway_lladdr\": \"02:00:5e:10:20:30\", \"pinned_at\": 1791900000}\n",
+    )
+    .unwrap();
+    assert_eq!(pinned(&harness).unwrap().interface(), None);
+    let outcome = harness.run(PIN);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        outcome.stdout.ends_with(&format!(
+            "already pinned; the interface lo0 is recorded with it in {}\n",
+            file.display()
+        )),
+        "{}",
+        outcome.stdout
+    );
+    assert!(harness.console.asked.is_empty());
+    assert_eq!(pinned(&harness), Some(pin_of(PINNED, NOW)));
+    // Recorded on another interface: rewritten for this one, unasked.
+    harness.pin(PINNED);
+    let other = RouterPin {
+        gateway_lladdr: MacAddr::from_bytes(PINNED).unwrap(),
+        interface: BsdName::parse("en9").unwrap(),
+        pinned_at: UnixTime::from_secs(NOW - 60),
+    };
+    mooring_store::write_router_pin(&dir, &other).unwrap();
+    let outcome = harness.run(PIN);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(harness.console.asked.is_empty());
+    assert_eq!(pinned(&harness), Some(pin_of(PINNED, NOW)));
+    // The same address on the same interface is left as it is.
+    let before = fs::read(&file).unwrap();
+    let outcome = harness.run(PIN);
+    assert!(
+        outcome
+            .stdout
+            .ends_with("already pinned; nothing was written\n")
+    );
+    assert_eq!(fs::read(&file).unwrap(), before);
 }

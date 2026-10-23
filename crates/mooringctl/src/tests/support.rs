@@ -647,6 +647,9 @@ pub(crate) struct Harness {
     /// The direct probes' answers, in order, and the reflectors asked.
     pub(crate) probes: RefCell<VecDeque<Result<Ipv4Addr, ProbeFailure>>>,
     pub(crate) probed: RefCell<Vec<(InterfaceIndex, SocketAddrV4)>>,
+    /// How many times the daemon pointed standard error at its log; the
+    /// test process's own stderr is never touched.
+    pub(crate) redirected: Cell<u32>,
 }
 
 impl Harness {
@@ -672,6 +675,7 @@ impl Harness {
             readings: std::sync::Arc::default(),
             probes: RefCell::new(VecDeque::new()),
             probed: RefCell::new(Vec::new()),
+            redirected: Cell::new(0),
         }
     }
 
@@ -703,6 +707,7 @@ impl Harness {
             &dir,
             &RouterPin {
                 gateway_lladdr: MacAddr::from_bytes(lladdr).unwrap(),
+                interface: BsdName::parse("lo0").unwrap(),
                 pinned_at: UnixTime::from_secs(NOW - 60),
             },
         )
@@ -759,6 +764,11 @@ impl Harness {
                     kind: Some(std::io::ErrorKind::ConnectionRefused),
                 }))
         };
+        let redirected = &self.redirected;
+        let redirect = move |_: std::os::fd::BorrowedFd<'_>| {
+            redirected.set(redirected.get() + 1);
+            Ok(())
+        };
         let mut env = Env {
             router: RouterEnv {
                 link: &self.link,
@@ -778,6 +788,7 @@ impl Harness {
             power: &power,
             meter_reader: &meter_reader,
             probe: &probe,
+            redirect_stderr: &redirect,
         };
         work(&mut env)
     }

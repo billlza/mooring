@@ -11,8 +11,6 @@ use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
 use mooring_model::iface::{InterfaceIndex, MacAddr};
-use mooring_model::time::UnixTime;
-use mooring_store::RouterPin;
 
 use super::stub::{Received, Reply, Stub, json, response};
 use super::support::{
@@ -64,11 +62,8 @@ pub(crate) fn verified(port: u16) -> VerifiedIdentity {
         index: lo0(),
         gateway: Ipv4Addr::LOCALHOST,
     };
-    let pin = RouterPin {
-        gateway_lladdr: MacAddr::from_bytes(PINNED).unwrap(),
-        pinned_at: UnixTime::from_secs(0),
-    };
-    check_identity(&FakeLink::pinned(), &attachment, &pin, port).unwrap()
+    let pinned = MacAddr::from_bytes(PINNED).unwrap();
+    check_identity(&FakeLink::pinned(), &attachment, pinned, port).unwrap()
 }
 
 #[test]

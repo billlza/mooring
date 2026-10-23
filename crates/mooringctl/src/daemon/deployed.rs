@@ -36,7 +36,7 @@ use mooring_model::{Deployment, NodeId};
 use mooring_store::{Store, read_latch, read_sim_meter};
 
 use super::{
-    Control, LoopState, POLL_INTERVAL, RunPaths, Waited, chain, poll_router, publish,
+    Control, LoopState, POLL_INTERVAL, RunPaths, Waited, chain, poll_router_on, publish,
     router_after_poll, say, wait_for_next_poll,
 };
 use crate::app::Env;
@@ -516,7 +516,7 @@ fn poll_m7(
     let polled_at = (env.clock)()?;
     match egress {
         Some(egress) => {
-            let outcome = poll_router(env, support_dir, Some(egress));
+            let outcome = poll_router_on(env, support_dir, egress);
             let now = (env.clock)()?;
             router_after_poll(log, previous, failure, polled_at, &outcome, now)
         }

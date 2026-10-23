@@ -28,10 +28,10 @@ ditto ~/mooring-engines/out ~/Library/Application\ Support/Mooring/engines
 
 ```
 cargo xtask app
-cargo xtask agent-install en9
+open target/app/Mooring.app
 ```
 
-As in `console.md`, section 2. `cargo xtask app` also builds `./target/signed/mooringctl`, the same bytes as the app's copy: use that one for every command below, so that the keys it makes in the keychain are the daemon's to read without asking. Until a deployment exists the daemon serves the router console; at its first poll after `exit init` it serves the exit instead. Install this build before `exit init`: a daemon built before the exit runtime stops when it finds a deployment.
+Then **Start the Daemon at Login** from Mooring.app's menu, as in `console.md`, section 2 (on a Mac that ran the development agent before, stop that first, as that section says). `cargo xtask app` also builds `./target/signed/mooringctl`, the same bytes as the app's copy: use that one for every command below, so that the keys it makes in the keychain are the daemon's to read without asking. Until a deployment exists the daemon serves the router console; at its first poll after `exit init` it serves the exit instead. Install this build before `exit init`: a daemon built before the exit runtime stops when it finds a deployment.
 
 ### 0.3 The deployment
 
@@ -86,7 +86,7 @@ mooringctl user export <user id> --format singbox --out <file>
 - The Mac is on no other network: Wi-Fi off, no campus Ethernet, no VPN, Tailscale quit, no virtual machine (its `bridge100`), CFM's TUN mode off. The daemon checks this (design §10.2, P0-2) and keeps the exit down, naming the interface, while any of them has an address.
 - The M7's Wi-Fi radio and its Wi-Fi and Ethernet offloads are off, so the SIM meter counts every byte (`router status` shows them; the status marks the meter a lower bound otherwise).
 - The Mac stays on mains power and does not sleep (`pmset -g` shows `sleep 0`).
-- The Mac does not restart or log out by itself: automatic installation of macOS updates is off (System Settings, General, Software Update). The daemon is a LaunchAgent of your session, so after a restart or a logout it is not running until `cargo xtask agent-install en9` again (section 3).
+- The Mac does not restart or log out by itself: automatic installation of macOS updates is off (System Settings, General, Software Update). The daemon is a login item of your session: after a restart it runs again once you log in (FileVault needs that login), and it does not run while you are logged out.
 - Whatever the Mac itself downloads also goes over the SIM and counts against its cycle: keep iCloud Drive and Photos sync and large downloads off this Mac.
 
 ### 0.7 Test the whole chain on the current SIM
@@ -156,5 +156,5 @@ The exit is `disabled` (it starts so, and section 0.7 ends so), which is right b
   ```
   The daemon clears the latch, probes afresh, asks the nodes to clear their holds, and starts the engine if the address passes. A node halted because the egress showed its own address stays halted; resume it only after finding out why.
 - **SIM hard stop** (`down` with `sim_cap_reached`): the cycle's bytes reached 240 GB. The exit stays down until the next cycle starts; nothing is to be done.
-- **`the Mooring daemon is not running`** (from any `mooringctl` command that asks it): the Mac restarted or you logged out. Log in and run `cargo xtask agent-install en9`; the daemon resumes the exit as it was, enabled or not.
-- **Stop the exit** at any time: `mooringctl exit disable` (the daemon stops the engine within 2 s), or stop the daemon: `cargo xtask agent-uninstall`.
+- **`the Mooring daemon is not running`** (from any `mooringctl` command that asks it): you are logged out, or the daemon was stopped from the menu. Log in, or **Start the Daemon at Login** from Mooring.app's menu; the daemon resumes the exit as it was, enabled or not.
+- **Stop the exit** at any time: `mooringctl exit disable` (the daemon stops the engine within 2 s), or stop the daemon: **Stop the Daemon** in Mooring.app's menu.

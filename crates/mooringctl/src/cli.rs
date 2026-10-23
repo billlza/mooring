@@ -72,14 +72,10 @@ pub(crate) enum Command {
         /// The node's SSH port.
         port: u16,
     },
-    /// Run the daemon (launchd starts it): poll the M7 and serve the
-    /// console's status on the control socket.
-    Daemon {
-        /// The Mac's interface to the M7, polled while no deployment
-        /// exists (a BSD name, for example en9).
-        #[arg(long, value_name = "BSD_NAME")]
-        router_interface: Option<BsdName>,
-    },
+    /// Run the daemon (launchd starts it): poll the M7 on the interface
+    /// the router pin records, and serve the console's status on the
+    /// control socket. It logs to ~/Library/Logs/Mooring/daemon.log.
+    Daemon,
 }
 
 /// A user command.

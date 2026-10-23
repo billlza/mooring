@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The kernel's boot time and the daemon's engine processes (design §10.1):
-//! when the kernel booted (`kern.boottime`), which tells the SIM meter a
-//! reading of this boot from one of an earlier boot; and a process's
+//! The kernel's boot time and the daemon's processes (design §10.1,
+//! §15.10): when the kernel booted (`kern.boottime`), which tells the SIM
+//! meter a reading of this boot from one of an earlier boot; a process's
 //! executable (`proc_pidpath`) and its end (`kill` with `SIGKILL`), with
 //! which the daemon stops an engine an earlier daemon left, and only when
-//! it is that engine.
+//! it is that engine; and the daemon's own standard error pointed at its
+//! log (`dup2`).
 
 use std::ffi::OsStr;
 use std::mem::size_of;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::ptr;
@@ -92,5 +94,30 @@ pub fn kill_process(pid: u32) -> Result<(), MacsysError> {
     match last_errno() {
         libc::ESRCH => Ok(()),
         errno => Err(failed(errno)),
+    }
+}
+
+/// Points this process's standard error at `file`: from then on whatever
+/// the process writes to stderr, a panic's message too, goes to it. The
+/// daemon does this with its log, as launchd gives an agent registered with
+/// `SMAppService` no log of its own (design §5.1, §15.10).
+pub fn redirect_stderr(file: BorrowedFd<'_>) -> Result<(), MacsysError> {
+    loop {
+        // SAFETY: `dup2` has no memory preconditions; `file` is open for
+        // the borrow, and descriptor 2 becomes a duplicate of it, which the
+        // process keeps after the borrow ends.
+        let status = unsafe { libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) };
+        if status == libc::STDERR_FILENO {
+            return Ok(());
+        }
+        match last_errno() {
+            libc::EINTR => {}
+            errno => {
+                return Err(MacsysError::Process {
+                    call: ProcessCall::Dup2,
+                    errno,
+                });
+            }
+        }
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Command-line parsing: exactly one command name, and its one argument for
-//! the command that takes one (`agent-install <bsd>`).
+//! the commands that take one (`engines-… <dir>`).
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -18,8 +18,6 @@ pub(crate) enum Command {
     Mooringctl,
     Fieldkit,
     App,
-    AgentInstall,
-    AgentUninstall,
     EnginesPins,
     EnginesPrepare,
     EnginesBuild,
@@ -36,7 +34,7 @@ pub(crate) struct Invocation {
 }
 
 impl Command {
-    const ALL: [Self; 18] = [
+    const ALL: [Self; 16] = [
         Self::Ci,
         Self::GraphCheck,
         Self::KindsCoverage,
@@ -47,8 +45,6 @@ impl Command {
         Self::Mooringctl,
         Self::Fieldkit,
         Self::App,
-        Self::AgentInstall,
-        Self::AgentUninstall,
         Self::EnginesPins,
         Self::EnginesPrepare,
         Self::EnginesBuild,
@@ -69,8 +65,6 @@ impl Command {
             Self::Mooringctl => "mooringctl",
             Self::Fieldkit => "fieldkit",
             Self::App => "app",
-            Self::AgentInstall => "agent-install",
-            Self::AgentUninstall => "agent-uninstall",
             Self::EnginesPins => "engines-pins",
             Self::EnginesPrepare => "engines-prepare",
             Self::EnginesBuild => "engines-build",
@@ -83,7 +77,6 @@ impl Command {
     /// The name of the one argument the command takes, if it takes one.
     pub(crate) const fn argument(self) -> Option<&'static str> {
         match self {
-            Self::AgentInstall => Some("<bsd>"),
             Self::EnginesPrepare
             | Self::EnginesBuild
             | Self::EnginesVerify
@@ -99,8 +92,7 @@ impl Command {
             | Self::Clean
             | Self::Mooringctl
             | Self::Fieldkit
-            | Self::App
-            | Self::AgentUninstall => None,
+            | Self::App => None,
         }
     }
 
@@ -126,13 +118,7 @@ impl Command {
                 "build fieldkit and sign a copy, <target>/signed/fieldkit, with its reverse-DNS identifier (macOS only)"
             }
             Self::App => {
-                "build Mooring.app at <target>/app with the signed mooringctl inside, Swift tests and warnings gated (macOS only)"
-            }
-            Self::AgentInstall => {
-                "run the daemon as a LaunchAgent polling the M7 on <bsd> until logout (macOS only)"
-            }
-            Self::AgentUninstall => {
-                "stop the daemon's LaunchAgent and remove its plist (macOS only)"
+                "build Mooring.app at <target>/app with the signed mooringctl and the daemon's plist inside, Swift tests and warnings gated, and restart a registered daemon on it (macOS only)"
             }
             Self::EnginesPins => {
                 "print engines.lock.toml's pins as KEY=value lines for the hosted build"
@@ -232,25 +218,25 @@ mod tests {
         }
     }
 
-    /// `agent-install` takes exactly one argument, the interface; every
+    /// The engines commands take exactly one argument, a directory; every
     /// other command takes none.
     #[test]
-    fn agent_install_takes_its_interface() {
+    fn the_engines_commands_take_their_directory() {
         let invocation =
-            Command::parse(["agent-install", "en9"].into_iter().map(OsString::from)).unwrap();
-        assert_eq!(invocation.command, Command::AgentInstall);
-        assert_eq!(invocation.argument.as_deref(), Some("en9"));
+            Command::parse(["engines-verify", "out"].into_iter().map(OsString::from)).unwrap();
+        assert_eq!(invocation.command, Command::EnginesVerify);
+        assert_eq!(invocation.argument.as_deref(), Some("out"));
         assert!(matches!(
-            parse(&["agent-install"]),
+            parse(&["engines-verify"]),
             Err(UsageError::MissingArgument {
-                command: Command::AgentInstall,
-                argument: "<bsd>"
+                command: Command::EnginesVerify,
+                argument: "<dir>"
             })
         ));
         assert!(matches!(
-            parse(&["agent-install", "en9", "en0"]),
+            parse(&["engines-verify", "out", "more"]),
             Err(UsageError::UnexpectedArgument {
-                command: Command::AgentInstall,
+                command: Command::EnginesVerify,
                 ..
             })
         ));
@@ -261,19 +247,10 @@ mod tests {
                 ..
             })
         ));
-        let usage = {
-            let mut text = Vec::new();
-            super::write_usage(&mut text).unwrap();
-            String::from_utf8(text).unwrap()
-        };
-        assert!(
-            usage.contains("\n  agent-install <bsd>   run the daemon"),
-            "{usage}"
-        );
-        assert!(
-            usage.contains("\n  agent-uninstall       stop the daemon"),
-            "{usage}"
-        );
+        assert!(matches!(
+            parse(&["agent-install", "en9"]),
+            Err(UsageError::UnknownCommand(name)) if name == "agent-install"
+        ));
     }
 
     /// `mooringctl`'s own error and the documents tell the operator to run

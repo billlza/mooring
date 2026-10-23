@@ -72,6 +72,9 @@ pub(crate) struct Env<'a> {
         std::net::SocketAddrV4,
     )
         -> Result<std::net::Ipv4Addr, crate::runtime::probe::ProbeFailure>,
+    /// Points standard error at the daemon's log
+    /// (`mooring_macsys::redirect_stderr` in the binary).
+    pub(crate) redirect_stderr: &'a crate::daemon::log::RedirectStderr<'a>,
 }
 
 /// The system clock, in whole seconds since the epoch.
@@ -226,9 +229,7 @@ pub(crate) fn run(
             address,
             port,
         } => crate::node::dial::dial_bound(env, &interface, address, port),
-        Command::Daemon { router_interface } => {
-            crate::daemon::run(env, err, router_interface.as_ref())
-        }
+        Command::Daemon => daemon(env),
     };
     let Err(error) = result else {
         return 0;
@@ -285,6 +286,19 @@ fn execute(
     }
 }
 
+/// `daemon`: opens its log, which standard error then points at too, and
+/// runs it there; its last error, which [`run`] prints to `err`, lands in
+/// the log as well.
+fn daemon(env: &mut Env<'_>) -> Result<(), CommandError> {
+    let dir = crate::daemon::log::log_dir(env.home.clone())?;
+    let mut log = crate::daemon::log::DaemonLog::open(
+        &dir,
+        crate::daemon::log::ROTATE_AT_BYTES,
+        env.redirect_stderr,
+    )?;
+    crate::daemon::run(env, &mut log)
+}
+
 fn pin(
     env: &mut Env<'_>,
     out: &mut dyn Write,
@@ -304,12 +318,16 @@ fn pin(
     .map_err(output)?;
     let existing =
         read_router_pin(&dir).map_err(|error| CommandError::Local(LocalError::Store(error)))?;
-    if decide_pin(existing.as_ref(), candidate.lladdr, replace)? == PinDecision::AlreadyPinned {
-        writeln!(out, "already pinned; nothing was written").map_err(output)?;
-        return Ok(());
-    }
-    if !yes {
-        match env
+    let decision = decide_pin(existing.as_ref(), candidate.lladdr, interface, replace)?;
+    match decision {
+        PinDecision::AlreadyPinned => {
+            writeln!(out, "already pinned; nothing was written").map_err(output)?;
+            return Ok(());
+        }
+        // The identity does not change, so there is nothing to confirm.
+        PinDecision::RecordInterface => {}
+        PinDecision::Write if yes => {}
+        PinDecision::Write => match env
             .console
             .confirm("Record this link-layer address as the M7's identity?")?
         {
@@ -318,20 +336,33 @@ fn pin(
             Answer::NoTerminal => {
                 return Err(LocalError::NotConfirmed(Unconfirmed::NoTerminal).into());
             }
-        }
+        },
     }
     paths::create_support_dir(&dir)?;
     let pin = RouterPin {
         gateway_lladdr: candidate.lladdr,
+        interface: interface.clone(),
         pinned_at: (env.clock)()?,
     };
     write_router_pin(&dir, &pin).map_err(|error| CommandError::Local(LocalError::Store(error)))?;
-    writeln!(
-        out,
-        "pinned as the M7's identity in {}",
-        dir.join(ROUTER_PIN_FILE).display()
-    )
-    .map_err(output)
+    let path = dir.join(ROUTER_PIN_FILE);
+    if decision == PinDecision::RecordInterface {
+        writeln!(
+            out,
+            "already pinned; the interface {} is recorded with it in {}",
+            interface.as_str(),
+            path.display()
+        )
+        .map_err(output)
+    } else {
+        writeln!(
+            out,
+            "pinned as the M7's identity, on {}, in {}",
+            interface.as_str(),
+            path.display()
+        )
+        .map_err(output)
+    }
 }
 
 fn set_password(env: &mut Env<'_>, out: &mut dyn Write, stdin: bool) -> Result<(), CommandError> {

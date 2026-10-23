@@ -2,15 +2,23 @@
 
 //! The boot time and the process calls, live: the boot lies between the
 //! epoch and now, this test's own executable is its path, an engine
-//! stand-in is ended with `SIGKILL`, and a process that is gone has no
-//! path and is no error to end.
+//! stand-in is ended with `SIGKILL`, a process that is gone has no path and
+//! is no error to end, and a process's stderr pointed at a file writes
+//! there (in a child, so this test's own stderr is left alone).
 
+use std::fs::{self, File};
+use std::io::Write;
+use std::os::fd::AsFd;
 use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{MacsysError, MacsysErrorKind, ProcessCall};
-use crate::process::{boot_time, kill_process, process_path};
+use crate::process::{boot_time, kill_process, process_path, redirect_stderr};
+
+/// The environment variable that makes [`stderr_child`] redirect, naming
+/// the file.
+const REDIRECT_TO: &str = "MACSYS_TEST_REDIRECT_STDERR_TO";
 
 #[test]
 fn the_boot_time_lies_before_now() {
@@ -67,4 +75,41 @@ fn pids_outside_the_kernel_range_are_refused() {
         MacsysError::BootTimeInvalid.kind(),
         MacsysErrorKind::BootTimeInvalid
     );
+}
+
+/// Run as a child by [`stderr_goes_to_the_file_after_a_redirect`]: points
+/// its stderr at the file the environment names and writes two lines there,
+/// one through `eprintln!` and one through a panic's message. Alone (no
+/// such variable) it does nothing.
+#[test]
+fn stderr_child() {
+    let Some(path) = std::env::var_os(REDIRECT_TO) else {
+        return;
+    };
+    let file = File::create(path).unwrap();
+    redirect_stderr(file.as_fd()).unwrap();
+    drop(file);
+    eprintln!("written after the redirect");
+    std::io::stderr().flush().unwrap();
+    panic!("a panic's message");
+}
+
+#[test]
+fn stderr_goes_to_the_file_after_a_redirect() {
+    let dir = std::env::temp_dir().join(format!("macsys-stderr-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("stderr.log");
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "tests::process::stderr_child", "--nocapture"])
+        .env(REDIRECT_TO, &path)
+        .status()
+        .unwrap();
+    assert!(!status.success(), "the child's test panicked");
+    let written = fs::read_to_string(&path).unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        written.contains("written after the redirect\n"),
+        "{written}"
+    );
+    assert!(written.contains("a panic's message"), "{written}");
 }

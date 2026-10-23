@@ -60,13 +60,13 @@ pub(crate) fn init(
     {
         return Err(LocalError::DeploymentExists { path: state_path }.into());
     }
-    let pinned = router::configured_pin(&dir)?;
+    let pinned = router::pinned_address(&dir)?;
     let candidate = router::pin_candidate(&env.router, interface)?;
-    if candidate.lladdr != pinned.gateway_lladdr {
+    if candidate.lladdr != pinned {
         return Err(LocalError::EgressNotTheRouter {
             interface: interface.clone(),
             found: candidate.lladdr,
-            pinned: pinned.gateway_lladdr,
+            pinned,
         }
         .into());
     }
@@ -82,14 +82,14 @@ pub(crate) fn init(
     })?;
     let init = DeploymentInit::pilot(
         InterfaceSelector::GatewayLinkAddr {
-            gw_lladdr: pinned.gateway_lladdr,
+            gw_lladdr: pinned,
             subnet,
         },
         cycle_anchor,
         flow_cap,
     )
     .map_err(LocalError::Pilot)?;
-    describe(out, interface, pinned.gateway_lladdr, subnet, &init)?;
+    describe(out, interface, pinned, subnet, &init)?;
     confirm(env, yes, "Create the deployment with these values?")?;
     let state = store.init(init).map_err(|error| match error {
         StoreError::AlreadyInitialized { path } => LocalError::DeploymentExists { path },

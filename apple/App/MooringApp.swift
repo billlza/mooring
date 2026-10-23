@@ -11,6 +11,7 @@ import SwiftUI
 @main
 struct MooringApp: App {
     @State private var model: ConsoleModel
+    @State private var daemon = DaemonService()
 
     /// The model reads from launch, whether or not the window is shown: the
     /// menu bar's summary needs it too.
@@ -22,13 +23,13 @@ struct MooringApp: App {
 
     var body: some Scene {
         Window("Mooring", id: ConsoleWindow.id) {
-            ConsoleView(model: model)
+            ConsoleView(model: model, daemon: daemon)
                 .frame(minWidth: 780, minHeight: 540)
         }
         .defaultSize(width: 980, height: 680)
 
         MenuBarExtra {
-            MenuView(model: model)
+            MenuView(model: model, daemon: daemon)
         } label: {
             Image(systemName: model.menuSymbol)
         }

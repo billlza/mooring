@@ -780,6 +780,16 @@
         }
       }
     },
+    "Could not change it: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能更改：%@"
+          }
+        }
+      }
+    },
     "Critical": {
       "localizations": {
         "zh-Hans": {
@@ -796,6 +806,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "计费周期"
+          }
+        }
+      }
+    },
+    "Daemon: not started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：未启动"
+          }
+        }
+      }
+    },
+    "Daemon: starts at login": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：登录时启动"
+          }
+        }
+      }
+    },
+    "Daemon: waiting for your approval in Login Items": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：等待你在“登录项”中批准"
           }
         }
       }
@@ -1163,6 +1203,16 @@
         }
       }
     },
+    "It reads the M7 and runs the exit. Started here, it runs at every login until stopped from the menu.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "它负责读取 M7 并运行出口。在这里启动后，每次登录都会运行，直到从菜单中停止。"
+          }
+        }
+      }
+    },
     "Keep serving past the fair-use line, accepting deprioritisation": {
       "localizations": {
         "zh-Hans": {
@@ -1405,6 +1455,26 @@
     },
     "Mooring": {
       "shouldTranslate": false
+    },
+    "Mooring's daemon is not started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mooring 守护进程未启动"
+          }
+        }
+      }
+    },
+    "Mooring's daemon needs your approval": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mooring 守护进程需要你的批准"
+          }
+        }
+      }
     },
     "NETGEAR Insight": {
       "localizations": {
@@ -1816,6 +1886,26 @@
         }
       }
     },
+    "Open Login Items…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开“登录项”…"
+          }
+        }
+      }
+    },
+    "Open Mooring at Login": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录时打开 Mooring"
+          }
+        }
+      }
+    },
     "Open alerts": {
       "localizations": {
         "zh-Hans": {
@@ -1856,12 +1946,12 @@
         }
       }
     },
-    "Pin the M7 (`mooringctl router pin --interface en9`), store its admin password (`mooringctl router set-password`), and give the daemon the interface.": {
+    "Pin the M7 on the Mac's interface to it (`mooringctl router pin --interface en9`, which records the interface the daemon polls on) and store its admin password (`mooringctl router set-password`).": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "先固定 M7 的身份（`mooringctl router pin --interface en9`），保存它的管理员密码（`mooringctl router set-password`），再把接口交给守护进程。"
+            "value": "在这台 Mac 连接 M7 的接口上固定 M7 的身份（`mooringctl router pin --interface en9`，同时记录守护进程要轮询的接口），并保存它的管理员密码（`mooringctl router set-password`）。"
           }
         }
       }
@@ -2286,6 +2376,16 @@
         }
       }
     },
+    "Start the Daemon at Login": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录时启动守护进程"
+          }
+        }
+      }
+    },
     "Started": {
       "localizations": {
         "zh-Hans": {
@@ -2342,6 +2442,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "上限策略"
+          }
+        }
+      }
+    },
+    "Stop the Daemon": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "停止守护进程"
           }
         }
       }
@@ -3835,6 +3945,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "3 级"
+          }
+        }
+      }
+    },
+    "macOS lists it under System Settings › General › Login Items; turn it on there.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "它在“系统设置 › 通用 › 登录项”中列出，请在那里打开。"
           }
         }
       }

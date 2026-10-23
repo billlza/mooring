@@ -22,7 +22,8 @@
 //!   (`RLIMIT_NOFILE`), which `fieldkit port-ceiling` raises before it
 //!   holds thousands of connections;
 //! - [`controlling_terminal`] and [`EchoOff`]: the process's terminal, and
-//!   its echo switched off while a password is typed.
+//!   its echo switched off while a password is typed;
+//! - [`redirect_stderr`]: the daemon's standard error pointed at its log.
 //!
 //! Nothing here shells out (no `arp`, `netstat` or `route`). The routing
 //! messages are parsed from the bytes the kernel returns by safe code that
@@ -53,6 +54,6 @@ pub use error::{MacsysError, MacsysErrorKind, ProcessCall, RlimitCall, RouteFaul
 pub use iflist::{Interface, InterfaceAddrV4, interface, interfaces};
 pub use interface::interface_index;
 pub use limits::{OpenFilesLimit, open_files_limit, raise_open_files};
-pub use process::{boot_time, kill_process, process_path};
+pub use process::{boot_time, kill_process, process_path, redirect_stderr};
 pub use route::{default_gateway_v4, neighbour_v4};
 pub use terminal::{EchoOff, controlling_terminal};
