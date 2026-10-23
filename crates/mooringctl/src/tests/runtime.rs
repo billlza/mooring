@@ -335,6 +335,20 @@ fn lo0() -> InterfaceIndex {
     super::support::lo0()
 }
 
+/// A reflector answers and closes at once; on loopback its close can come
+/// before the connect's poll looks, which socket2 reports as a hang-up
+/// with no error (about 1 connect in 170 here). Every probe still reads
+/// its answer.
+#[test]
+fn a_reflector_that_closes_before_the_connect_is_polled_is_still_read() {
+    for _ in 0..1000 {
+        assert_eq!(
+            direct(lo0(), reflector(b"45.67.89.10\n")),
+            Ok(Ipv4Addr::new(45, 67, 89, 10))
+        );
+    }
+}
+
 #[test]
 fn the_direct_probe_reads_the_address_the_reflector_saw() {
     assert_eq!(

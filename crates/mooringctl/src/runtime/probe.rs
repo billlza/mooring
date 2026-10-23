@@ -8,15 +8,18 @@
 //! destination is the node's reflector reached through the whole chain;
 //! the line it reads is the address the chain's traffic leaves by, within
 //! 10 s.
+//!
+//! Both connect through [`connect_within`]: a reflector answers and closes
+//! at once, and its close can come before the connect's own poll looks.
 
-use std::io::{ErrorKind, Read};
+use std::io::{self, ErrorKind, Read};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
 use mooring_daemon_core::status::ProbeStage;
 use mooring_model::iface::InterfaceIndex;
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 /// The longest the whole direct probe may take.
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,7 +47,7 @@ pub(crate) fn direct(
 ) -> Result<Ipv4Addr, ProbeFailure> {
     let started = Instant::now();
     let failed = |stage| {
-        move |error: std::io::Error| ProbeFailure {
+        move |error: io::Error| ProbeFailure {
             stage,
             kind: Some(error.kind()),
         }
@@ -54,8 +57,7 @@ pub(crate) fn direct(
     socket
         .bind_device_by_index_v4(Some(NonZeroU32::from(index)))
         .map_err(failed(ProbeStage::Connect))?;
-    socket
-        .connect_timeout(&SocketAddr::V4(reflector).into(), PROBE_TIMEOUT)
+    connect_within(&socket, &SocketAddr::V4(reflector).into(), PROBE_TIMEOUT)
         .map_err(failed(ProbeStage::Connect))?;
     read_address(socket.into(), started, PROBE_TIMEOUT)
 }
@@ -65,13 +67,34 @@ pub(crate) fn direct(
 pub(crate) fn in_chain(port: u16) -> Result<(Ipv4Addr, Duration), ProbeFailure> {
     let started = Instant::now();
     let inbound = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
-    let stream =
-        TcpStream::connect_timeout(&inbound, IN_CHAIN_TIMEOUT).map_err(|error| ProbeFailure {
-            stage: ProbeStage::Connect,
-            kind: Some(error.kind()),
-        })?;
-    let address = read_address(stream, started, IN_CHAIN_TIMEOUT)?;
+    let failed = |error: io::Error| ProbeFailure {
+        stage: ProbeStage::Connect,
+        kind: Some(error.kind()),
+    };
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).map_err(failed)?;
+    connect_within(&socket, &inbound.into(), IN_CHAIN_TIMEOUT).map_err(failed)?;
+    let address = read_address(socket.into(), started, IN_CHAIN_TIMEOUT)?;
     Ok((address, started.elapsed()))
+}
+
+/// Connects `socket` to `target` within `timeout`. A peer that answers and
+/// closes at once can hang up before `connect_timeout`'s poll looks, and
+/// socket2 then reports the hang-up with no error set (`ErrorKind::Other`,
+/// "no error set after POLLHUP", socket2 0.6.5 `sys/unix.rs`) although the
+/// connection was made and the answer waits to be read: measured on this
+/// Mac, 18 of 3000 loopback connects. A socket that has a peer is
+/// connected, so that report, and only it, is the connection it is.
+fn connect_within(socket: &Socket, target: &SockAddr, timeout: Duration) -> io::Result<()> {
+    match socket.connect_timeout(target, timeout) {
+        Err(error)
+            if error.kind() == ErrorKind::Other
+                && error.raw_os_error().is_none()
+                && socket.peer_addr().is_ok() =>
+        {
+            Ok(())
+        }
+        connected => connected,
+    }
 }
 
 /// The reflector's line on `stream`, read before `timeout` from `started`.
@@ -81,7 +104,7 @@ fn read_address(
     timeout: Duration,
 ) -> Result<Ipv4Addr, ProbeFailure> {
     let failed = |stage| {
-        move |error: std::io::Error| ProbeFailure {
+        move |error: io::Error| ProbeFailure {
             stage,
             kind: Some(error.kind()),
         }
