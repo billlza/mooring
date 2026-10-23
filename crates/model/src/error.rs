@@ -238,6 +238,12 @@ pub enum ModelError {
         /// The rejected day.
         day: u8,
     },
+    /// A cycle length or rolling window is outside 1..=366 days.
+    #[error("{days} days is outside 1..=366")]
+    InvalidPeriodDays {
+        /// The rejected number of days.
+        days: u16,
+    },
     /// The SIM warning threshold is zero or not below the hard stop.
     #[error("SIM warning threshold {warn_bytes} must be positive and below any hard stop")]
     InvalidSimThresholds {
@@ -264,6 +270,21 @@ pub enum ModelError {
         "accepting deprioritisation needs a recorded plan with a fair-use line; set a hard stop instead"
     )]
     DeprioritisationNeedsFairUseLine,
+    /// A hard stop, once in each of the cycles one window of a rolling
+    /// fair-use line can overlap, is not below that line.
+    #[error(
+        "a hard stop of {stop_bytes} bytes in each of the {cycles} cycles a {window_days}-day window can overlap is not below the plan's rolling line of {line_bytes} bytes"
+    )]
+    SimStopAboveRollingLine {
+        /// The hard stop in bytes, per cycle.
+        stop_bytes: u64,
+        /// The most cycles one window overlaps.
+        cycles: u64,
+        /// The window, in days.
+        window_days: u16,
+        /// The line per window, in bytes.
+        line_bytes: u64,
+    },
     /// A version-1 SIM policy without a hard stop cannot be lifted: version 2
     /// needs an explicit stop policy (critique C-10).
     #[error(
@@ -632,12 +653,16 @@ kinds! {
         InvalidCycleDay,
         /// See [`ModelError::InvalidBillDay`].
         InvalidBillDay,
+        /// See [`ModelError::InvalidPeriodDays`].
+        InvalidPeriodDays,
         /// See [`ModelError::InvalidSimThresholds`].
         InvalidSimThresholds,
         /// See [`ModelError::SimThresholdAbovePlan`].
         SimThresholdAbovePlan,
         /// See [`ModelError::DeprioritisationNeedsFairUseLine`].
         DeprioritisationNeedsFairUseLine,
+        /// See [`ModelError::SimStopAboveRollingLine`].
+        SimStopAboveRollingLine,
         /// See [`ModelError::StopPolicyUnchosen`].
         StopPolicyUnchosen,
         /// See [`ModelError::PlanNotRecorded`].
@@ -769,11 +794,13 @@ impl ModelError {
             Self::InvalidDate => ModelErrorKind::InvalidDate,
             Self::InvalidCycleDay { .. } => ModelErrorKind::InvalidCycleDay,
             Self::InvalidBillDay { .. } => ModelErrorKind::InvalidBillDay,
+            Self::InvalidPeriodDays { .. } => ModelErrorKind::InvalidPeriodDays,
             Self::InvalidSimThresholds { .. } => ModelErrorKind::InvalidSimThresholds,
             Self::SimThresholdAbovePlan { .. } => ModelErrorKind::SimThresholdAbovePlan,
             Self::DeprioritisationNeedsFairUseLine => {
                 ModelErrorKind::DeprioritisationNeedsFairUseLine
             }
+            Self::SimStopAboveRollingLine { .. } => ModelErrorKind::SimStopAboveRollingLine,
             Self::StopPolicyUnchosen => ModelErrorKind::StopPolicyUnchosen,
             Self::PlanNotRecorded => ModelErrorKind::PlanNotRecorded,
             Self::InvalidWarnPercent { .. } => ModelErrorKind::InvalidWarnPercent,
@@ -851,7 +878,7 @@ mod tests {
     };
     use crate::quota::{BudgetPercent, SimFactor};
     use crate::secret::{Password, SecretRef};
-    use crate::sim::{BillDay, SimPolicy, StopPolicy};
+    use crate::sim::{BillDay, CycleRule, PeriodDays, SimPlan, SimPolicy, StopPolicy};
     use crate::state::StateVersion;
     use crate::target::{CertificateName, EvidenceUrl, HttpStatus, require_attested};
     use crate::testing::{self, attestation, node_id, two_node_parts, user, user_id};
@@ -889,7 +916,9 @@ mod tests {
     /// runs).
     fn every_error() -> Vec<(ModelErrorKind, ModelError)> {
         use ModelErrorKind as K;
-        let day = BillDay::new(1).unwrap();
+        let day = CycleRule::Monthly {
+            bill_day: BillDay::new(1).unwrap(),
+        };
         let mut revoked = user(1, &[]);
         revoked.status = UserStatus::Revoked;
         let deployment = Deployment::try_from(two_node_parts()).unwrap();
@@ -1004,6 +1033,7 @@ mod tests {
             ),
             (K::InvalidCycleDay, CycleDay::new(0).unwrap_err()),
             (K::InvalidBillDay, BillDay::new(32).unwrap_err()),
+            (K::InvalidPeriodDays, PeriodDays::new(0).unwrap_err()),
             (
                 K::InvalidSimThresholds,
                 SimPolicy::new(
@@ -1031,6 +1061,18 @@ mod tests {
                     testing::smarty_unlimited_plan(),
                     1,
                     StopPolicy::AcceptDeprioritisation,
+                )
+                .unwrap_err(),
+            ),
+            (
+                K::SimStopAboveRollingLine,
+                SimPolicy::new(
+                    day,
+                    SimPlan::one_p_mobile_unlimited().unwrap(),
+                    1,
+                    StopPolicy::HardStop {
+                        bytes: 250_000_000_000,
+                    },
                 )
                 .unwrap_err(),
             ),
@@ -1312,6 +1354,12 @@ mod tests {
             ModelError::SimThresholdAbovePlan {
                 threshold_bytes: 2,
                 line_bytes: 1,
+            },
+            ModelError::SimStopAboveRollingLine {
+                stop_bytes: 2,
+                cycles: 2,
+                window_days: 30,
+                line_bytes: 3,
             },
         ] {
             let text = error.to_string();

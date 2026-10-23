@@ -24,8 +24,8 @@ use crate::node::{
 };
 use crate::ports::{DEBIAN_EPHEMERAL_PORTS, PortPlan};
 use crate::sim::{
-    BillDay, Carrier, EvidenceRef, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES, PlanKind,
-    SimPlan, SimPolicy, StopPolicy,
+    BillDay, Carrier, CycleRule, EvidenceRef, FairUseWindow, PlanKind, SimPlan, SimPolicy,
+    StopPolicy,
 };
 use crate::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
@@ -61,11 +61,13 @@ pub(crate) fn exit_site() -> ExitSite {
             pairing: Pairing::Paired,
         },
         sim: SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             smarty_unlimited_plan(),
-            PILOT_SIM_WARN_BYTES,
+            TEST_SIM_WARN_BYTES,
             StopPolicy::HardStop {
-                bytes: PILOT_SIM_HARD_STOP_BYTES,
+                bytes: TEST_SIM_HARD_STOP_BYTES,
             },
         )
         .unwrap(),
@@ -74,6 +76,16 @@ pub(crate) fn exit_site() -> ExitSite {
         uplink_baseline: None,
     }
 }
+
+/// The SIM warning threshold the test exit site runs with: SMARTY's pilot
+/// value as decision F2 first set it, 240e9. Tests check arithmetic and
+/// encodings, not the decided values, so they keep it when the pilot's
+/// values move ([`crate::sim::PILOT_SIM_WARN_BYTES`] is the decided one).
+pub(crate) const TEST_SIM_WARN_BYTES: u64 = 240_000_000_000;
+
+/// The SIM hard stop the test exit site runs with, 300e9, as
+/// [`TEST_SIM_WARN_BYTES`].
+pub(crate) const TEST_SIM_HARD_STOP_BYTES: u64 = 300_000_000_000;
 
 /// A fair-use line for tests that need one: 600 × 1024³ bytes.
 pub(crate) const TEST_FAIR_USE_BYTES: NonZeroU64 = match NonZeroU64::new(600 << 30) {
@@ -104,6 +116,7 @@ pub(crate) fn fair_use_plan() -> SimPlan {
     SimPlan {
         kind: PlanKind::UnlimitedFairUse {
             fair_use_bytes: TEST_FAIR_USE_BYTES,
+            window: FairUseWindow::BillingCycle,
         },
         ..smarty_unlimited_plan()
     }

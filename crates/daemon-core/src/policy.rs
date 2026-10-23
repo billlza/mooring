@@ -215,8 +215,8 @@ pub struct UserAction {
 /// (UTC midnight of its first day) and not after `now`. The threshold
 /// counts the same users. The suspension's instant decides, not the
 /// `cycle_start` it records: that names the cycle as it was when the user
-/// was suspended, and after an edit of the bill day (design §7, `BillDay`)
-/// it can lie on either side of the current cycle's start, whichever side
+/// was suspended, and after an edit of the cycle rule (design §7,
+/// `CycleRule`) it can lie on either side of the current cycle's start, whichever side
 /// the suspension was made on. The quota is latched per cycle (design
 /// §15.3, §20 F4, decided 2026-10-09): suspending a user for quota changes
 /// neither N nor anyone's share within the cycle, so it never switches the
@@ -256,7 +256,7 @@ impl Moment {
     fn of(deployment: &Deployment, now: UnixTime) -> Result<Self, PolicyError> {
         Ok(Self {
             now,
-            cycle: BillingCycle::of_instant(deployment.exit().sim.bill_day(), now)?,
+            cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), now)?,
         })
     }
 }
@@ -314,8 +314,8 @@ fn shares_the_budget(id: &UserId, user: &User, moment: Moment) -> Result<bool, P
 /// at `moment` (design §15.3, §20 F4): it holds when it was made during
 /// `moment`'s cycle, at or after the cycle's start, and has lapsed when it
 /// was made before. The instant decides, not the `cycle_start` the
-/// suspension records: after an edit of the bill day (design §7, `BillDay`)
-/// a recorded start can lie on either side of the current cycle's start,
+/// suspension records: after an edit of the cycle rule (design §7,
+/// `CycleRule`) a recorded start can lie on either side of the current cycle's start,
 /// whichever side the suspension was made on. A lapsed suspension shares
 /// nothing, and resuming it at the cycle boundary is the apply's step (M5,
 /// design §13.6), which is to use this predicate too, so that a suspension

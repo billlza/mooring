@@ -13,16 +13,29 @@
 //!
 //! The four fixtures are [`one_node_one_user`], [`one_node_three_users`],
 //! [`two_nodes_three_users`] and [`two_nodes_twenty_users`]; [`all`] builds
-//! them in that order. Each runs the decided line (SMARTY Unlimited, decision
-//! F1) with the pilot's SIM thresholds (F2), no cap on active users (the
-//! 20-user fixture would break the pilot's cap of 5), no automatic quotas
-//! and no alert channels; [`two_nodes_three_users`] also has one viewer.
+//! them in that order. Each runs the first exit line, SMARTY Unlimited
+//! (decision F1 as first made), at SMARTY's pilot thresholds
+//! ([`FIXTURE_SIM_WARN_BYTES`], [`FIXTURE_SIM_HARD_STOP_BYTES`]), with no
+//! cap on active users (the 20-user fixture would break the pilot's cap of
+//! 5), no automatic quotas and no alert channels; [`two_nodes_three_users`]
+//! also has one viewer. The fixtures check arithmetic and encodings, not
+//! the decided values, which moved to 1pMobile on 2026-10-23, so they keep
+//! SMARTY's.
 //! Every user accepted the current agreement revision on 2026-10-08
 //! (decision F9), so every user can be exported.
 
 #![deny(missing_docs)]
 
 mod material;
+
+/// The SIM warning threshold every fixture runs with: SMARTY's pilot value
+/// as decision F2 first set it, 240e9 (the crate documentation says why it
+/// is not the decided `mooring_model::PILOT_SIM_WARN_BYTES`).
+pub const FIXTURE_SIM_WARN_BYTES: u64 = 240_000_000_000;
+
+/// The SIM hard stop every fixture runs with, 300e9, as
+/// [`FIXTURE_SIM_WARN_BYTES`].
+pub const FIXTURE_SIM_HARD_STOP_BYTES: u64 = 300_000_000_000;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -56,8 +69,7 @@ use mooring_model::secret::{
     SecretSnapshotError, WgPrivateKey,
 };
 use mooring_model::sim::{
-    BillDay, Carrier, EvidenceRef, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES, PlanKind,
-    SimPlan, SimPolicy, StopPolicy,
+    BillDay, Carrier, CycleRule, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy,
 };
 use mooring_model::state::{RuntimeIntent, StateV2};
 use mooring_model::target::{
@@ -291,11 +303,13 @@ fn exit_site() -> Result<ExitSite, ModelError> {
             pairing: Pairing::Paired,
         },
         sim: SimPolicy::new(
-            BillDay::new(1)?,
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1)?,
+            },
             sim_plan()?,
-            PILOT_SIM_WARN_BYTES,
+            FIXTURE_SIM_WARN_BYTES,
             StopPolicy::HardStop {
-                bytes: PILOT_SIM_HARD_STOP_BYTES,
+                bytes: FIXTURE_SIM_HARD_STOP_BYTES,
             },
         )?,
         probe: ProbePolicy::default(),
@@ -631,15 +645,20 @@ mod tests {
         );
     }
 
-    /// Every fixture runs the pilot's thresholds on the decided SMARTY
-    /// plan, and leaves the cap, automatic quotas, alert channels and every
-    /// per-user record off, except the agreement: every user accepted the
-    /// current revision on the fixtures' day, as exports require (F9).
+    /// Every fixture runs SMARTY's pilot thresholds on SMARTY's plan, and
+    /// leaves the cap, automatic quotas, alert channels and every per-user
+    /// record off, except the agreement: every user accepted the current
+    /// revision on the fixtures' day, as exports require (F9).
     #[test]
-    fn the_sim_policy_is_the_pilot_on_the_smarty_plan() {
+    fn the_sim_policy_is_smartys_pilot() {
         for fixture in all().unwrap() {
             let sim = &fixture.deployment.exit().sim;
-            assert_eq!(sim.bill_day().get(), 1);
+            assert_eq!(
+                sim.cycle(),
+                CycleRule::Monthly {
+                    bill_day: BillDay::new(1).unwrap()
+                }
+            );
             let plan = sim.plan().unwrap();
             assert_eq!(plan.carrier, Carrier::Smarty);
             assert_eq!(plan.kind, PlanKind::Unlimited);
@@ -649,11 +668,11 @@ mod tests {
                 "https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf"
             );
             assert_eq!(plan.terms.dated.to_string(), "2026-08-25");
-            assert_eq!(sim.warn_bytes(), PILOT_SIM_WARN_BYTES);
+            assert_eq!(sim.warn_bytes(), 240_000_000_000);
             assert_eq!(
                 sim.stop(),
                 StopPolicy::HardStop {
-                    bytes: PILOT_SIM_HARD_STOP_BYTES
+                    bytes: 300_000_000_000
                 }
             );
             assert_eq!(sim.thresholds().plan_line(), None);

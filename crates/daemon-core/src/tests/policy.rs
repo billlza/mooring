@@ -7,13 +7,14 @@ use std::num::{NonZeroU16, NonZeroU64};
 
 use mooring_model::deployment::CapacityPolicy;
 use mooring_model::quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
-use mooring_model::sim::{EvidenceRef, PlanKind, SimPlan};
+use mooring_model::sim::{EvidenceRef, FairUseWindow, PlanKind, SimPlan};
 use mooring_model::target::EvidenceUrl;
 use mooring_model::user::{
     QuotaAction, SuspendReason, UserPolicy, UserQuota, UserStatus, WarnPercent,
 };
 use mooring_model::{
-    BillDay, Carrier, Deployment, ModelError, SimPolicy, StopPolicy, UnixTime, User, UserId,
+    BillDay, Carrier, CycleRule, Deployment, ModelError, SimPolicy, StopPolicy, UnixTime, User,
+    UserId,
 };
 use proptest::prelude::*;
 
@@ -45,8 +46,10 @@ fn set(users: &mut BTreeMap<UserId, User>, user: &UserId, value: UserPolicy) {
     users.get_mut(user).unwrap().policy = value;
 }
 
-fn bill_day() -> BillDay {
-    BillDay::new(1).unwrap()
+fn bill_day() -> CycleRule {
+    CycleRule::Monthly {
+        bill_day: BillDay::new(1).unwrap(),
+    }
 }
 
 /// The three-user fixture deployment (billed on day 1, no automatic
@@ -544,7 +547,9 @@ fn with_bill_day(deployment: Deployment, day: u8) -> Deployment {
     let mut parts = deployment.into_parts();
     let sim = &parts.exit.sim;
     parts.exit.sim = SimPolicy::new(
-        BillDay::new(day).unwrap(),
+        CycleRule::Monthly {
+            bill_day: BillDay::new(day).unwrap(),
+        },
         sim.plan().unwrap().clone(),
         sim.warn_bytes(),
         sim.stop(),
@@ -1095,6 +1100,7 @@ fn the_budget_follows_the_stop() {
     let fair_use = SimPlan {
         kind: PlanKind::UnlimitedFairUse {
             fair_use_bytes: NonZeroU64::new(600 << 30).unwrap(),
+            window: FairUseWindow::BillingCycle,
         },
         ..smarty()
     };

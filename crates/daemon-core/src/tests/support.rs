@@ -10,7 +10,8 @@ use mooring_agent_proto::{
     UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, WatchConditions,
 };
 use mooring_model::{
-    BillDay, CalendarDate, Deployment, DeploymentParts, NodeId, SimPolicy, UnixTime, User, UserId,
+    BillDay, CalendarDate, CycleRule, Deployment, DeploymentParts, NodeId, SimPolicy, UnixTime,
+    User, UserId,
 };
 
 /// The fixture deployment with two nodes (lon1, ams1) and three users.
@@ -29,7 +30,9 @@ pub(crate) fn deployment_billed_on(day: u8) -> Deployment {
     edited(|parts| {
         let sim = &parts.exit.sim;
         parts.exit.sim = SimPolicy::new(
-            BillDay::new(day).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(day).unwrap(),
+            },
             sim.plan().unwrap().clone(),
             sim.warn_bytes(),
             sim.stop(),

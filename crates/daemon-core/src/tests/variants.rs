@@ -299,7 +299,7 @@ fn variants() -> Variants {
         ],
         usage_view: vec![
             UsageView::Report {
-                periods: UsagePeriods::ending(sim.bill_day(), now).unwrap(),
+                periods: UsagePeriods::ending(sim.cycle(), now).unwrap(),
             },
             UsageView::Unavailable {
                 reason: UsageErrorKind::MissingLedger,

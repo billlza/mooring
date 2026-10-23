@@ -31,7 +31,9 @@ use mooring_model::secret::{
     Ed25519Seed, Hy2KeyPem, Password, RealityPrivateKey, RouterAdminPassword, Secret, SecretEntry,
     SecretKind, SecretMaterial, SecretRef, WgPrivateKey,
 };
-use mooring_model::sim::{BillDay, Carrier, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy};
+use mooring_model::sim::{
+    BillDay, Carrier, CycleRule, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy,
+};
 use mooring_model::state::StateV2;
 use mooring_model::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
@@ -85,7 +87,9 @@ pub(crate) fn exit_site() -> ExitSite {
             pairing: Pairing::Paired,
         },
         sim: SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             smarty_plan(),
             V1_GOLDEN_WARN_BYTES,
             StopPolicy::HardStop {

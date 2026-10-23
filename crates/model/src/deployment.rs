@@ -911,7 +911,7 @@ mod tests {
     #[test]
     fn a_fresh_deployment_needs_a_recorded_plan() {
         let lifted: SimPolicy = serde_json::from_str(
-            r#"{"bill_day":1,"plan":null,"warn_bytes":240000000000,"stop":{"hard_stop":{"bytes":300000000000}}}"#,
+            r#"{"cycle":{"monthly":{"bill_day":1}},"plan":null,"warn_bytes":240000000000,"stop":{"hard_stop":{"bytes":300000000000}}}"#,
         )
         .unwrap();
         assert_eq!(lifted.plan(), None);

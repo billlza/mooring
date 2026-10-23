@@ -77,8 +77,9 @@ pub use secret::{
     SecretKindMismatch, SecretMaterial, SecretRef, SecretSnapshot,
 };
 pub use sim::{
-    AfterAllowance, BillDay, Carrier, EvidenceRef, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES,
-    PlanKind, SimPlan, SimPolicy, SimThresholds, StopPolicy,
+    AfterAllowance, BillDay, Carrier, CycleRule, EvidenceRef, FairUseWindow,
+    ONE_P_MOBILE_FAIR_USE_BYTES, ONE_P_MOBILE_PERIOD_DAYS, PILOT_SIM_HARD_STOP_BYTES,
+    PILOT_SIM_WARN_BYTES, PeriodDays, PlanKind, SimPlan, SimPolicy, SimThresholds, StopPolicy,
 };
 pub use state::{RuntimeIntent, StateFile, StateV2, StateVersion};
 pub use target::{TargetAttestation, TargetSpec, qualify};

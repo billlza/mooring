@@ -18,18 +18,19 @@
 //! time-zone database, converts hour bins to Europe/London or Asia/Shanghai
 //! when it draws them.
 //!
-//! A SIM billing cycle here starts at UTC midnight of its bill date.
-//! SMARTY renews on the same day each month from activation ([SMARTY-TC]
-//! 5.20 and 5.21, cited in the model's `sim` module), but states neither
-//! the time of day nor the time zone, so UTC midnight is an inference; if
-//! the carrier's boundary is UK midnight, the two differ by one hour
-//! during British Summer Time, which the reconciliation against SMARTY's
-//! own usage reading (console spec B.2.6) covers. A failed renewal taken
-//! later moves the cycle's start; the operator then records the new bill
-//! day.
+//! A SIM billing cycle here starts at UTC midnight of its first day, as
+//! the model's `CycleRule` gives it. Neither carrier states the time of day
+//! or the time zone of its boundary: SMARTY renews on the same day each
+//! month from activation ([SMARTY-TC] 5.20 and 5.21), and 1pMobile charges
+//! its Boosts on a 30-day rolling basis ([1PM-TC], Definitions; both cited
+//! in the model's `sim` module). UTC midnight is therefore an inference; if
+//! the carrier's boundary is UK midnight, the two differ by one hour during
+//! British Summer Time, which the reconciliation against the carrier's own
+//! usage reading (console spec B.2.6) covers. A failed renewal taken later
+//! moves the cycle's start; the operator then records the new rule.
 
 use mooring_model::date::SECS_PER_DAY;
-use mooring_model::{BillDay, CalendarDate, ModelError, UnixTime};
+use mooring_model::{CalendarDate, CycleRule, ModelError, UnixTime};
 use serde::{Deserialize, Serialize};
 
 /// One SIM billing cycle on the UTC calendar: from UTC midnight of
@@ -50,19 +51,19 @@ struct BillingCycleRepr {
 }
 
 impl BillingCycle {
-    /// The cycle that contains `date` for `bill_day` (the model's clamp
-    /// rule for short months applies). `InvalidDate` when a boundary would
-    /// fall outside 1970..=9999.
-    pub fn containing(bill_day: BillDay, date: CalendarDate) -> Result<Self, ModelError> {
+    /// The cycle that contains `date` under `rule` (the model's clamp rule
+    /// for short months applies to a monthly one). `InvalidDate` when a
+    /// boundary would fall outside 1970..=9999.
+    pub fn containing(rule: CycleRule, date: CalendarDate) -> Result<Self, ModelError> {
         Ok(Self {
-            start: bill_day.cycle_start(date)?,
-            next_start: bill_day.next_cycle_start(date)?,
+            start: rule.cycle_start(date)?,
+            next_start: rule.next_cycle_start(date)?,
         })
     }
 
     /// The cycle that contains the UTC date of `at`.
-    pub fn of_instant(bill_day: BillDay, at: UnixTime) -> Result<Self, ModelError> {
-        Self::containing(bill_day, CalendarDate::utc_of(at)?)
+    pub fn of_instant(rule: CycleRule, at: UnixTime) -> Result<Self, ModelError> {
+        Self::containing(rule, CalendarDate::utc_of(at)?)
     }
 
     /// The first day of the cycle.
@@ -142,13 +143,13 @@ pub struct UsagePeriods {
 }
 
 impl UsagePeriods {
-    /// The periods ending at `through` for `bill_day`.
-    pub fn ending(bill_day: BillDay, through: UnixTime) -> Result<Self, ModelError> {
+    /// The periods ending at `through` under the cycle `rule`.
+    pub fn ending(rule: CycleRule, through: UnixTime) -> Result<Self, ModelError> {
         let utc_day = CalendarDate::utc_of(through)?;
         Ok(Self {
             through,
             utc_day,
-            cycle: BillingCycle::containing(bill_day, utc_day)?,
+            cycle: BillingCycle::containing(rule, utc_day)?,
             utc_month_start: utc_day.first_of_month(),
         })
     }
@@ -176,7 +177,14 @@ pub(crate) const fn days_until(from: UnixTime, to: UnixTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mooring_model::BillDay;
     use proptest::prelude::*;
+
+    fn monthly(day: u8) -> CycleRule {
+        CycleRule::Monthly {
+            bill_day: BillDay::new(day).unwrap(),
+        }
+    }
 
     fn date(text: &str) -> CalendarDate {
         CalendarDate::parse(text).unwrap()
@@ -184,8 +192,7 @@ mod tests {
 
     #[test]
     fn a_cycle_runs_from_bill_day_to_bill_day_in_utc() {
-        let cycle =
-            BillingCycle::containing(BillDay::new(15).unwrap(), date("2026-10-08")).unwrap();
+        let cycle = BillingCycle::containing(monthly(15), date("2026-10-08")).unwrap();
         assert_eq!(cycle.start(), date("2026-09-15"));
         assert_eq!(cycle.next_start(), date("2026-10-15"));
         assert_eq!(cycle.starts_at(), date("2026-09-15").utc_start());
@@ -194,8 +201,7 @@ mod tests {
         assert!(!cycle.contains(cycle.ends_at()));
         assert!(cycle.contains(UnixTime::from_secs(cycle.ends_at().as_secs() - 1)));
         // Bill day 31 in a 30-day month starts on the last day.
-        let short =
-            BillingCycle::containing(BillDay::new(31).unwrap(), date("2026-11-30")).unwrap();
+        let short = BillingCycle::containing(monthly(31), date("2026-11-30")).unwrap();
         assert_eq!(short.start(), date("2026-11-30"));
         assert_eq!(short.next_start(), date("2026-12-31"));
         assert_eq!(
@@ -220,20 +226,20 @@ mod tests {
     fn periods_end_at_through_and_start_at_utc_midnights() {
         // 2026-10-08T10:30:00Z.
         let through = UnixTime::from_secs(1_791_417_600 + 37_800);
-        let periods = UsagePeriods::ending(BillDay::new(20).unwrap(), through).unwrap();
+        let periods = UsagePeriods::ending(monthly(20), through).unwrap();
         assert_eq!(periods.utc_day, date("2026-10-08"));
         assert_eq!(periods.cycle.start(), date("2026-09-20"));
         assert_eq!(periods.utc_month_start, date("2026-10-01"));
         assert_eq!(periods.earliest_start(), date("2026-09-20").utc_start());
         // At midnight, the new day is today.
         let midnight = date("2026-10-09").utc_start();
-        let periods = UsagePeriods::ending(BillDay::new(9).unwrap(), midnight).unwrap();
+        let periods = UsagePeriods::ending(monthly(9), midnight).unwrap();
         assert_eq!(periods.utc_day, date("2026-10-09"));
         assert_eq!(periods.cycle.start(), date("2026-10-09"));
         assert_eq!(periods.earliest_start(), date("2026-10-01").utc_start());
         // Before 1970 there is no cycle.
         assert_eq!(
-            UsagePeriods::ending(BillDay::new(20).unwrap(), UnixTime::from_secs(0)),
+            UsagePeriods::ending(monthly(20), UnixTime::from_secs(0)),
             Err(ModelError::InvalidDate)
         );
     }
@@ -252,7 +258,7 @@ mod tests {
         #[test]
         fn every_instant_lies_in_its_cycle(day in 1_u8..=31, secs in 2_678_400_u64..253_390_000_000) {
             let at = UnixTime::from_secs(secs);
-            let cycle = BillingCycle::of_instant(BillDay::new(day).unwrap(), at).unwrap();
+            let cycle = BillingCycle::of_instant(monthly(day), at).unwrap();
             prop_assert!(cycle.contains(at));
             prop_assert!(cycle.start() < cycle.next_start());
         }
