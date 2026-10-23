@@ -44,9 +44,12 @@ gcflags = "all=-l=4"
 targets = ["linux-amd64", "linux-arm64"]
 # The go.mod and go.sum change the replace makes, so that the build runs
 # with -mod=readonly (design §4.4). `cargo xtask engines-prepare` writes it
-# on the hosted runner; it is reviewed, committed here and pinned.
+# on the hosted runner; it is reviewed, committed here and pinned. Reviewed
+# 2026-10-23 (hosted run 39906955840): one replace line and the two go.sum
+# lines of the replacement, equal to sum.golang.org's; the pseudo-version is
+# commit e1986a4d31ca33c0 (proxy.golang.org .info), 8cdf7bf9's parent.
 patch = "engines/patches/xray-reality-e1986a4.patch"
-patch-sha256 = ""
+patch-sha256 = "0b48048d41016fb4526d9e9594619aa1dbc6c3c4226378962fc7d6351e56ebb8"
 
 # "<target>" = "<sha256 of the unsigned binary>", filled from the first
 # reproducible hosted build and checked by `cargo xtask engines-verify`.
