@@ -313,6 +313,8 @@ pub struct ExitMachine {
     failed_rounds: u32,
     carrier_check: Option<CarrierCheck>,
     clear_holds: bool,
+    /// Whether the latest tick reached the direct probes.
+    probing: bool,
     /// Whether a latch read at start still has to be sent to the nodes.
     resend: bool,
     pending: BTreeMap<NodeId, Pending>,
@@ -343,6 +345,7 @@ impl ExitMachine {
             failed_rounds: 0,
             carrier_check: None,
             clear_holds: false,
+            probing: false,
             resend: latch_present,
             pending: BTreeMap::new(),
         }
@@ -352,6 +355,22 @@ impl ExitMachine {
     #[must_use]
     pub const fn latch(&self) -> Option<&LatchRecord> {
         self.latch.as_ref()
+    }
+
+    /// How long until the next direct-probe round is due at `mono`, while
+    /// the latest tick reached the probes (`None`: it stopped before them,
+    /// so none is pending): zero when one is due now. The daemon starts
+    /// slow work of its own (a router poll) only when enough is left, so
+    /// the probes keep their cadence.
+    #[must_use]
+    pub fn next_probe_in(&self, mono: Duration, deployment: &Deployment) -> Option<Duration> {
+        if !self.probing {
+            return None;
+        }
+        let every = Duration::from_secs(u64::from(deployment.exit().probe.direct_every.seconds()));
+        Some(self.probed_at.map_or(Duration::ZERO, |at| {
+            every.saturating_sub(mono.saturating_sub(at))
+        }))
     }
 
     /// The node calls not yet delivered, by node.
@@ -371,6 +390,7 @@ impl ExitMachine {
         ports: &mut P,
     ) -> Result<ExitSection, P::Error> {
         self.prune_crashes(inputs.mono);
+        self.probing = false;
         self.reap(inputs, ports)?;
         self.clear_stale_latch(inputs, ports)?;
         if std::mem::take(&mut self.resend)
@@ -555,6 +575,7 @@ impl ExitMachine {
             return Ok(Err(DownReason::NoAppliedNode));
         }
         let running = matches!(self.engine, Engine::Running { .. });
+        self.probing = true;
         let due = self.probed_at.is_none_or(|at| {
             inputs.mono.saturating_sub(at)
                 >= Duration::from_secs(u64::from(deployment.exit().probe.direct_every.seconds()))

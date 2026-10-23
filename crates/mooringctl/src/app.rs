@@ -57,6 +57,21 @@ pub(crate) struct Env<'a> {
     pub(crate) nodes: &'a dyn crate::node::NodeLinks,
     /// The engine files' pins (`node::engines::PINS` in the binary).
     pub(crate) engine_pins: crate::node::engines::Pins<'a>,
+    /// The Mac engines' pins (`node::engines::MAC_PINS` in the binary).
+    pub(crate) mac_pins: crate::node::engines::Pins<'a>,
+    /// The Mac's power source (`/usr/bin/pmset` in the binary, until M7's
+    /// power helper reports it).
+    pub(crate) power: &'a dyn Fn() -> Result<mooring_daemon_core::status::PowerSource, LocalError>,
+    /// Makes the SIM meter's counter reader (the kernel's counters in the
+    /// binary), which the meter's thread owns.
+    pub(crate) meter_reader: &'a dyn Fn() -> crate::runtime::meter::Reader,
+    /// The direct probe: a TCP connection bound to an interface to a
+    /// node's reflector (`runtime::probe::direct` in the binary).
+    pub(crate) probe: &'a dyn Fn(
+        mooring_model::iface::InterfaceIndex,
+        std::net::SocketAddrV4,
+    )
+        -> Result<std::net::Ipv4Addr, crate::runtime::probe::ProbeFailure>,
 }
 
 /// The system clock, in whole seconds since the epoch.
@@ -110,6 +125,12 @@ pub(crate) fn run(
             pairing,
             yes,
         }) => crate::exit::record_carrier(env, out, prefixes, pairing.into(), yes),
+        Command::Exit(ExitCommand::Observe { interface }) => {
+            crate::exit::observe(env, out, &interface)
+        }
+        Command::Exit(ExitCommand::Enable) => crate::exit::set_enabled(env, out, true),
+        Command::Exit(ExitCommand::Disable) => crate::exit::set_enabled(env, out, false),
+        Command::Exit(ExitCommand::Retry) => crate::exit::retry(env, out),
         Command::Node(NodeCommand::New {
             node,
             role,

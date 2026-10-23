@@ -9,13 +9,15 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::io::Cursor;
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
 use mooring_agent_proto::{LineRequest, RequestKind, Response, Sha256Hex};
-use mooring_macsys::{InterfaceAddrV4, MacsysError};
+use mooring_daemon_core::meter::CounterReading;
+use mooring_daemon_core::status::PowerSource;
+use mooring_macsys::{Interface, InterfaceAddrV4, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry};
 use mooring_model::time::UnixTime;
@@ -35,6 +37,7 @@ use crate::prompt::{Answer, Console, Line};
 use crate::router::RouterEnv;
 use crate::router::http::Timeouts;
 use crate::router::link::LinkLayer;
+use crate::runtime::probe::ProbeFailure;
 
 /// The router fixture: the M2a capture, re-redacted (an administrator's
 /// session).
@@ -271,7 +274,16 @@ pub(crate) struct FakeLink {
     pub(crate) neighbours: RefCell<VecDeque<Result<[u8; 6], MacsysError>>>,
     pub(crate) neighbour_calls: Cell<usize>,
     pub(crate) addresses: Result<Vec<InterfaceAddrV4>, MacsysError>,
+    /// The kernel's interface list, as `interfaces()` answers it.
+    pub(crate) listed: Result<Vec<Interface>, MacsysError>,
+    /// Interfaces other than `lo0`, by index: each one's default gateway
+    /// and that gateway's neighbour entry.
+    pub(crate) routes: std::collections::BTreeMap<u32, Route>,
 }
+
+/// An interface's default gateway and that gateway's neighbour entry, as
+/// the kernel answers them.
+pub(crate) type Route = (Result<Ipv4Addr, MacsysError>, Result<[u8; 6], MacsysError>);
 
 impl FakeLink {
     pub(crate) fn answering(neighbours: &[Result<[u8; 6], MacsysError>]) -> Self {
@@ -283,6 +295,8 @@ impl FakeLink {
                 addr: Ipv4Addr::LOCALHOST,
                 prefix_len: Some(8),
             }]),
+            listed: Ok(Vec::new()),
+            routes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -300,11 +314,20 @@ impl LinkLayer for FakeLink {
         }
     }
 
-    fn default_gateway(&self, _index: InterfaceIndex) -> Result<Ipv4Addr, MacsysError> {
-        self.gateway
+    fn default_gateway(&self, index: InterfaceIndex) -> Result<Ipv4Addr, MacsysError> {
+        match self.routes.get(&std::num::NonZeroU32::from(index).get()) {
+            Some((gateway, _)) => *gateway,
+            None => self.gateway,
+        }
     }
 
     fn neighbour(&self, index: InterfaceIndex, addr: Ipv4Addr) -> Result<[u8; 6], MacsysError> {
+        if let Some((gateway, neighbour)) =
+            self.routes.get(&std::num::NonZeroU32::from(index).get())
+        {
+            assert_eq!(Ok(addr), *gateway);
+            return *neighbour;
+        }
         assert_eq!(index, lo0());
         assert_eq!(Ok(addr), self.gateway);
         self.neighbour_calls.set(self.neighbour_calls.get() + 1);
@@ -319,6 +342,10 @@ impl LinkLayer for FakeLink {
     fn ipv4_addresses(&self, index: InterfaceIndex) -> Result<Vec<InterfaceAddrV4>, MacsysError> {
         assert_eq!(index, lo0());
         self.addresses.clone()
+    }
+
+    fn interfaces(&self) -> Result<Vec<Interface>, MacsysError> {
+        self.listed.clone()
     }
 }
 
@@ -610,6 +637,16 @@ pub(crate) struct Harness {
     pub(crate) nodes: FakeNodes,
     /// The engine pins the commands check files against.
     pub(crate) engine_pins: Vec<(&'static str, String)>,
+    /// The Mac engine pins the daemon checks its engine against.
+    pub(crate) mac_pins: Vec<(&'static str, String)>,
+    /// The power source the daemon reads.
+    pub(crate) power: PowerSource,
+    /// The counter readings the SIM meter's thread is given, in order;
+    /// once they are used up, the interface reads as absent.
+    pub(crate) readings: std::sync::Arc<std::sync::Mutex<VecDeque<CounterReading>>>,
+    /// The direct probes' answers, in order, and the reflectors asked.
+    pub(crate) probes: RefCell<VecDeque<Result<Ipv4Addr, ProbeFailure>>>,
+    pub(crate) probed: RefCell<Vec<(InterfaceIndex, SocketAddrV4)>>,
 }
 
 impl Harness {
@@ -630,6 +667,11 @@ impl Harness {
             parent: FakeParent::staying(),
             nodes: FakeNodes::default(),
             engine_pins: Vec::new(),
+            mac_pins: Vec::new(),
+            power: PowerSource::Ac,
+            readings: std::sync::Arc::default(),
+            probes: RefCell::new(VecDeque::new()),
+            probed: RefCell::new(Vec::new()),
         }
     }
 
@@ -690,6 +732,33 @@ impl Harness {
             .iter()
             .map(|(path, hex)| (*path, hex.as_str()))
             .collect();
+        let mac_pins: Vec<(&str, &str)> = self
+            .mac_pins
+            .iter()
+            .map(|(path, hex)| (*path, hex.as_str()))
+            .collect();
+        let source = self.power;
+        let power = move || Ok(source);
+        let readings = std::sync::Arc::clone(&self.readings);
+        let meter_reader = move || -> crate::runtime::meter::Reader {
+            let readings = std::sync::Arc::clone(&readings);
+            Box::new(move |_| {
+                Ok(readings
+                    .lock()
+                    .map_err(|_| LocalError::MeterThread)?
+                    .pop_front())
+            })
+        };
+        let probe = |index: InterfaceIndex, reflector: SocketAddrV4| {
+            self.probed.borrow_mut().push((index, reflector));
+            self.probes
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or(Err(ProbeFailure {
+                    stage: mooring_daemon_core::status::ProbeStage::Connect,
+                    kind: Some(std::io::ErrorKind::ConnectionRefused),
+                }))
+        };
         let mut env = Env {
             router: RouterEnv {
                 link: &self.link,
@@ -705,6 +774,10 @@ impl Harness {
             parent: &parent,
             nodes: &self.nodes,
             engine_pins: &pins,
+            mac_pins: &mac_pins,
+            power: &power,
+            meter_reader: &meter_reader,
+            probe: &probe,
         };
         work(&mut env)
     }

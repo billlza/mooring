@@ -21,7 +21,7 @@ use mooring_store::{InMemorySecretStore, SecretStore};
 use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
-use crate::node::engines::PINS;
+use crate::node::engines::{MAC_PINS, PINS};
 
 fn node_id(text: &str) -> NodeId {
     NodeId::parse(text).unwrap()
@@ -598,7 +598,7 @@ fn the_engine_pins_are_the_locks() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../engines.lock.toml"),
     )
     .unwrap();
-    for (path, digest) in PINS {
+    for (path, digest) in PINS.iter().chain(&MAC_PINS) {
         let (target, file) = path.split_once('/').unwrap();
         let key = match (target, file) {
             ("geodata", file) => format!("\"{file}\" = \"{digest}\""),

@@ -382,3 +382,174 @@ fn set_anchor_keeps_the_same_cycles_and_refuses_monthly_ones() {
     assert_eq!(state_bytes(&declined), before);
     assert!(fs::metadata(store(&declined).state_path()).is_ok());
 }
+
+/// `exit enable` and `exit disable` change the runtime intent only: its
+/// revision moves, the generation does not, and a second run says so and
+/// changes nothing.
+#[test]
+fn enable_and_disable_record_the_runtime_intent_only() {
+    let mut harness = harness_with(fixture(|_| {}));
+    let before = store(&harness).load().unwrap();
+    assert!(!before.runtime.exit_enabled);
+    let outcome = harness.run(&["exit", "enable"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "the exit is enabled; the daemon runs its preflight and starts the engine at its next tick\n"
+    );
+    let enabled = store(&harness).load().unwrap();
+    assert!(enabled.runtime.exit_enabled);
+    assert_eq!(
+        enabled.runtime.revision,
+        before.runtime.revision.next().unwrap()
+    );
+    assert_eq!(enabled.deployment, before.deployment);
+    let bytes = state_bytes(&harness);
+    let again = harness.run(&["exit", "enable"]);
+    assert_eq!(again.stdout, "the exit is enabled already\n");
+    assert_eq!(state_bytes(&harness), bytes);
+    let outcome = harness.run(&["exit", "disable"]);
+    assert_eq!(
+        outcome.stdout,
+        "the exit is disabled; the daemon stops the engine at its next tick\n"
+    );
+    assert!(!store(&harness).load().unwrap().runtime.exit_enabled);
+}
+
+/// A harness with the fixture deployment whose `lo0` faces the pinned M7.
+fn observing(edit: impl FnOnce(&mut mooring_model::DeploymentParts)) -> Harness {
+    let mut harness = harness_with(fixture(edit));
+    harness.pin(PINNED);
+    harness.link.gateway = Ok(Ipv4Addr::new(192, 168, 1, 1));
+    harness
+}
+
+fn connect_failure() -> crate::runtime::probe::ProbeFailure {
+    crate::runtime::probe::ProbeFailure {
+        stage: mooring_daemon_core::status::ProbeStage::Connect,
+        kind: Some(std::io::ErrorKind::TimedOut),
+    }
+}
+
+/// `exit observe` asks each adopted node's reflector through the M7 and
+/// says whether the address passes a recorded carrier check.
+#[test]
+fn observe_prints_the_address_each_reflector_sees() {
+    let mut harness = observing(|_| {});
+    harness
+        .probes
+        .borrow_mut()
+        .extend([Ok(Ipv4Addr::new(31, 120, 5, 6)), Err(connect_failure())]);
+    let outcome = harness.run(&["exit", "observe", "--interface", "lo0"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "ams1: the reflector sees 31.120.5.6 (inside the recorded carrier prefixes)\n\
+         lon1: no answer from 45.67.89.10:27900 (Connect, timed out)\n"
+    );
+    let probed: Vec<String> = harness
+        .probed
+        .borrow()
+        .iter()
+        .map(|(index, reflector)| {
+            assert_eq!(*index, super::support::lo0());
+            reflector.to_string()
+        })
+        .collect();
+    assert_eq!(probed, ["46.78.90.12:27900", "45.67.89.10:27900"]);
+    // Before the carrier check is recorded, and outside it.
+    let mut harness = observing(|parts| parts.exit.egress_check = None);
+    harness
+        .probes
+        .borrow_mut()
+        .extend([Ok(Ipv4Addr::new(82, 10, 20, 30)), Err(connect_failure())]);
+    let outcome = harness.run(&["exit", "observe", "--interface", "lo0"]);
+    assert!(
+        outcome.stdout.starts_with(
+            "ams1: the reflector sees 82.10.20.30 (no carrier check is recorded yet)\n"
+        )
+    );
+    let mut harness = observing(|_| {});
+    harness
+        .probes
+        .borrow_mut()
+        .extend([Ok(Ipv4Addr::new(82, 10, 20, 30)), Err(connect_failure())]);
+    let outcome = harness.run(&["exit", "observe", "--interface", "lo0"]);
+    assert!(outcome.stdout.starts_with(
+        "ams1: the reflector sees 82.10.20.30 (OUTSIDE the recorded carrier prefixes)\n"
+    ));
+}
+
+/// No answer from any reflector is a failure, and an interface that does
+/// not face the pinned M7 is refused before any probe.
+#[test]
+fn observe_refuses_no_answer_and_another_gateway() {
+    let mut harness = observing(|_| {});
+    let outcome = harness.run(&["exit", "observe", "--interface", "lo0"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome.stderr.ends_with(
+            "mooringctl: no node's reflector answered; adopt a node first, and check the line\n"
+        ),
+        "{}",
+        outcome.stderr
+    );
+    let mut harness = observing(|_| {});
+    harness.link = super::support::FakeLink::answering(&[Ok([2, 0, 0, 0, 0, 9])]);
+    harness.link.gateway = Ok(Ipv4Addr::new(192, 168, 1, 1));
+    let outcome = harness.run(&["exit", "observe", "--interface", "lo0"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(harness.probed.borrow().is_empty());
+}
+
+/// `exit retry` asks the daemon on the control socket, and reports a
+/// refusal as the daemon's.
+#[test]
+fn retry_asks_the_daemon_and_reports_its_answer() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    use mooring_daemon_core::control::{DaemonReply, MAX_REPLY_LINE_BYTES, Refusal, encode_line};
+
+    for (reply, code, stdout, stderr) in [
+        (
+            DaemonReply::RetryQueued,
+            0,
+            "retry queued: the daemon clears the latch and runs a fresh preflight at its next tick; `mooringctl status` shows the outcome\n",
+            "",
+        ),
+        (
+            DaemonReply::Refused {
+                reason: Refusal::NotDeployed,
+            },
+            EXIT_LOCAL,
+            "",
+            "mooringctl: the daemon refused the request: there is no deployment yet (`exit init` creates it)\n",
+        ),
+    ] {
+        // A home short enough for the control socket's path (SUN_LEN).
+        let mut harness = harness_with(fixture(|_| {}));
+        let state = fs::read(store(&harness).state_path()).unwrap();
+        harness.home = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        fs::create_dir_all(harness.support_dir()).unwrap();
+        fs::write(store(&harness).state_path(), state).unwrap();
+        let paths = crate::daemon::RunPaths::under(&harness.support_dir());
+        fs::create_dir_all(&paths.dir).unwrap();
+        let listener = UnixListener::bind(&paths.socket).unwrap();
+        let line = encode_line(&reply, MAX_REPLY_LINE_BYTES).unwrap();
+        let daemon = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_until(b'\n', &mut request)
+                .unwrap();
+            stream.write_all(&line).unwrap();
+            request
+        });
+        let outcome = harness.run(&["exit", "retry"]);
+        assert_eq!(daemon.join().unwrap(), b"\"retry\"\n");
+        assert_eq!(outcome.code, code, "{}", outcome.stderr);
+        assert_eq!(outcome.stdout, stdout);
+        assert_eq!(outcome.stderr, stderr);
+    }
+}

@@ -35,6 +35,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::forecast::DailySimBytes;
 use crate::period::BillingCycle;
+use crate::router::{RouterAdvisory, RouterReading};
+use crate::status::MeterAccuracy;
 
 /// The counters' modulus as the kernel gives them to the daemon.
 pub const COUNTER_MODULUS: u64 = 1 << 32;
@@ -104,6 +106,31 @@ impl CycleBytes {
     #[must_use]
     pub const fn total(self) -> u64 {
         self.rx.saturating_add(self.tx)
+    }
+}
+
+/// Whether `cycle`'s figures count every byte of the SIM (design §10.1
+/// step 5): only when none of its days is short and the router's latest
+/// reading shows the M7's Wi-Fi radio and both offloads off, since the
+/// egress counters miss whatever the M7 carries another way. Without a
+/// reading that shows it, the figures are a lower bound.
+#[must_use]
+pub fn accuracy(cycle: CycleBytes, router: &RouterReading) -> MeterAccuracy {
+    let bypassed = match router {
+        RouterReading::Available { status, .. } => status.advisories().iter().any(|advisory| {
+            matches!(
+                advisory,
+                RouterAdvisory::WifiRadioOn
+                    | RouterAdvisory::WifiOffloadOn
+                    | RouterAdvisory::EthernetOffloadOn
+            )
+        }),
+        RouterReading::Unavailable { .. } => true,
+    };
+    if cycle.short || bypassed {
+        MeterAccuracy::LowerBound
+    } else {
+        MeterAccuracy::Exact
     }
 }
 

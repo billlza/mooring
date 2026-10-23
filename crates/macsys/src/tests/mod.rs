@@ -11,4 +11,5 @@ mod iflist;
 mod limits;
 mod live;
 mod messages;
+mod process;
 mod terminal;

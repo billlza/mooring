@@ -53,6 +53,21 @@ pub(crate) const PINS: [(&str, &str); 6] = [
 
 /// The pins an engine directory is checked against: `(path, digest)`
 /// pairs, [`PINS`] in the binary.
+/// The Mac's engines, by path in the directory, with the digests
+/// `engines.lock.toml` pins (the same run): the daemon runs `mooring-exit`
+/// from the support directory's `engines/` after checking it against its
+/// pin, every time it starts it.
+pub(crate) const MAC_PINS: [(&str, &str); 2] = [
+    (
+        "darwin-arm64/mooring-exit",
+        "e0a858dda89aab39298d728158af5d57e255301b5853778a83cf6de650179a8a",
+    ),
+    (
+        "darwin-arm64/mooring-probe",
+        "12f571e947f841a0ca3cdc6f7385942d60b0fd0a835e9f33528a4ff3c8074caa",
+    ),
+];
+
 pub(crate) type Pins<'a> = &'a [(&'a str, &'a str)];
 
 /// A checked engine directory.
@@ -113,7 +128,7 @@ impl<'p> Engines<'p> {
 }
 
 /// The file `path` in `dir`, which must hash to its pin.
-fn read_pinned(dir: &Path, pins: Pins<'_>, path: &str) -> Result<Vec<u8>, LocalError> {
+pub(crate) fn read_pinned(dir: &Path, pins: Pins<'_>, path: &str) -> Result<Vec<u8>, LocalError> {
     let full = dir.join(path);
     let failed = |source| LocalError::EngineRead {
         path: full.clone(),

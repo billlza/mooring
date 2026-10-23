@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use mooring_agent_proto::{AgentError, Sha256Hex};
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::control::Refusal;
+use mooring_daemon_core::meter::MeterError;
 use mooring_daemon_core::router::RouterUnavailableReason;
+use mooring_daemon_core::snapshot::SnapshotError;
 use mooring_export::ExportError;
 use mooring_keys::KeysError;
 use mooring_macsys::MacsysError;
@@ -250,15 +252,78 @@ pub(crate) enum LocalError {
         /// The lock file.
         path: PathBuf,
     },
-    /// A deployment exists, and this build's daemon serves only the router
-    /// console before `exit init`.
-    #[error(
-        "a deployment exists ({}), and this build's daemon serves only the router console, before `exit init`",
-        path.display()
-    )]
-    DeploymentNotServed {
-        /// The state file.
+    /// The exit site refused the interfaces resolved for it.
+    #[error("the interfaces resolved for the exit were refused")]
+    ExitSite(#[source] ModelError),
+    /// The billing cycle of the Mac's clock could not be computed.
+    #[error("the SIM billing cycle could not be computed")]
+    Cycle(#[source] ModelError),
+    /// The exit's latch file (`run/latch.json`) failed. (Boxed, as
+    /// `StateRead` is.)
+    #[error("the exit's latch file failed")]
+    Latch(#[source] Box<StoreError>),
+    /// The SIM meter's file (`usage/sim-meter.json`) failed. (Boxed, as
+    /// `StateRead` is.)
+    #[error("the SIM meter's file failed")]
+    MeterFile(#[source] Box<StoreError>),
+    /// The SIM meter could not count a reading or read its document.
+    /// (Boxed, as `StateRead` is, to keep `CommandError` small.)
+    #[error("the SIM meter failed")]
+    Meter(#[source] Box<MeterError>),
+    /// The SIM meter's thread ended, or left its state inconsistent.
+    #[error("the SIM meter's thread stopped")]
+    MeterThread,
+    /// The SIM meter's thread ended on a fault: the daemon can no longer
+    /// count the line's bytes, so it stops.
+    #[error("the SIM meter stopped: {fault}")]
+    MeterFault {
+        /// The fault, with its causes.
+        fault: String,
+    },
+    /// The daemon could not assemble its status. (Boxed, as `StateRead`
+    /// is, to keep `CommandError` small.)
+    #[error("the daemon could not assemble its status")]
+    Snapshot(#[source] Box<SnapshotError>),
+    /// The exit's engine config could not be rendered.
+    #[error("the exit's engine config could not be rendered")]
+    ExitRender(#[source] Box<RenderError>),
+    /// The exit's keys could not be read from the keychain.
+    #[error("reading the exit's keys from the keychain failed")]
+    ExitSecrets(#[source] Box<SnapshotReadError>),
+    /// Waiting for or stopping the exit's engine failed.
+    #[error("waiting for the exit's engine failed")]
+    EngineWait(#[source] io::Error),
+    /// The engine an earlier daemon left could not be checked or stopped.
+    #[error("the engine an earlier daemon left (pid {pid}) could not be checked or stopped")]
+    StaleEngine {
+        /// Its process id.
+        pid: u32,
+        /// The kernel's error.
+        #[source]
+        source: MacsysError,
+    },
+    /// The engine's pid file could not be read, written or removed.
+    #[error("the engine's pid file {} failed", path.display())]
+    EnginePidFile {
+        /// The file.
         path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// `/usr/bin/pmset` could not be run or failed.
+    #[error("running /usr/bin/pmset failed")]
+    Power(#[source] io::Error),
+    /// `/usr/bin/pmset -g ps` did not name the power source on its first
+    /// line.
+    #[error("/usr/bin/pmset -g ps did not name the power source")]
+    PowerUnreadable,
+    /// The kernel lists an interface whose name is not a BSD name, so the
+    /// foreign-network check cannot name it.
+    #[error("the kernel lists an interface named {name:?}, which is not a BSD name")]
+    InterfaceName {
+        /// The name, as the kernel gave it.
+        name: String,
     },
     /// Whether `state.json` exists could not be told.
     #[error("cannot inspect {}", path.display())]
@@ -322,6 +387,12 @@ pub(crate) enum LocalError {
     /// The daemon closed the status stream.
     #[error("the daemon closed the status stream")]
     DaemonClosed,
+    /// No adopted node's reflector answered `exit observe`.
+    #[error("no node's reflector answered; adopt a node first, and check the line")]
+    NothingObserved,
+    /// The daemon answered with a reply to another request.
+    #[error("the daemon answered with a reply to another request")]
+    DaemonUnexpectedReply,
     /// The daemon sent nothing for longer than a poll takes.
     #[error("the daemon sent no status for {secs} s")]
     DaemonSilent {
@@ -611,6 +682,7 @@ pub(crate) const fn refusal_text(reason: Refusal) -> &'static str {
         Refusal::Busy => "it already serves as many clients as it accepts; try again",
         Refusal::BadRequest => "the request was malformed",
         Refusal::NoStatusYet => "its first poll of the M7 has not finished yet",
+        Refusal::NotDeployed => "there is no deployment yet (`exit init` creates it)",
     }
 }
 

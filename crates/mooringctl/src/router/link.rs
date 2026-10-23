@@ -11,7 +11,7 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
-use mooring_macsys::{InterfaceAddrV4, MacsysError};
+use mooring_macsys::{Interface, InterfaceAddrV4, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_store::RouterPin;
 
@@ -34,6 +34,9 @@ pub(crate) trait LinkLayer {
 
     /// The interface's IPv4 addresses, in the kernel's order.
     fn ipv4_addresses(&self, index: InterfaceIndex) -> Result<Vec<InterfaceAddrV4>, MacsysError>;
+
+    /// Every interface in the kernel's list.
+    fn interfaces(&self) -> Result<Vec<Interface>, MacsysError>;
 }
 
 /// The kernel itself, through `mooring-macsys`.
@@ -55,6 +58,10 @@ impl LinkLayer for KernelLink {
 
     fn ipv4_addresses(&self, index: InterfaceIndex) -> Result<Vec<InterfaceAddrV4>, MacsysError> {
         mooring_macsys::interface(index.into()).map(|interface| interface.ipv4)
+    }
+
+    fn interfaces(&self) -> Result<Vec<Interface>, MacsysError> {
+        mooring_macsys::interfaces()
     }
 }
 

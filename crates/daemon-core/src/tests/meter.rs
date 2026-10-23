@@ -386,6 +386,47 @@ fn a_day_that_would_overflow_is_refused() {
     );
 }
 
+#[test]
+fn the_meter_is_exact_only_with_full_days_and_the_m7_bypasses_off() {
+    use crate::meter::accuracy;
+    use crate::router::{RouterReading, RouterStatus, RouterStatusParts, RouterUnavailableReason};
+    use crate::status::MeterAccuracy::{Exact, LowerBound};
+    let full = CycleBytes {
+        rx: 1,
+        tx: 1,
+        short: false,
+    };
+    let short = CycleBytes {
+        short: true,
+        ..full
+    };
+    let reading = super::router::reading();
+    assert_eq!(accuracy(full, &reading), Exact);
+    assert_eq!(accuracy(short, &reading), LowerBound);
+    let with = |change: &dyn Fn(&mut RouterStatusParts)| {
+        let mut parts = super::router::status().into_parts();
+        change(&mut parts);
+        RouterReading::Available {
+            polled_at: UnixTime::from_secs(MIDNIGHT),
+            status: Box::new(RouterStatus::new(parts).unwrap()),
+        }
+    };
+    for bypass in [
+        with(&|p| p.wifi.enabled = true),
+        with(&|p| p.settings.wifi_offload = true),
+        with(&|p| p.settings.ethernet_offload = true),
+    ] {
+        assert_eq!(accuracy(full, &bypass), LowerBound);
+    }
+    // Settings that carry no SIM bytes around the Mac leave it exact.
+    assert_eq!(accuracy(full, &with(&|p| p.settings.upnp = true)), Exact);
+    let unread = RouterReading::Unavailable {
+        reason: RouterUnavailableReason::Unreachable,
+        last_polled_at: None,
+    };
+    assert_eq!(accuracy(full, &unread), LowerBound);
+}
+
 proptest! {
     /// Read every 2 s, the meter reproduces a 64-bit counter exactly from
     /// its value modulo 2^32, whatever the line carries up to its peak.

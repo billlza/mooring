@@ -6,11 +6,13 @@
 //! a newline, each within its bound. The CLI is the only client: Mooring.app
 //! runs the CLI, never the socket.
 //!
-//! This slice serves the console: [`DaemonRequest::Status`] answers with
-//! the latest status once, and [`DaemonRequest::Subscribe`] with the latest
-//! and then each new one, until either side closes. A request the daemon
-//! will not serve is answered with [`DaemonReply::Refused`], after which it
-//! closes the connection.
+//! [`DaemonRequest::Status`] answers with the latest status once, and
+//! [`DaemonRequest::Subscribe`] with the latest and then each new one,
+//! until either side closes. [`DaemonRequest::Retry`] (`exit retry`, M5c)
+//! is queued for the daemon's next tick and answered
+//! [`DaemonReply::RetryQueued`]. A request the daemon will not serve is
+//! answered with [`DaemonReply::Refused`], after which it closes the
+//! connection.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +43,9 @@ pub enum DaemonRequest {
     Status,
     /// The latest status, then each new one, until either side closes.
     Subscribe,
+    /// Clear the exit's latch and holds and run a fresh preflight
+    /// (`exit retry`, design §10.2).
+    Retry,
 }
 
 /// Why the daemon refused a request. It closes the connection after
@@ -57,6 +62,8 @@ pub enum Refusal {
     /// a `Status` request is refused for it; a subscription waits for the
     /// first status.
     NoStatusYet,
+    /// The request is about the exit, and there is no deployment yet.
+    NotDeployed,
 }
 
 /// One line the daemon sends.
@@ -70,6 +77,8 @@ pub enum DaemonReply {
         /// Why.
         reason: Refusal,
     },
+    /// The retry is queued: the daemon's next tick runs it.
+    RetryQueued,
 }
 
 /// `value` as one line: its compact JSON and a newline, refused when the

@@ -339,12 +339,33 @@ fn a_good_probe_starts_the_engine_which_verifies_after_the_grace() {
     let verified_at = section.since;
     world.advance(10);
     assert_eq!(world.tick(&mut machine, &mut fake).since, verified_at);
-    world.advance(20);
+    // The next round is due 30 s after the first.
+    let mono = |world: &World| std::time::Duration::from_secs(world.mono);
+    assert_eq!(
+        machine.next_probe_in(mono(&world), &world.deployment),
+        Some(std::time::Duration::from_secs(10))
+    );
+    world.advance(10);
+    assert_eq!(
+        machine.next_probe_in(mono(&world), &world.deployment),
+        Some(std::time::Duration::ZERO)
+    );
     world.tick(&mut machine, &mut fake);
     assert_eq!(
         fake.take_log(),
         [Event::Probe(Ipv4Addr::new(46, 78, 90, 12))]
     );
+    // Before any tick, and after one that stopped before the probes, no
+    // probe is pending.
+    assert_eq!(
+        world
+            .machine()
+            .next_probe_in(mono(&world), &world.deployment),
+        None
+    );
+    world.enabled = false;
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(machine.next_probe_in(mono(&world), &world.deployment), None);
 }
 
 #[test]

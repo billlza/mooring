@@ -51,6 +51,7 @@ struct Info {
     mtu: u32,
     ibytes: u64,
     obytes: u64,
+    baudrate: u64,
 }
 
 const EN9: Info = Info {
@@ -60,6 +61,7 @@ const EN9: Info = Info {
     mtu: 1500,
     ibytes: 0x1_0000_0001,
     obytes: 0x2_0000_0002,
+    baudrate: 2_500_000_000,
 };
 
 const LO0: Info = Info {
@@ -69,6 +71,7 @@ const LO0: Info = Info {
     mtu: 16384,
     ibytes: 7,
     obytes: 7,
+    baudrate: 0,
 };
 
 fn ifinfo_of(version: u8, info: &Info, slots: &[(usize, Vec<u8>)]) -> Vec<u8> {
@@ -126,6 +129,11 @@ fn ifinfo_of(version: u8, info: &Info, slots: &[(usize, Vec<u8>)]) -> Vec<u8> {
         &mut message,
         data + offset_of!(libc::if_data64, ifi_obytes),
         &info.obytes.to_ne_bytes(),
+    );
+    put(
+        &mut message,
+        data + offset_of!(libc::if_data64, ifi_baudrate),
+        &info.baudrate.to_ne_bytes(),
     );
     message.extend(body);
     message
@@ -270,6 +278,7 @@ fn a_list_gives_each_interface_with_its_ipv4_addresses() {
                 mtu: 16384,
                 ibytes: 7,
                 obytes: 7,
+                baudrate: 0,
                 ipv4: vec![InterfaceAddrV4 {
                     addr: Ipv4Addr::LOCALHOST,
                     prefix_len: Some(8),
@@ -285,6 +294,7 @@ fn a_list_gives_each_interface_with_its_ipv4_addresses() {
                 mtu: 1500,
                 ibytes: 0x1_0000_0001,
                 obytes: 0x2_0000_0002,
+                baudrate: 2_500_000_000,
                 ipv4: vec![
                     InterfaceAddrV4 {
                         addr: Ipv4Addr::new(192, 168, 1, 60),

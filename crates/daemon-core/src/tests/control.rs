@@ -27,6 +27,7 @@ fn requests_have_fixed_lines() {
     for (request, line) in [
         (DaemonRequest::Status, "\"status\"\n"),
         (DaemonRequest::Subscribe, "\"subscribe\"\n"),
+        (DaemonRequest::Retry, "\"retry\"\n"),
     ] {
         let encoded = encode_line(&request, MAX_REQUEST_LINE_BYTES).unwrap();
         assert_eq!(encoded, line.as_bytes());
@@ -49,6 +50,7 @@ fn replies_have_fixed_lines() {
         (Refusal::Busy, "busy"),
         (Refusal::BadRequest, "bad_request"),
         (Refusal::NoStatusYet, "no_status_yet"),
+        (Refusal::NotDeployed, "not_deployed"),
     ] {
         let reply = DaemonReply::Refused { reason };
         let line = encode_line(&reply, MAX_REPLY_LINE_BYTES).unwrap();
@@ -58,6 +60,9 @@ fn replies_have_fixed_lines() {
         );
         assert_eq!(decode_reply(&line).unwrap(), reply);
     }
+    let queued = encode_line(&DaemonReply::RetryQueued, MAX_REPLY_LINE_BYTES).unwrap();
+    assert_eq!(queued, b"\"retry_queued\"\n");
+    assert_eq!(decode_reply(&queued).unwrap(), DaemonReply::RetryQueued);
     let reply = DaemonReply::Status(status());
     let line = encode_line(&reply, MAX_REPLY_LINE_BYTES).unwrap();
     assert!(line.starts_with(b"{\"status\":{\"no_deployment\":{\"version\":1,"));
