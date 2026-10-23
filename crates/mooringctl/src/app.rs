@@ -123,8 +123,9 @@ pub(crate) fn run(
         Command::Exit(ExitCommand::RecordCarrier {
             prefixes,
             pairing,
+            replace,
             yes,
-        }) => crate::exit::record_carrier(env, out, prefixes, pairing.into(), yes),
+        }) => crate::exit::record_carrier(env, out, prefixes, pairing.into(), replace, yes),
         Command::Exit(ExitCommand::Observe { interface }) => {
             crate::exit::observe(env, out, &interface)
         }

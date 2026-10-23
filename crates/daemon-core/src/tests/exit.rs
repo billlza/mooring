@@ -23,8 +23,8 @@ use proptest::prelude::*;
 use crate::alert::MacEngine;
 use crate::exit::{
     CRASH_LIMIT, CallFault, Egress, EgressFault, ExitMachine, ExitPorts, FAILED_ROUNDS_TOLERATED,
-    NODE_CALL_RETRY, NodeCall, RenderOutcome, Rendered, START_GRACE, SimUse, StartFault,
-    TickInputs,
+    IN_CHAIN_FIRST, InChainProbe, InChainTarget, NODE_CALL_RETRY, NodeCall, RenderOutcome,
+    Rendered, RenderedProber, START_GRACE, SimUse, StartFault, TickInputs,
 };
 use crate::network::ForeignNetworkFinding;
 use crate::status::{
@@ -42,6 +42,7 @@ const LON1: Ipv4Addr = Ipv4Addr::new(45, 67, 89, 10);
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Event {
     Probe(Ipv4Addr),
+    InChain(u16),
     Check(&'static str),
     Start(&'static str),
     Stop,
@@ -74,6 +75,15 @@ struct Fake {
     latch: Option<LatchRecord>,
     fail_persist: bool,
     log: Vec<Event>,
+    /// The prober: its rendered config (no probes unless a test gives
+    /// some), its start, and what it did, kept apart from `log`.
+    prober: Result<RenderedProber<&'static str>, RenderOutcome>,
+    prober_start: Result<(), StartFault>,
+    prober_running: Option<u32>,
+    prober_ends: Option<ProcessEnd>,
+    prober_log: Vec<&'static str>,
+    chain: VecDeque<Result<InChainProbe, ProbeStage>>,
+    chain_answer: Result<InChainProbe, ProbeStage>,
 }
 
 fn config(name: &'static str) -> Rendered<&'static str> {
@@ -98,6 +108,17 @@ impl Fake {
             latch: None,
             fail_persist: false,
             log: Vec::new(),
+            prober: Ok(RenderedProber {
+                config: "probe-one",
+                digest: Sha256Digest::of(b"probe-one"),
+                targets: Vec::new(),
+            }),
+            prober_start: Ok(()),
+            prober_running: None,
+            prober_ends: None,
+            prober_log: Vec::new(),
+            chain: VecDeque::new(),
+            chain_answer: Ok(chained(CARRIER)),
         }
     }
 
@@ -114,8 +135,17 @@ fn call_name(node: &NodeId) -> &'static str {
     }
 }
 
+/// An in-chain answer of `ip`, taking 120 ms.
+fn chained(ip: Ipv4Addr) -> InChainProbe {
+    InChainProbe {
+        ip,
+        latency: std::time::Duration::from_millis(120),
+    }
+}
+
 impl ExitPorts for Fake {
     type Config = &'static str;
+    type ProberConfig = &'static str;
     type Error = Fault;
 
     fn render(
@@ -177,6 +207,45 @@ impl ExitPorts for Fake {
         Ok(())
     }
 
+    fn render_prober(
+        &mut self,
+        _deployment: &Deployment,
+        _interfaces: &ResolvedInterfaces,
+    ) -> Result<Result<RenderedProber<&'static str>, RenderOutcome>, Fault> {
+        Ok(self.prober.clone())
+    }
+
+    fn start_prober(&mut self, config: &&'static str) -> Result<Result<u32, StartFault>, Fault> {
+        self.prober_log.push(config);
+        assert!(
+            self.prober_running.is_none(),
+            "started over a running prober"
+        );
+        Ok(self.prober_start.map(|()| {
+            self.prober_running = Some(900);
+            900
+        }))
+    }
+
+    fn prober_exited(&mut self) -> Result<Option<ProcessEnd>, Fault> {
+        assert!(self.prober_running.is_some());
+        Ok(self
+            .prober_ends
+            .take()
+            .inspect(|_| self.prober_running = None))
+    }
+
+    fn stop_prober(&mut self) -> Result<ProcessEnd, Fault> {
+        self.prober_log.push("stop");
+        assert!(self.prober_running.take().is_some(), "stopped no prober");
+        Ok(ProcessEnd::Signalled { signal: 9 })
+    }
+
+    fn probe_in_chain(&mut self, port: u16) -> Result<InChainProbe, ProbeStage> {
+        self.log.push(Event::InChain(port));
+        self.chain.pop_front().unwrap_or(self.chain_answer)
+    }
+
     fn call(&mut self, node: &NodeId, call: &NodeCall) -> Result<(), CallFault> {
         let name = call_name(node);
         let kind = match call {
@@ -203,6 +272,7 @@ struct World {
     foreign: BTreeSet<ForeignNetworkFinding>,
     sim_bytes: u64,
     power: PowerStatus,
+    nodes_degraded: Vec<DegradedReason>,
 }
 
 impl World {
@@ -225,6 +295,7 @@ impl World {
             egress,
             foreign: BTreeSet::new(),
             sim_bytes: 0,
+            nodes_degraded: Vec::new(),
             power: PowerStatus {
                 source: PowerSource::Ac,
                 assertions_held: false,
@@ -249,6 +320,7 @@ impl World {
             },
             power: self.power,
             retry,
+            nodes_degraded: self.nodes_degraded.clone(),
         }
     }
 
@@ -1202,4 +1274,349 @@ proptest! {
             }
         }
     }
+}
+
+// --- In-chain probes ------------------------------------------------------
+
+const AMS1: Ipv4Addr = Ipv4Addr::new(46, 78, 90, 12);
+
+/// A prober serving ams1 through REALITY and lon1 through Hysteria2.
+fn two_probes(fake: &mut Fake) {
+    fake.prober = Ok(RenderedProber {
+        config: "probe-one",
+        digest: Sha256Digest::of(b"probe-one"),
+        targets: vec![
+            InChainTarget {
+                node: NodeId::parse("ams1").unwrap(),
+                protocol: mooring_model::exit::ProbeProtocol::Reality,
+                port: 47101,
+                reflector: SocketAddrV4::new(AMS1, 27900),
+            },
+            InChainTarget {
+                node: NodeId::parse("lon1").unwrap(),
+                protocol: mooring_model::exit::ProbeProtocol::Hy2,
+                port: 47104,
+                reflector: SocketAddrV4::new(LON1, 27900),
+            },
+        ],
+    });
+}
+
+/// A started engine with two probes, its log cleared, just before its
+/// first round.
+fn before_the_round() -> (World, ExitMachine, Fake) {
+    let world = World::new();
+    let mut machine = world.machine();
+    let mut fake = Fake::new();
+    two_probes(&mut fake);
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(fake.prober_log, ["probe-one"]);
+    fake.take_log();
+    (world, machine, fake)
+}
+
+#[test]
+fn a_round_brackets_each_probe_and_a_verified_round_serves() {
+    let (mut world, mut machine, mut fake) = before_the_round();
+    world.advance(IN_CHAIN_FIRST.as_secs() - 1);
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(fake.take_log(), [], "no round before its time");
+    world.advance(1);
+    let section = world.tick(&mut machine, &mut fake);
+    // Each probe between two direct probes to its node's reflector.
+    assert_eq!(
+        fake.take_log(),
+        [
+            Event::Probe(AMS1),
+            Event::InChain(47101),
+            Event::Probe(AMS1),
+            Event::Probe(LON1),
+            Event::InChain(47104),
+            Event::Probe(LON1),
+        ]
+    );
+    assert_eq!(
+        section.state,
+        ExitState::Serving {
+            ip: CARRIER,
+            verified_at: UnixTime::from_secs(world.now)
+        }
+    );
+    assert_eq!(section.engines.probe.pid, Some(900));
+    let verdicts = machine.verdicts();
+    let reality = verdicts[&NodeId::parse("ams1").unwrap()].reality.unwrap();
+    assert_eq!(reality.outcome, crate::status::InChainOutcome::Verified);
+    assert_eq!(reality.latency_ms, Some(120));
+    assert_eq!(reality.at, UnixTime::from_secs(world.now));
+    assert!(verdicts[&NodeId::parse("ams1").unwrap()].hy2.is_none());
+    assert!(verdicts[&NodeId::parse("lon1").unwrap()].hy2.is_some());
+    // The next round waits its interval (300 s); the direct probes go on.
+    world.advance(299);
+    world.tick(&mut machine, &mut fake);
+    assert!(!fake.take_log().contains(&Event::InChain(47101)));
+    world.advance(1);
+    world.tick(&mut machine, &mut fake);
+    assert!(fake.take_log().contains(&Event::InChain(47101)));
+}
+
+#[test]
+fn an_unsteady_bracket_runs_again_once_and_then_degrades() {
+    let (mut world, mut machine, mut fake) = before_the_round();
+    let a = Ipv4Addr::new(31, 120, 0, 1);
+    let b = Ipv4Addr::new(31, 120, 0, 2);
+    let c = Ipv4Addr::new(31, 120, 0, 3);
+    // ams1: d1 = a, x = c, d2 = b, twice; lon1: steady.
+    fake.answers = VecDeque::from([Ok(a), Ok(b), Ok(a), Ok(b), Ok(CARRIER), Ok(CARRIER)]);
+    fake.chain = VecDeque::from([Ok(chained(c)), Ok(chained(c)), Ok(chained(CARRIER))]);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    let section = world.tick(&mut machine, &mut fake);
+    assert_eq!(
+        fake.take_log()
+            .iter()
+            .filter(|event| **event == Event::InChain(47101))
+            .count(),
+        2
+    );
+    assert_eq!(
+        section.state,
+        ExitState::Degraded {
+            reasons: NonEmpty::new(DegradedReason::NodeProbeFailed {
+                node: NodeId::parse("ams1").unwrap(),
+                protocol: mooring_model::exit::ProbeProtocol::Reality,
+                stage: ProbeStage::CarrierAddressUnstable,
+            })
+        }
+    );
+    // The engine keeps running.
+    assert!(section.engines.exit.pid.is_some());
+}
+
+#[test]
+fn an_in_chain_address_away_from_a_steady_carrier_is_a_mismatch() {
+    let (mut world, mut machine, mut fake) = before_the_round();
+    let elsewhere = Ipv4Addr::new(31, 121, 7, 7);
+    fake.chain = VecDeque::from([Ok(chained(elsewhere))]);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    let section = world.tick(&mut machine, &mut fake);
+    let violation = Violation::EgressMismatch {
+        d1: CARRIER,
+        d2: CARRIER,
+        observed: elsewhere,
+    };
+    assert_eq!(
+        section.state,
+        down(DownReason::Violation(violation.clone()))
+    );
+    assert_eq!(fake.latch.as_ref().unwrap().violation, violation);
+    // The round stops at the violation; the engine and the prober stop.
+    let log = fake.take_log();
+    assert!(!log.contains(&Event::InChain(47104)));
+    assert!(log.contains(&Event::Stop));
+    assert_eq!(fake.prober_running, None);
+    assert_eq!(fake.prober_log.last(), Some(&"stop"));
+    assert_eq!(
+        machine.verdicts()[&NodeId::parse("ams1").unwrap()]
+            .reality
+            .unwrap()
+            .outcome,
+        crate::status::InChainOutcome::Violation {
+            kind: ViolationKind::EgressMismatch
+        }
+    );
+}
+
+#[test]
+fn an_in_chain_address_outside_the_prefixes_or_a_node_s_is_latched() {
+    for (seen, kind) in [
+        (OUTSIDE, ViolationKind::OutsideCarrierPrefixes),
+        (LON1, ViolationKind::EgressIsNodeAddress),
+    ] {
+        let (mut world, mut machine, mut fake) = before_the_round();
+        fake.chain = VecDeque::from([Ok(chained(seen))]);
+        world.advance(IN_CHAIN_FIRST.as_secs());
+        let section = world.tick(&mut machine, &mut fake);
+        assert!(matches!(section.state, ExitState::Down { .. }), "{kind:?}");
+        assert_eq!(fake.latch.as_ref().unwrap().violation.kind(), kind);
+    }
+    // A bracketing direct probe outside the prefixes is a violation too.
+    let (mut world, mut machine, mut fake) = before_the_round();
+    fake.answers = VecDeque::from([Ok(OUTSIDE)]);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(
+        fake.latch.as_ref().unwrap().violation.kind(),
+        ViolationKind::OutsideCarrierPrefixes
+    );
+    assert_eq!(fake.take_log()[..2], [Event::Probe(AMS1), Event::Stop]);
+}
+
+#[test]
+fn a_failed_probe_degrades_naming_its_node_and_protocol() {
+    let (mut world, mut machine, mut fake) = before_the_round();
+    fake.chain = VecDeque::from([Ok(chained(CARRIER)), Err(ProbeStage::Read)]);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    let section = world.tick(&mut machine, &mut fake);
+    assert_eq!(
+        section.state,
+        ExitState::Degraded {
+            reasons: NonEmpty::new(DegradedReason::NodeProbeFailed {
+                node: NodeId::parse("lon1").unwrap(),
+                protocol: mooring_model::exit::ProbeProtocol::Hy2,
+                stage: ProbeStage::Read,
+            })
+        }
+    );
+    // A bracketing direct probe that fails fails the probe the same way.
+    let (mut world, mut machine, mut fake) = before_the_round();
+    fake.answers = VecDeque::from([Err(ProbeStage::Connect)]);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    let section = world.tick(&mut machine, &mut fake);
+    assert!(matches!(section.state, ExitState::Degraded { .. }));
+    assert_eq!(
+        fake.take_log()[..2],
+        [Event::Probe(AMS1), Event::Probe(LON1)]
+    );
+}
+
+#[test]
+fn a_prober_that_cannot_start_degrades_every_probe_and_never_downs() {
+    let mut world = World::new();
+    let mut machine = world.machine();
+    let mut fake = Fake::new();
+    two_probes(&mut fake);
+    fake.prober_start = Err(StartFault::Rejected);
+    world.tick(&mut machine, &mut fake);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    let section = world.tick(&mut machine, &mut fake);
+    let ExitState::Degraded { reasons } = &section.state else {
+        panic!("{:?}", section.state);
+    };
+    assert_eq!(usize::from(reasons.len()), 4, "both nodes, both protocols");
+    assert!(reasons.iter().all(|reason| matches!(
+        reason,
+        DegradedReason::NodeProbeFailed {
+            stage: ProbeStage::ProberUnavailable,
+            ..
+        }
+    )));
+    assert!(section.engines.exit.pid.is_some());
+    assert_eq!(section.engines.probe.pid, None);
+    // It is tried again at the next round, not every tick.
+    let starts = fake.prober_log.len();
+    world.advance(2);
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(fake.prober_log.len(), starts);
+    fake.prober_start = Ok(());
+    world.advance(300);
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(fake.prober_running, Some(900));
+}
+
+#[test]
+fn the_prober_restarts_with_its_config_and_stops_with_the_engine() {
+    let (mut world, mut machine, mut fake) = before_the_round();
+    fake.prober = Ok(RenderedProber {
+        config: "probe-two",
+        digest: Sha256Digest::of(b"probe-two"),
+        targets: Vec::new(),
+    });
+    world.advance(2);
+    let section = world.tick(&mut machine, &mut fake);
+    assert_eq!(fake.prober_log, ["probe-one", "stop", "probe-two"]);
+    assert_eq!(section.engines.probe.restarts, 1);
+    // An exit of its own is seen, and it starts again at the next round.
+    fake.prober_ends = Some(ProcessEnd::Exited { code: 1 });
+    world.advance(2);
+    let section = world.tick(&mut machine, &mut fake);
+    assert_eq!(section.engines.probe.pid, None);
+    assert_eq!(
+        section.engines.probe.last_exit.map(|exit| exit.end),
+        Some(ProcessEnd::Exited { code: 1 })
+    );
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(fake.prober_running, Some(900));
+    world.enabled = false;
+    world.advance(2);
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(fake.prober_running, None);
+    assert_eq!(fake.prober_log.last(), Some(&"stop"));
+}
+
+#[test]
+fn a_node_s_stale_watch_degrades_a_serving_exit() {
+    let (mut world, mut machine, mut fake) = before_the_round();
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    assert!(matches!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Serving { .. }
+    ));
+    world.nodes_degraded = vec![DegradedReason::WatchStale {
+        node: NodeId::parse("lon1").unwrap(),
+    }];
+    world.advance(2);
+    assert_eq!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Degraded {
+            reasons: NonEmpty::new(DegradedReason::WatchStale {
+                node: NodeId::parse("lon1").unwrap()
+            })
+        }
+    );
+    // A new engine forgets the old engine's verdicts until its own round.
+    world.nodes_degraded.clear();
+    fake.render = Ok(config("two"));
+    world.advance(2);
+    world.tick(&mut machine, &mut fake);
+    world.advance(START_GRACE.as_secs() - 1);
+    assert_eq!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Starting
+    );
+    world.advance(1);
+    assert!(matches!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Serving { .. }
+    ));
+}
+
+/// The verdicts of an engine count only while it runs: a new engine whose
+/// round does not reach a probe that failed, or verifies nothing, is not
+/// judged by the old one's.
+#[test]
+fn a_new_engine_is_not_judged_by_the_old_engine_s_verdicts() {
+    // An old failure through lon1 is forgotten when the new prober serves
+    // ams1 alone.
+    let (mut world, mut machine, mut fake) = before_the_round();
+    fake.chain = VecDeque::from([Ok(chained(CARRIER)), Err(ProbeStage::Read)]);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    assert!(matches!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Degraded { .. }
+    ));
+    fake.render = Ok(config("two"));
+    if let Ok(prober) = &mut fake.prober {
+        prober.targets.truncate(1);
+        prober.digest = Sha256Digest::of(b"probe-two");
+    }
+    world.advance(2);
+    world.tick(&mut machine, &mut fake);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    assert!(matches!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Serving { .. }
+    ));
+    // An old verification is forgotten when the new prober serves nothing.
+    fake.render = Ok(config("three"));
+    if let Ok(prober) = &mut fake.prober {
+        prober.targets.clear();
+        prober.digest = Sha256Digest::of(b"probe-three");
+    }
+    world.advance(2);
+    world.tick(&mut machine, &mut fake);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    assert_eq!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Verifying
+    );
 }

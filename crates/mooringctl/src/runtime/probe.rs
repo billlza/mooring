@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The direct probe (design §10.2): a TCP connection bound to the egress
-//! interface (`IP_BOUND_IF`) to a node's reflector, which answers with the
-//! address it saw, one line `<IPv4>\n`, within 5 s. That address is the
-//! carrier's public address as the internet sees the line.
+//! The probes (design §10.2). The direct probe is a TCP connection bound
+//! to the egress interface (`IP_BOUND_IF`) to a node's reflector, which
+//! answers with the address it saw, one line `<IPv4>\n`, within 5 s: the
+//! carrier's public address as the internet sees the line. The in-chain
+//! probe connects to a probe inbound of `mooring-probe` on loopback, whose
+//! destination is the node's reflector reached through the whole chain;
+//! the line it reads is the address the chain's traffic leaves by, within
+//! 10 s.
 
 use std::io::{ErrorKind, Read};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
@@ -14,8 +18,12 @@ use mooring_daemon_core::status::ProbeStage;
 use mooring_model::iface::InterfaceIndex;
 use socket2::{Domain, Protocol, Socket, Type};
 
-/// The longest the whole probe may take.
+/// The longest the whole direct probe may take.
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The longest the whole in-chain probe may take: the chain crosses the
+/// node twice and the line once more.
+pub(crate) const IN_CHAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The most bytes read for the reflector's line: an IPv4 address and its
 /// newline fit in 16.
@@ -49,11 +57,39 @@ pub(crate) fn direct(
     socket
         .connect_timeout(&SocketAddr::V4(reflector).into(), PROBE_TIMEOUT)
         .map_err(failed(ProbeStage::Connect))?;
-    let mut stream: TcpStream = socket.into();
+    read_address(socket.into(), started, PROBE_TIMEOUT)
+}
+
+/// Probes through the probe inbound on the loopback `port`: the address
+/// the reflector saw at the chain's end, and how long the probe took.
+pub(crate) fn in_chain(port: u16) -> Result<(Ipv4Addr, Duration), ProbeFailure> {
+    let started = Instant::now();
+    let inbound = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
+    let stream =
+        TcpStream::connect_timeout(&inbound, IN_CHAIN_TIMEOUT).map_err(|error| ProbeFailure {
+            stage: ProbeStage::Connect,
+            kind: Some(error.kind()),
+        })?;
+    let address = read_address(stream, started, IN_CHAIN_TIMEOUT)?;
+    Ok((address, started.elapsed()))
+}
+
+/// The reflector's line on `stream`, read before `timeout` from `started`.
+fn read_address(
+    mut stream: TcpStream,
+    started: Instant,
+    timeout: Duration,
+) -> Result<Ipv4Addr, ProbeFailure> {
+    let failed = |stage| {
+        move |error: std::io::Error| ProbeFailure {
+            stage,
+            kind: Some(error.kind()),
+        }
+    };
     let mut line = Vec::new();
     let mut byte = [0_u8; 1];
     loop {
-        let left = PROBE_TIMEOUT.saturating_sub(started.elapsed());
+        let left = timeout.saturating_sub(started.elapsed());
         if left.is_zero() {
             return Err(ProbeFailure {
                 stage: ProbeStage::Read,
