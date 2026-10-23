@@ -3,9 +3,10 @@
 //! The daemon with a deployment (design §10.1): every [`TICK`] it reads
 //! the state, resolves the exit's interfaces, checks for foreign networks,
 //! reads the SIM meter and ticks the exit machine; it polls the M7 every
-//! [`POLL_INTERVAL`] in the slot after a direct-probe round, so a slow M7
-//! never delays a probe; and it publishes the deployment's status when the
-//! exit's state changes and at least every [`PUBLISH_EVERY`]. The SIM
+//! [`POLL_INTERVAL`] and each node's agent every [`NODE_POLL_EVERY`]
+//! (`Status`, design §10.5) in the slot after a direct-probe round, so
+//! neither delays a probe; and it publishes the deployment's status when
+//! the exit's state changes and at least every [`PUBLISH_EVERY`]. The SIM
 //! meter reads the egress counters on a thread of its own.
 //!
 //! The daemon keeps std threads, as the router console did (design §10.1,
@@ -19,15 +20,19 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use mooring_agent_proto::{LineRequest, ReadError, Response, WATCH_STALE_SECS};
 use mooring_daemon_core::console::ConsoleStatus;
 use mooring_daemon_core::exit::{ExitMachine, SimUse, TickInputs};
 use mooring_daemon_core::meter::{MAX_SIM_METER_BYTES, SimMeter, accuracy};
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
-use mooring_daemon_core::snapshot::{SimTotals, StatusInputs, assemble};
-use mooring_daemon_core::status::{ExitState, PowerSource, PowerStatus};
+use mooring_daemon_core::snapshot::{NodePoll, SimTotals, StatusInputs, assemble};
+use mooring_daemon_core::status::{
+    AgentUnreachable, DegradedReason, ExitState, NodeAgentState, PowerSource, PowerStatus,
+};
 use mooring_model::iface::BsdName;
 use mooring_model::time::UnixTime;
+use mooring_model::{Deployment, NodeId};
 use mooring_store::{Store, read_latch, read_sim_meter};
 
 use super::{
@@ -36,9 +41,13 @@ use super::{
 };
 use crate::app::Env;
 use crate::error::{CommandError, LocalError};
+use crate::node::NodeError;
+use crate::node::session::ops_session;
 use crate::runtime::meter::{METER_TICK, MeterThread, PERSIST_EVERY, Watched};
 use crate::runtime::network::foreign;
-use crate::runtime::ports::{DaemonPorts, EXIT_ENGINE, stop_stale_engine};
+use crate::runtime::ports::{
+    DaemonPorts, ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE, stop_stale_engine,
+};
 use crate::runtime::resolve::exit_interfaces;
 
 /// The loop's tick (design §10.1).
@@ -49,6 +58,9 @@ pub(crate) const PUBLISH_EVERY: Duration = Duration::from_secs(10);
 
 /// How often the power source is read.
 pub(crate) const POWER_EVERY: Duration = Duration::from_secs(60);
+
+/// How often each node's agent is polled (design §10.5).
+pub(crate) const NODE_POLL_EVERY: Duration = Duration::from_secs(600);
 
 /// A router poll starts only with at least this long left before the next
 /// direct-probe round: each of its requests takes at most 15 s, and the
@@ -85,6 +97,9 @@ pub(crate) struct Deployed<'e, 'a> {
     published: Option<(Instant, ExitState)>,
     snapshot_failure: Option<String>,
     meter_failure: Option<String>,
+    nodes_polled: Option<Instant>,
+    polls: BTreeMap<NodeId, NodePoll>,
+    unreachable: BTreeMap<NodeId, NodeAgentState>,
 }
 
 impl std::fmt::Debug for Deployed<'_, '_> {
@@ -113,12 +128,17 @@ impl<'e, 'a> Deployed<'e, 'a> {
         let now = (env.clock)()?;
         let run_dir = RunPaths::under(support_dir).dir;
         let engines = support_dir.join(ENGINES_DIRECTORY);
-        if let Some(pid) = stop_stale_engine(&run_dir, &engines.join(EXIT_ENGINE))? {
-            say(
-                log,
-                now,
-                &format!("stopped the engine an earlier daemon left (pid {pid})"),
-            )?;
+        for (pid_file, engine) in [
+            (ENGINE_PID_FILE, EXIT_ENGINE),
+            (PROBER_PID_FILE, PROBE_ENGINE),
+        ] {
+            if let Some(pid) = stop_stale_engine(&run_dir, pid_file, &engines.join(engine))? {
+                say(
+                    log,
+                    now,
+                    &format!("stopped the engine an earlier daemon left (pid {pid})"),
+                )?;
+            }
         }
         let latch = read_latch(&run_dir).map_err(|error| LocalError::Latch(Box::new(error)))?;
         if let Some(latch) = &latch {
@@ -178,6 +198,9 @@ impl<'e, 'a> Deployed<'e, 'a> {
             published: None,
             snapshot_failure: None,
             meter_failure: None,
+            nodes_polled: None,
+            polls: BTreeMap::new(),
+            unreachable: BTreeMap::new(),
         })
     }
 
@@ -241,6 +264,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                     last_drain: None,
                 },
                 retry,
+                nodes_degraded: stale_watches(&self.polls),
             },
             &mut self.ports,
         )?;
@@ -259,6 +283,12 @@ impl<'e, 'a> Deployed<'e, 'a> {
             .is_none_or(|left| left >= ROUTER_SLOT);
         if due && slot {
             self.poll_router(log, egress_name.as_ref())?;
+        }
+        let nodes_due = self
+            .nodes_polled
+            .is_none_or(|at| at.elapsed() >= NODE_POLL_EVERY);
+        if nodes_due && slot {
+            self.poll_nodes(log, deployment, egress_name.as_ref())?;
         }
         self.note_meter(log, now)?;
         let state_changed = previous.as_ref() != Some(&section.state);
@@ -285,9 +315,9 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 capacity: None,
                 ledgers: &[],
                 through: now,
-                polls: &BTreeMap::new(),
-                unreachable: &BTreeMap::new(),
-                verdicts: &BTreeMap::new(),
+                polls: &self.polls,
+                unreachable: &self.unreachable,
+                verdicts: &self.machine.verdicts(),
                 pending_apply: &BTreeMap::new(),
                 alerts: Vec::new(),
             })
@@ -322,6 +352,71 @@ impl<'e, 'a> Deployed<'e, 'a> {
             &mut self.router_failure,
             egress,
         )?;
+        Ok(())
+    }
+
+    /// Polls every node with a site for its `Status` through the egress.
+    /// A node that answers is reported; one that does not is unreachable
+    /// since its first failed poll in a row, which is logged once.
+    fn poll_nodes(
+        &mut self,
+        log: &mut dyn Write,
+        deployment: &Deployment,
+        egress: Option<&BsdName>,
+    ) -> Result<(), CommandError> {
+        self.nodes_polled = Some(Instant::now());
+        let sited: Vec<_> = deployment
+            .nodes()
+            .values()
+            .filter(|node| node.lifecycle.site().is_some())
+            .collect();
+        self.polls
+            .retain(|id, _| sited.iter().any(|node| node.id == *id));
+        self.unreachable
+            .retain(|id, _| sited.iter().any(|node| node.id == *id));
+        for node in sited {
+            let now = (self.env.clock)()?;
+            let outcome = match egress {
+                Some(egress) => ops_session(self.env, node, egress)
+                    .and_then(|mut session| Ok(session.request(&LineRequest::Status)?)),
+                None => Err(LocalError::NodeUnreachableWithoutEgress.into()),
+            };
+            match outcome {
+                Ok(Response::Status(status)) => {
+                    if self.unreachable.remove(&node.id).is_some() {
+                        say(log, now, &format!("{}: polled again", node.id))?;
+                    }
+                    self.polls.insert(
+                        node.id.clone(),
+                        NodePoll {
+                            polled_at: now,
+                            status: *status,
+                        },
+                    );
+                }
+                outcome => {
+                    let (cause, text) = match &outcome {
+                        Ok(response) => (
+                            AgentUnreachable::ProtocolMismatch,
+                            format!("the agent answered Status with {:?}", response.kind()),
+                        ),
+                        Err(error) => (unreachable_cause(error), chain(error)),
+                    };
+                    self.polls.remove(&node.id);
+                    let since = match self.unreachable.get(&node.id) {
+                        Some(NodeAgentState::Unreachable { since, .. }) => *since,
+                        _ => {
+                            say(log, now, &format!("{}: poll failed: {text}", node.id))?;
+                            now
+                        }
+                    };
+                    self.unreachable.insert(
+                        node.id.clone(),
+                        NodeAgentState::Unreachable { since, cause },
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -366,6 +461,44 @@ impl<'e, 'a> Deployed<'e, 'a> {
             }
         }
         Ok(())
+    }
+}
+
+/// The nodes whose watch had not written its status for longer than
+/// [`WATCH_STALE_SECS`] when they answered (design §10.2, `WatchStale`),
+/// by the node's own clock.
+pub(crate) fn stale_watches(polls: &BTreeMap<NodeId, NodePoll>) -> Vec<DegradedReason> {
+    polls
+        .iter()
+        .filter(|(_, poll)| {
+            poll.status
+                .now
+                .secs_since(poll.status.watch_at)
+                .is_none_or(|age| age > WATCH_STALE_SECS)
+        })
+        .map(|(node, _)| DegradedReason::WatchStale { node: node.clone() })
+        .collect()
+}
+
+/// Why a node could not be polled, as the status names it. ssh's own
+/// failures (connection, login, host key) are one `Transport` until the
+/// runner tells them apart.
+pub(crate) fn unreachable_cause(error: &CommandError) -> AgentUnreachable {
+    match error {
+        CommandError::Local(LocalError::Node(node)) => match node {
+            NodeError::Spawn(_) => AgentUnreachable::Spawn,
+            NodeError::Reply(ReadError::TooLarge { .. }) => AgentUnreachable::ResponseTooLarge,
+            NodeError::Reply(_) => AgentUnreachable::Decode,
+            NodeError::Encode(_) | NodeError::Agent(_) | NodeError::Unexpected { .. } => {
+                AgentUnreachable::ProtocolMismatch
+            }
+            NodeError::Pipe
+            | NodeError::Read(_)
+            | NodeError::Ssh { .. }
+            | NodeError::Connect(_)
+            | NodeError::Relay(_) => AgentUnreachable::Transport,
+        },
+        CommandError::Local(_) | CommandError::Router(_) => AgentUnreachable::Transport,
     }
 }
 

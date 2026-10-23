@@ -23,14 +23,16 @@ use std::process::ExitStatus;
 
 use mooring_agent_proto::{ClearableHold, GateReason, LineRequest, Response, ShutdownReason};
 use mooring_daemon_core::exit::{
-    CallFault, ExitPorts, NodeCall, RenderOutcome, Rendered, StartFault,
+    CallFault, ExitPorts, InChainProbe, InChainTarget, NodeCall, RenderOutcome, Rendered,
+    RenderedProber, StartFault,
 };
 use mooring_daemon_core::status::{ProbeStage, ProcessEnd};
 use mooring_model::iface::{BsdName, ResolvedInterface, ResolvedInterfaces};
+use mooring_model::ports::ListenerIdx;
 use mooring_model::secret::{SecretRef, SecretSnapshot};
 use mooring_model::verdict::LatchRecord;
-use mooring_model::{ConfigGeneration, Deployment, NodeId};
-use mooring_render::{ExitConfig, RenderErrorKind};
+use mooring_model::{ConfigGeneration, Deployment, NodeAddress, NodeId};
+use mooring_render::{ExitConfig, ProberConfig, RenderErrorKind};
 use mooring_store::{SecretStoreError, SnapshotReadError, clear_latch, read_snapshot, write_latch};
 
 use crate::app::Env;
@@ -39,15 +41,22 @@ use crate::node::NodeError;
 use crate::node::engines::{Pins, read_pinned};
 use crate::node::session::{deployed_node, ops_session};
 use crate::runtime::engine::{Engine, EngineError, Running};
+use crate::runtime::probe::in_chain;
 
 /// `errSecInteractionNotAllowed`: the Keychain would have to ask.
 pub(crate) const INTERACTION_NOT_ALLOWED: i32 = -25_308;
 
-/// The engine's path in the engine directory, as its pin names it.
+/// The exit engine's path in the engine directory, as its pin names it.
 pub(crate) const EXIT_ENGINE: &str = "darwin-arm64/mooring-exit";
 
-/// The engine's pid file, in the run directory.
+/// The prober's path in the engine directory, as its pin names it.
+pub(crate) const PROBE_ENGINE: &str = "darwin-arm64/mooring-probe";
+
+/// The exit engine's pid file, in the run directory.
 pub(crate) const ENGINE_PID_FILE: &str = "engine-exit.pid";
+
+/// The prober's pid file, in the run directory.
+pub(crate) const PROBER_PID_FILE: &str = "engine-probe.pid";
 
 /// The ports, for one daemon.
 pub(crate) struct DaemonPorts<'e, 'a> {
@@ -56,6 +65,7 @@ pub(crate) struct DaemonPorts<'e, 'a> {
     engines: PathBuf,
     pins: Pins<'a>,
     running: Option<Running>,
+    prober: Option<Running>,
     secrets: Option<(ConfigGeneration, SecretSnapshot)>,
     egress: Option<BsdName>,
     notes: Vec<String>,
@@ -67,6 +77,7 @@ impl std::fmt::Debug for DaemonPorts<'_, '_> {
             .field("run_dir", &self.run_dir)
             .field("engines", &self.engines)
             .field("running", &self.running)
+            .field("prober", &self.prober)
             .field("egress", &self.egress)
             .finish_non_exhaustive()
     }
@@ -83,6 +94,7 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
             engines,
             pins: env.mac_pins,
             running: None,
+            prober: None,
             secrets: None,
             egress: None,
             notes: Vec::new(),
@@ -100,15 +112,24 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
         std::mem::take(&mut self.notes)
     }
 
-    /// The engine binary, checked against its pin.
-    fn checked_engine(&self) -> Result<Engine, StartFault> {
-        match read_pinned(&self.engines, self.pins, EXIT_ENGINE) {
-            Ok(_) => Ok(Engine::new(&self.engines.join(EXIT_ENGINE))),
-            Err(_) => Err(StartFault::Spawn),
+    /// The engine binary at `path`, checked against its pin; a note says
+    /// why one is refused.
+    fn checked_engine(&mut self, path: &str) -> Result<Engine, StartFault> {
+        match read_pinned(&self.engines, self.pins, path) {
+            Ok(_) => Ok(Engine::new(&self.engines.join(path))),
+            Err(_) => {
+                self.notes.push(format!(
+                    "{} is missing or does not match its pin",
+                    self.engines.join(path).display()
+                ));
+                Err(StartFault::Spawn)
+            }
         }
     }
 
-    /// The WireGuard keys of the nodes the config holds, read once per
+    /// The secrets the two engines' configs hold: each applied node's
+    /// WireGuard key, and the probe identity's credentials and the first
+    /// listener's obfuscation password on it. They are read once per
     /// generation; `None` when the Keychain would have to ask.
     fn secrets(&mut self, deployment: &Deployment) -> Result<Option<&SecretSnapshot>, LocalError> {
         let generation = deployment.config_generation();
@@ -123,7 +144,14 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
             .nodes()
             .values()
             .filter(|node| node.lifecycle.applied().is_some())
-            .map(|node| SecretRef::NodeWgMacPrivate(node.id.clone()))
+            .flat_map(|node| {
+                [
+                    SecretRef::NodeWgMacPrivate(node.id.clone()),
+                    SecretRef::ProbeVlessUuid(node.id.clone()),
+                    SecretRef::ProbeHy2Password(node.id.clone()),
+                    SecretRef::NodeHy2Obfs(node.id.clone(), ListenerIdx::FIRST),
+                ]
+            })
             .collect();
         match read_snapshot(&*self.env.secrets, &refs) {
             Ok(snapshot) => {
@@ -139,12 +167,8 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
         }
     }
 
-    fn pid_file(&self) -> PathBuf {
-        self.run_dir.join(ENGINE_PID_FILE)
-    }
-
-    fn write_pid(&self, pid: u32) -> Result<(), LocalError> {
-        let path = self.pid_file();
+    fn write_pid(&self, file: &str, pid: u32) -> Result<(), LocalError> {
+        let path = self.run_dir.join(file);
         let failed = |source| LocalError::EnginePidFile {
             path: path.clone(),
             source,
@@ -159,13 +183,21 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
         io::Write::write_all(&mut file, format!("{pid}\n").as_bytes()).map_err(failed)
     }
 
-    fn remove_pid(&self) -> Result<(), LocalError> {
-        let path = self.pid_file();
+    fn remove_pid(&self, file: &str) -> Result<(), LocalError> {
+        let path = self.run_dir.join(file);
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(source) => Err(LocalError::EnginePidFile { path, source }),
         }
+    }
+}
+
+/// A failure to wait for or stop an engine.
+fn wait_error(error: EngineError) -> LocalError {
+    match error {
+        EngineError::Wait(source) => LocalError::EngineWait(source),
+        other => LocalError::EngineWait(io::Error::other(other.to_string())),
     }
 }
 
@@ -183,6 +215,7 @@ fn end_of(status: ExitStatus) -> Result<ProcessEnd, LocalError> {
 
 impl ExitPorts for DaemonPorts<'_, '_> {
     type Config = ExitConfig;
+    type ProberConfig = ProberConfig;
     type Error = CommandError;
 
     fn render(
@@ -206,15 +239,9 @@ impl ExitPorts for DaemonPorts<'_, '_> {
     }
 
     fn check(&mut self, config: &ExitConfig) -> Result<Result<(), StartFault>, CommandError> {
-        let engine = match self.checked_engine() {
+        let engine = match self.checked_engine(EXIT_ENGINE) {
             Ok(engine) => engine,
-            Err(fault) => {
-                self.notes.push(format!(
-                    "mooring-exit at {} is missing or does not match its pin",
-                    self.engines.join(EXIT_ENGINE).display()
-                ));
-                return Ok(Err(fault));
-            }
+            Err(fault) => return Ok(Err(fault)),
         };
         match engine.check(config.file().expose_bytes()) {
             Ok(()) => Ok(Ok(())),
@@ -233,7 +260,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
     }
 
     fn start(&mut self, config: &ExitConfig) -> Result<Result<u32, StartFault>, CommandError> {
-        let engine = match self.checked_engine() {
+        let engine = match self.checked_engine(EXIT_ENGINE) {
             Ok(engine) => engine,
             Err(fault) => return Ok(Err(fault)),
         };
@@ -241,7 +268,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
             Ok(running) => {
                 let pid = running.pid();
                 self.running = Some(running);
-                self.write_pid(pid)?;
+                self.write_pid(ENGINE_PID_FILE, pid)?;
                 Ok(Ok(pid))
             }
             Err(EngineError::Spawn { .. }) => Ok(Err(StartFault::Spawn)),
@@ -257,15 +284,11 @@ impl ExitPorts for DaemonPorts<'_, '_> {
         let Some(running) = self.running.as_mut() else {
             return Ok(None);
         };
-        let Some(status) = running.exited().map_err(|error| match error {
-            EngineError::Wait(source) => LocalError::EngineWait(source),
-            other => LocalError::EngineWait(io::Error::other(other.to_string())),
-        })?
-        else {
+        let Some(status) = running.exited().map_err(wait_error)? else {
             return Ok(None);
         };
         self.running = None;
-        self.remove_pid()?;
+        self.remove_pid(ENGINE_PID_FILE)?;
         Ok(Some(end_of(status)?))
     }
 
@@ -273,11 +296,8 @@ impl ExitPorts for DaemonPorts<'_, '_> {
         let Some(running) = self.running.take() else {
             return Err(LocalError::EngineWait(io::Error::other("no engine runs")).into());
         };
-        let status = running.stop().map_err(|error| match error {
-            EngineError::Wait(source) => LocalError::EngineWait(source),
-            other => LocalError::EngineWait(io::Error::other(other.to_string())),
-        })?;
-        self.remove_pid()?;
+        let status = running.stop().map_err(wait_error)?;
+        self.remove_pid(ENGINE_PID_FILE)?;
         Ok(end_of(status)?)
     }
 
@@ -359,14 +379,126 @@ impl ExitPorts for DaemonPorts<'_, '_> {
             }
         }
     }
+
+    fn render_prober(
+        &mut self,
+        deployment: &Deployment,
+        interfaces: &ResolvedInterfaces,
+    ) -> Result<Result<RenderedProber<ProberConfig>, RenderOutcome>, CommandError> {
+        let Some(secrets) = self.secrets(deployment)? else {
+            return Ok(Err(RenderOutcome::SecretsUnavailable));
+        };
+        let config = match mooring_render::mac::prober(deployment, interfaces, secrets) {
+            Ok(config) => config,
+            Err(error) if error.kind() == RenderErrorKind::NoAppliedNodes => {
+                return Ok(Err(RenderOutcome::NoAppliedNode));
+            }
+            Err(error) => return Err(LocalError::ExitRender(Box::new(error)).into()),
+        };
+        let mut targets = Vec::new();
+        for probe in config.probes() {
+            let node = deployment.node(&probe.node).map_err(LocalError::ExitSite)?;
+            let site = node
+                .lifecycle
+                .site()
+                .ok_or_else(|| LocalError::ProberTarget {
+                    node: probe.node.clone(),
+                })?;
+            let NodeAddress::Public(address) = site.address;
+            targets.push(InChainTarget {
+                node: probe.node.clone(),
+                protocol: probe.protocol,
+                port: probe.port.get(),
+                reflector: SocketAddrV4::new(address.get(), node.ports.reflector().get()),
+            });
+        }
+        Ok(Ok(RenderedProber {
+            digest: config.digest(),
+            config,
+            targets,
+        }))
+    }
+
+    fn start_prober(
+        &mut self,
+        config: &ProberConfig,
+    ) -> Result<Result<u32, StartFault>, CommandError> {
+        let engine = match self.checked_engine(PROBE_ENGINE) {
+            Ok(engine) => engine,
+            Err(fault) => return Ok(Err(fault)),
+        };
+        let bytes = config.file().expose_bytes();
+        let checked = match engine.check(bytes) {
+            Ok(()) => Ok(()),
+            Err(EngineError::Rejected { code, stderr }) => {
+                self.notes.push(format!(
+                    "mooring-probe refused its config (exit status {}): {stderr}",
+                    code.map_or_else(|| "none".to_owned(), |code| code.to_string())
+                ));
+                Err(StartFault::Rejected)
+            }
+            Err(EngineError::Spawn { .. }) => Err(StartFault::Spawn),
+            Err(EngineError::CheckTimeout) => Err(StartFault::CheckTimedOut),
+            Err(EngineError::Config(_)) => Err(StartFault::Rejected),
+            Err(EngineError::Wait(source)) => return Err(LocalError::EngineWait(source).into()),
+        };
+        if let Err(fault) = checked {
+            return Ok(Err(fault));
+        }
+        match engine.start(bytes) {
+            Ok(running) => {
+                let pid = running.pid();
+                self.prober = Some(running);
+                self.write_pid(PROBER_PID_FILE, pid)?;
+                Ok(Ok(pid))
+            }
+            Err(EngineError::Spawn { .. }) => Ok(Err(StartFault::Spawn)),
+            Err(EngineError::Config(_) | EngineError::Rejected { .. }) => {
+                Ok(Err(StartFault::Rejected))
+            }
+            Err(EngineError::CheckTimeout) => Ok(Err(StartFault::CheckTimedOut)),
+            Err(EngineError::Wait(source)) => Err(LocalError::EngineWait(source).into()),
+        }
+    }
+
+    fn prober_exited(&mut self) -> Result<Option<ProcessEnd>, CommandError> {
+        let Some(running) = self.prober.as_mut() else {
+            return Ok(None);
+        };
+        let Some(status) = running.exited().map_err(wait_error)? else {
+            return Ok(None);
+        };
+        self.prober = None;
+        self.remove_pid(PROBER_PID_FILE)?;
+        Ok(Some(end_of(status)?))
+    }
+
+    fn stop_prober(&mut self) -> Result<ProcessEnd, CommandError> {
+        let Some(running) = self.prober.take() else {
+            return Err(LocalError::EngineWait(io::Error::other("no prober runs")).into());
+        };
+        let status = running.stop().map_err(wait_error)?;
+        self.remove_pid(PROBER_PID_FILE)?;
+        Ok(end_of(status)?)
+    }
+
+    fn probe_in_chain(&mut self, port: u16) -> Result<InChainProbe, ProbeStage> {
+        in_chain(port)
+            .map(|(ip, latency)| InChainProbe { ip, latency })
+            .map_err(|failure| failure.stage)
+    }
 }
 
-/// Stops the engine an earlier daemon left, if its pid file names a
-/// process whose executable is `engine` (compared as the kernel names it,
-/// with links resolved; an engine file that is gone identifies nothing);
-/// the pid file goes either way.
-pub(crate) fn stop_stale_engine(run_dir: &Path, engine: &Path) -> Result<Option<u32>, LocalError> {
-    let path = run_dir.join(ENGINE_PID_FILE);
+/// Stops the engine an earlier daemon left, if its pid file (`pid_file` in
+/// the run directory) names a process whose executable is `engine`
+/// (compared as the kernel names it, with links resolved; an engine file
+/// that is gone identifies nothing); the pid file goes either way.
+pub(crate) fn stop_stale_engine(
+    run_dir: &Path,
+    pid_file: &str,
+    engine: &Path,
+) -> Result<Option<u32>, LocalError> {
+    let path = run_dir.join(pid_file);
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),

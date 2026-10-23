@@ -17,11 +17,15 @@ use std::os::unix::process::ExitStatusExt;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 
+use mooring_agent_proto::WATCH_STALE_SECS;
 use mooring_agent_proto::{AgentError, Holds, RequestKind, Response};
 use mooring_daemon_core::alert::MacEngine;
 use mooring_daemon_core::console::ConsoleStatus;
 use mooring_daemon_core::control::{DaemonReply, decode_reply};
-use mooring_daemon_core::status::{DownReason, ExitState};
+use mooring_daemon_core::snapshot::NodePoll;
+use mooring_daemon_core::status::{
+    AgentUnreachable, DegradedReason, DownReason, ExitState, NodeAgentState,
+};
 use mooring_macsys::{Interface, InterfaceAddrV4};
 use mooring_model::Sha256Digest;
 use mooring_model::secret::SecretEntry;
@@ -34,12 +38,12 @@ use mooring_store::{
 use super::runtime::STAND_IN;
 use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, lo0};
 use super::user::{fixture, harness_with, store};
-use crate::daemon::deployed::{Deployed, ENGINES_DIRECTORY};
+use crate::daemon::deployed::{Deployed, ENGINES_DIRECTORY, stale_watches, unreachable_cause};
 use crate::daemon::hub::Hub;
 use crate::daemon::{Control, RunPaths};
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
-use crate::runtime::ports::{ENGINE_PID_FILE, EXIT_ENGINE};
+use crate::runtime::ports::{ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE};
 
 /// Inside the fixtures' carrier prefix, 31.120.0.0/14.
 const CARRIER: Ipv4Addr = Ipv4Addr::new(31, 120, 5, 6);
@@ -80,17 +84,15 @@ fn deployed() -> Harness {
     store(&harness)
         .set_exit_enabled(state.runtime.revision, true)
         .unwrap();
-    let engine = harness
-        .support_dir()
-        .join(ENGINES_DIRECTORY)
-        .join(EXIT_ENGINE);
-    fs::create_dir_all(engine.parent().unwrap()).unwrap();
-    fs::write(&engine, STAND_IN).unwrap();
-    fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
-    harness.mac_pins = vec![(
-        EXIT_ENGINE,
-        Sha256Digest::of(STAND_IN.as_bytes()).to_string(),
-    )];
+    for name in [EXIT_ENGINE, PROBE_ENGINE] {
+        let engine = harness.support_dir().join(ENGINES_DIRECTORY).join(name);
+        fs::create_dir_all(engine.parent().unwrap()).unwrap();
+        fs::write(&engine, STAND_IN).unwrap();
+        fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
+        harness
+            .mac_pins
+            .push((name, Sha256Digest::of(STAND_IN.as_bytes()).to_string()));
+    }
     harness
 }
 
@@ -134,6 +136,7 @@ fn with_exit<T>(
 fn the_exit_starts_its_engine_on_the_rendered_config_and_publishes_its_status() {
     let mut harness = deployed();
     harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
     let support = harness.support_dir();
     let (control, _retries) = shared();
     let log = with_exit(&mut harness, |exit, log| {
@@ -156,7 +159,9 @@ fn the_exit_starts_its_engine_on_the_rendered_config_and_publishes_its_status() 
             format!("{pid}\n")
         );
         // The engine got the rendered config on its stdin.
-        let ran = support.join(ENGINES_DIRECTORY).join("darwin-arm64/ran");
+        let ran = support
+            .join(ENGINES_DIRECTORY)
+            .join("darwin-arm64/mooring-exit.ran");
         let started = std::time::Instant::now();
         while !ran.exists() {
             assert!(started.elapsed().as_secs() < 5);
@@ -165,6 +170,12 @@ fn the_exit_starts_its_engine_on_the_rendered_config_and_publishes_its_status() 
         let config = fs::read_to_string(&ran).unwrap();
         assert!(config.starts_with('{'), "{config:.40}");
         assert!(config.contains("\"lo0\""), "the egress binding");
+        // The prober runs beside it, on its own config.
+        let prober = parts.exit.engines.probe.pid.unwrap();
+        assert_eq!(
+            fs::read_to_string(run.join(PROBER_PID_FILE)).unwrap(),
+            format!("{prober}\n")
+        );
         // The status is written too.
         assert!(support.join(STATUS_SNAPSHOT_FILE).exists());
         // Disabled, the engine stops and its pid file goes.
@@ -178,13 +189,39 @@ fn the_exit_starts_its_engine_on_the_rendered_config_and_publishes_its_status() 
             ExitState::Disabled
         );
         assert!(!run.join(ENGINE_PID_FILE).exists());
-        assert_eq!(published(&control).parts().exit.engines.exit.pid, None);
+        assert!(!run.join(PROBER_PID_FILE).exists());
+        let engines = published(&control).parts().exit.engines;
+        assert_eq!((engines.exit.pid, engines.probe.pid), (None, None));
         String::from_utf8(log.clone()).unwrap()
     });
     assert!(log.contains("mooringctl daemon: exit: Starting\n"), "{log}");
     assert!(log.contains("mooringctl daemon: exit: Disabled\n"), "{log}");
     // The meter is written when it stops.
     assert!(support.join(USAGE_DIRECTORY).join(SIM_METER_FILE).exists());
+}
+
+/// The agent's `Status` reply as protocol 1 pins it, its watch fresh by
+/// the node's clock.
+pub(crate) fn status_reply() -> Response {
+    let text = include_str!("../../../../contract/agent-proto-golden/status.response.snap");
+    let line = text.lines().last().unwrap();
+    serde_json::from_str::<Result<Response, AgentError>>(line)
+        .unwrap()
+        .unwrap()
+}
+
+/// Scripts a `Status` answer from every node (ams1, lon1).
+fn statuses(harness: &Harness) {
+    for _ in 0..2 {
+        harness.nodes.expect(
+            Expected::Request {
+                identity: "ops_ed25519",
+                remote: ExpectedRemote::Forced,
+                kind: RequestKind::Status,
+            },
+            Answered::Replied(Ok(status_reply())),
+        );
+    }
 }
 
 fn gate_closed() -> Answered {
@@ -211,6 +248,7 @@ fn a_violation_is_latched_in_its_file_and_every_gate_is_closed() {
             gate_closed(),
         );
     }
+    statuses(&harness);
     let support = harness.support_dir();
     let (control, _retries) = shared();
     let log = with_exit(&mut harness, |exit, log| {
@@ -244,6 +282,7 @@ fn a_violation_is_latched_in_its_file_and_every_gate_is_closed() {
             gate_closed(),
         );
     }
+    statuses(&harness);
     let (control, _retries) = shared();
     with_exit(&mut harness, |exit, log| {
         assert!(matches!(
@@ -278,6 +317,7 @@ fn a_refused_gate_call_is_not_tried_again() {
         },
         Answered::Replied(Err(NodeError::Pipe)),
     );
+    statuses(&harness);
     let (control, _retries) = shared();
     let log = with_exit(&mut harness, |exit, log| {
         exit.tick(&control, log, false).unwrap();
@@ -304,6 +344,7 @@ fn an_engine_that_is_missing_or_unpinned_keeps_the_exit_down() {
         } else {
             fs::write(&engine, format!("{STAND_IN}# changed\n")).unwrap();
         }
+        statuses(&harness);
         let (control, _retries) = shared();
         let log = with_exit(&mut harness, |exit, log| {
             assert_eq!(
@@ -376,4 +417,180 @@ fn an_engine_an_earlier_daemon_left_is_stopped_at_the_start() {
     );
     assert_eq!(left.wait().unwrap().signal(), Some(9));
     assert!(!run.join(ENGINE_PID_FILE).exists());
+}
+
+/// The first tick polls every node: one that answers is reported, one that
+/// does not is unreachable from that poll on, logged once.
+#[test]
+fn every_node_is_polled_and_one_that_does_not_answer_is_unreachable() {
+    let mut harness = deployed();
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    harness.nodes.expect(
+        Expected::Request {
+            identity: "ops_ed25519",
+            remote: ExpectedRemote::Forced,
+            kind: RequestKind::Status,
+        },
+        Answered::Replied(Ok(status_reply())),
+    );
+    harness.nodes.expect(
+        Expected::Request {
+            identity: "ops_ed25519",
+            remote: ExpectedRemote::Forced,
+            kind: RequestKind::Status,
+        },
+        Answered::Replied(Err(NodeError::Pipe)),
+    );
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        exit.tick(&control, log, false).unwrap();
+        String::from_utf8(log.clone()).unwrap()
+    });
+    assert!(log.contains("lon1: poll failed: "), "{log}");
+    let status = published(&control);
+    let nodes = &status.parts().nodes;
+    assert!(matches!(
+        nodes[&mooring_model::NodeId::parse("ams1").unwrap()].agent,
+        NodeAgentState::Reported(_)
+    ));
+    assert!(matches!(
+        nodes[&mooring_model::NodeId::parse("lon1").unwrap()].agent,
+        NodeAgentState::Unreachable {
+            cause: AgentUnreachable::Transport,
+            ..
+        }
+    ));
+    assert!(harness.nodes.script.borrow().is_empty());
+}
+
+/// A node whose watch has not written for longer than the bound when it
+/// answered is stale, by its own clock: the Mac's does not enter.
+#[test]
+fn a_watch_older_than_the_bound_is_stale() {
+    let Response::Status(fresh) = status_reply() else {
+        panic!("not a status");
+    };
+    let mut status = *fresh;
+    let lon1 = mooring_model::NodeId::parse("lon1").unwrap();
+    let poll = |status: &mooring_agent_proto::StatusV1| {
+        std::collections::BTreeMap::from([(
+            lon1.clone(),
+            NodePoll {
+                polled_at: mooring_model::UnixTime::from_secs(1),
+                status: status.clone(),
+            },
+        )])
+    };
+    // The golden's watch is 3 s old.
+    assert_eq!(stale_watches(&poll(&status)), []);
+    let now = status.now.as_secs();
+    status.watch_at = mooring_agent_proto::UnixTime::from_secs(now - WATCH_STALE_SECS);
+    assert_eq!(stale_watches(&poll(&status)), []);
+    status.watch_at = mooring_agent_proto::UnixTime::from_secs(now - WATCH_STALE_SECS - 1);
+    assert_eq!(
+        stale_watches(&poll(&status)),
+        [DegradedReason::WatchStale { node: lon1.clone() }]
+    );
+    // A watch time after the answer cannot be judged: stale.
+    status.watch_at = mooring_agent_proto::UnixTime::from_secs(now + 1);
+    assert_eq!(stale_watches(&poll(&status)).len(), 1);
+}
+
+#[test]
+fn every_failure_of_a_poll_has_its_cause() {
+    use mooring_agent_proto::ReadError;
+    for (error, cause) in [
+        (
+            NodeError::Spawn(std::io::Error::other("x")),
+            AgentUnreachable::Spawn,
+        ),
+        (NodeError::Pipe, AgentUnreachable::Transport),
+        (
+            NodeError::Read(std::io::Error::other("x")),
+            AgentUnreachable::Transport,
+        ),
+        (
+            NodeError::Ssh {
+                code: Some(255),
+                stderr: String::new(),
+            },
+            AgentUnreachable::Transport,
+        ),
+        (
+            NodeError::Connect(std::io::Error::other("x")),
+            AgentUnreachable::Transport,
+        ),
+        (
+            NodeError::Relay(std::io::Error::other("x")),
+            AgentUnreachable::Transport,
+        ),
+        (NodeError::Reply(ReadError::Empty), AgentUnreachable::Decode),
+        (
+            NodeError::Reply(ReadError::TooLarge { limit: 1 }),
+            AgentUnreachable::ResponseTooLarge,
+        ),
+        (
+            NodeError::Agent(AgentError::TrailingInput),
+            AgentUnreachable::ProtocolMismatch,
+        ),
+    ] {
+        assert_eq!(
+            unreachable_cause(&CommandError::Local(LocalError::Node(error))),
+            cause
+        );
+    }
+    assert_eq!(
+        unreachable_cause(&LocalError::NodeUnreachableWithoutEgress.into()),
+        AgentUnreachable::Transport
+    );
+}
+
+/// The prober's probes are each node's, aimed at its reflector, on the
+/// ports the exit site's probe policy gives.
+#[test]
+fn the_prober_s_probes_aim_at_each_node_s_reflector() {
+    use mooring_daemon_core::exit::ExitPorts;
+
+    let mut harness = deployed();
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let support = harness.support_dir();
+    let targets = harness.with_env(|env| {
+        let mut ports = crate::runtime::ports::DaemonPorts::new(
+            env,
+            RunPaths::under(&support).dir,
+            support.join(ENGINES_DIRECTORY),
+        );
+        ports
+            .render_prober(&fixture.deployment, &fixture.interfaces)
+            .unwrap()
+            .unwrap()
+            .targets
+    });
+    let aimed: Vec<(String, u16, String)> = targets
+        .iter()
+        .map(|target| {
+            (
+                format!("{}-{:?}", target.node, target.protocol),
+                target.port,
+                target.reflector.to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        aimed,
+        [
+            (
+                "ams1-Reality".to_owned(),
+                47101,
+                "46.78.90.12:27900".to_owned()
+            ),
+            ("ams1-Hy2".to_owned(), 47102, "46.78.90.12:27900".to_owned()),
+            (
+                "lon1-Reality".to_owned(),
+                47103,
+                "45.67.89.10:27900".to_owned()
+            ),
+            ("lon1-Hy2".to_owned(), 47104, "45.67.89.10:27900".to_owned()),
+        ]
+    );
 }

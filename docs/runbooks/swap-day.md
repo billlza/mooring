@@ -5,7 +5,7 @@ This runbook is for the operator. It takes the pilot from "the 1pMobile SIM has 
 
 The design is §7 (the plan and its cycles), §10.1 and §10.2 (the daemon, preflight, probes, latches), §13.2 (provisioning) and §15.6 (the M7). Every command runs from Terminal.app's own shell in the workspace root, with the signed `mooringctl` (`cargo xtask mooringctl` builds `./target/signed/mooringctl`; below it is written `mooringctl`). `en9` stands for the Mac's interface to the M7, the USB Ethernet adapter: check it with `ifconfig`, it is the one with the address `192.168.1.x`.
 
-What this build does not do yet (M5d): the in-chain probes through `mooring-probe`, so the exit stays `verifying` and never shows `serving`; the node polls, so `status` shows no node report and no usage; the Mac's report to the phone. None of them is needed for traffic to flow: the exit runs, and the direct probe guards the carrier address every 30 s.
+What this build does not do yet: per-user usage (the status says it is unavailable, `missing_ledger`), the Mac's report to the phone, and the alert notices. None of them is needed for traffic to flow.
 
 ## 0. Before the SIM arrives
 
@@ -111,13 +111,14 @@ The exit is `down` with `carrier_check_unrecorded`, or `disabled`: both are righ
    mooringctl exit enable
    mooringctl status --json
    ```
-   Within a few seconds the exit is `starting`, then `verifying` with the egress, the carrier check (the address, inside the prefixes) and `mooring-exit`'s pid. The daemon's log (`~/Library/Logs/Mooring/daemon.log`) says the same, one line per state.
+   Within a few seconds the exit is `starting`, with the egress, the carrier check (the address, inside the prefixes) and `mooring-exit`'s and `mooring-probe`'s pids; 10 s after the engine starts the first in-chain round runs, and the exit is `serving` with the verified address, or `degraded` naming each probe that failed (node, protocol, stage). Each node's row shows its latest report or why it is unreachable. The daemon's log (`~/Library/Logs/Mooring/daemon.log`) has one line per state.
 7. **Ask a user to connect** with the file they imported. lon1's gate opens once the Mac's WireGuard handshake is live.
 
 ## 3. When something is wrong
 
-- **`down` with a reason:** the reason says which check failed (design §14). `egress_interface_absent`: the M7 is unplugged or has no address. `foreign_network_attached`: an interface is named; take it off. `direct_probe_failed`: the line or lon1's reflector does not answer. `engine_spawn_failed`: `engines/darwin-arm64/mooring-exit` is missing or does not match its pin (section 0.1). `secrets_unavailable`: the keychain would have had to ask; open a session and allow it.
-- **A violation** (`down` with `violation`): the carrier address left the recorded prefixes, or was a node's address. The engine stopped at once and every node's gate was closed, with a hold. It stays down until you act: find the cause (the M7 switched its WAN to Wi-Fi? the carrier changed its pool?), fix it or record the new prefixes, then
+- **`degraded`:** the exit serves, with a problem. `node_probe_failed` names a node, a protocol and the stage: `prober_unavailable` means `mooring-probe` is missing or does not match its pin (section 0.1); `carrier_address_unstable` means the carrier's address changed during the probe twice running (consider `--pairing unpaired`, section 2 step 3); `connect`, `read` or `parse` point at the node or the chain. `watch_stale` means the node's watch has stopped writing its status. `on_battery`: the Mac lost mains power.
+- **`down` with a reason:** the reason says which check failed (design §14). `egress_interface_absent`: the M7 is unplugged or has no address. `foreign_network_attached`: an interface is named; take it off. `direct_probe_failed`: the line or lon1's reflector does not answer. `engine_spawn_failed`: `engines/darwin-arm64/mooring-exit` is missing or does not match its pin (section 0.1). `engine_config_rejected`: the daemon's log has the engine's own words. `secrets_unavailable`: the keychain would have had to ask; open a session and allow it.
+- **A violation** (`down` with `violation`): the carrier address left the recorded prefixes, was a node's address, or (with `paired`) the chain's address differed from two equal direct probes around it. The engine stopped at once and every node's gate was closed, with a hold. It stays down until you act: find the cause (the M7 switched its WAN to Wi-Fi? the carrier changed its pool?), fix it or record the new prefixes, then
   ```
   mooringctl exit retry
   ```

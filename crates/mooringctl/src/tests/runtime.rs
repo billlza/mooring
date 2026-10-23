@@ -38,7 +38,7 @@ use crate::runtime::meter::{MeterThread, Reader, Watched};
 use crate::runtime::network::foreign;
 use crate::runtime::ports::{ENGINE_PID_FILE, stop_stale_engine};
 use crate::runtime::power::parse;
-use crate::runtime::probe::direct;
+use crate::runtime::probe::{direct, in_chain};
 use crate::runtime::resolve::{ResolveError, exit_interfaces, resolve};
 
 /// `SIGKILL`'s number on macOS.
@@ -364,9 +364,10 @@ fn the_direct_probe_reads_the_address_the_reflector_saw() {
     assert_eq!(failure.kind, Some(ErrorKind::ConnectionRefused));
 }
 
-/// A stand-in engine: `check` accepts the config `good` and refuses any
-/// other with a line on stderr; `run` keeps its config beside itself and
-/// runs until killed, or exits at once for the config `exit`.
+/// A stand-in engine: `check` accepts the config `good`, or any JSON
+/// object, and refuses any other with a line on stderr; `run` keeps its
+/// config beside itself (`<binary>.ran`) and runs until killed, or exits
+/// at once for the config `exit`.
 pub(crate) fn stand_in(dir: &std::path::Path) -> PathBuf {
     let path = dir.join("engine");
     fs::write(&path, STAND_IN).unwrap();
@@ -375,7 +376,7 @@ pub(crate) fn stand_in(dir: &std::path::Path) -> PathBuf {
 }
 
 /// The stand-in's script.
-pub(crate) const STAND_IN: &str = "#!/bin/sh\nhere=$(dirname \"$0\")\ncase \"$1 $2 $3\" in\n\"check -c stdin\") config=$(cat); [ \"$config\" = good ] || [ \"${config#\\{}\" != \"$config\" ] || { echo \"refused: $config\" >&2; exit 3; } ;;\n\"run -c stdin\") cat > \"$here/ran\"; [ \"$(cat \"$here/ran\")\" = exit ] && exit 0; exec sleep 30 ;;\n*) exit 64 ;;\nesac\n";
+pub(crate) const STAND_IN: &str = "#!/bin/sh\ncase \"$1 $2 $3\" in\n\"check -c stdin\") config=$(cat); [ \"$config\" = good ] || [ \"${config#\\{}\" != \"$config\" ] || { echo \"refused: $config\" >&2; exit 3; } ;;\n\"run -c stdin\") cat > \"$0.ran\"; [ \"$(cat \"$0.ran\")\" = exit ] && exit 0; exec sleep 30 ;;\n*) exit 64 ;;\nesac\n";
 
 #[test]
 fn an_engine_checks_its_config_on_stdin_and_starts_with_it() {
@@ -391,7 +392,7 @@ fn an_engine_checks_its_config_on_stdin_and_starts_with_it() {
     }
     let mut running = engine.start(b"the config").unwrap();
     // The config reaches the engine, which keeps running.
-    let ran = dir.path().join("ran");
+    let ran = dir.path().join("engine.ran");
     for _ in 0..200 {
         if fs::read(&ran).is_ok_and(|bytes| bytes == b"the config") {
             break;
@@ -416,6 +417,25 @@ fn an_engine_checks_its_config_on_stdin_and_starts_with_it() {
     }
     assert!(exited.is_some_and(|status| status.success()));
     assert!(quick.stop().unwrap().success());
+}
+
+#[test]
+fn the_in_chain_probe_reads_the_line_at_the_end_of_the_chain() {
+    let answering = reflector(b"31.120.5.6\n");
+    let (ip, latency) = in_chain(answering.port()).unwrap();
+    assert_eq!(ip, Ipv4Addr::new(31, 120, 5, 6));
+    assert!(latency < Duration::from_secs(5));
+    // Nothing listens on the inbound: `mooring-probe` is not there.
+    let closed = {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let failure = in_chain(closed).unwrap_err();
+    assert_eq!(failure.stage, ProbeStage::Connect);
+    assert_eq!(
+        in_chain(reflector(b"no\n").port()).unwrap_err().stage,
+        ProbeStage::Parse
+    );
 }
 
 #[test]
@@ -633,6 +653,7 @@ fn a_stale_engine_is_stopped_only_when_it_is_this_engine() {
     assert_eq!(
         stop_stale_engine(
             run.path(),
+            ENGINE_PID_FILE,
             std::path::Path::new("/nonexistent/mooring-exit")
         )
         .unwrap(),
@@ -643,14 +664,20 @@ fn a_stale_engine_is_stopped_only_when_it_is_this_engine() {
     // This engine is stopped.
     fs::write(&pid_file, format!("{}\n", other.id())).unwrap();
     assert_eq!(
-        stop_stale_engine(run.path(), sleep).unwrap(),
+        stop_stale_engine(run.path(), ENGINE_PID_FILE, sleep).unwrap(),
         Some(other.id())
     );
     assert_eq!(other.wait().unwrap().signal(), Some(SIGKILL));
     assert!(!pid_file.exists());
     // No file, or one that is not a pid, stops nothing.
-    assert_eq!(stop_stale_engine(run.path(), sleep).unwrap(), None);
+    assert_eq!(
+        stop_stale_engine(run.path(), ENGINE_PID_FILE, sleep).unwrap(),
+        None
+    );
     fs::write(&pid_file, b"not a pid\n").unwrap();
-    assert_eq!(stop_stale_engine(run.path(), sleep).unwrap(), None);
+    assert_eq!(
+        stop_stale_engine(run.path(), ENGINE_PID_FILE, sleep).unwrap(),
+        None
+    );
     assert!(!pid_file.exists());
 }

@@ -318,6 +318,17 @@ pub(crate) enum LocalError {
     /// line.
     #[error("/usr/bin/pmset -g ps did not name the power source")]
     PowerUnreadable,
+    /// A node cannot be reached: the egress, which faces the M7, does not
+    /// resolve.
+    #[error("the node cannot be reached: the egress does not resolve")]
+    NodeUnreachableWithoutEgress,
+    /// The prober's config serves a node without a site, which only an
+    /// applied node can be rendered for.
+    #[error("the prober's config serves {node}, which has no site")]
+    ProberTarget {
+        /// The node.
+        node: NodeId,
+    },
     /// The kernel lists an interface whose name is not a BSD name, so the
     /// foreign-network check cannot name it.
     #[error("the kernel lists an interface named {name:?}, which is not a BSD name")]

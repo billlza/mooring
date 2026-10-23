@@ -46,6 +46,19 @@
 //! The latch clears only on a retry, another `config_generation`, or
 //! another egress identity; the nodes are then asked to clear their holds
 //! (`ClearHold{EgressViolation}`) once a fresh direct probe has passed.
+//!
+//! # In-chain probes
+//!
+//! While the engine runs, `mooring-probe` runs beside it ([`in_chain`]):
+//! [`IN_CHAIN_FIRST`] after the engine starts, and then every
+//! `in_chain_every` (300 s), each applied node is probed through each
+//! protocol, bracketed by direct probes. A violation is latched as above; a
+//! probe that fails, or a carrier address that will not hold still,
+//! degrades the exit, naming the node and protocol; a round that verifies
+//! makes it `Serving`. `mooring-probe` failing only degrades: it never takes
+//! the exit down.
+
+mod in_chain;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -64,7 +77,10 @@ use crate::network::ForeignNetworkFinding;
 use crate::status::{
     CarrierCheck, DegradedReason, DownReason, EgressFacts, EngineExit, EngineProcess, ExitSection,
     ExitState, Latch, LinkState, MacEngines, PowerSource, PowerStatus, ProbeStage, ProcessEnd,
+    ProtocolVerdicts,
 };
+
+pub use in_chain::{IN_CHAIN_FIRST, InChainProbe, InChainTarget, RenderedProber};
 
 /// An engine that exits within this long of its start failed to start.
 pub const START_GRACE: Duration = Duration::from_secs(10);
@@ -164,6 +180,9 @@ pub struct TickInputs<'a> {
     pub power: PowerStatus,
     /// Whether the operator asked to retry (`exit retry`).
     pub retry: bool,
+    /// What the node polls found wrong (`WatchStale`), which degrades a
+    /// serving exit.
+    pub nodes_degraded: Vec<DegradedReason>,
 }
 
 /// A rendered engine config and its digest.
@@ -220,8 +239,10 @@ pub enum NodeCall {
 
 /// The daemon's effects, as the machine uses them.
 pub trait ExitPorts {
-    /// A rendered engine config.
+    /// A rendered `mooring-exit` config.
     type Config;
+    /// A rendered `mooring-probe` config.
+    type ProberConfig;
     /// A fault of the daemon itself, which ends it.
     type Error;
 
@@ -256,6 +277,29 @@ pub trait ExitPorts {
 
     /// Sends `call` to `node`.
     fn call(&mut self, node: &NodeId, call: &NodeCall) -> Result<(), CallFault>;
+
+    /// Renders `mooring-probe`'s config for `interfaces`.
+    fn render_prober(
+        &mut self,
+        deployment: &Deployment,
+        interfaces: &ResolvedInterfaces,
+    ) -> Result<Result<RenderedProber<Self::ProberConfig>, RenderOutcome>, Self::Error>;
+
+    /// Checks and starts `mooring-probe` with `config`: its process id.
+    fn start_prober(
+        &mut self,
+        config: &Self::ProberConfig,
+    ) -> Result<Result<u32, StartFault>, Self::Error>;
+
+    /// The running prober's end, once it has ended.
+    fn prober_exited(&mut self) -> Result<Option<ProcessEnd>, Self::Error>;
+
+    /// Stops the running prober: its end.
+    fn stop_prober(&mut self) -> Result<ProcessEnd, Self::Error>;
+
+    /// The address the reflector saw through the probe inbound on the
+    /// loopback `port`, and how long that took.
+    fn probe_in_chain(&mut self, port: u16) -> Result<InChainProbe, ProbeStage>;
 }
 
 /// The engine as the machine knows it.
@@ -318,6 +362,8 @@ pub struct ExitMachine {
     /// Whether a latch read at start still has to be sent to the nodes.
     resend: bool,
     pending: BTreeMap<NodeId, Pending>,
+    /// `mooring-probe` and the in-chain probes.
+    in_chain: in_chain::InChain,
 }
 
 impl ExitMachine {
@@ -348,6 +394,7 @@ impl ExitMachine {
             probing: false,
             resend: latch_present,
             pending: BTreeMap::new(),
+            in_chain: in_chain::InChain::default(),
         }
     }
 
@@ -371,6 +418,12 @@ impl ExitMachine {
         Some(self.probed_at.map_or(Duration::ZERO, |at| {
             every.saturating_sub(mono.saturating_sub(at))
         }))
+    }
+
+    /// The latest in-chain probe of each node, through each protocol.
+    #[must_use]
+    pub fn verdicts(&self) -> BTreeMap<NodeId, ProtocolVerdicts> {
+        self.in_chain.verdicts()
     }
 
     /// The node calls not yet delivered, by node.
@@ -411,6 +464,9 @@ impl ExitMachine {
         };
         if matches!(state, ExitState::Down { .. } | ExitState::Disabled) {
             self.stop_engine(inputs, ports)?;
+        }
+        if !matches!(self.engine, Engine::Running { .. }) {
+            self.in_chain.stop_prober(inputs.now, ports)?;
         }
         self.set_state(state, inputs.now);
         self.deliver(inputs, ports);
@@ -747,6 +803,26 @@ impl ExitMachine {
                 }
             }
         }
+        let Engine::Running { started, .. } = self.engine else {
+            return Ok(ExitState::Starting);
+        };
+        let round_due = self.in_chain.due(inputs, started);
+        self.in_chain
+            .supervise_prober(inputs, interfaces, round_due, ports)?;
+        if round_due {
+            let egress = match &inputs.egress {
+                Ok(egress) => egress,
+                // The preflight resolved it this tick.
+                Err(fault) => return Ok(down(fault.reason())),
+            };
+            let Some(check) = inputs.deployment.exit().egress_check.as_ref() else {
+                return Ok(down(DownReason::CarrierCheckUnrecorded));
+            };
+            if let Some(violation) = self.in_chain_round(inputs, egress, check, ports) {
+                self.violate(violation.clone(), inputs, egress, ports)?;
+                return Ok(down(DownReason::Violation(violation)));
+            }
+        }
         Ok(self.running_state(inputs))
     }
 
@@ -788,8 +864,11 @@ impl ExitMachine {
         }
     }
 
-    /// The state of a running engine: starting within the grace, then
-    /// verifying, or degraded for what the Mac knows to be wrong.
+    /// The state of a running engine: starting within the grace; degraded
+    /// for what the Mac knows to be wrong (the power, a node's watch, an
+    /// in-chain probe of this engine that failed); serving through the
+    /// address an in-chain probe of this engine verified; verifying until
+    /// one has.
     fn running_state(&self, inputs: &TickInputs<'_>) -> ExitState {
         let Engine::Running { started, .. } = self.engine else {
             return ExitState::Starting;
@@ -801,9 +880,14 @@ impl ExitMachine {
         if inputs.power.source == PowerSource::Battery {
             reasons.push(DegradedReason::OnBattery);
         }
+        reasons.extend(inputs.nodes_degraded.iter().cloned());
+        reasons.extend(self.in_chain.failures_since(started));
         match NonEmpty::try_from(reasons) {
             Ok(reasons) => ExitState::Degraded { reasons },
-            Err(_) => ExitState::Verifying,
+            Err(_) => match self.in_chain.verified_since(started) {
+                Some((ip, verified_at)) => ExitState::Serving { ip, verified_at },
+                None => ExitState::Verifying,
+            },
         }
     }
 
@@ -888,11 +972,7 @@ impl ExitMachine {
                     restarts: self.restarts,
                     last_exit: self.last_exit,
                 },
-                probe: EngineProcess {
-                    pid: None,
-                    restarts: 0,
-                    last_exit: None,
-                },
+                probe: self.in_chain.process(),
             },
             power: inputs.power,
             foreign_networks: inputs.foreign.clone(),

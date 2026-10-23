@@ -1482,6 +1482,8 @@ There is no automatic retry. The latch clears only on Retry, a `config_generatio
 
 **Calibration of the gap before the first verdict** (about 10 s). In that window a user flow can leave only through the IP_BOUND_IF `egress`, whose carrier IP preflight has just checked. VPS-IP leaks are prevented by the owner guard.
 
+*Built 2026-10-23 (M5d):* `mooring-probe` runs beside `mooring-exit` from the same `engines/` directory, checked against its pin before each start, and restarts only when its config changes; one that cannot start is tried again at the next round, and meanwhile every probe of a round fails as `ProberUnavailable` (`Degraded`, never `Down`). The first round runs 10 s after the engine starts, then every `in_chain_every` (300 s): for each applied node and protocol, a direct probe to that node's reflector, the in-chain probe through the probe inbound on 127.0.0.1 (at most 10 s), and a second direct probe; both direct probes are judged as every direct probe is, and the three by `in_chain_verdict`, with its one immediate re-run. A violation ends the round and is latched as above. The exit is `Serving{ip, verified_at}` once a probe of the running engine has verified, and `Degraded` naming every probe of it that failed; a new engine is `Verifying` until its own round. The pinned `mooring-probe` accepts the rendered fixture config (`check -c stdin`, 2026-10-23).
+
 **ReachabilitySuspect.** A node is marked `Degraded(ReachabilitySuspect{node})` when all of these hold:
 - it had user (not probe) bytes in the last 7 days;
 - it has had zero user bytes for 6 hours between 08:00 and 24:00 China time;
@@ -1550,7 +1552,7 @@ The L7 lab cannot prove the bypass, because a VM subnet is a connected route tha
   - `GateSet` on a sleep drain or a violation;
   - `Shutdown` on `EgressIsNodeAddress`;
   - `ClearHold` on Retry;
-  - a `Status`/`Usage` poll every 10 minutes;
+  - a `Status`/`Usage` poll every 10 minutes (*built 2026-10-23, M5d:* `Status`, in the slot after a direct-probe round; a node that does not answer is shown unreachable since its first failed poll in a row, with its cause, and one whose watch had not written for more than 30 s by its own clock degrades a serving exit as `WatchStale`; ssh's own failures are one `Transport` until the runner tells a changed host key apart);
   - *(revision 5; plan, M5)* with that poll, or on `PollNow`, an incremental `UsageSeries` pull from the last stored bin and an `Events{since}` read from the last stored event (§11.1, §15);
   - *(revision 6; plan, M5)* with that poll, a `PutMacReport` push of the remote viewer's report to each node (F5, §15.9), and, once M4 adds the request, the notices the Mac rendered (§15.8).
 
@@ -3124,6 +3126,8 @@ cargo xtask lane l1 -p mooring-agent-proto  # frozen-core wire goldens
 **Status 2026-10-23 (M5b, merged):** the node driver: `node new --host-key`, `node adopt`, `node target check | set` and `node apply` over `dial-bound` management SSH (§10.5, §13.2).
 
 **Status 2026-10-23 (M5c, on the topic branch `feat/m5c-exit-runtime`):** built and tested: `daemon-core`'s exit machine, SIM meter and status line, and the deployed daemon (§10.1, §10.2): interface resolution against the exit site, the foreign-network check (IPv4), `mooring-exit` supervised from `engines/` against its pin with the config on stdin (the pinned engine's `check` accepts the rendered fixture config), the direct probe every 30 s with the verdict, the latch file, the gate, halt and hold calls, the SIM meter's thread and file, the hard stop, the power source read from `pmset`, the router poll through the egress, the status published, `exit enable | disable | retry | observe`, and the stale engine. Not yet (M5d): `mooring-probe`, the in-chain probes and `Serving`, the node polls (`Status`, `UsageSeries`, `Events`), `PutMacReport`, pending applies and the alert machine's notices; the PF_ROUTE monitor; IPv6 in the foreign-network snapshot.
+
+**Status 2026-10-23 (M5d, on the topic branch `feat/m5d-in-chain`):** `mooring-probe` supervised beside the exit, the in-chain rounds with their brackets and verdicts, `Serving` and the probe failures that degrade it, the node `Status` polls with `WatchStale` and unreachable nodes in the status. Not yet: `UsageSeries` and `Events` pulls (the usage view stays unavailable, `MissingLedger`), `PutMacReport`, pending applies, the alert machine's notices, the PF_ROUTE monitor, and IPv6 in the foreign-network snapshot.
 
 **Verification:**
 ```
