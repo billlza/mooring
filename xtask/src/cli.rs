@@ -25,6 +25,7 @@ pub(crate) enum Command {
     EnginesBuild,
     EnginesVerify,
     EnginesMetadata,
+    EnginesGovulncheck,
 }
 
 /// A parsed command line: the command, and its argument when it takes one.
@@ -35,7 +36,7 @@ pub(crate) struct Invocation {
 }
 
 impl Command {
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::Ci,
         Self::GraphCheck,
         Self::KindsCoverage,
@@ -53,6 +54,7 @@ impl Command {
         Self::EnginesBuild,
         Self::EnginesVerify,
         Self::EnginesMetadata,
+        Self::EnginesGovulncheck,
     ];
 
     pub(crate) const fn name(self) -> &'static str {
@@ -74,6 +76,7 @@ impl Command {
             Self::EnginesBuild => "engines-build",
             Self::EnginesVerify => "engines-verify",
             Self::EnginesMetadata => "engines-metadata",
+            Self::EnginesGovulncheck => "engines-govulncheck",
         }
     }
 
@@ -84,7 +87,8 @@ impl Command {
             Self::EnginesPrepare
             | Self::EnginesBuild
             | Self::EnginesVerify
-            | Self::EnginesMetadata => Some("<dir>"),
+            | Self::EnginesMetadata
+            | Self::EnginesGovulncheck => Some("<dir>"),
             Self::EnginesPins
             | Self::Ci
             | Self::GraphCheck
@@ -134,7 +138,7 @@ impl Command {
                 "print engines.lock.toml's pins as KEY=value lines for the hosted build"
             }
             Self::EnginesPrepare => {
-                "write the REALITY replace's go.mod/go.sum change as <dir>/xray-reality.patch (hosted runner)"
+                "apply each engine's pinned go.mod/go.sum patch, or make an unpinned one as <dir>/<engine>.patch for review (hosted runner)"
             }
             Self::EnginesBuild => {
                 "build every engine from the pinned sources in <dir> into <dir>/out (hosted runner)"
@@ -144,6 +148,9 @@ impl Command {
             }
             Self::EnginesMetadata => {
                 "check each engine's go version -m build information against its recipe (hosted runner)"
+            }
+            Self::EnginesGovulncheck => {
+                "run govulncheck on every engine output with its own tags and target (hosted runner)"
             }
         }
     }

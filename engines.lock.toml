@@ -44,14 +44,21 @@ reality-replace-commit = "e1986a4d31ca33c087a72ab4644aef1295693b69"
 ldflags = "-X github.com/xtls/xray-core/core.build=v26.9.30 -s -w -buildid="
 gcflags = "all=-l=4"
 targets = ["linux-amd64", "linux-arm64"]
-# The go.mod and go.sum change the replace makes, so that the build runs
-# with -mod=readonly (design §4.4). `cargo xtask engines-prepare` writes it
-# on the hosted runner; it is reviewed, committed here and pinned. Reviewed
-# 2026-10-23 (hosted run 39906955840): one replace line and the two go.sum
-# lines of the replacement, equal to sum.golang.org's; the pseudo-version is
-# commit e1986a4d31ca33c0 (proxy.golang.org .info), 8cdf7bf9's parent.
-patch = "engines/patches/xray-reality-e1986a4.patch"
-patch-sha256 = "0b48048d41016fb4526d9e9594619aa1dbc6c3c4226378962fc7d6351e56ebb8"
+# Reviewed security bumps (design §4.4), each to the module's latest stable
+# version: govulncheck found GO-2026-6603, -6610, -6611, -6612 and -6617
+# (HTTP/2 in golang.org/x/net v0.59.0, fixed in v0.60.0) reachable in
+# linux-amd64/xray in hosted run 39910137779 (2026-10-23); v0.61.0
+# (2026-10-09) is the latest stable release (proxy.golang.org, 2026-10-23).
+security-bumps = ["golang.org/x/net@v0.61.0"]
+# The go.mod and go.sum change of the replace and the bumps, so that the
+# build runs with -mod=readonly (design §4.4). `cargo xtask engines-prepare`
+# writes it on the hosted runner; it is reviewed, committed here and pinned.
+# The replace alone was reviewed on 2026-10-23 (hosted run 39906955840): one
+# replace line and the two go.sum lines of the replacement, equal to
+# sum.golang.org's; the pseudo-version is commit e1986a4d31ca33c0
+# (proxy.golang.org .info), 8cdf7bf9's parent.
+patch = "engines/patches/xray-v26.9.30.patch"
+patch-sha256 = ""
 
 # "<target>" = "<sha256 of the unsigned binary>", filled from the first
 # reproducible hosted build and checked by `cargo xtask engines-verify`.
@@ -64,6 +71,20 @@ commit = "af6e64c3b69e6132ebaee0e1a3d24e93903f6709"
 prerelease = false
 ldflags = "-X 'github.com/sagernet/sing-box/constant.Version=1.14.2' -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 -checklinkname=0 -s -w -buildid="
 common-tags = ["badlinkname", "tfogo_checklinkname0"]
+# Reviewed security bumps (design §4.4), each to the module's latest stable
+# version (proxy.golang.org, 2026-10-23: both released 2026-10-09).
+# v1.14.2 pins golang.org/x/net v0.57.0, which the five HTTP/2 advisories
+# Xray's govulncheck found also affect (fixed in v0.60.0), and
+# golang.org/x/crypto v0.54.0, which GO-2026-6354 and GO-2026-6355 (SSH
+# channel deadlocks, fixed in v0.56.0) and GO-2026-6303 (fixed in v0.55.0)
+# affect. sing-box links both: its HTTP/2 transports and its SSH outbound
+# (inference: govulncheck has not scanned the unbumped tree; CFM's v1.14.2
+# patch makes the same two bumps for the same advisories). The scans of the
+# patched tree run before the patch is pinned.
+security-bumps = ["golang.org/x/crypto@v0.58.0", "golang.org/x/net@v0.61.0"]
+# The go.mod and go.sum change of the bumps, as Xray's patch.
+patch = "engines/patches/sing-box-v1.14.2.patch"
+patch-sha256 = ""
 
 [sing-box.roles.mooring-exit]
 targets = ["darwin-arm64"]

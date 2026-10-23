@@ -126,6 +126,11 @@ fn run(invocation: Invocation) -> Result<(), XtaskError> {
             dir_of(&invocation)?,
             &mut out,
         )?),
+        Command::EnginesGovulncheck => Ok(engines::govulncheck(
+            cargo.workspace_root(),
+            dir_of(&invocation)?,
+            &mut out,
+        )?),
     }
 }
 

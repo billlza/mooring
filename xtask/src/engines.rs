@@ -6,12 +6,17 @@
 //!
 //! - `engines-pins` prints the pins as `KEY=value` lines for the workflow,
 //!   which downloads the pinned Go and checks out the pinned sources;
-//! - `engines-prepare <dir>` writes the REALITY replace's `go.mod` and
-//!   `go.sum` change as a patch, once, for review and pinning;
+//! - `engines-prepare <dir>` puts each engine's `go.mod` and `go.sum` patch
+//!   (Xray's REALITY replace, and either engine's reviewed security bumps)
+//!   into its tree: a pinned patch is checked and applied, an unpinned one
+//!   is made from the lock and written out for review and pinning;
 //! - `engines-build <dir>` builds every engine from the sources checked
 //!   out in `<dir>` (`xray/`, `sing-box/`, `Xray-linux-64.zip`) into
 //!   `<dir>/out`, after checking the Go version, the commits and the
-//!   pinned patch;
+//!   pinned patches;
+//! - `engines-govulncheck <dir>` runs govulncheck on every output's
+//!   package with its own tags and target, and reports every scan that
+//!   finds a reachable vulnerability;
 //! - `engines-verify <dir>` checks `<dir>/out` against the output digests
 //!   the lock records, and prints them while none are recorded;
 //! - `engines-metadata <dir>` checks each binary against its recipe: its
@@ -37,6 +42,12 @@ const XRAY_CODENAME: &str = "Xray, Penetrates Everything.";
 
 /// Where a build's outputs go inside its directory.
 const OUT: &str = "out";
+
+/// Xray's main package, inside its source directory.
+const XRAY_PACKAGE: &str = "./main";
+
+/// sing-box's main package, inside its source directory.
+const SING_BOX_PACKAGE: &str = "./cmd/sing-box";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EnginesError {
@@ -71,9 +82,14 @@ pub(crate) enum EnginesError {
         pinned: String,
     },
     #[error(
-        "the REALITY patch is not pinned yet: run `cargo xtask engines-prepare` on the hosted runner, review its patch, commit it and pin its sha256"
+        "the {source_name} patch is not pinned yet: run `cargo xtask engines-prepare` on the hosted runner, review its patch, commit it and pin its sha256"
     )]
-    PatchNotPinned,
+    PatchNotPinned { source_name: &'static str },
+    #[error(
+        "govulncheck did not pass for {}; bump each reachable module to its latest stable version in the lock's security-bumps (design §4.4)",
+        .scans.join(", ")
+    )]
+    Vulnerable { scans: Vec<String> },
     #[error("{} hashes to {actual}, the lock pins {pinned}", .path.display())]
     Digest {
         path: PathBuf,
@@ -182,6 +198,7 @@ pub(crate) struct Xray {
     pub(crate) ldflags: String,
     pub(crate) gcflags: String,
     pub(crate) targets: Vec<Target>,
+    pub(crate) security_bumps: Vec<String>,
     pub(crate) patch: String,
     pub(crate) patch_sha256: String,
     pub(crate) outputs: BTreeMap<String, String>,
@@ -197,6 +214,10 @@ pub(crate) struct SingBox {
     pub(crate) ldflags: String,
     pub(crate) common_tags: Vec<String>,
     pub(crate) roles: BTreeMap<String, Role>,
+    pub(crate) security_bumps: Vec<String>,
+    /// Empty, with its digest, while there are no security bumps.
+    pub(crate) patch: String,
+    pub(crate) patch_sha256: String,
     pub(crate) outputs: BTreeMap<String, String>,
 }
 
@@ -251,6 +272,7 @@ impl Lock {
             &lock.go.darwin_arm64_sha256,
             &lock.go.linux_amd64_sha256,
             &lock.xray.patch_sha256,
+            &lock.sing_box.patch_sha256,
             &lock.geodata.zip_sha256,
         ] {
             pinned(digest)?;
@@ -319,7 +341,58 @@ impl Lock {
         if sing_box.prerelease {
             return Err("sing-box is pinned to a prerelease".to_owned());
         }
+        for (engine, bumps) in [
+            ("xray", &xray.security_bumps),
+            ("sing-box", &sing_box.security_bumps),
+        ] {
+            let mut modules = Vec::new();
+            for bump in bumps {
+                let module = bump_module(bump).ok_or_else(|| {
+                    format!(
+                        "{engine} security bump {bump:?} is not `<module>@v<major>.<minor>.<patch>`"
+                    )
+                })?;
+                if modules.contains(&module) {
+                    return Err(format!("{engine} bumps {module} twice"));
+                }
+                modules.push(module);
+            }
+        }
+        if xray.patch.is_empty() {
+            return Err("xray has no patch for its REALITY replace".to_owned());
+        }
+        if sing_box.security_bumps.is_empty()
+            != (sing_box.patch.is_empty() && sing_box.patch_sha256.is_empty())
+        {
+            return Err("sing-box has a patch exactly when it has security bumps".to_owned());
+        }
         Ok(())
+    }
+
+    /// The engines that carry a `go.mod` and `go.sum` patch: Xray always,
+    /// for its REALITY replace, and sing-box while it has security bumps.
+    pub(crate) fn patches(&self) -> Vec<EnginePatch> {
+        let mut patches = vec![EnginePatch {
+            source: "xray",
+            replace: self
+                .xray
+                .reality_replace
+                .split_once(' ')
+                .map(|(module, version)| format!("-replace={module}={module}@{version}")),
+            bumps: self.xray.security_bumps.clone(),
+            path: self.xray.patch.clone(),
+            sha256: self.xray.patch_sha256.clone(),
+        }];
+        if !self.sing_box.security_bumps.is_empty() {
+            patches.push(EnginePatch {
+                source: "sing-box",
+                replace: None,
+                bumps: self.sing_box.security_bumps.clone(),
+                path: self.sing_box.patch.clone(),
+                sha256: self.sing_box.patch_sha256.clone(),
+            });
+        }
+        patches
     }
 
     /// Every output the lock records, by its path in a build's `out`.
@@ -369,6 +442,7 @@ impl Lock {
                 source: "xray",
                 target,
                 output: format!("{}/xray", target.name()),
+                package: XRAY_PACKAGE,
                 tags: Vec::new(),
                 gcflags: Some(self.xray.gcflags.clone()),
                 version_line: format!(
@@ -387,7 +461,7 @@ impl Lock {
                     format!("-ldflags={}", self.xray.ldflags),
                     "-o".to_owned(),
                     String::new(),
-                    "./main".to_owned(),
+                    XRAY_PACKAGE.to_owned(),
                 ],
             })
             .collect();
@@ -399,6 +473,7 @@ impl Lock {
                     source: "sing-box",
                     target,
                     output: format!("{}/{name}", target.name()),
+                    package: SING_BOX_PACKAGE,
                     tags: tags.clone(),
                     gcflags: None,
                     version_line: format!(
@@ -413,7 +488,7 @@ impl Lock {
                         format!("-ldflags={}", self.sing_box.ldflags),
                         "-o".to_owned(),
                         String::new(),
-                        "./cmd/sing-box".to_owned(),
+                        SING_BOX_PACKAGE.to_owned(),
                     ],
                 });
             }
@@ -444,6 +519,8 @@ pub(crate) struct Build {
     pub(crate) target: Target,
     /// Its path inside `out`.
     pub(crate) output: String,
+    /// The main package, inside the source directory.
+    pub(crate) package: &'static str,
     /// The build tags, in recipe order.
     pub(crate) tags: Vec<String>,
     pub(crate) gcflags: Option<String>,
@@ -530,6 +607,37 @@ impl Build {
             )),
         }
     }
+}
+
+/// One engine's `go.mod` and `go.sum` patch (design §4.2, §4.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EnginePatch {
+    /// The source directory inside the build directory.
+    pub(crate) source: &'static str,
+    /// The `go mod edit` argument of Xray's REALITY replace.
+    pub(crate) replace: Option<String>,
+    /// The reviewed security bumps, `<module>@<version>` each.
+    pub(crate) bumps: Vec<String>,
+    /// The committed patch, relative to the workspace root.
+    pub(crate) path: String,
+    /// Its pinned digest; empty until it is reviewed and pinned.
+    pub(crate) sha256: String,
+}
+
+/// The module of a security bump `<module>@v<major>.<minor>.<patch>`: a
+/// released version, never a prerelease or a pseudo-version.
+fn bump_module(bump: &str) -> Option<&str> {
+    let (module, version) = bump.split_once('@')?;
+    let numbers: Vec<&str> = version.strip_prefix('v')?.split('.').collect();
+    let released = numbers.len() == 3
+        && numbers
+            .iter()
+            .all(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()));
+    let path = module.contains('/')
+        && module
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"./-_~".contains(&byte));
+    (released && path).then_some(module)
 }
 
 /// Checks `go tool buildid`'s report on a built binary: the ID is empty, as
@@ -644,51 +752,128 @@ fn check_go(lock: &Lock) -> Result<(), EnginesError> {
     }
 }
 
-/// `engines-prepare <dir>`: applies the REALITY replace to `<dir>/xray`,
-/// lets Go record the sums the build needs, and writes the change as
-/// `<dir>/xray-reality.patch`.
+/// `engines-prepare <dir>`: every engine's patch into its tree. A pinned
+/// patch is checked against its pin and applied. An unpinned one is made
+/// from the lock: from upstream's `go.mod` and `go.sum`, Xray's REALITY
+/// replace, `go get` of each security bump, and a build of each of that
+/// engine's outputs, so that `go.sum` holds every line the builds need. It
+/// is written to `<dir>/<source>.patch` for review and left applied, so
+/// that govulncheck scans what the build would build. The last line is
+/// `prepared=true` when a patch was made, for the workflow.
 pub(crate) fn prepare(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(), EnginesError> {
     let dir = &absolute(dir)?;
     let lock = Lock::read(&root.join(LOCK))?;
     check_go(&lock)?;
     check_commit(dir, "xray", &lock.xray.commit)?;
-    let xray = dir.join("xray");
-    let replace = lock
-        .xray
-        .reality_replace
-        .split_once(' ')
-        .map(|(module, version)| format!("-replace={module}={module}@{version}"))
-        .ok_or_else(|| EnginesError::Lock {
-            path: root.join(LOCK),
-            message: "reality-replace is not `<module> <version>`".to_owned(),
+    check_commit(dir, "sing-box", &lock.sing_box.commit)?;
+    let mut prepared = false;
+    for patch in lock.patches() {
+        let tree = dir.join(patch.source);
+        let unpinned = pinned(&patch.sha256)
+            .map_err(|message| EnginesError::Lock {
+                path: root.join(LOCK),
+                message,
+            })?
+            .is_none();
+        if !unpinned {
+            apply_patch(root, &patch, &tree)?;
+            continue;
+        }
+        run(Command::new("git")
+            .arg("-C")
+            .arg(&tree)
+            .args(["checkout", "--", "go.mod", "go.sum"]))?;
+        if let Some(replace) = &patch.replace {
+            run(Command::new("go")
+                .current_dir(&tree)
+                .args(["mod", "edit", replace]))?;
+        }
+        if !patch.bumps.is_empty() {
+            run(Command::new("go")
+                .current_dir(&tree)
+                .envs(lock.go.env.iter())
+                .env("GOFLAGS", "-mod=mod")
+                .arg("get")
+                .args(&patch.bumps))?;
+        }
+        for build in lock.builds() {
+            if build.source == patch.source {
+                run(Command::new("go")
+                    .current_dir(&tree)
+                    .envs(lock.env(build.target))
+                    .env("GOFLAGS", "-mod=mod -trimpath")
+                    .args(build.args_to(Path::new("/dev/null"))))?;
+            }
+        }
+        let diff = run(Command::new("git")
+            .arg("-C")
+            .arg(&tree)
+            .args(["diff", "--", "go.mod", "go.sum"]))?;
+        let path = dir.join(format!("{}.patch", patch.source));
+        fs::write(&path, &diff).map_err(|source| EnginesError::Write {
+            path: path.clone(),
+            source,
         })?;
-    run(Command::new("go")
-        .current_dir(&xray)
-        .args(["mod", "edit", &replace]))?;
-    run(Command::new("go")
-        .current_dir(&xray)
-        .envs(lock.go.env.iter())
-        .env("GOFLAGS", "-mod=mod -trimpath")
-        .args(["build", "-o", "/dev/null", "./main"]))?;
-    let patch = run(Command::new("git")
+        writeln!(
+            out,
+            "{} sha256 {}",
+            path.display(),
+            Sha256Digest::of(diff.as_bytes())
+        )
+        .map_err(stdout_error)?;
+        prepared = true;
+    }
+    writeln!(out, "prepared={prepared}").map_err(stdout_error)
+}
+
+/// Applies an engine's committed patch to `tree`, after checking it
+/// against its pin, unless the tree has it already (a second build).
+fn apply_patch(root: &Path, patch: &EnginePatch, tree: &Path) -> Result<(), EnginesError> {
+    let Some(pin) = pinned(&patch.sha256).map_err(|message| EnginesError::Lock {
+        path: root.join(LOCK),
+        message,
+    })?
+    else {
+        return Err(EnginesError::PatchNotPinned {
+            source_name: patch.source,
+        });
+    };
+    let path = root.join(&patch.path);
+    let actual = digest_of(&path)?;
+    if actual != pin {
+        return Err(EnginesError::Digest {
+            path,
+            actual,
+            pinned: pin,
+        });
+    }
+    let applied = Command::new("git")
         .arg("-C")
-        .arg(&xray)
-        .args(["diff", "--", "go.mod", "go.sum"]))?;
-    let path = dir.join("xray-reality.patch");
-    fs::write(&path, &patch).map_err(|source| EnginesError::Write {
-        path: path.clone(),
-        source,
-    })?;
-    writeln!(
-        out,
-        "{} sha256 {}",
-        path.display(),
-        Sha256Digest::of(patch.as_bytes())
-    )
-    .map_err(|source| EnginesError::Write {
+        .arg(tree)
+        .args(["apply", "--reverse", "--check"])
+        .arg(&path)
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|source| EnginesError::Spawn {
+            command: "git apply --reverse --check".to_owned(),
+            source,
+        })?
+        .success();
+    if !applied {
+        run(Command::new("git")
+            .arg("-C")
+            .arg(tree)
+            .arg("apply")
+            .arg(&path))?;
+    }
+    Ok(())
+}
+
+fn stdout_error(source: io::Error) -> EnginesError {
+    EnginesError::Write {
         path: PathBuf::from("<stdout>"),
         source,
-    })
+    }
 }
 
 /// `dir` made absolute: each `go build` runs in its source directory, and
@@ -707,43 +892,8 @@ pub(crate) fn build(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(),
     check_go(&lock)?;
     check_commit(dir, "xray", &lock.xray.commit)?;
     check_commit(dir, "sing-box", &lock.sing_box.commit)?;
-    let Some(patch_sha) =
-        pinned(&lock.xray.patch_sha256).map_err(|message| EnginesError::Lock {
-            path: root.join(LOCK),
-            message,
-        })?
-    else {
-        return Err(EnginesError::PatchNotPinned);
-    };
-    let patch = root.join(&lock.xray.patch);
-    let actual = digest_of(&patch)?;
-    if actual != patch_sha {
-        return Err(EnginesError::Digest {
-            path: patch,
-            actual,
-            pinned: patch_sha,
-        });
-    }
-    let xray = dir.join("xray");
-    // Apply the patch unless this tree has it already (a second build).
-    let applied = Command::new("git")
-        .arg("-C")
-        .arg(&xray)
-        .args(["apply", "--reverse", "--check"])
-        .arg(&patch)
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|source| EnginesError::Spawn {
-            command: "git apply --reverse --check".to_owned(),
-            source,
-        })?
-        .success();
-    if !applied {
-        run(Command::new("git")
-            .arg("-C")
-            .arg(&xray)
-            .arg("apply")
-            .arg(&patch))?;
+    for patch in lock.patches() {
+        apply_patch(root, &patch, &dir.join(patch.source))?;
     }
     let out_dir = dir.join(OUT);
     let zip = dir.join("Xray-linux-64.zip");
@@ -905,6 +1055,58 @@ pub(crate) fn verify(root: &Path, dir: &Path, out: &mut impl Write) -> Result<()
     result
 }
 
+/// `engines-govulncheck <dir>`: govulncheck on every output's main package,
+/// with that output's tags and target, from the patched trees in `<dir>`
+/// (design §4.1). Every scan runs, and its report is printed as it comes;
+/// the error lists each scan that did not pass: exit status 3 is a
+/// reachable vulnerability, any other failure is govulncheck's own.
+pub(crate) fn govulncheck(
+    root: &Path,
+    dir: &Path,
+    out: &mut impl Write,
+) -> Result<(), EnginesError> {
+    let dir = &absolute(dir)?;
+    let lock = Lock::read(&root.join(LOCK))?;
+    let mut failed = Vec::new();
+    for build in lock.builds() {
+        writeln!(
+            out,
+            "== govulncheck {} ({} for {}, tags [{}])",
+            build.output,
+            build.package,
+            build.target.name(),
+            build.tags.join(",")
+        )
+        .map_err(stdout_error)?;
+        out.flush().map_err(stdout_error)?;
+        let mut command = Command::new("govulncheck");
+        command
+            .current_dir(dir.join(build.source))
+            .envs(lock.env(build.target))
+            .stdin(Stdio::null());
+        if !build.tags.is_empty() {
+            command.arg(format!("-tags={}", build.tags.join(",")));
+        }
+        let status = command
+            .arg(build.package)
+            .status()
+            .map_err(|source| EnginesError::Spawn {
+                command: format!("govulncheck {}", build.package),
+                source,
+            })?;
+        match status.code() {
+            Some(0) => {}
+            Some(3) => failed.push(format!("{} (reachable vulnerabilities)", build.output)),
+            code => failed.push(format!("{} (govulncheck failed: {code:?})", build.output)),
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(EnginesError::Vulnerable { scans: failed })
+    }
+}
+
 /// `engines-metadata <dir>`: every binary's build information and build
 /// ID, and the version stamps of the binaries built for this computer.
 pub(crate) fn metadata(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(), EnginesError> {
@@ -944,12 +1146,8 @@ pub(crate) fn metadata(root: &Path, dir: &Path, out: &mut impl Write) -> Result<
         } else {
             "built for another computer, so its version stamp is not run here".to_owned()
         };
-        writeln!(out, "{}: built as its recipe says; {stamp}", build.output).map_err(|source| {
-            EnginesError::Write {
-                path: PathBuf::from("<stdout>"),
-                source,
-            }
-        })?;
+        writeln!(out, "{}: built as its recipe says; {stamp}", build.output)
+            .map_err(stdout_error)?;
     }
     Ok(())
 }

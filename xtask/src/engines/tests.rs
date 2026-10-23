@@ -5,7 +5,10 @@ use std::path::Path;
 
 use mooring_model::Sha256Digest;
 
-use super::{EnginesError, Lock, Target, check_build_id, compare, outputs_toml, unquote};
+use super::{
+    EnginePatch, EnginesError, Lock, Target, bump_module, check_build_id, compare, outputs_toml,
+    unquote,
+};
 
 fn repository_lock() -> Lock {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -153,6 +156,31 @@ fn a_lock_that_contradicts_itself_is_refused() {
         ),
         ("prerelease = false", "prerelease = true", "prerelease"),
         ("[geodata]", "[geodata]\nextra = 1", "unknown field"),
+        (
+            r#"security-bumps = ["golang.org/x/net@v0.61.0"]"#,
+            r#"security-bumps = ["golang.org/x/net@latest"]"#,
+            "security bump",
+        ),
+        (
+            r#"security-bumps = ["golang.org/x/net@v0.61.0"]"#,
+            r#"security-bumps = ["golang.org/x/net@v0.0.0-20261009170724-c1d31df183e5"]"#,
+            "security bump",
+        ),
+        (
+            r#"security-bumps = ["golang.org/x/crypto@v0.58.0", "golang.org/x/net@v0.61.0"]"#,
+            r#"security-bumps = ["golang.org/x/net@v0.58.0", "golang.org/x/net@v0.61.0"]"#,
+            "twice",
+        ),
+        (
+            r#"security-bumps = ["golang.org/x/crypto@v0.58.0", "golang.org/x/net@v0.61.0"]"#,
+            "security-bumps = []",
+            "exactly when",
+        ),
+        (
+            r#"patch = "engines/patches/xray-v26.9.30.patch""#,
+            r#"patch = """#,
+            "REALITY replace",
+        ),
     ] {
         assert!(lock.contains(from), "{from}");
         let changed = lock.replacen(from, to, 1);
@@ -346,4 +374,102 @@ fn quoted_settings_are_unquoted_as_go_quotes_them() {
     assert_eq!(unquote("\"say \\\"hi\\\"\""), "say \"hi\"");
     assert_eq!(unquote("\"back\\\\slash\\ttab\""), "back\\slash\ttab");
     assert_eq!(unquote("\"unterminated"), "\"unterminated");
+}
+
+/// Each engine's patch is what the lock says: Xray's always, with its
+/// REALITY replace and its bumps; sing-box's only while it has bumps.
+#[test]
+fn the_patches_follow_the_lock() {
+    let lock = repository_lock();
+    assert_eq!(
+        lock.patches(),
+        [
+            EnginePatch {
+                source: "xray",
+                replace: Some(
+                    "-replace=github.com/xtls/reality=github.com/xtls/reality@v0.0.0-20260908045812-e1986a4d31ca"
+                        .to_owned()
+                ),
+                bumps: vec!["golang.org/x/net@v0.61.0".to_owned()],
+                path: "engines/patches/xray-v26.9.30.patch".to_owned(),
+                sha256: lock.xray.patch_sha256.clone(),
+            },
+            EnginePatch {
+                source: "sing-box",
+                replace: None,
+                bumps: vec![
+                    "golang.org/x/crypto@v0.58.0".to_owned(),
+                    "golang.org/x/net@v0.61.0".to_owned()
+                ],
+                path: "engines/patches/sing-box-v1.14.2.patch".to_owned(),
+                sha256: lock.sing_box.patch_sha256.clone(),
+            },
+        ]
+    );
+    let unbumped = text()
+        .replacen(
+            r#"security-bumps = ["golang.org/x/crypto@v0.58.0", "golang.org/x/net@v0.61.0"]"#,
+            "security-bumps = []",
+            1,
+        )
+        .replacen(
+            r#"patch = "engines/patches/sing-box-v1.14.2.patch""#,
+            r#"patch = """#,
+            1,
+        );
+    let unbumped = Lock::parse(&unbumped).unwrap();
+    assert_eq!(
+        unbumped
+            .patches()
+            .iter()
+            .map(|patch| patch.source)
+            .collect::<Vec<_>>(),
+        ["xray"]
+    );
+}
+
+#[test]
+fn a_security_bump_is_a_released_module_version() {
+    assert_eq!(
+        bump_module("golang.org/x/net@v0.61.0"),
+        Some("golang.org/x/net")
+    );
+    assert_eq!(
+        bump_module("github.com/sagernet/sing-quic@v0.6.12"),
+        Some("github.com/sagernet/sing-quic")
+    );
+    for bad in [
+        "golang.org/x/net@latest",
+        "golang.org/x/net@0.61.0",
+        "golang.org/x/net@v0.61",
+        "golang.org/x/net@v0.61.0-rc.1",
+        "golang.org/x/net@v0.0.0-20261009170724-c1d31df183e5",
+        "golang.org/x/net v0.61.0",
+        "net@v0.61.0",
+        "golang.org/x/net@v0.61.0 ",
+        "golang.org/x/n et@v0.61.0",
+        "@v0.61.0",
+    ] {
+        assert_eq!(bump_module(bad), None, "{bad}");
+    }
+}
+
+/// Every output's main package is the one its build compiles, and its
+/// govulncheck scan uses the same package, tags and target.
+#[test]
+fn every_output_builds_and_scans_its_main_package() {
+    for build in repository_lock().builds() {
+        let package = if build.source == "xray" {
+            "./main"
+        } else {
+            "./cmd/sing-box"
+        };
+        assert_eq!(build.package, package, "{}", build.output);
+        assert_eq!(
+            build.args.last().map(String::as_str),
+            Some(package),
+            "{}",
+            build.output
+        );
+    }
 }

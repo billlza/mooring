@@ -7,7 +7,9 @@
 # govulncheck. The gates are design §4.1's: two clean builds, byte for
 # byte the same and the same as the digests the lock records; each
 # binary's build information as its recipe says; upstream's package tests;
-# govulncheck with each role's tags.
+# govulncheck on every output with its own tags and target. While an
+# engine's go.mod/go.sum patch is unpinned, the run makes it, uploads it
+# for review, scans the patched trees with govulncheck and stops.
 name: engines
 
 on:
@@ -34,6 +36,11 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: never
+    defaults:
+      run:
+        # bash -eo pipefail, so that a failed command before a pipe fails
+        # the step.
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,23 +74,26 @@ jobs:
         run: |
           curl -fsSLo build/Xray-linux-64.zip "$GEODATA_URL"
           echo "${GEODATA_SHA256}  build/Xray-linux-64.zip" | sha256sum -c -
-      - name: The REALITY patch, while it is not pinned
+      - name: Install govulncheck
+        run: go install "$GOVULNCHECK"
+      - name: The engines' patches, made while one is not pinned
         id: prepare
         run: |
-          if grep -q '^patch-sha256 = ""' engines.lock.toml; then
-            cargo xtask engines-prepare build
-            echo "prepared=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Upload the REALITY patch for review
+          cargo xtask engines-prepare build | tee build/prepare.out
+          grep '^prepared=' build/prepare.out >> "$GITHUB_OUTPUT"
+      - name: Upload the made patches for review
         if: steps.prepare.outputs.prepared == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: xray-reality-patch
-          path: build/xray-reality.patch
-      - name: Stop until the patch is pinned
+          name: engine-patches
+          path: build/*.patch
+      - name: govulncheck on the patched trees
+        if: steps.prepare.outputs.prepared == 'true'
+        run: PATH="$(go env GOPATH)/bin:$PATH" cargo xtask engines-govulncheck build
+      - name: Stop until the patches are pinned
         if: steps.prepare.outputs.prepared == 'true'
         run: |
-          echo "Review build/xray-reality.patch, commit it as engines/patches/xray-reality-e1986a4.patch and pin its sha256."
+          echo "Review build/*.patch, commit each where engines.lock.toml names it and pin its sha256."
           exit 1
       - name: First build
         env:
@@ -112,17 +122,11 @@ jobs:
           (cd build/xray && go test ./proxy/vless/... ./transport/internet/reality/...)
           (cd build/sing-box && go test -tags with_quic ./protocol/hysteria2/...)
           (cd build/sing-box && go test -tags with_gvisor,with_wireguard ./protocol/wireguard/...)
-      - name: govulncheck
+      - name: govulncheck on every output
         env:
           GOCACHE: ${{ runner.temp }}/second/cache
           GOMODCACHE: ${{ runner.temp }}/second/mod
-        run: |
-          go install "$GOVULNCHECK"
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          (cd build/xray && GOFLAGS=-mod=readonly govulncheck ./main/...)
-          (cd build/sing-box && govulncheck -tags with_quic ./cmd/sing-box)
-          (cd build/sing-box && GOOS=darwin GOARCH=arm64 govulncheck -tags with_gvisor,with_wireguard ./cmd/sing-box)
-          (cd build/sing-box && GOOS=darwin GOARCH=arm64 govulncheck -tags with_quic,with_utls ./cmd/sing-box)
+        run: PATH="$(go env GOPATH)/bin:$PATH" cargo xtask engines-govulncheck build
       - name: Upload the engines
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
