@@ -78,12 +78,15 @@
     "egress_subnet_mismatch",
     "uplink_absent",
     "uplink_equals_egress",
+    "no_applied_node",
     {
       "direct_probe_failed": {
         "node": "lon1",
         "stage": "connect"
       }
     },
+    "carrier_check_unrecorded",
+    "sim_plan_unrecorded",
     "secrets_unavailable",
     {
       "agent_not_enabled": {

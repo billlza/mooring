@@ -8,10 +8,13 @@ use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::counters::ConfigGeneration;
 use crate::exit::{EgressCheck, Pairing};
 use crate::ids::NodeId;
+use crate::iface::EgressIdentity;
 use crate::kinds;
 use crate::node::NodeAddress;
+use crate::time::UnixTime;
 
 /// The two direct probes bracketing an in-chain probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,6 +132,23 @@ impl Violation {
             | Self::EgressMismatch { .. } => None,
         }
     }
+}
+
+/// A latched violation (design §10.2, "After a violation"): the daemon
+/// keeps it in `run/latch.json`, so that it outlives the daemon, a crash
+/// and a reboot. It clears only on a retry, a change of
+/// `config_generation`, or another egress identity.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatchRecord {
+    /// The violation with its evidence.
+    pub violation: Violation,
+    /// When it was latched.
+    pub at: UnixTime,
+    /// The configuration generation it was latched under.
+    pub config_generation: ConfigGeneration,
+    /// The egress it was seen through.
+    pub egress: EgressIdentity,
 }
 
 /// The outcome of one in-chain probe.

@@ -1,26 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The exit commands (design §7, §10.2): `exit init`, which creates the
-//! deployment with the values decided for the pilot, and
+//! The exit commands (design §7, §10.2, §13): `exit init`, which creates
+//! the deployment with the values decided for the pilot;
 //! `exit record-carrier`, which records the line's carrier check once it
-//! has been observed on the line.
+//! has been observed on the line, and `exit observe`, which observes it;
+//! `exit enable` and `exit disable`, the operator's runtime intent; and
+//! `exit retry`, which asks the daemon to clear a latched violation.
 
-use std::io::Write;
-use std::net::Ipv4Addr;
+use std::io::{BufReader, Write};
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::time::Instant;
 
+use mooring_daemon_core::control::{DaemonReply, DaemonRequest, decode_reply};
 use mooring_macsys::InterfaceAddrV4;
 use mooring_model::collections::NonEmpty;
 use mooring_model::exit::{EgressCheck, FlowCap, Pairing};
 use mooring_model::iface::{BsdName, InterfaceSelector, LanSubnet, MacAddr};
 use mooring_model::ipv4::CarrierPrefix;
+use mooring_model::node::NodeAddress;
 use mooring_model::{Bookkeeping, CalendarDate, CycleRule, DeploymentInit, PlanKind, StopPolicy};
 use mooring_store::{Store, StoreError};
 
 use crate::app::{Env, support_dir};
+use crate::daemon::RunPaths;
 use crate::error::{CommandError, LocalError, Unconfirmed};
+use crate::node::dial::facing_the_m7;
 use crate::prompt::Answer;
 use crate::router;
 use crate::state::{load, output};
+use crate::status::{ANSWER_TIMEOUT, Next, connect, read_reply_line};
 
 /// `exit init --interface <bsd> --cycle-anchor <date> --flow-cap <n>
 /// [--yes]` (design §7, "What `exit init` records"): creates the deployment
@@ -229,5 +237,123 @@ pub(crate) fn record_carrier(
         )
         .map_err(|error| LocalError::StateChange(Box::new(error)))?;
     writeln!(out, "recorded the carrier check; no node apply is needed").map_err(output)?;
+    Ok(())
+}
+
+/// `exit enable` and `exit disable` (design §13): the operator's runtime
+/// intent, recorded with its own revision so that it never makes a node
+/// stale. The daemon starts or stops the engine at its next tick.
+pub(crate) fn set_enabled(
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    enabled: bool,
+) -> Result<(), CommandError> {
+    let store = Store::new(support_dir(env)?);
+    let state = load(&store)?;
+    let word = if enabled { "enabled" } else { "disabled" };
+    if state.runtime.exit_enabled == enabled {
+        writeln!(out, "the exit is {word} already").map_err(output)?;
+        return Ok(());
+    }
+    store
+        .set_exit_enabled(state.runtime.revision, enabled)
+        .map_err(|error| LocalError::StateChange(Box::new(error)))?;
+    writeln!(
+        out,
+        "the exit is {word}; the daemon {} the engine at its next tick",
+        if enabled {
+            "runs its preflight and starts"
+        } else {
+            "stops"
+        }
+    )
+    .map_err(output)?;
+    Ok(())
+}
+
+/// `exit retry` (design §10.2, "Retry flow"): asks the daemon to clear the
+/// latched violation and the nodes' holds, and to run a fresh preflight at
+/// its next tick; `mooringctl status` then shows what it found.
+pub(crate) fn retry(env: &mut Env<'_>, out: &mut dyn Write) -> Result<(), CommandError> {
+    let socket = RunPaths::under(&support_dir(env)?).socket;
+    let mut reader = BufReader::new(connect(&socket, DaemonRequest::Retry, ANSWER_TIMEOUT)?);
+    let line = match read_reply_line(
+        &mut reader,
+        &socket,
+        Instant::now() + ANSWER_TIMEOUT,
+        &|| true,
+    )? {
+        Next::Line(line) => line,
+        Next::Deadline | Next::ParentGone => {
+            return Err(LocalError::DaemonSilent {
+                secs: ANSWER_TIMEOUT.as_secs(),
+            }
+            .into());
+        }
+    };
+    match decode_reply(&line).map_err(LocalError::DaemonReply)? {
+        DaemonReply::RetryQueued => {
+            writeln!(
+                out,
+                "retry queued: the daemon clears the latch and runs a fresh preflight at its next tick; `mooringctl status` shows the outcome"
+            )
+            .map_err(output)?;
+            Ok(())
+        }
+        DaemonReply::Refused { reason } => Err(LocalError::DaemonRefused { reason }.into()),
+        DaemonReply::Status(_) => Err(LocalError::DaemonUnexpectedReply.into()),
+    }
+}
+
+/// `exit observe --interface <bsd>` (design §10.2): the address each
+/// adopted node's reflector sees through `interface`, which must face the
+/// pinned M7. It is the carrier's public address for this line, which the
+/// operator looks up (RIPE inetnum) before `exit record-carrier`; with a
+/// carrier check recorded it also says whether the address passes it. No
+/// node answering is `NothingObserved`.
+pub(crate) fn observe(
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    interface: &BsdName,
+) -> Result<(), CommandError> {
+    let store = Store::new(support_dir(env)?);
+    let state = load(&store)?;
+    let index = facing_the_m7(env, interface)?;
+    let check = state.deployment.exit().egress_check.as_ref();
+    let mut observed = 0_usize;
+    for node in state.deployment.nodes().values() {
+        let Some(site) = node.lifecycle.site() else {
+            continue;
+        };
+        let NodeAddress::Public(address) = site.address;
+        let reflector = SocketAddrV4::new(address.get(), node.ports.reflector().get());
+        match (env.probe)(index, reflector) {
+            Ok(ip) => {
+                observed += 1;
+                let verdict = match check {
+                    None => "no carrier check is recorded yet",
+                    Some(check) if check.in_carrier(ip) => "inside the recorded carrier prefixes",
+                    Some(_) => "OUTSIDE the recorded carrier prefixes",
+                };
+                writeln!(out, "{}: the reflector sees {ip} ({verdict})", node.id)
+                    .map_err(output)?;
+            }
+            Err(failure) => {
+                writeln!(
+                    out,
+                    "{}: no answer from {reflector} ({:?}{})",
+                    node.id,
+                    failure.stage,
+                    failure
+                        .kind
+                        .map_or_else(String::new, |kind| format!(", {kind}"))
+                )
+                .map_err(output)?;
+            }
+        }
+    }
+    if observed == 0 {
+        return Err(LocalError::NothingObserved.into());
+    }
     Ok(())
 }

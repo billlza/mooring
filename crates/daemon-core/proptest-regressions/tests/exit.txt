@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ebef5a668e5b23d55de52e13dd01bf46ad6c268d4608f282eeb2beac15bf5abb # shrinks to answers = [Outside, Carrier]
+cc afb368def145b1e0b4fd8cc7c94a9021bc580546fff345f3217fc94ab97c5a9b # shrinks to answers = [Fails, Carrier, Carrier, Outside]

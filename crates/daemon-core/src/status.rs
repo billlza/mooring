@@ -147,6 +147,9 @@ pub enum DownReason {
     UplinkAbsent,
     /// The separate uplink is the egress.
     UplinkEqualsEgress,
+    /// No node has confirmed a configuration yet (`node apply`), so the
+    /// exit has no tunnel to serve and no reflector to probe.
+    NoAppliedNode,
     /// No direct probe succeeded at preflight.
     DirectProbeFailed {
         /// The last node tried.
@@ -154,6 +157,12 @@ pub enum DownReason {
         /// Where it failed.
         stage: ProbeStage,
     },
+    /// The line's carrier check is not recorded yet (`exit record-carrier`),
+    /// so no egress address can be judged.
+    CarrierCheckUnrecorded,
+    /// The SIM plan is not recorded (a state lifted from version 1); the
+    /// exit stays down until `sim set-plan` records it (design §10.2).
+    SimPlanUnrecorded,
     /// The Keychain could not be read (`errSecInteractionNotAllowed`).
     SecretsUnavailable,
     /// The agent on a node is not enabled.
@@ -208,6 +217,9 @@ impl DownReason {
             | Self::EgressSubnetMismatch
             | Self::UplinkAbsent
             | Self::UplinkEqualsEgress
+            | Self::NoAppliedNode
+            | Self::CarrierCheckUnrecorded
+            | Self::SimPlanUnrecorded
             | Self::SecretsUnavailable
             | Self::EngineSpawnFailed { .. }
             | Self::EngineConfigRejected { .. }

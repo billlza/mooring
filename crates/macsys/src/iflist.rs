@@ -39,6 +39,7 @@ const IFI_TYPE_AT: usize = IFM_DATA_AT + offset_of!(libc::if_data64, ifi_type);
 const IFI_MTU_AT: usize = IFM_DATA_AT + offset_of!(libc::if_data64, ifi_mtu);
 const IFI_IBYTES_AT: usize = IFM_DATA_AT + offset_of!(libc::if_data64, ifi_ibytes);
 const IFI_OBYTES_AT: usize = IFM_DATA_AT + offset_of!(libc::if_data64, ifi_obytes);
+const IFI_BAUDRATE_AT: usize = IFM_DATA_AT + offset_of!(libc::if_data64, ifi_baudrate);
 
 const IFAM_HEADER_LEN: usize = size_of::<libc::ifa_msghdr>();
 const IFAM_ADDRS_AT: usize = offset_of!(libc::ifa_msghdr, ifam_addrs);
@@ -75,6 +76,9 @@ pub struct Interface {
     pub ibytes: u64,
     /// Bytes sent (`ifi_obytes`), read as [`Interface::ibytes`] is.
     pub obytes: u64,
+    /// The link's speed in bits per second (`ifi_baudrate`); 0 when the
+    /// driver reports none.
+    pub baudrate: u64,
     /// Its IPv4 addresses, in the kernel's order.
     pub ipv4: Vec<InterfaceAddrV4>,
 }
@@ -206,6 +210,7 @@ fn parse_ifinfo(message: &[u8]) -> Result<Interface, RouteFault> {
         mtu: u32_at(message, IFI_MTU_AT),
         ibytes: u64_at(message, IFI_IBYTES_AT),
         obytes: u64_at(message, IFI_OBYTES_AT),
+        baudrate: u64_at(message, IFI_BAUDRATE_AT),
         ipv4: Vec::new(),
     })
 }

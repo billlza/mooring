@@ -43,14 +43,16 @@ mod error;
 mod iflist;
 mod interface;
 mod limits;
+mod process;
 mod route;
 mod terminal;
 #[cfg(test)]
 mod tests;
 
-pub use error::{MacsysError, MacsysErrorKind, RlimitCall, RouteFault, TerminalCall};
+pub use error::{MacsysError, MacsysErrorKind, ProcessCall, RlimitCall, RouteFault, TerminalCall};
 pub use iflist::{Interface, InterfaceAddrV4, interface, interfaces};
 pub use interface::interface_index;
 pub use limits::{OpenFilesLimit, open_files_limit, raise_open_files};
+pub use process::{boot_time, kill_process, process_path};
 pub use route::{default_gateway_v4, neighbour_v4};
 pub use terminal::{EchoOff, controlling_terminal};

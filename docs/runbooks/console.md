@@ -5,7 +5,9 @@ This runbook is for the operator. It covers building Mooring.app, running the da
 
 The design is §5.1, §10.1, §15.1 and §15.6 (revision 9). This is the development build: it runs from the repository's target directory, signed ad hoc, and the daemon runs until logout. M7 replaces this with a signed app that registers the daemon itself (`SMAppService`).
 
-Before a deployment exists (`exit init` is not built yet) the console shows the M7 router only. Every other screen says it needs a deployment. When `exit init` exists, run `cargo xtask agent-uninstall` before it: this build's daemon stops once a deployment appears, and launchd would start it again each minute only for it to refuse.
+Before a deployment exists the console shows the M7 router only, and every other screen says it needs a deployment. Once `mooringctl exit init` has created one, the daemon serves the exit from its next poll (within a minute), with no restart: it resolves the egress, checks for foreign networks, meters the SIM and, once the exit is enabled and its preflight passes, runs `mooring-exit` (design §10.1, §10.2). The swap-day runbook (`swap-day.md`) covers that part. Mooring.app does not show a deployment's status yet (M7); `mooringctl status --json` prints it.
+
+With a deployment, the daemon reads each applied node's WireGuard key from the keychain the first time it starts the engine, and again after each configuration change: macOS asks once per key, as it does for the M7's password (section 2, question 1); choose **Always Allow**.
 
 ## 0. Once
 

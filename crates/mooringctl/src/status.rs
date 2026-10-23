@@ -111,6 +111,9 @@ pub(crate) fn status(
                 return Err(CommandError::Local(LocalError::DaemonRefused { reason }));
             }
             DaemonReply::Status(status) => status,
+            DaemonReply::RetryQueued => {
+                return Err(CommandError::Local(LocalError::DaemonUnexpectedReply));
+            }
         };
         if reading == Reading::Once {
             return print(out, &status, json);
@@ -160,7 +163,7 @@ pub(crate) enum Next {
 /// `DaemonNotRunning`. The time limits are set before connecting: a busy
 /// daemon writes its refusal and closes at once, and setsockopt(2) fails
 /// on macOS once the peer has shut the socket down.
-fn connect(
+pub(crate) fn connect(
     socket: &Path,
     request: DaemonRequest,
     tick: Duration,

@@ -5,7 +5,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::error::{MacsysError, MacsysErrorKind, RlimitCall, RouteFault, TerminalCall};
+use crate::error::{
+    MacsysError, MacsysErrorKind, ProcessCall, RlimitCall, RouteFault, TerminalCall,
+};
 
 #[test]
 fn every_macsys_error_has_its_kind() {
@@ -92,6 +94,19 @@ fn every_macsys_error_has_its_kind() {
             },
             MacsysErrorKind::Terminal,
             "tcsetattr failed with errno 25",
+        ),
+        (
+            MacsysError::BootTimeInvalid,
+            MacsysErrorKind::BootTimeInvalid,
+            "the kernel's boot time is not one time at or after the epoch",
+        ),
+        (
+            MacsysError::Process {
+                call: ProcessCall::PidPath,
+                errno: 3,
+            },
+            MacsysErrorKind::Process,
+            "proc_pidpath failed with errno 3",
         ),
     ];
     let kinds: BTreeSet<MacsysErrorKind> = cases.iter().map(|(_, kind, _)| *kind).collect();

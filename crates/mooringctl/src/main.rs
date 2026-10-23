@@ -77,6 +77,8 @@ mod prompt;
 #[cfg(target_os = "macos")]
 mod router;
 #[cfg(target_os = "macos")]
+mod runtime;
+#[cfg(target_os = "macos")]
 mod sim;
 #[cfg(target_os = "macos")]
 mod state;
@@ -126,6 +128,10 @@ fn main() -> ExitCode {
         parent: &std::os::unix::process::parent_id,
         nodes: &SshLinks,
         engine_pins: &node::engines::PINS,
+        mac_pins: &node::engines::MAC_PINS,
+        power: &runtime::power::power_source,
+        meter_reader: &|| runtime::meter::kernel_reader(system_clock),
+        probe: &runtime::probe::direct,
     };
     let code = run(
         cli.command,

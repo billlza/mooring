@@ -70,6 +70,16 @@ pub enum MacsysError {
         /// The `errno` value.
         errno: i32,
     },
+    /// The kernel's boot time (`kern.boottime`) was not one `timeval` at
+    /// or after the epoch.
+    BootTimeInvalid,
+    /// A process call failed with this `errno`.
+    Process {
+        /// The call.
+        call: ProcessCall,
+        /// The `errno` value.
+        errno: i32,
+    },
 }
 
 impl fmt::Display for MacsysError {
@@ -114,6 +124,10 @@ impl fmt::Display for MacsysError {
                 )
             }
             Self::Terminal { call, errno } => write!(f, "{call} failed with errno {errno}"),
+            Self::BootTimeInvalid => {
+                f.write_str("the kernel's boot time is not one time at or after the epoch")
+            }
+            Self::Process { call, errno } => write!(f, "{call} failed with errno {errno}"),
         }
     }
 }
@@ -153,6 +167,10 @@ pub enum MacsysErrorKind {
     Rlimit,
     /// See [`MacsysError::Terminal`].
     Terminal,
+    /// See [`MacsysError::BootTimeInvalid`].
+    BootTimeInvalid,
+    /// See [`MacsysError::Process`].
+    Process,
 }
 
 impl MacsysErrorKind {
@@ -173,6 +191,8 @@ impl MacsysErrorKind {
         Self::AmbiguousNeighbour,
         Self::Rlimit,
         Self::Terminal,
+        Self::BootTimeInvalid,
+        Self::Process,
     ];
 
     /// The stable name of this kind: its variant identifier.
@@ -194,6 +214,8 @@ impl MacsysErrorKind {
             Self::AmbiguousNeighbour => "AmbiguousNeighbour",
             Self::Rlimit => "Rlimit",
             Self::Terminal => "Terminal",
+            Self::BootTimeInvalid => "BootTimeInvalid",
+            Self::Process => "Process",
         }
     }
 }
@@ -224,6 +246,8 @@ impl MacsysError {
             Self::AmbiguousNeighbour => MacsysErrorKind::AmbiguousNeighbour,
             Self::Rlimit { .. } => MacsysErrorKind::Rlimit,
             Self::Terminal { .. } => MacsysErrorKind::Terminal,
+            Self::BootTimeInvalid => MacsysErrorKind::BootTimeInvalid,
+            Self::Process { .. } => MacsysErrorKind::Process,
         }
     }
 }
@@ -315,6 +339,24 @@ impl fmt::Display for TerminalCall {
         f.write_str(match self {
             Self::GetAttributes => "tcgetattr",
             Self::SetAttributes => "tcsetattr",
+        })
+    }
+}
+
+/// The process call that failed ([`MacsysError::Process`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProcessCall {
+    /// `proc_pidpath`.
+    PidPath,
+    /// `kill`.
+    Kill,
+}
+
+impl fmt::Display for ProcessCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::PidPath => "proc_pidpath",
+            Self::Kill => "kill",
         })
     }
 }

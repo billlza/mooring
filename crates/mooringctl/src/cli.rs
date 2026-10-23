@@ -187,6 +187,22 @@ pub(crate) enum ExitCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Show the carrier address each adopted node's reflector sees through
+    /// the M7, the address `record-carrier` records the prefixes for.
+    Observe {
+        /// The Mac's interface to the M7 (a BSD name, for example en9); its
+        /// gateway must be the pinned M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+    },
+    /// Let the daemon run the exit: it starts the engine once its
+    /// preflight passes.
+    Enable,
+    /// Stop the exit: the daemon stops the engine at its next tick.
+    Disable,
+    /// Ask the daemon to clear a latched violation and the nodes' holds,
+    /// and to run a fresh preflight.
+    Retry,
     /// Record the line's carrier check, observed on the line: its public
     /// pool prefixes (RIPE inetnum evidence) and the pairing mode.
     RecordCarrier {

@@ -8,10 +8,13 @@
 mod alerts;
 mod canary;
 mod control;
+mod exit;
+mod meter;
 mod netgear;
 mod notify;
 mod policy;
 mod router;
+mod snapshot;
 mod support;
 mod usage;
 mod variants;

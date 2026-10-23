@@ -12,6 +12,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -34,7 +35,7 @@ use crate::cli::Cli;
 use crate::daemon::hub::Hub;
 use crate::daemon::serve::{End, Limits, accept, serve};
 use crate::daemon::{
-    LoopState, RunPaths, Waited, after_poll, poll_once, start, unavailable_reason,
+    Control, LoopState, Polled, RunPaths, Waited, after_poll, poll_once, start, unavailable_reason,
     wait_for_next_poll,
 };
 use crate::error::{CommandError, EXIT_LOCAL, LocalError};
@@ -184,20 +185,21 @@ fn a_second_daemon_is_refused_while_the_first_runs() {
     let (_accepted, _) = second.listener.accept().unwrap();
 }
 
-/// With a deployment present this build's daemon refuses to start, and
-/// binds no socket.
+/// A deployment does not keep the daemon from starting: it serves the
+/// exit once it has started.
 #[test]
-fn a_deployment_is_refused_and_nothing_is_bound() {
+fn a_deployment_does_not_keep_the_daemon_from_starting() {
     let dir = short_dir();
     let support = dir.path().join("support");
     fs::create_dir_all(&support).unwrap();
     fs::write(support.join(STATE_FILE), b"{}").unwrap();
-    let error = start(&support).unwrap_err();
+    let _started = start(&support).unwrap();
     assert!(
-        matches!(&error, LocalError::DeploymentNotServed { path } if *path == support.join(STATE_FILE)),
-        "{error:?}"
+        fs::symlink_metadata(RunPaths::under(&support).socket)
+            .unwrap()
+            .file_type()
+            .is_socket()
     );
-    assert!(!RunPaths::under(&support).socket.exists());
 }
 
 /// A run directory that is a symbolic link is refused; one with a looser
@@ -424,9 +426,9 @@ fn a_snapshot_that_cannot_be_written_is_logged_not_fatal() {
 }
 
 /// Each poll first checks that no deployment has appeared: the daemon
-/// never publishes `no_deployment` beside one, and stops instead.
+/// never publishes `no_deployment` beside one, and serves the exit instead.
 #[test]
-fn a_deployment_that_appears_stops_the_daemon_at_its_next_poll() {
+fn a_deployment_that_appears_ends_the_router_console_at_its_next_poll() {
     let mut harness = harness();
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
@@ -434,17 +436,19 @@ fn a_deployment_that_appears_stops_the_daemon_at_its_next_poll() {
     let hub = Hub::default();
     let mut state = LoopState::default();
     let mut log = Vec::new();
-    harness
-        .with_env(|env| poll_once(env, &support, Some(&interface), &hub, &mut log, &mut state))
-        .unwrap();
+    assert_eq!(
+        harness
+            .with_env(|env| poll_once(env, &support, Some(&interface), &hub, &mut log, &mut state))
+            .unwrap(),
+        Polled::Published
+    );
     assert_eq!(hub.latest().unwrap().unwrap().seq, 1);
     fs::write(support.join(STATE_FILE), b"{}").unwrap();
-    let error = harness
-        .with_env(|env| poll_once(env, &support, Some(&interface), &hub, &mut log, &mut state))
-        .unwrap_err();
-    assert!(
-        matches!(&error, CommandError::Local(LocalError::DeploymentNotServed { path }) if *path == support.join(STATE_FILE)),
-        "{error:?}"
+    assert_eq!(
+        harness
+            .with_env(|env| poll_once(env, &support, Some(&interface), &hub, &mut log, &mut state))
+            .unwrap(),
+        Polled::DeploymentAppeared
     );
     assert_eq!(hub.latest().unwrap().unwrap().seq, 1);
 }
@@ -505,22 +509,37 @@ fn failures_map_to_panel_reasons() {
 /// Serves one connection on a socket pair whose client has already sent
 /// `request` (the pair buffers it, so a slow test thread cannot make it
 /// late): the client end, and how the connection ended.
-fn serve_pair(hub: &Arc<Hub>, request: &[u8]) -> (UnixStream, Running<End>) {
+fn serve_pair(control: &Arc<Control>, request: &[u8]) -> (UnixStream, Running<End>) {
     let (mut client, server) = UnixStream::pair().unwrap();
     client.write_all(request).unwrap();
-    let hub = Arc::clone(hub);
+    let control = Arc::clone(control);
     (
         bounded(client),
-        Running::start(move || serve(server, &hub, QUICK)),
+        Running::start(move || serve(server, &control, QUICK)),
+    )
+}
+
+/// What the connections share, with a fresh hub, and the receiving end of
+/// its retries.
+fn control() -> (Arc<Control>, mpsc::Receiver<()>) {
+    let (retry, retries) = mpsc::channel();
+    (
+        Arc::new(Control {
+            hub: Hub::default(),
+            retry,
+            deployed: AtomicBool::new(false),
+        }),
+        retries,
     )
 }
 
 #[test]
 fn status_answers_the_latest_line_once() {
-    let hub = Arc::new(Hub::default());
+    let (control, _retries) = control();
+    let hub = &control.hub;
     hub.publish(unavailable(1)).unwrap();
     hub.publish(unavailable(2)).unwrap();
-    let (mut client, server) = serve_pair(&hub, b"\"status\"\n");
+    let (mut client, server) = serve_pair(&control, b"\"status\"\n");
     let mut all = Vec::new();
     client.read_to_end(&mut all).unwrap();
     assert_eq!(all, &*unavailable(2));
@@ -529,8 +548,8 @@ fn status_answers_the_latest_line_once() {
 
 #[test]
 fn status_before_the_first_poll_is_refused() {
-    let hub = Arc::new(Hub::default());
-    let (client, server) = serve_pair(&hub, b"\"status\"\n");
+    let (control, _retries) = control();
+    let (client, server) = serve_pair(&control, b"\"status\"\n");
     let mut reader = BufReader::new(client);
     assert_eq!(
         read_reply(&mut reader),
@@ -541,12 +560,43 @@ fn status_before_the_first_poll_is_refused() {
     assert_eq!(server.result(), End::Refused(Refusal::NoStatusYet));
 }
 
+/// A retry is handed to the loop and answered once it is queued, and
+/// refused while there is no deployment; with the loop gone it is not
+/// answered at all.
+#[test]
+fn a_retry_is_queued_for_the_loop_only_with_a_deployment() {
+    let (control, retries) = control();
+    let (client, server) = serve_pair(&control, b"\"retry\"\n");
+    assert_eq!(
+        read_reply(&mut BufReader::new(client)),
+        DaemonReply::Refused {
+            reason: Refusal::NotDeployed
+        }
+    );
+    assert_eq!(server.result(), End::Refused(Refusal::NotDeployed));
+    assert!(retries.try_recv().is_err());
+    control
+        .deployed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (client, server) = serve_pair(&control, b"\"retry\"\n");
+    assert_eq!(
+        read_reply(&mut BufReader::new(client)),
+        DaemonReply::RetryQueued
+    );
+    assert_eq!(server.result(), End::Answered);
+    assert_eq!(retries.try_iter().count(), 1);
+    drop(retries);
+    let (_client, server) = serve_pair(&control, b"\"retry\"\n");
+    assert_eq!(server.result(), End::Stopping);
+}
+
 /// A subscription waits for the first status, gets each new one, skips to
 /// the latest when it falls behind, and ends when the client leaves.
 #[test]
 fn a_subscription_follows_the_hub_until_the_client_leaves() {
-    let hub = Arc::new(Hub::default());
-    let (client, server) = serve_pair(&hub, b"\"subscribe\"\n");
+    let (control, _retries) = control();
+    let hub = &control.hub;
+    let (client, server) = serve_pair(&control, b"\"subscribe\"\n");
     thread::sleep(Duration::from_millis(250));
     hub.publish(unavailable(1)).unwrap();
     let mut reader = BufReader::new(client.try_clone().unwrap());
@@ -586,9 +636,10 @@ fn a_subscription_follows_the_hub_until_the_client_leaves() {
 /// nothing else.
 #[test]
 fn bytes_after_the_request_end_a_subscription() {
-    let hub = Arc::new(Hub::default());
+    let (control, _retries) = control();
+    let hub = &control.hub;
     hub.publish(unavailable(1)).unwrap();
-    let (_client, server) = serve_pair(&hub, b"\"subscribe\"\n\"status\"\n");
+    let (_client, server) = serve_pair(&control, b"\"subscribe\"\n\"status\"\n");
     assert_eq!(server.result(), End::ClientLeft);
 }
 
@@ -596,7 +647,8 @@ fn bytes_after_the_request_end_a_subscription() {
 /// bad request.
 #[test]
 fn bad_requests_are_refused() {
-    let hub = Arc::new(Hub::default());
+    let (control, _retries) = control();
+    let hub = &control.hub;
     hub.publish(unavailable(1)).unwrap();
     let long = vec![b' '; MAX_REQUEST_LINE_BYTES + 10];
     for request in [
@@ -606,7 +658,7 @@ fn bad_requests_are_refused() {
         &long,
         b"\"status\"",
     ] {
-        let (client, server) = serve_pair(&hub, request);
+        let (client, server) = serve_pair(&control, request);
         let mut reader = BufReader::new(client);
         assert_eq!(
             read_reply(&mut reader),
@@ -618,7 +670,7 @@ fn bad_requests_are_refused() {
         assert_eq!(server.result(), End::Refused(Refusal::BadRequest));
     }
     // A client that leaves before its request is gone, not refused.
-    let (client, server) = serve_pair(&hub, b"");
+    let (client, server) = serve_pair(&control, b"");
     drop(client);
     assert_eq!(server.result(), End::ClientLeft);
 }
@@ -627,9 +679,10 @@ fn bad_requests_are_refused() {
 /// client that drips a valid request slower than that is refused.
 #[test]
 fn a_request_dripped_past_the_limit_is_refused() {
-    let hub = Arc::new(Hub::default());
+    let (control, _retries) = control();
+    let hub = &control.hub;
     hub.publish(unavailable(1)).unwrap();
-    let (mut client, server) = serve_pair(&hub, b"");
+    let (mut client, server) = serve_pair(&control, b"");
     let pause = QUICK.request / 2 + Duration::from_millis(20);
     for part in [&b"\"sta"[..], b"tus\"", b"\n"] {
         thread::sleep(pause);
@@ -653,15 +706,16 @@ fn a_request_dripped_past_the_limit_is_refused() {
 /// is cut off once the limit has passed.
 #[test]
 fn a_line_drained_past_the_write_limit_ends_the_connection() {
-    let hub = Arc::new(Hub::default());
+    let (control, _retries) = control();
+    let hub = &control.hub;
     let mut long = vec![b' '; 600 * 1024];
     long.push(b'\n');
     hub.publish(Arc::from(long)).unwrap();
-    let (client, server) = serve_pair(&hub, b"\"status\"\n");
+    let (client, server) = serve_pair(&control, b"\"status\"\n");
     // Eight bytes every 100 ms: every read wakes the writer well within
     // the limit, so only a deadline on the whole line ends it. The reader
     // stops once the server has ended, with its buffer still unread.
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
     let reader = {
         let stop = Arc::clone(&stop);
         Running::start(move || {
@@ -699,11 +753,12 @@ fn clients_beyond_the_limit_are_told_busy() {
     let dir = short_dir();
     let path = dir.path().join("c.sock");
     let listener = UnixListener::bind(&path).unwrap();
-    let hub = Arc::new(Hub::default());
+    let (control, _retries) = control();
+    let hub = &control.hub;
     hub.publish(unavailable(1)).unwrap();
     {
-        let hub = Arc::clone(&hub);
-        thread::spawn(move || accept(&listener, &hub, QUICK, 1));
+        let control = Arc::clone(&control);
+        thread::spawn(move || accept(&listener, &control, QUICK, 1));
     }
     let mut first = bounded(UnixStream::connect(&path).unwrap());
     first.write_all(b"\"subscribe\"\n").unwrap();
@@ -1209,9 +1264,10 @@ fn a_busy_daemon_is_reported_as_busy() {
     let paths = RunPaths::under(&harness.support_dir());
     fs::create_dir_all(&paths.dir).unwrap();
     let listener = UnixListener::bind(&paths.socket).unwrap();
-    let hub = Arc::new(Hub::default());
+    let (control, _retries) = control();
+    let hub = &control.hub;
     hub.publish(unavailable(1)).unwrap();
-    thread::spawn(move || accept(&listener, &hub, QUICK, 0));
+    thread::spawn(move || accept(&listener, &control, QUICK, 0));
     for _ in 0..20 {
         let outcome = harness.run(&["status"]);
         assert_eq!(outcome.code, EXIT_LOCAL);
@@ -1310,9 +1366,10 @@ fn status_without_a_daemon_says_it_is_not_running() {
     );
 }
 
-/// `daemon` refuses to run next to a deployment, through the command line.
+/// A deployment whose state cannot be read stops the daemon, through the
+/// command line: it never serves an exit it cannot read.
 #[test]
-fn the_daemon_command_refuses_a_deployment() {
+fn the_daemon_stops_on_a_state_it_cannot_read() {
     let mut harness = harness();
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
@@ -1320,11 +1377,11 @@ fn the_daemon_command_refuses_a_deployment() {
     let outcome =
         Running::start(move || harness.run(&["daemon", "--router-interface", "lo0"])).result();
     assert_eq!(outcome.code, EXIT_LOCAL);
-    assert_eq!(
-        outcome.stderr,
-        format!(
-            "mooringctl: a deployment exists ({}), and this build's daemon serves only the router console, before `exit init`\n",
-            support.join(STATE_FILE).display()
-        )
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: the state could not be read"),
+        "{}",
+        outcome.stderr
     );
 }

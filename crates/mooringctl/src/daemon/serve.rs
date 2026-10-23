@@ -2,7 +2,8 @@
 
 //! The control socket's connections (design §10.1): each client sends one
 //! request line and gets its replies; a client beyond [`MAX_CLIENTS`] is
-//! told the daemon is busy. The request line and each reply line have a
+//! told the daemon is busy. A `retry` is handed to the daemon's loop for
+//! its next tick, and refused while there is no deployment. The request line and each reply line have a
 //! deadline, however slowly their bytes go, so a stalled or dripping client
 //! holds a thread for a bounded while only.
 
@@ -18,6 +19,7 @@ use mooring_daemon_core::control::{
     decode_request, encode_line,
 };
 
+use super::Control;
 use super::hub::{Hub, HubPoisoned};
 
 /// The most clients served at once: the app's one subscription, a few CLI
@@ -52,7 +54,7 @@ pub(crate) struct AcceptFailed(pub(crate) io::Error);
 /// at most `max_clients` at once. Returns only when accepting fails.
 pub(crate) fn accept(
     listener: &UnixListener,
-    hub: &Arc<Hub>,
+    control: &Arc<Control>,
     limits: Limits,
     max_clients: usize,
 ) -> AcceptFailed {
@@ -72,12 +74,12 @@ pub(crate) fn accept(
             continue;
         }
         let slot = Slot::take(&active);
-        let hub = Arc::clone(hub);
+        let control = Arc::clone(control);
         let spawned = thread::Builder::new()
             .name("mooring-control".to_owned())
             .spawn(move || {
                 let _slot = slot;
-                serve(stream, &hub, limits);
+                serve(stream, &control, limits);
             });
         if let Err(error) = spawned {
             return AcceptFailed(error);
@@ -116,6 +118,8 @@ pub(crate) enum End {
     Io(ErrorKind),
     /// The hub is poisoned.
     Poisoned,
+    /// The daemon's loop has ended, so a retry cannot be handed to it.
+    Stopping,
 }
 
 impl From<HubPoisoned> for End {
@@ -125,16 +129,30 @@ impl From<HubPoisoned> for End {
 }
 
 /// Serves one connection to its end.
-pub(crate) fn serve(mut stream: UnixStream, hub: &Hub, limits: Limits) -> End {
+pub(crate) fn serve(mut stream: UnixStream, control: &Control, limits: Limits) -> End {
     let request = match read_request(&mut stream, limits) {
         Ok(request) => request,
         Err(end) => return end,
     };
     let result = match request {
-        DaemonRequest::Status => answer_status(&mut stream, hub, limits),
-        DaemonRequest::Subscribe => subscribe(&mut stream, hub, limits),
+        DaemonRequest::Status => answer_status(&mut stream, &control.hub, limits),
+        DaemonRequest::Subscribe => subscribe(&mut stream, &control.hub, limits),
+        DaemonRequest::Retry => queue_retry(&mut stream, control, limits),
     };
     result.unwrap_or_else(|end| end)
+}
+
+/// `Retry`: handed to the loop, which runs it at its next tick, and
+/// answered `RetryQueued`; refused as `NotDeployed` without a deployment.
+fn queue_retry(stream: &mut UnixStream, control: &Control, limits: Limits) -> Result<End, End> {
+    if !control.deployed.load(Ordering::SeqCst) {
+        return Err(refused(stream, Refusal::NotDeployed));
+    }
+    control.retry.send(()).map_err(|_| End::Stopping)?;
+    let line = encode_line(&DaemonReply::RetryQueued, MAX_REPLY_LINE_BYTES)
+        .map_err(|_| End::Io(ErrorKind::InvalidData))?;
+    write_line(stream, &line, limits)?;
+    Ok(End::Answered)
 }
 
 /// Reads the one request line, a byte at a time so nothing after its
