@@ -13,11 +13,11 @@ Do these in order; each is done once. They run over the M7's current line (the o
 
 ### 0.1 The engines
 
-Download the hosted engine build that matches `engines.lock.toml`'s pins (run 39918017282, 2026-10-23, which rebuilt the engines and verified them against the pins) into a new directory, check it, and install it where the daemon runs `mooring-exit` from:
+Download the hosted engine build that matches `engines.lock.toml`'s pins (run 39941124325, 2026-10-23, which built the engines and the target scanner and verified them against the pins) into a new directory, check it, and install it where the daemon runs `mooring-exit` from:
 
 ```
 mkdir -p ~/mooring-engines/out
-gh run download 39918017282 -R billlza/mooring -n engines-xray-v26.9.30-sing-box-v1.14.2 -D ~/mooring-engines/out
+gh run download 39941124325 -R billlza/mooring -n engines-xray-v26.9.30-sing-box-v1.14.2 -D ~/mooring-engines/out
 cargo xtask engines-verify ~/mooring-engines
 ditto ~/mooring-engines/out ~/Library/Application\ Support/Mooring/engines
 ```
@@ -52,7 +52,14 @@ mooringctl node adopt lon1 --address <lon1's IPv4> --interface en9 --root-identi
 
 `ops-local/known_hosts` holds lon1's host key, checked against the fingerprint Mythic Beasts' control panel shows; `node new` takes it as a `.pub` line. The address is in `ops-local/vps-lon1.md`. **`node adopt` removes your own root key from lon1**: afterwards only Mooring's operations key logs in, forced to the agent, and the Mythic Beasts control panel is the way in if it is lost (its web console, or a reinstall). It runs `Bootstrap`, then checks the running system (`Hello`: Debian 13, a 6.12 kernel, bbr and fq) and records lon1 `Adopted`; no reboot is needed. If it stops after `Bootstrap` (it names the step), fix the cause, for example by rebooting lon1 from the control panel, and run it again with `--resume` in place of `--root-identity`.
 
-Then the REALITY target, and the first configuration:
+Then the REALITY target. None of Mythic Beasts' own names qualifies (each answers HTTP/1.1 only, redirects `/`, or resolves to two addresses), so find one in lon1's /24 with the pinned scanner (design §11.7). It dials by the Mac's default route: turn Wi-Fi off first (section 0.6), so that it leaves over the M7. It makes two handshakes at a time and is done in about ten minutes; its warning about `Country.mmdb` only means the country column stays empty:
+
+```
+mkdir -p ops-local/scan
+(cd ops-local/scan && ~/mooring-engines/out/darwin-arm64/realitlscanner -addr <lon1's IPv4 ending in .0>/24 -thread 2 -timeout 5 -out lon1-neighbours.csv)
+```
+
+Each row of `lon1-neighbours.csv` is an address that completed TLS 1.3 with h2, and the name on its certificate. Take a name that resolves to exactly that address (`dig +short A <name>`). `--same-asn` and `--not-cdn` hold when the address is in lon1's network, AS44684 (Mythic Beasts), which `--evidence` shows, for example `https://bgp.he.net/ip/<address>`. Check it from lon1, set it with that attestation, and apply the first configuration:
 
 ```
 mooringctl node target check lon1 <candidate host> --interface en9 --engines ~/mooring-engines/out
