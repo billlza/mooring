@@ -85,12 +85,14 @@ pub(crate) const ALLOWED_EDGES: &[AllowedEdges] = &[
     AllowedEdges {
         krate: "mooringctl",
         normal: &[
+            "mooring-agent-proto",
             "mooring-model",
             "mooring-store",
             "mooring-macsys",
             "mooring-daemon-core",
             "mooring-export",
             "mooring-keys",
+            "mooring-render",
         ],
         dev: &["mooring-fixtures"],
     },

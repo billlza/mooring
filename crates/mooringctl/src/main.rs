@@ -69,6 +69,8 @@ mod exit;
 #[cfg(target_os = "macos")]
 mod keychain;
 #[cfg(target_os = "macos")]
+mod node;
+#[cfg(target_os = "macos")]
 mod paths;
 #[cfg(target_os = "macos")]
 mod prompt;
@@ -97,6 +99,7 @@ fn main() -> ExitCode {
     use crate::backup::Tmutil;
     use crate::cli::Cli;
     use crate::keychain::LoginKeychain;
+    use crate::node::ssh::SshLinks;
     use crate::prompt::TtyConsole;
     use crate::router::RouterEnv;
     use crate::router::http::{DEVICE_TIMEOUTS, HTTP_PORT};
@@ -121,6 +124,8 @@ fn main() -> ExitCode {
         stdin: &mut stdin,
         backups: &backups,
         parent: &std::os::unix::process::parent_id,
+        nodes: &SshLinks,
+        engine_pins: &node::engines::PINS,
     };
     let code = run(
         cli.command,

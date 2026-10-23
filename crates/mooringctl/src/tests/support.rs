@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
+use mooring_agent_proto::{LineRequest, RequestKind, Response, Sha256Hex};
 use mooring_macsys::{InterfaceAddrV4, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry};
@@ -28,6 +29,8 @@ use crate::app::{Env, run};
 use crate::backup::{BackupCheck, BackupCheckError};
 use crate::cli::Cli;
 use crate::error::LocalError;
+use crate::node::ssh::{Remote, SshTarget};
+use crate::node::{AgentLink, NodeError, NodeLinks, NodeSession};
 use crate::prompt::{Answer, Console, Line};
 use crate::router::RouterEnv;
 use crate::router::http::Timeouts;
@@ -319,6 +322,175 @@ impl LinkLayer for FakeLink {
     }
 }
 
+/// Which sessions a scripted node step accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Expected {
+    /// A remote command run with input, by the identity file named.
+    Run {
+        identity: &'static str,
+        command_prefix: &'static str,
+    },
+    /// An agent request of this kind, by the identity file named and
+    /// through this remote side.
+    Request {
+        identity: &'static str,
+        remote: ExpectedRemote,
+        kind: RequestKind,
+    },
+    /// A blob upload over the forced command.
+    PutBlob { identity: &'static str },
+    /// An empty request.
+    Empty {
+        identity: &'static str,
+        command: &'static str,
+    },
+}
+
+/// The remote side a scripted request expects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExpectedRemote {
+    /// The key's forced command.
+    Forced,
+    /// A command starting with this text.
+    Command(&'static str),
+}
+
+/// What a scripted step answers.
+pub(crate) enum Answered {
+    /// A remote command's outcome.
+    Ran(Result<(), NodeError>),
+    /// An agent's reply.
+    Replied(Result<Response, NodeError>),
+}
+
+/// Nodes whose sessions follow a script, in order, recording each session's
+/// target and what was sent.
+#[derive(Default)]
+pub(crate) struct FakeNodes {
+    pub(crate) script: RefCell<VecDeque<(Expected, Answered)>>,
+    pub(crate) seen: RefCell<Vec<(SshTarget, Sent)>>,
+}
+
+/// What a session sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Sent {
+    Run(Vec<u8>),
+    Request(LineRequest),
+    PutBlob(Sha256Hex, usize),
+    Empty,
+}
+
+impl FakeNodes {
+    pub(crate) fn expect(&self, expected: Expected, answered: Answered) {
+        self.script.borrow_mut().push_back((expected, answered));
+    }
+
+    fn next(&self, target: &SshTarget, sent: Sent) -> Answered {
+        let (expected, answered) = self
+            .script
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or_else(|| panic!("no step scripted for {sent:?}"));
+        let identity = target.identity.file_name().unwrap().to_str().unwrap();
+        let remote = match &target.remote {
+            Remote::ForcedCommand => None,
+            Remote::Command(command) => Some(command.as_str()),
+        };
+        match (&expected, &sent) {
+            (
+                Expected::Run {
+                    identity: wanted,
+                    command_prefix,
+                },
+                Sent::Run(_),
+            ) => {
+                assert_eq!(identity, *wanted);
+                assert!(remote.unwrap().starts_with(command_prefix), "{remote:?}");
+            }
+            (
+                Expected::Request {
+                    identity: wanted,
+                    remote: wanted_remote,
+                    kind,
+                },
+                Sent::Request(request),
+            ) => {
+                assert_eq!(identity, *wanted);
+                assert_eq!(request.kind(), *kind);
+                match wanted_remote {
+                    ExpectedRemote::Forced => assert_eq!(remote, None),
+                    ExpectedRemote::Command(prefix) => {
+                        assert!(remote.unwrap().starts_with(prefix), "{remote:?}");
+                    }
+                }
+            }
+            (Expected::PutBlob { identity: wanted }, Sent::PutBlob(..)) => {
+                assert_eq!(identity, *wanted);
+                assert_eq!(remote, None);
+            }
+            (
+                Expected::Empty {
+                    identity: wanted,
+                    command,
+                },
+                Sent::Empty,
+            ) => {
+                assert_eq!(identity, *wanted);
+                assert_eq!(remote, Some(*command));
+            }
+            (expected, sent) => panic!("expected {expected:?}, the command sent {sent:?}"),
+        }
+        self.seen.borrow_mut().push((target.clone(), sent));
+        answered
+    }
+}
+
+impl NodeLinks for FakeNodes {
+    fn open(&self, target: SshTarget) -> Box<dyn NodeSession + '_> {
+        Box::new(FakeSession {
+            nodes: self,
+            target,
+        })
+    }
+}
+
+struct FakeSession<'a> {
+    nodes: &'a FakeNodes,
+    target: SshTarget,
+}
+
+impl FakeSession<'_> {
+    fn replied(&self, sent: Sent) -> Result<Response, NodeError> {
+        match self.nodes.next(&self.target, sent) {
+            Answered::Replied(reply) => reply,
+            Answered::Ran(_) => panic!("a reply was scripted as a run"),
+        }
+    }
+}
+
+impl AgentLink for FakeSession<'_> {
+    fn request(&mut self, request: &LineRequest) -> Result<Response, NodeError> {
+        self.replied(Sent::Request(request.clone()))
+    }
+
+    fn put_blob(&mut self, sha256: Sha256Hex, payload: &[u8]) -> Result<Response, NodeError> {
+        self.replied(Sent::PutBlob(sha256, payload.len()))
+    }
+}
+
+impl NodeSession for FakeSession<'_> {
+    fn run(&mut self, input: &[u8]) -> Result<(), NodeError> {
+        match self.nodes.next(&self.target, Sent::Run(input.to_vec())) {
+            Answered::Ran(outcome) => outcome,
+            Answered::Replied(_) => panic!("a run was scripted as a reply"),
+        }
+    }
+
+    fn empty_request(&mut self) -> Result<Response, NodeError> {
+        self.replied(Sent::Empty)
+    }
+}
+
 /// A console with scripted answers and passwords, recording what it was
 /// asked.
 #[derive(Default)]
@@ -435,6 +607,9 @@ pub(crate) struct Harness {
     pub(crate) timeouts: Timeouts,
     pub(crate) backups: FakeBackups,
     pub(crate) parent: FakeParent,
+    pub(crate) nodes: FakeNodes,
+    /// The engine pins the commands check files against.
+    pub(crate) engine_pins: Vec<(&'static str, String)>,
 }
 
 impl Harness {
@@ -453,6 +628,8 @@ impl Harness {
                 asked: RefCell::new(Vec::new()),
             },
             parent: FakeParent::staying(),
+            nodes: FakeNodes::default(),
+            engine_pins: Vec::new(),
         }
     }
 
@@ -508,6 +685,11 @@ impl Harness {
     pub(crate) fn with_env<T>(&mut self, work: impl FnOnce(&mut Env<'_>) -> T) -> T {
         let clock = || Ok(UnixTime::from_secs(NOW));
         let parent = || self.parent.id();
+        let pins: Vec<(&str, &str)> = self
+            .engine_pins
+            .iter()
+            .map(|(path, hex)| (*path, hex.as_str()))
+            .collect();
         let mut env = Env {
             router: RouterEnv {
                 link: &self.link,
@@ -521,6 +703,8 @@ impl Harness {
             stdin: &mut self.stdin,
             backups: &self.backups,
             parent: &parent,
+            nodes: &self.nodes,
+            engine_pins: &pins,
         };
         work(&mut env)
     }

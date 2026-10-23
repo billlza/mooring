@@ -8,17 +8,24 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
+use mooring_agent_proto::{AgentError, Sha256Hex};
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_export::ExportError;
 use mooring_keys::KeysError;
 use mooring_macsys::MacsysError;
+use mooring_model::dns::DnsName;
 use mooring_model::error::ModelError;
 use mooring_model::iface::{BsdName, MacAddr};
-use mooring_model::{PublicAlias, UserId};
+use mooring_model::node::LifecycleStage;
+use mooring_model::secret::SecretKind;
+use mooring_model::{NodeId, PublicAlias, UserId};
+use mooring_render::RenderError;
 use mooring_store::{SecretStoreError, SnapshotReadError, StoreError};
 
+use crate::node::NodeError;
+use crate::node::adopt::Step;
 use crate::router::error::RouterError;
 
 /// A failure on the Mac rather than at the M7.
@@ -391,6 +398,211 @@ pub(crate) enum LocalError {
     /// The SIM policy the change would record was not accepted.
     #[error("the SIM policy was not accepted")]
     SimChange(#[source] ModelError),
+    /// A node with this id exists already.
+    #[error("node {node} exists already")]
+    NodeExists {
+        /// The id given.
+        node: NodeId,
+    },
+    /// The host-key file could not be read.
+    #[error("cannot read the host key in {}", path.display())]
+    HostKeyFile {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The host-key file does not hold one Ed25519 OpenSSH public key.
+    #[error(
+        "{} does not hold an Ed25519 host key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`)",
+        path.display()
+    )]
+    HostKey {
+        /// The file.
+        path: PathBuf,
+    },
+    /// The node's plan was refused by the model.
+    #[error("the node's plan was not accepted")]
+    NodePlan(#[source] ModelError),
+    /// No node has this id.
+    #[error("unknown node {node}")]
+    UnknownNode {
+        /// The id given.
+        node: NodeId,
+    },
+    /// The node is not planned, so it cannot be adopted.
+    #[error("node {node} is {stage}; only a planned node is adopted")]
+    NodeNotPlanned {
+        /// The node.
+        node: NodeId,
+        /// Its stage.
+        stage: LifecycleStage,
+    },
+    /// A keychain item holds another kind of secret than its reference
+    /// names.
+    #[error("the keychain item holds a {found:?}, not a {expected:?}")]
+    SecretKind {
+        /// The kind the reference names.
+        expected: SecretKind,
+        /// The kind found.
+        found: SecretKind,
+    },
+    /// This program's own path could not be found, for ssh's
+    /// ProxyCommand.
+    #[error("cannot find this mooringctl's path")]
+    CurrentExe(#[source] io::Error),
+    /// `node adopt` without `--resume` needs the operator's root key.
+    #[error("give --root-identity, the key that logs in as root on the VPS now, or --resume")]
+    RootIdentityMissing,
+    /// A value from or for a node was not accepted.
+    #[error("a value from or for the node was not accepted")]
+    Render(#[source] RenderError),
+    /// An adoption step failed.
+    #[error("adoption stopped at {}", step.name())]
+    AdoptStep {
+        /// The step.
+        step: Step,
+        /// Why.
+        #[source]
+        source: NodeError,
+    },
+    /// The operations key ran a command instead of the agent.
+    #[error(
+        "the operations key ran a command instead of the agent: its forced command is not active, so the node is not adopted"
+    )]
+    ForcedCommandNotActive,
+    /// The agent binary could not be read.
+    #[error("cannot read the agent binary {}", path.display())]
+    AgentFile {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The agent binary is empty or larger than the limit.
+    #[error("{} is empty or larger than 64 MiB; give the release build of mooring-agent", path.display())]
+    AgentSize {
+        /// The file.
+        path: PathBuf,
+    },
+    /// The node does not run what Mooring supports.
+    #[error("the node does not run {wanted}: it reports {found}")]
+    HostUnsupported {
+        /// What adoption asserts.
+        wanted: &'static str,
+        /// What the node reported.
+        found: String,
+    },
+    /// A node file could not be written or read.
+    #[error("cannot use {}", path.display())]
+    NodeFile {
+        /// The file or directory.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The node is not adopted or applied.
+    #[error("node {node} is {stage}; it must be adopted first")]
+    NodeNotDeployed {
+        /// The node.
+        node: NodeId,
+        /// Its stage.
+        stage: LifecycleStage,
+    },
+    /// An engine file is missing or unreadable.
+    #[error("cannot read the engine {}", path.display())]
+    EngineRead {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// An engine file does not hash to its pin.
+    #[error(
+        "{} hashes to {actual}, not to engines.lock.toml's digest: give the directory `cargo xtask engines-verify` accepted",
+        path.display()
+    )]
+    EngineDigest {
+        /// The file.
+        path: PathBuf,
+        /// Its digest.
+        actual: String,
+    },
+    /// The engine directory lacks a pinned file.
+    #[error("no pinned engine file at {}", path.display())]
+    EngineFile {
+        /// Where it should be.
+        path: PathBuf,
+    },
+    /// A blob the node lacks is neither a bundle file nor an engine.
+    #[error("the node lacks the blob {sha256}, which this Mac cannot supply")]
+    EngineMissing {
+        /// The blob.
+        sha256: Sha256Hex,
+    },
+    /// A target value was not accepted.
+    #[error("the target value was not accepted")]
+    Target(#[source] ModelError),
+    /// The host name is not one the agent takes.
+    #[error("{host} is not a host name the agent takes")]
+    TargetHost {
+        /// The host.
+        host: DnsName,
+    },
+    /// The target failed a rule; nothing was stored.
+    #[error("{host} was not stored: it fails the rules printed above")]
+    TargetRefused {
+        /// The host.
+        host: DnsName,
+    },
+    /// The transaction failed on the node.
+    #[error("the transaction for generation {generation} failed on the node")]
+    TxnFailed {
+        /// Its generation.
+        generation: u64,
+        /// The agent's error.
+        #[source]
+        source: AgentError,
+    },
+    /// The transaction was reverted by a `Rollback`.
+    #[error("the transaction for generation {generation} was rolled back")]
+    TxnReverted {
+        /// Its generation.
+        generation: u64,
+    },
+    /// The transaction was confirmed by someone else while this command
+    /// waited.
+    #[error("the transaction for generation {generation} was confirmed elsewhere")]
+    TxnAlreadyCommitted {
+        /// Its generation.
+        generation: u64,
+    },
+    /// The transaction did not reach confirmation in time.
+    #[error(
+        "the transaction for generation {generation} did not await confirmation within {secs} s; the node reverts it unless it is confirmed"
+    )]
+    TxnTimeout {
+        /// Its generation.
+        generation: u64,
+        /// How long the command waited.
+        secs: u64,
+    },
+    /// A node's address is not a public IPv4 address.
+    #[error("the node's address was not accepted")]
+    NodeAddress(#[source] ModelError),
+    /// Between the Mac and a node's agent.
+    #[error("the node could not be reached or refused")]
+    Node(#[source] NodeError),
+}
+
+impl From<NodeError> for CommandError {
+    fn from(error: NodeError) -> Self {
+        Self::Local(LocalError::Node(error))
+    }
 }
 
 /// What a refusal means, in words.

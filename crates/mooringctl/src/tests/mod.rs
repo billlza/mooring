@@ -7,6 +7,7 @@
 //! other host, and the live keychain is never touched.
 
 mod add;
+mod apply;
 mod capture;
 mod daemon;
 mod exit;
@@ -14,6 +15,7 @@ mod export;
 mod flow;
 mod form;
 mod http;
+mod node;
 mod output;
 mod password;
 mod pin;
