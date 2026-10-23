@@ -173,6 +173,7 @@
       }
     }
   },
+  "advisories": [],
   "capacity": {
     "at": 1791453610,
     "tx_bps": 3211264,

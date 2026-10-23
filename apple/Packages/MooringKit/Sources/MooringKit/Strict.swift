@@ -71,6 +71,48 @@ extension Decoder {
             DecodingError.Context(codingPath: codingPath, debugDescription: "unknown variant \(tag)")
         )
     }
+
+    /// An externally tagged enum's variant: a unit variant is its name as a
+    /// string (`value` is `nil`), any other an object with the variant's
+    /// name as its one key (`value` decodes what the key holds). A variant
+    /// in the other form than its own matches no case, and is refused as
+    /// unknown.
+    func variant() throws -> (tag: String, value: (any Decoder)?) {
+        if let text = try? singleValueContainer().decode(String.self) {
+            return (text, nil)
+        }
+        let (tag, value) = try onlyKey()
+        return (tag, value)
+    }
+
+    /// A struct variant's object, once every key it has is one of `keys`;
+    /// each field is then read with `field` or `nullableField`, which
+    /// refuse a missing key.
+    func fields(_ keys: String...) throws -> KeyedDecodingContainer<AnyKey> {
+        let object = try container(keyedBy: AnyKey.self)
+        let known = Set(keys)
+        if let unknown = object.allKeys.first(where: { !known.contains($0.stringValue) }) {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath + [unknown],
+                    debugDescription: "unknown key \(unknown.stringValue)"
+                )
+            )
+        }
+        return object
+    }
+}
+
+extension KeyedDecodingContainer where Key == AnyKey {
+    /// The field `key`, which must be present.
+    func field<T: Decodable>(_ type: T.Type, _ key: String) throws -> T {
+        try decode(T.self, forKey: AnyKey(key))
+    }
+
+    /// The field `key`, which must be present and may be `null`.
+    func nullableField<T: Decodable>(_ type: T.Type, _ key: String) throws -> T? {
+        try decodeNullable(T.self, forKey: AnyKey(key))
+    }
 }
 
 extension KeyedDecodingContainer {

@@ -1,6 +1,26 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%@ %% of the baseline's median, %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "为基线中位数 %2$@ 的 %1$@ %%"
+          }
+        }
+      }
+    },
+    "%@ (%@)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@（%@）"
+          }
+        }
+      }
+    },
     "%@ (primary)": {
       "localizations": {
         "zh-Hans": {
@@ -11,8 +31,338 @@
         }
       }
     },
+    "%@ ago": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 前"
+          }
+        }
+      }
+    },
+    "%@ carries an IPv4 default route": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 带有 IPv4 默认路由"
+          }
+        }
+      }
+    },
+    "%@ carries an IPv6 default route": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 带有 IPv6 默认路由"
+          }
+        }
+      }
+    },
+    "%@ could not be started.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法启动 %@。"
+          }
+        }
+      }
+    },
+    "%@ crashed five times within 10 minutes.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 在 10 分钟内崩溃了五次。"
+          }
+        }
+      }
+    },
+    "%@ exited within 10 s of starting.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 启动后 10 秒内就退出了。"
+          }
+        }
+      }
+    },
+    "%@ halted": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 已停机"
+          }
+        }
+      }
+    },
+    "%@ has a global IPv6 address": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 有全局 IPv6 地址"
+          }
+        }
+      }
+    },
+    "%@ has a routable IPv4 address": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 有可路由的 IPv4 地址"
+          }
+        }
+      }
+    },
+    "%@ has been unreachable since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 自 %2$@ 起无法连接"
+          }
+        }
+      }
+    },
+    "%@ has had an apply pending since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 自 %2$@ 起有待应用的配置"
+          }
+        }
+      }
+    },
+    "%@ has needed a reboot since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 自 %2$@ 起需要重启"
+          }
+        }
+      }
+    },
+    "%@ has no handshake from the Mac": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 收不到这台 Mac 的握手"
+          }
+        }
+      }
+    },
+    "%@ in-chain probe": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 链路内探测"
+          }
+        }
+      }
+    },
+    "%@ is a Personal Hotspot": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 是个人热点"
+          }
+        }
+      }
+    },
+    "%@ is crash-looping": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 在反复崩溃"
+          }
+        }
+      }
+    },
+    "%@ is low on disk: %@ free": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 磁盘空间不足：剩余 %2$@"
+          }
+        }
+      }
+    },
+    "%@ is not counting the probe's traffic on %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 没有统计探测在 %2$@ 上的流量"
+          }
+        }
+      }
+    },
+    "%@ may be blocked in China": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 可能在国内被封锁"
+          }
+        }
+      }
+    },
+    "%@ may be blocked in China.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 可能在国内被封锁。"
+          }
+        }
+      }
+    },
+    "%@ of %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已用 %1$@，共 %2$@"
+          }
+        }
+      }
+    },
+    "%@ of %@, near the quota": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已用 %1$@，共 %2$@，接近配额"
+          }
+        }
+      }
+    },
+    "%@ of %@, over the quota": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已用 %1$@，共 %2$@，已超出配额"
+          }
+        }
+      }
+    },
+    "%@ on %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 上的 %1$@"
+          }
+        }
+      }
+    },
+    "%@ on this Mac": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 上的 %@"
+          }
+        }
+      }
+    },
+    "%@ rejected its configuration.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 拒绝了它的配置。"
+          }
+        }
+      }
+    },
     "%@ · %@": {
       "shouldTranslate": false
+    },
+    "%@ · since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ · 自 %2$@ 起"
+          }
+        }
+      }
+    },
+    "%@'s REALITY target is degraded": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 的 REALITY 目标降级"
+          }
+        }
+      }
+    },
+    "%@'s clock is not synchronised": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 的时钟未同步"
+          }
+        }
+      }
+    },
+    "%@'s host key does not match its pin": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 的主机密钥与固定值不符"
+          }
+        }
+      }
+    },
+    "%@'s operator hold has lasted since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 的运营者暂停自 %2$@ 起一直未解除"
+          }
+        }
+      }
+    },
+    "%@'s watch status is older than 30 s.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 的监视状态已超过 30 秒没有更新。"
+          }
+        }
+      }
+    },
+    "%@, %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@，%@"
+          }
+        }
+      }
     },
     "%d °C, %@": {
       "shouldTranslate": false
@@ -30,12 +380,32 @@
     "%u %%%@": {
       "shouldTranslate": false
     },
+    "%u ms, %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%u 毫秒，%@"
+          }
+        }
+      }
+    },
     "%u unassigned slots": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "%u 个未分配槽位"
+          }
+        }
+      }
+    },
+    "+%llu ms over idle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "比空闲时多 %llu 毫秒"
           }
         }
       }
@@ -60,6 +430,16 @@
         }
       }
     },
+    "A latch survives daemon restarts; the exit stays down until it is cleared.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "锁存的违规在守护进程重启后仍然保留；清除之前出口一直停止。"
+          }
+        }
+      }
+    },
     "A line from mooringctl could not be read: %@": {
       "localizations": {
         "zh-Hans": {
@@ -80,6 +460,46 @@
         }
       }
     },
+    "A reboot has been required since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %@ 起需要重启"
+          }
+        }
+      }
+    },
+    "A rollback failed on %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 上的回滚失败"
+          }
+        }
+      }
+    },
+    "A violation is latched: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已锁存一次违规：%@"
+          }
+        }
+      }
+    },
+    "AC power": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "交流电源"
+          }
+        }
+      }
+    },
     "Access points": {
       "localizations": {
         "zh-Hans": {
@@ -90,12 +510,132 @@
         }
       }
     },
+    "Accounting": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "流量统计"
+          }
+        }
+      }
+    },
+    "Accuracy": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "准确度"
+          }
+        }
+      }
+    },
+    "Active": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正常"
+          }
+        }
+      }
+    },
+    "Activity": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "活动"
+          }
+        }
+      }
+    },
+    "Adopted": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已接管"
+          }
+        }
+      }
+    },
+    "Agent": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点代理"
+          }
+        }
+      }
+    },
+    "Alias": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "别名"
+          }
+        }
+      }
+    },
+    "Allowance": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "流量额度"
+          }
+        }
+      }
+    },
+    "An egress violation is latched: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已锁存出口违规：%@"
+          }
+        }
+      }
+    },
     "Analytics": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "Analytics（数据分析）"
+          }
+        }
+      }
+    },
+    "Applied": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已应用"
+          }
+        }
+      }
+    },
+    "As of": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "截至"
+          }
+        }
+      }
+    },
+    "Assertions held": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保持唤醒"
           }
         }
       }
@@ -140,6 +680,26 @@
         }
       }
     },
+    "Carrier address": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运营商地址"
+          }
+        }
+      }
+    },
+    "Carrier check": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运营商地址检查"
+          }
+        }
+      }
+    },
     "Charge source": {
       "localizations": {
         "zh-Hans": {
@@ -160,12 +720,52 @@
         }
       }
     },
+    "Checked": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "检查时间"
+          }
+        }
+      }
+    },
+    "Closed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭"
+          }
+        }
+      }
+    },
+    "Closing %@'s gate failed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭 %@ 的闸门失败"
+          }
+        }
+      }
+    },
     "Colours follow common LTE rules of thumb (RSRP −80/−90/−100 dBm, SINR 20/13/0 dB); they only help with placing the antenna.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "颜色按常见的 LTE 经验值标注（RSRP −80/−90/−100 dBm，SINR 20/13/0 dB），只用来帮助摆放天线。"
+          }
+        }
+      }
+    },
+    "Conditions": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "状况"
           }
         }
       }
@@ -180,12 +780,92 @@
         }
       }
     },
+    "Critical": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "严重"
+          }
+        }
+      }
+    },
+    "Cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "计费周期"
+          }
+        }
+      }
+    },
+    "Daily average": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "日均"
+          }
+        }
+      }
+    },
     "Device": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "设备"
+          }
+        }
+      }
+    },
+    "Down": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止"
+          }
+        }
+      }
+    },
+    "Egress": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口接口"
+          }
+        }
+      }
+    },
+    "Egress %@, verified %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口地址 %1$@，验证于 %2$@。"
+          }
+        }
+      }
+    },
+    "Enable it with `mooringctl exit enable`.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 `mooringctl exit enable` 启用。"
+          }
+        }
+      }
+    },
+    "Engines": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "引擎"
           }
         }
       }
@@ -210,12 +890,42 @@
         }
       }
     },
+    "Exact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "精确"
+          }
+        }
+      }
+    },
     "Exit": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "出口"
+          }
+        }
+      }
+    },
+    "Exit disabled": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口已停用"
+          }
+        }
+      }
+    },
+    "Exit: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口：%@"
           }
         }
       }
@@ -230,12 +940,235 @@
         }
       }
     },
+    "Expired %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已于 %@ 到期"
+          }
+        }
+      }
+    },
+    "Expires %@ (days left: %llu)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 到期（还剩 %2$llu 天）"
+          }
+        }
+      }
+    },
+    "Expiry": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "到期"
+          }
+        }
+      }
+    },
+    "Failed (%@)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "失败（%@）"
+          }
+        }
+      }
+    },
+    "Fair-use line": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合理使用线"
+          }
+        }
+      }
+    },
     "Firmware": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "固件"
+          }
+        }
+      }
+    },
+    "Flows %@'s exit flow cap rejected: %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 的出口连接上限拒绝的连接数：%2$llu"
+          }
+        }
+      }
+    },
+    "Flows the exit flow cap rejected: %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口连接上限拒绝的连接数：%llu"
+          }
+        }
+      }
+    },
+    "Forecast": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "预测"
+          }
+        }
+      }
+    },
+    "Foreign networks": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他网络"
+          }
+        }
+      }
+    },
+    "Gate": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "闸门"
+          }
+        }
+      }
+    },
+    "Generation": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配置版本"
+          }
+        }
+      }
+    },
+    "Halted": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停机"
+          }
+        }
+      }
+    },
+    "Hard stop": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "硬性上限"
+          }
+        }
+      }
+    },
+    "Hard stop at %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "硬性上限 %@"
+          }
+        }
+      }
+    },
+    "Holds": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂停"
+          }
+        }
+      }
+    },
+    "Host": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主机"
+          }
+        }
+      }
+    },
+    "Hysteria2": {
+      "shouldTranslate": false
+    },
+    "Hysteria2 this cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期 Hysteria2"
+          }
+        }
+      }
+    },
+    "IPv4 on the M7's network": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 网络中的 IPv4"
+          }
+        }
+      }
+    },
+    "In the carrier's prefixes": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在运营商地址段内"
+          }
+        }
+      }
+    },
+    "Interface": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接口"
+          }
+        }
+      }
+    },
+    "Interfaces matching the egress: %u; exactly one must.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "与出口匹配的接口：%u 个；必须恰好一个。"
+          }
+        }
+      }
+    },
+    "Keep serving past the fair-use line, accepting deprioritisation": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "超过合理使用线后继续服务，接受被降速"
           }
         }
       }
@@ -290,6 +1223,16 @@
         }
       }
     },
+    "Last drain": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上次排空"
+          }
+        }
+      }
+    },
     "Last read %@.": {
       "localizations": {
         "zh-Hans": {
@@ -300,12 +1243,122 @@
         }
       }
     },
+    "Last seen": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最后活动"
+          }
+        }
+      }
+    },
+    "Last sleep": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上次睡眠"
+          }
+        }
+      }
+    },
+    "Last wake": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上次唤醒"
+          }
+        }
+      }
+    },
+    "Latched violations": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已锁存的违规"
+          }
+        }
+      }
+    },
+    "Lifetime": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "累计"
+          }
+        }
+      }
+    },
+    "Limits": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "限制"
+          }
+        }
+      }
+    },
+    "Link": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "链路"
+          }
+        }
+      }
+    },
+    "Link-layer address": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "链路层地址"
+          }
+        }
+      }
+    },
     "Live from the Mooring daemon": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "Mooring 守护进程实时状态"
+          }
+        }
+      }
+    },
+    "Loaded latency": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "负载下延迟"
+          }
+        }
+      }
+    },
+    "Low disk: %@ free": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "磁盘空间不足：剩余 %@"
+          }
+        }
+      }
+    },
+    "Lower bound: the M7's Wi-Fi or offload is on, or a counter reset was seen": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下限值：M7 的 Wi-Fi 或卸载已开启，或者检测到计数器重置"
           }
         }
       }
@@ -326,6 +1379,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "M7：无服务"
+          }
+        }
+      }
+    },
+    "Mac's handshake": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 的握手"
           }
         }
       }
@@ -403,12 +1466,102 @@
         }
       }
     },
+    "Next cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下个周期"
+          }
+        }
+      }
+    },
+    "No capacity sample yet": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有容量采样"
+          }
+        }
+      }
+    },
     "No deployment on this Mac yet": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "这台 Mac 上还没有部署"
+          }
+        }
+      }
+    },
+    "No direct probe has run yet.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有运行过直连探测。"
+          }
+        }
+      }
+    },
+    "No direct probe succeeded; the last, to %@, failed (%@).": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有一次直连探测成功；最后一次（到 %1$@）失败（%2$@）。"
+          }
+        }
+      }
+    },
+    "No expiry": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不过期"
+          }
+        }
+      }
+    },
+    "No forecast: %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法预测：%@。"
+          }
+        }
+      }
+    },
+    "No handshake from the Mac": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收不到 Mac 的握手"
+          }
+        }
+      }
+    },
+    "No handshake from the Mac since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %@ 起收不到 Mac 的握手"
+          }
+        }
+      }
+    },
+    "No interface matches the egress: the M7's Ethernet adapter is not attached.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有接口与出口匹配：M7 的以太网转接器没有连接。"
           }
         }
       }
@@ -423,12 +1576,52 @@
         }
       }
     },
+    "No node has confirmed a configuration yet (`mooringctl node apply`).": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有节点确认过配置（`mooringctl node apply`）。"
+          }
+        }
+      }
+    },
+    "No nodes": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有节点"
+          }
+        }
+      }
+    },
+    "No nodes yet.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有节点。"
+          }
+        }
+      }
+    },
     "No poll of the M7 has been reported yet.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "还没有收到读取 M7 的结果。"
+          }
+        }
+      }
+    },
+    "No quota": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无配额"
           }
         }
       }
@@ -463,12 +1656,32 @@
         }
       }
     },
+    "No users": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有用户"
+          }
+        }
+      }
+    },
     "Nodes": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "节点"
+          }
+        }
+      }
+    },
+    "None: the Mac is attached to the M7 only.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有：这台 Mac 只连着 M7。"
           }
         }
       }
@@ -513,6 +1726,36 @@
         }
       }
     },
+    "Now": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前"
+          }
+        }
+      }
+    },
+    "On %@ this cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期在 %@ 上"
+          }
+        }
+      }
+    },
+    "On battery the exit is degraded and the Mac may sleep; it drains the nodes before it does.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用电池时出口处于降级状态，Mac 可能睡眠；睡眠前会先排空各节点。"
+          }
+        }
+      }
+    },
     "On: %@. The exit needs these off; turn them off in the M7's web interface.": {
       "localizations": {
         "zh-Hans": {
@@ -543,12 +1786,42 @@
         }
       }
     },
+    "Opaque id": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "匿名 ID"
+          }
+        }
+      }
+    },
+    "Open": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开"
+          }
+        }
+      }
+    },
     "Open Console": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "打开控制台"
+          }
+        }
+      }
+    },
+    "Open alerts": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未解决的告警"
           }
         }
       }
@@ -563,12 +1836,52 @@
         }
       }
     },
+    "Pairing": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配对方式"
+          }
+        }
+      }
+    },
+    "Paused while the Mac sleeps": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 睡眠期间暂停"
+          }
+        }
+      }
+    },
     "Pin the M7 (`mooringctl router pin --interface en9`), store its admin password (`mooringctl router set-password`), and give the daemon the interface.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "先固定 M7 的身份（`mooringctl router pin --interface en9`），保存它的管理员密码（`mooringctl router set-password`），再把接口交给守护进程。"
+          }
+        }
+      }
+    },
+    "Plan's line": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "套餐线"
+          }
+        }
+      }
+    },
+    "Planned": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已计划"
           }
         }
       }
@@ -593,12 +1906,82 @@
         }
       }
     },
+    "Preflight": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "预检中"
+          }
+        }
+      }
+    },
+    "Primary": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主节点"
+          }
+        }
+      }
+    },
+    "Projected for the cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期预计"
+          }
+        }
+      }
+    },
     "Quit Mooring": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "退出 Mooring"
+          }
+        }
+      }
+    },
+    "Quota": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配额"
+          }
+        }
+      }
+    },
+    "Quota %@; usage unavailable": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配额 %@；无法获取用量"
+          }
+        }
+      }
+    },
+    "REALITY downloads are counted when their connection closes, so a long one shows late.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "REALITY 下载在连接关闭时才计入，所以长时间的下载会晚些显示。"
+          }
+        }
+      }
+    },
+    "REALITY this cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期 REALITY"
           }
         }
       }
@@ -613,6 +1996,16 @@
         }
       }
     },
+    "Reading WireGuard state failed; the gate is closed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取 WireGuard 状态失败；闸门已关闭"
+          }
+        }
+      }
+    },
     "Received": {
       "localizations": {
         "zh-Hans": {
@@ -623,12 +2016,92 @@
         }
       }
     },
+    "Receiving": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接收"
+          }
+        }
+      }
+    },
+    "Reported": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "报告时间"
+          }
+        }
+      }
+    },
+    "Retired": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已退役"
+          }
+        }
+      }
+    },
+    "Retired, pending deletion at the provider": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已退役，等待在服务商处删除"
+          }
+        }
+      }
+    },
+    "Retiring": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "退役中"
+          }
+        }
+      }
+    },
     "Retrying in %lld s.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "%lld 秒后重试。"
+          }
+        }
+      }
+    },
+    "Revocation pending": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "待撤销"
+          }
+        }
+      }
+    },
+    "Revoked": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已撤销"
+          }
+        }
+      }
+    },
+    "Role": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "角色"
           }
         }
       }
@@ -653,12 +2126,42 @@
         }
       }
     },
+    "Sampled": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "采样时间"
+          }
+        }
+      }
+    },
+    "Saturation": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "饱和"
+          }
+        }
+      }
+    },
     "Secondary carriers counted": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "M7 统计的辅载波数"
+          }
+        }
+      }
+    },
+    "Sending": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发送"
           }
         }
       }
@@ -673,12 +2176,42 @@
         }
       }
     },
+    "Served this cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期服务流量"
+          }
+        }
+      }
+    },
     "Service": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "服务类型"
+          }
+        }
+      }
+    },
+    "Serving": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务中"
+          }
+        }
+      }
+    },
+    "Serving, degraded": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务中（降级）"
           }
         }
       }
@@ -703,7 +2236,87 @@
         }
       }
     },
+    "Since": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "起始时间"
+          }
+        }
+      }
+    },
+    "Since %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %@ 起。"
+          }
+        }
+      }
+    },
+    "Source": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来源"
+          }
+        }
+      }
+    },
+    "Stage": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "阶段"
+          }
+        }
+      }
+    },
+    "Standby": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "备用节点"
+          }
+        }
+      }
+    },
+    "Started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开始"
+          }
+        }
+      }
+    },
+    "Starting the engine": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在启动引擎"
+          }
+        }
+      }
+    },
     "State": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "状态"
+          }
+        }
+      }
+    },
+    "Status": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
@@ -723,12 +2336,52 @@
         }
       }
     },
+    "Stop": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上限策略"
+          }
+        }
+      }
+    },
+    "Suspended": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已暂停"
+          }
+        }
+      }
+    },
+    "Suspended (%@) since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %2$@ 起暂停（%1$@）"
+          }
+        }
+      }
+    },
     "Temperature": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "温度"
+          }
+        }
+      }
+    },
+    "The %@ probe through %@ failed (%@).": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "经 %2$@ 的 %1$@ 探测失败（%3$@）。"
           }
         }
       }
@@ -753,6 +2406,36 @@
         }
       }
     },
+    "The M7 has no service": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 无服务"
+          }
+        }
+      }
+    },
+    "The M7 is on LTE, not 5G": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 在用 LTE，不是 5G"
+          }
+        }
+      }
+    },
+    "The M7 is overheating (%@)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 过热（%@）"
+          }
+        }
+      }
+    },
     "The M7 is unreachable": {
       "localizations": {
         "zh-Hans": {
@@ -769,6 +2452,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "M7 拒绝了登录"
+          }
+        }
+      }
+    },
+    "The M7 restarted": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 重启过"
+          }
+        }
+      }
+    },
+    "The M7 stepped its radio down for heat": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 因过热降低了无线性能"
+          }
+        }
+      }
+    },
+    "The M7's Wi-Fi or Ethernet offload is on": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 的 Wi-Fi 或以太网卸载已开启"
+          }
+        }
+      }
+    },
+    "The M7's Wi-Fi radio is on": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 的 Wi-Fi 射频已开启"
           }
         }
       }
@@ -793,12 +2516,32 @@
         }
       }
     },
+    "The M7's firmware changed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 的固件变了"
+          }
+        }
+      }
+    },
     "The M7's own counters (wwan.dataTransferredRx/Tx).": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "M7 自己的计数器（wwan.dataTransferredRx/Tx）。"
+          }
+        }
+      }
+    },
+    "The M7's signal is weak (RSRP %@ dBm)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 信号弱（RSRP %@ dBm）"
           }
         }
       }
@@ -813,6 +2556,146 @@
         }
       }
     },
+    "The Mac is attached to another network (findings: %llu)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 连着其他网络（发现 %llu 处）"
+          }
+        }
+      }
+    },
+    "The Mac is attached to another network: %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 连着其他网络：%@。"
+          }
+        }
+      }
+    },
+    "The Mac runs on battery and may sleep.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 正在用电池，可能会睡眠。"
+          }
+        }
+      }
+    },
+    "The Mac's and the nodes' event journals are not read by this build yet; the open alerts are on the overview.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个版本还不读取 Mac 和各节点的事件日志；未解决的告警显示在概览页。"
+          }
+        }
+      }
+    },
+    "The REALITY target is degraded": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "REALITY 目标降级"
+          }
+        }
+      }
+    },
+    "The SIM is forecast to reach its %@ on %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "预计 SIM 将于 %2$@ 达到“%1$@”"
+          }
+        }
+      }
+    },
+    "The SIM meter and the M7's counter differ by %u ‰": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIM 流量表与 M7 计数器相差 %u ‰"
+          }
+        }
+      }
+    },
+    "The SIM passed its warning in the cycle from %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从 %@ 开始的周期内，SIM 已超过警告线"
+          }
+        }
+      }
+    },
+    "The SIM plan is not recorded (`mooringctl sim set-plan`).": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有记录 SIM 套餐（`mooringctl sim set-plan`）。"
+          }
+        }
+      }
+    },
+    "The SIM's hard stop was reached in the cycle from %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从 %@ 开始的周期内，SIM 已达到硬性上限"
+          }
+        }
+      }
+    },
+    "The SIM's hard stop was reached in the cycle from %@; the exit stays down until the next cycle.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从 %@ 开始的周期内，SIM 已达到硬性上限；出口停止到下个周期。"
+          }
+        }
+      }
+    },
+    "The Xray stats query failed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xray 统计查询失败"
+          }
+        }
+      }
+    },
+    "The agent on %@ is not enabled.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 上的节点代理没有启用。"
+          }
+        }
+      }
+    },
+    "The clock is not synchronised by NTP": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "时钟没有经 NTP 同步"
+          }
+        }
+      }
+    },
     "The daemon has not reported a poll of the M7 yet.": {
       "localizations": {
         "zh-Hans": {
@@ -823,22 +2706,22 @@
         }
       }
     },
-    "The daemon reports a deployment, which this build of Mooring.app does not show yet.": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "守护进程报告了一个部署，这个版本的 Mooring.app 还不能显示部署状态。"
-          }
-        }
-      }
-    },
     "The daemon reports after its first poll of the M7, which waits while macOS asks you to allow keychain or local network access.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "守护进程要在第一次读取 M7 之后才开始报告；如果 macOS 正在请你允许钥匙串或本地网络访问，这次读取会一直等着。"
+          }
+        }
+      }
+    },
+    "The daemon samples the egress once the exit runs.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口运行后，守护进程才会对出口采样。"
           }
         }
       }
@@ -873,6 +2756,46 @@
         }
       }
     },
+    "The egress %@ has no IPv4 address.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口接口 %@ 没有 IPv4 地址。"
+          }
+        }
+      }
+    },
+    "The egress does not resolve to an interface.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口无法对应到任何接口。"
+          }
+        }
+      }
+    },
+    "The egress's IPv4 address is outside the M7's subnet.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口接口的 IPv4 地址不在 M7 的子网内。"
+          }
+        }
+      }
+    },
+    "The exit is degraded: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口降级：%@"
+          }
+        }
+      }
+    },
     "The exit, its nodes, users and SIM meter appear once `mooringctl exit init` has created a deployment. Until then the daemon reads the M7 only.": {
       "localizations": {
         "zh-Hans": {
@@ -893,6 +2816,16 @@
         }
       }
     },
+    "The keychain could not be read.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取钥匙串。"
+          }
+        }
+      }
+    },
     "The keychain or the kernel's tables failed on this Mac; the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause.": {
       "localizations": {
         "zh-Hans": {
@@ -903,12 +2836,72 @@
         }
       }
     },
+    "The line's carrier check is not recorded (`mooringctl exit record-carrier`).": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有记录这条线路的运营商检查（`mooringctl exit record-carrier`）。"
+          }
+        }
+      }
+    },
+    "The power helper exited.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电源助手已退出。"
+          }
+        }
+      }
+    },
+    "The probe's traffic is not being counted on %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "探测在 %@ 上的流量没有被统计"
+          }
+        }
+      }
+    },
     "The router adapter is not set up": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "路由器读取还没有配置"
+          }
+        }
+      }
+    },
+    "The separate uplink is absent.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "独立上行链路不存在。"
+          }
+        }
+      }
+    },
+    "The separate uplink is the egress.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "独立上行链路就是出口接口。"
+          }
+        }
+      }
+    },
+    "The uplink is saturated": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上行已饱和"
           }
         }
       }
@@ -933,6 +2926,26 @@
         }
       }
     },
+    "This cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期"
+          }
+        }
+      }
+    },
+    "This month": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本月"
+          }
+        }
+      }
+    },
     "This screen fills in once a deployment exists on this Mac. `mooringctl exit init` creates it; until then the console shows the M7 router only.": {
       "localizations": {
         "zh-Hans": {
@@ -943,12 +2956,42 @@
         }
       }
     },
+    "Thresholds": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "阈值"
+          }
+        }
+      }
+    },
+    "Today": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今天"
+          }
+        }
+      }
+    },
     "Traffic": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "流量"
+          }
+        }
+      }
+    },
+    "Transfer in %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 的流量"
           }
         }
       }
@@ -973,12 +3016,82 @@
         }
       }
     },
+    "Unread SMS on the M7: %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 上的未读短信：%llu"
+          }
+        }
+      }
+    },
     "Up": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "已运行"
+          }
+        }
+      }
+    },
+    "Uplink use": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上行使用率"
+          }
+        }
+      }
+    },
+    "Usage": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用量"
+          }
+        }
+      }
+    },
+    "Usage through %@, cycle from %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用量统计到 %1$@，周期从 %2$@ 开始。"
+          }
+        }
+      }
+    },
+    "Usage unavailable: %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法获取用量：%@。"
+          }
+        }
+      }
+    },
+    "Used this cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期已用"
+          }
+        }
+      }
+    },
+    "User": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户"
           }
         }
       }
@@ -993,12 +3106,132 @@
         }
       }
     },
+    "Users expired: %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已到期的用户：%llu"
+          }
+        }
+      }
+    },
+    "Users expiring soon: %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "即将到期的用户：%llu"
+          }
+        }
+      }
+    },
+    "Users near their quota: %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接近配额的用户：%llu"
+          }
+        }
+      }
+    },
+    "Users over their quota: %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "超出配额的用户：%llu"
+          }
+        }
+      }
+    },
+    "Users suspended: %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已暂停的用户：%llu"
+          }
+        }
+      }
+    },
+    "Verified": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已验证"
+          }
+        }
+      }
+    },
+    "Verifying the egress": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在验证出口"
+          }
+        }
+      }
+    },
+    "Violation: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "违规：%@"
+          }
+        }
+      }
+    },
     "Waiting for the Mooring daemon…": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "正在等待 Mooring 守护进程…"
+          }
+        }
+      }
+    },
+    "Warning": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "警告"
+          }
+        }
+      }
+    },
+    "Warning at": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "警告线"
+          }
+        }
+      }
+    },
+    "Warning at %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "警告线 %@。"
+          }
+        }
+      }
+    },
+    "Watch": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "监视"
           }
         }
       }
@@ -1053,12 +3286,465 @@
         }
       }
     },
+    "With the default thresholds, saturated means uplink use of at least %lld %%, or latency inflated by %lld ms or more, for %lld minutes; every user shares the uplink.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按默认阈值，上行使用率至少 %1$lld %%，或延迟增加 %2$lld 毫秒以上，并持续 %3$lld 分钟，即为饱和；所有用户共用这条上行。"
+          }
+        }
+      }
+    },
+    "Writing watch state failed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "写入监视状态失败"
+          }
+        }
+      }
+    },
+    "Writing watch state failed (errno %d)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "写入监视状态失败（errno %d）"
+          }
+        }
+      }
+    },
+    "Xray": {
+      "shouldTranslate": false
+    },
+    "`mooringctl exit enable`, `disable` and `retry` change it from Terminal; the console only shows it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在终端里用 `mooringctl exit enable`、`disable` 和 `retry` 修改；控制台只负责显示。"
+          }
+        }
+      }
+    },
+    "`mooringctl node new` and `node adopt` add the first node.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 `mooringctl node new` 和 `node adopt` 添加第一个节点。"
+          }
+        }
+      }
+    },
+    "`mooringctl sim set-plan`, `set-stop` and `set-anchor` change them from Terminal.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在终端里用 `mooringctl sim set-plan`、`set-stop` 和 `set-anchor` 修改。"
+          }
+        }
+      }
+    },
+    "`mooringctl user add` adds the first user.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 `mooringctl user add` 添加第一个用户。"
+          }
+        }
+      }
+    },
+    "a metered day is missing": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缺少一天的计量"
+          }
+        }
+      }
+    },
+    "a metered day lies outside the cycle's elapsed days": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一天的计量不在本周期已过去的日子里"
+          }
+        }
+      }
+    },
+    "a metered day repeats or precedes an earlier one": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一天的计量重复或早于之前的记录"
+          }
+        }
+      }
+    },
+    "a node accounts traffic for a name that is no Mooring user id": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点统计了一个不是 Mooring 用户 ID 的名字的流量"
+          }
+        }
+      }
+    },
+    "a node accounts traffic for a user the deployment does not hold": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点统计了一个不在本部署中的用户的流量"
+          }
+        }
+      }
+    },
+    "a node may be blocked in China": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点可能在国内被封锁"
+          }
+        }
+      }
+    },
+    "a node may have counted traffic, but no usage ledger is given for it": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点可能统计过流量，但没有它的用量账本"
+          }
+        }
+      }
+    },
+    "a node's probe failed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点的探测失败"
+          }
+        }
+      }
+    },
+    "a node's usage bin straddles the report's end": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点的用量时段跨过了报告的结束时间"
+          }
+        }
+      }
+    },
+    "a node's usage is not yet recorded to the report's end": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点的用量还没有记录到报告的结束时间"
+          }
+        }
+      }
+    },
+    "a node's usage ledger has a gap or overlap": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点的用量账本有缺口或重叠"
+          }
+        }
+      }
+    },
+    "a node's usage ledger starts after the period does": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点的用量账本晚于统计期开始"
+          }
+        }
+      }
+    },
+    "a node's watch is stale": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点的监视状态过时"
+          }
+        }
+      }
+    },
+    "a usage ledger is for a node the deployment does not hold": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一份用量账本属于不在本部署中的节点"
+          }
+        }
+      }
+    },
+    "a usage total overflows a 64-bit counter": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某项用量合计超出了 64 位计数器"
+          }
+        }
+      }
+    },
+    "abuse review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滥用审查"
+          }
+        }
+      }
+    },
+    "active for %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已运行 %@"
+          }
+        }
+      }
+    },
+    "active for %@, Go heap %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已运行 %1$@，Go 堆 %2$@"
+          }
+        }
+      }
+    },
+    "active now": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在使用"
+          }
+        }
+      }
+    },
+    "an egress violation (%@)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口违规（%@）"
+          }
+        }
+      }
+    },
+    "applied %@, current %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已应用 %1$@，当前 %2$llu"
+          }
+        }
+      }
+    },
+    "applied %@, current %llu; pending since %@ (`mooringctl node apply`)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已应用 %1$@，当前 %2$llu；自 %3$@ 起待应用（`mooringctl node apply`）"
+          }
+        }
+      }
+    },
+    "building since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %@ 起趋于饱和"
+          }
+        }
+      }
+    },
+    "by the operator": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运营者操作"
+          }
+        }
+      }
+    },
+    "carrier address unstable": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运营商地址不稳定"
+          }
+        }
+      }
+    },
+    "clear": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未饱和"
+          }
+        }
+      }
+    },
+    "clock not synchronised": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "时钟未同步"
+          }
+        }
+      }
+    },
+    "clock synchronised": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "时钟已同步"
+          }
+        }
+      }
+    },
+    "completed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已完成"
+          }
+        }
+      }
+    },
+    "connect": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接"
+          }
+        }
+      }
+    },
+    "down": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "断开"
+          }
+        }
+      }
+    },
+    "egress is a node's address": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口地址是节点自己的地址"
+          }
+        }
+      }
+    },
+    "egress is the uplink": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口地址是上行链路的地址"
+          }
+        }
+      }
+    },
+    "egress mismatch": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口地址不一致"
+          }
+        }
+      }
+    },
+    "ended by signal %d": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "被信号 %d 终止"
+          }
+        }
+      }
+    },
     "excellent": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "很好"
+          }
+        }
+      }
+    },
+    "exited with code %d": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已退出，退出码 %d"
+          }
+        }
+      }
+    },
+    "expired": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已到期"
+          }
+        }
+      }
+    },
+    "failed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "失败"
           }
         }
       }
@@ -1073,6 +3759,16 @@
         }
       }
     },
+    "gate %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "闸门%@"
+          }
+        }
+      }
+    },
     "good": {
       "localizations": {
         "zh-Hans": {
@@ -1083,12 +3779,92 @@
         }
       }
     },
+    "idle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "空闲"
+          }
+        }
+      }
+    },
+    "inactive": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未运行"
+          }
+        }
+      }
+    },
+    "last %@, %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上次%1$@，%2$@"
+          }
+        }
+      }
+    },
+    "last upgrade %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上次升级 %@"
+          }
+        }
+      }
+    },
+    "level 2": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 级"
+          }
+        }
+      }
+    },
+    "level 3": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3 级"
+          }
+        }
+      }
+    },
     "main %@, guest %@, aux %@": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "主 %@，访客 %@，辅助 %@"
+          }
+        }
+      }
+    },
+    "memory free %@, disk free %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可用内存 %1$@，可用磁盘 %2$@"
+          }
+        }
+      }
+    },
+    "mooring-probe not running": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mooring-probe 没有运行"
           }
         }
       }
@@ -1133,12 +3909,92 @@
         }
       }
     },
+    "never": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从未"
+          }
+        }
+      }
+    },
+    "nft failed; the watch restarts with the gate closed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nft 失败；监视以闸门关闭的状态重启"
+          }
+        }
+      }
+    },
     "no": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "否"
+          }
+        }
+      }
+    },
+    "no answer in time": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "超时未应答"
+          }
+        }
+      }
+    },
+    "no evidence yet": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂无数据"
+          }
+        }
+      }
+    },
+    "no metered day yet: there is nothing to project from": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有计量数据，无法预测"
+          }
+        }
+      }
+    },
+    "no time has passed in the billing cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "计费周期才刚开始"
+          }
+        }
+      }
+    },
+    "no uplink baseline recorded": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有记录上行基线"
+          }
+        }
+      }
+    },
+    "none": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无"
           }
         }
       }
@@ -1153,12 +4009,82 @@
         }
       }
     },
+    "none yet": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有"
+          }
+        }
+      }
+    },
+    "not polled since the daemon started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程启动后还没有轮询"
+          }
+        }
+      }
+    },
+    "not polled yet": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有轮询"
+          }
+        }
+      }
+    },
     "not reported": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "未报告"
+          }
+        }
+      }
+    },
+    "not run yet": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有运行"
+          }
+        }
+      }
+    },
+    "not running": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未运行"
+          }
+        }
+      }
+    },
+    "not this cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期内不会"
+          }
+        }
+      }
+    },
+    "of %@ this cycle": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "/ 本周期上限 %@"
           }
         }
       }
@@ -1183,12 +4109,452 @@
         }
       }
     },
+    "on battery": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用电池"
+          }
+        }
+      }
+    },
+    "outside the carrier's prefixes": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不在运营商地址段内"
+          }
+        }
+      }
+    },
+    "paired": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配对"
+          }
+        }
+      }
+    },
+    "parse": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "解析"
+          }
+        }
+      }
+    },
     "poor": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "差"
+          }
+        }
+      }
+    },
+    "projected for %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "预计在 %@"
+          }
+        }
+      }
+    },
+    "quota exceeded in the cycle from %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在从 %@ 开始的周期内超出配额"
+          }
+        }
+      }
+    },
+    "reached on %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已于 %@ 达到"
+          }
+        }
+      }
+    },
+    "read": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取"
+          }
+        }
+      }
+    },
+    "reboot required": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要重启"
+          }
+        }
+      }
+    },
+    "restarts: %u": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重启次数：%u"
+          }
+        }
+      }
+    },
+    "retired": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已退役"
+          }
+        }
+      }
+    },
+    "running, pid %u": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运行中，pid %u"
+          }
+        }
+      }
+    },
+    "saturated since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %@ 起饱和"
+          }
+        }
+      }
+    },
+    "ssh could not be started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法启动 ssh"
+          }
+        }
+      }
+    },
+    "the Mac's sleep drain": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 睡眠前的排空"
+          }
+        }
+      }
+    },
+    "the SIM byte counts overflow a 64-bit counter": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIM 字节数超出了 64 位计数器"
+          }
+        }
+      }
+    },
+    "the agent speaks another protocol version": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点代理使用了另一个协议版本"
+          }
+        }
+      }
+    },
+    "the answer could not be decoded": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法解码应答"
+          }
+        }
+      }
+    },
+    "the answer exceeded 1 MiB": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应答超过了 1 MiB"
+          }
+        }
+      }
+    },
+    "the connection failed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接失败"
+          }
+        }
+      }
+    },
+    "the deployment's figures are inconsistent": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "部署的数据前后不一致"
+          }
+        }
+      }
+    },
+    "the egress address %@ is %@'s own.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口地址 %1$@ 是 %2$@ 自己的地址。"
+          }
+        }
+      }
+    },
+    "the egress address %@ is outside the carrier's prefixes.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口地址 %@ 不在运营商地址段内。"
+          }
+        }
+      }
+    },
+    "the egress address %@ is the separate uplink's.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口地址 %@ 是独立上行链路的地址。"
+          }
+        }
+      }
+    },
+    "the egress was the node's own address": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口地址是节点自己的地址"
+          }
+        }
+      }
+    },
+    "the host key did not match its pin": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主机密钥与固定值不符"
+          }
+        }
+      }
+    },
+    "the in-chain probe observed %@ between direct probes that saw %@ and %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "两次直连探测分别看到 %2$@ 和 %3$@，而其间的链路内探测看到的是 %1$@。"
+          }
+        }
+      }
+    },
+    "the node refused the key": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点拒绝了密钥"
+          }
+        }
+      }
+    },
+    "the node's clock stepped back": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点的时钟回拨了"
+          }
+        }
+      }
+    },
+    "the node's forced command is not active": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点的强制命令没有生效"
+          }
+        }
+      }
+    },
+    "the operator (%@)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运营者（%@）"
+          }
+        }
+      }
+    },
+    "the plan's figures are inconsistent": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "套餐的数据前后不一致"
+          }
+        }
+      }
+    },
+    "the power helper exited": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电源助手已退出"
+          }
+        }
+      }
+    },
+    "the probe failed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "探测失败"
+          }
+        }
+      }
+    },
+    "timed out": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "超时"
+          }
+        }
+      }
+    },
+    "two usage ledgers are for one node": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同一个节点有两份用量账本"
+          }
+        }
+      }
+    },
+    "unavailable": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法获取"
+          }
+        }
+      }
+    },
+    "unknown": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未知"
+          }
+        }
+      }
+    },
+    "unpaired": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未配对"
+          }
+        }
+      }
+    },
+    "unreachable since %@: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %1$@ 起无法连接：%2$@"
+          }
+        }
+      }
+    },
+    "unreachable: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法连接：%@"
+          }
+        }
+      }
+    },
+    "up %@, load %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已运行 %1$@，负载 %2$@"
+          }
+        }
+      }
+    },
+    "up, %u Mbit/s": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已连接，%u Mbit/s"
+          }
+        }
+      }
+    },
+    "up, speed not reported": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已连接，未报告速率"
           }
         }
       }

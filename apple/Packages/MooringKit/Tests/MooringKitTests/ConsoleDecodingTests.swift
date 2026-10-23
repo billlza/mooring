@@ -73,12 +73,19 @@ import Testing
         #expect(status.advisories == [])
     }
 
-    /// A deployment's document is refused whole: this build has no mirror
-    /// of `MacStatusV1`, so it never shows part of one.
-    @Test func aDeploymentIsRefusedNotShownInPart() throws {
-        #expect(throws: ConsoleDecodingError.deploymentNotShown) {
-            try ConsoleStatus.decode(line: try Fixtures.console("deployed"))
+    /// A deployment's document reads whole, with the router and the time
+    /// where the undeployed one keeps them.
+    @Test func aDeploymentReadsWhole() throws {
+        let status = try ConsoleStatus.decode(line: try Fixtures.console("deployed"))
+        guard case .deployed(let deployed) = status else {
+            Issue.record("not a deployment's document")
+            return
         }
+        #expect(status.deployed == deployed)
+        #expect(status.at == deployed.at)
+        #expect(status.router == deployed.router)
+        #expect(status.advisories == [])
+        #expect(deployed.sortedNodes.map(\.id.text) == ["ams1", "lon1"])
     }
 
     /// Every object of both undeployed fixtures refuses an unknown key, as

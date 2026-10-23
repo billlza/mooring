@@ -1147,4 +1147,15 @@ impl RouterReading {
             Self::Unavailable { last_polled_at, .. } => *last_polled_at,
         }
     }
+
+    /// The settings the exit needs off that the panel shows on: its
+    /// status's ([`RouterStatus::advisories`]), or none without one. Both
+    /// console documents carry them beside the panel (design §15.6 rule 8).
+    #[must_use]
+    pub fn advisories(&self) -> Vec<RouterAdvisory> {
+        match self {
+            Self::Available { status, .. } => status.advisories(),
+            Self::Unavailable { .. } => Vec::new(),
+        }
+    }
 }

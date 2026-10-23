@@ -78,19 +78,11 @@ struct UndeployedRepr {
     advisories: Vec<RouterAdvisory>,
 }
 
-/// The advisories of a router panel: the status's, or none without one.
-fn advisories_of(router: &RouterReading) -> Vec<RouterAdvisory> {
-    match router {
-        RouterReading::Available { status, .. } => status.advisories(),
-        RouterReading::Unavailable { .. } => Vec::new(),
-    }
-}
-
 impl UndeployedStatus {
     /// The status the daemon produced at `at` with `router`.
     #[must_use]
     pub fn new(at: UnixTime, router: RouterReading) -> Self {
-        let advisories = advisories_of(&router);
+        let advisories = router.advisories();
         Self {
             at,
             router,

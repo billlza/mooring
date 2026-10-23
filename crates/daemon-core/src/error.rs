@@ -791,6 +791,10 @@ pub enum StatusError {
         /// The alert out of order.
         key: AlertKey,
     },
+    /// The document's advisories are not the ones its router panel calls
+    /// for.
+    #[error("a MacStatusV1 document's advisories do not follow from its router panel")]
+    AdvisoriesMismatch,
 }
 
 kinds! {
@@ -804,6 +808,8 @@ kinds! {
         UsageMismatch,
         /// See [`StatusError::AlertsNotOrdered`].
         AlertsNotOrdered,
+        /// See [`StatusError::AdvisoriesMismatch`].
+        AdvisoriesMismatch,
     }
 }
 
@@ -816,6 +822,7 @@ impl StatusError {
             Self::UnknownNode { .. } => StatusErrorKind::UnknownNode,
             Self::UsageMismatch { .. } => StatusErrorKind::UsageMismatch,
             Self::AlertsNotOrdered { .. } => StatusErrorKind::AlertsNotOrdered,
+            Self::AdvisoriesMismatch => StatusErrorKind::AdvisoriesMismatch,
         }
     }
 }

@@ -5,7 +5,7 @@ This runbook is for the operator. It covers building Mooring.app, running the da
 
 The design is §5.1, §10.1, §15.1 and §15.6 (revision 9). This is the development build: it runs from the repository's target directory, signed ad hoc, and the daemon runs until logout. M7 replaces this with a signed app that registers the daemon itself (`SMAppService`).
 
-Before a deployment exists the console shows the M7 router only, and every other screen says it needs a deployment. Once `mooringctl exit init` has created one, the daemon serves the exit from its next poll (within a minute), with no restart: it resolves the egress, checks for foreign networks, meters the SIM and, once the exit is enabled and its preflight passes, runs `mooring-exit` (design §10.1, §10.2). The swap-day runbook (`swap-day.md`) covers that part. Mooring.app does not show a deployment's status yet (M7); `mooringctl status --json` prints it.
+Before a deployment exists the console shows the M7 router only, and every other screen says it needs a deployment. Once `mooringctl exit init` has created one, the daemon serves the exit from its next poll (within a minute), with no restart: it resolves the egress, checks for foreign networks, meters the SIM and, once the exit is enabled and its preflight passes, runs `mooring-exit` (design §10.1, §10.2). The swap-day runbook (`swap-day.md`) covers that part. Mooring.app then shows the deployment's status on every screen (section 3); `mooringctl status --json` prints the same document.
 
 With a deployment, the daemon reads each applied node's WireGuard key from the keychain the first time it starts the engine, and again after each configuration change: macOS asks once per key, as it does for the M7's password (section 2, question 1); choose **Always Allow**.
 
@@ -66,13 +66,24 @@ The app lives in the menu bar (an antenna symbol); its menu opens the console wi
 - **Live:** the status on screen is the latest.
 - **Waiting:** the daemon has not finished its first poll. It may be waiting for one of the questions above.
 - **Not live: mooringctl stopped:** with how it ended and its own message. The app starts it again after 5 s. "The daemon's latest status is from …, more than 240 s ago" means the daemon's poll has not finished since: look for a keychain or local network question.
-- **Not live: the latest status cannot be shown:** the daemon sent a line this build cannot show (for example a deployment's status); the status on screen is older.
+- **Not live: the latest status cannot be shown:** the daemon sent a line this build cannot show (for example a document of a newer version, from a daemon built from newer sources than the app); the status on screen is older.
 
 **The router screen** lists first the settings the exit needs off that the M7 reports on (the Wi-Fi radio, Wi-Fi or Ethernet offload, UPnP, NETGEAR Insight), as the daemon decides them. It shows:
 - what the M7 reports: network, service types, band, LTE carriers, signal, temperature, power, its own traffic counters, Wi-Fi and the settings the exit needs off, and the unread SMS count;
 - the time of the poll.
 
 The colours on RSRP and SINR are rules of thumb for placing the antenna, not limits.
+
+**Once a deployment exists** every screen fills in from the deployment's status (design §15.3):
+- **Overview:** the exit's state and why, the open alerts (critical first), each node's gate and latest REALITY and Hysteria2 verdicts, the SIM gauge, and the router.
+- **Exit:** the state since when, latched violations with their evidence, the egress interface and link, the carrier check, `mooring-exit` and `mooring-probe`, the Mac's power and any foreign network.
+- **SIM:** the billing cycle, bytes received and sent, the meter's accuracy, the warning, the stop policy and the plan's line, and the forecast with each threshold's crossing.
+- **Nodes:** per node, its role, stage and generation, the in-chain verdicts, and its agent's report (gate, holds, halt, handshake and watch ages, conditions, engines, host and this month's transfer), or why it could not be polled.
+- **Users:** one row per opaque id and alias; select a row for its figures, quota and expiry. When the daemon has no usage report the figures say "unavailable" with its reason, never zeros.
+- **Capacity:** the egress rates, the uplink's use against its baseline, the loaded latency and saturation.
+- **Events:** not read by this build; the open alerts are on the overview.
+
+The app only shows: every change (`exit enable`, `node apply`, `user …`, `sim …`) is a `mooringctl` command in Terminal.
 
 The same status is available in Terminal:
 - `target/app/Mooring.app/Contents/MacOS/mooringctl status` prints it once;

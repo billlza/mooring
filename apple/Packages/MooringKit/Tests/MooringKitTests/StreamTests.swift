@@ -112,18 +112,28 @@ private func running(_ pid: pid_t) -> Bool {
                     StreamEnd(reason: .exited(1), message: "mooringctl: the daemon closed the status stream")))
     }
 
-    @Test func aDeploymentLineIsRefusedAndTheStreamGoesOn() async throws {
-        let standIn = try StandIn(
-            lines: [try Fixtures.console("deployed"), try Fixtures.console("no-deployment")])
+    /// A deployment's line is shown as one, and a line of another version
+    /// is refused while the stream goes on.
+    @Test func aDeploymentLineIsShownAndAnotherVersionRefused() async throws {
+        let deployed = try Fixtures.console("deployed")
+        let later = Data(
+            String(decoding: deployed, as: UTF8.self)
+                .replacingOccurrences(of: "\"version\": 1", with: "\"version\": 2").utf8)
+        let standIn = try StandIn(lines: [deployed, later, try Fixtures.console("no-deployment")])
         defer { try? standIn.remove() }
         let events = await collect(StatusCommand(executable: standIn.executable))
-        #expect(events.count == 3)
-        #expect(events[0] == .refused(.deploymentNotShown))
-        guard case .status = events[1] else {
-            Issue.record("the second line is not a status")
+        #expect(events.count == 4)
+        guard case .status(.deployed(let status)) = events[0] else {
+            Issue.record("the first line is not a deployment's status: \(events)")
             return
         }
-        #expect(events[2] == .ended(StreamEnd(reason: .exited(0), message: "")))
+        #expect(status.nodes.count == 2)
+        #expect(events[1] == .refused(.unsupportedVersion(2)))
+        guard case .status(.noDeployment) = events[2] else {
+            Issue.record("the third line is not an undeployed status")
+            return
+        }
+        #expect(events[3] == .ended(StreamEnd(reason: .exited(0), message: "")))
     }
 
     @Test func aCommandThatCannotStartEndsAtOnce() async throws {
@@ -332,8 +342,8 @@ private func running(_ pid: pid_t) -> Bool {
         let status = try ConsoleStatus.decode(line: try Fixtures.console("no-deployment"))
         model.apply(.status(status))
         #expect(model.state == .live)
-        model.apply(.refused(.deploymentNotShown))
-        #expect(model.state == .refusing(.deploymentNotShown))
+        model.apply(.refused(.unsupportedVersion(2)))
+        #expect(model.state == .refusing(.unsupportedVersion(2)))
         #expect(model.status == status)
         model.apply(.status(status))
         #expect(model.state == .live)

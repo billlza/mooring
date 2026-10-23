@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The overview (design §15.3): the exit's state and the router at a
-// glance. Before `exit init` the exit has no deployment to report, which is
-// said as such, never drawn as zeros.
+// The overview (design §15.3): the exit's state, each node's gate and
+// verdicts, the SIM gauge, the router and the open alerts at a glance.
+// Before `exit init` the exit has no deployment to report, which is said as
+// such, never drawn as zeros.
 
 import MooringKit
 import SwiftUI
@@ -14,6 +15,18 @@ struct OverviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 exitCard
+                if let deployed = model.status?.deployed {
+                    if !deployed.alerts.isEmpty {
+                        AlertsCard(alerts: deployed.alerts)
+                    }
+                    NodesCard(status: deployed)
+                    GroupBox {
+                        SimGauge(sim: deployed.sim)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } label: {
+                        Label("SIM", systemImage: "simcard")
+                    }
+                }
                 routerCard
             }
             .padding(20)
@@ -32,6 +45,16 @@ struct OverviewView: View {
                         "The exit, its nodes, users and SIM meter appear once `mooringctl exit init` has created a deployment. Until then the daemon reads the M7 only."
                     )
                     .foregroundStyle(.secondary)
+                case .deployed(let deployed)?:
+                    Label(deployed.exit.state.headline, systemImage: deployed.exit.state.symbol)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(deployed.exit.state.tint)
+                    ForEach(deployed.exit.state.details, id: \.self) { detail in
+                        Text(detail)
+                    }
+                    Text("Since \(deployed.exit.since.text).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 case nil:
                     Text("No status from the daemon yet")
                         .font(.title3.weight(.semibold))
@@ -169,6 +192,88 @@ struct SignalGauge: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+/// The open alerts, most severe first, as the daemon raised them.
+struct AlertsCard: View {
+    let alerts: [OpenAlert]
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(sorted.enumerated()), id: \.offset) { _, alert in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: alert.severity == .critical ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(alert.severity.tint)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(alert.condition.text)
+                            Text("\(alert.severity.text) · since \(alert.activeSince.text)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Label("Open alerts", systemImage: "bell.badge")
+        }
+    }
+
+    /// Critical alerts first; otherwise in the daemon's order.
+    private var sorted: [OpenAlert] {
+        alerts.filter { $0.severity == .critical } + alerts.filter { $0.severity == .warning }
+    }
+}
+
+/// Each node's gate and latest in-chain verdicts.
+struct NodesCard: View {
+    let status: DeployedStatus
+
+    var body: some View {
+        GroupBox {
+            if status.nodes.isEmpty {
+                Text("No nodes yet.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                    ForEach(status.sortedNodes, id: \.id) { node in
+                        GridRow {
+                            Text(verbatim: node.id.text)
+                                .font(.body.weight(.semibold))
+                            Text(gate(node.row))
+                                .foregroundStyle(.secondary)
+                            verdict("REALITY", node.row.verdicts.reality)
+                            verdict("Hysteria2", node.row.verdicts.hy2)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } label: {
+            Label("Nodes", systemImage: "server.rack")
+        }
+    }
+
+    private func gate(_ row: NodeRow) -> String {
+        switch row.agent {
+        case .reported(let report): String(localized: "gate \(report.gate.text)")
+        case .unreachable(_, let cause): String(localized: "unreachable: \(cause.text)")
+        case .notPolled: String(localized: "not polled yet")
+        }
+    }
+
+    private func verdict(_ name: String, _ result: InChainResult?) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(result?.outcome.tint ?? .secondary)
+                .frame(width: 8, height: 8)
+            Text(verbatim: name)
+            Text(result?.outcome.text ?? String(localized: "not run yet"))
+                .foregroundStyle(.secondary)
         }
     }
 }
