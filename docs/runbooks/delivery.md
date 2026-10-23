@@ -32,7 +32,7 @@ The last command must print `[Excluded]`.
 4. **Get the user's acceptance on the call.**
    - On a FaceTime Audio call, the user says 「我已阅读并同意《Mooring 使用约定》第 N 版」, where N is the revision the build ships (`AgreementVersion::CURRENT`, now 1).
    - Then run `mooringctl user agree <uid>`. It records the revision and the UTC day, and takes neither as an argument. It is a bookkeeping record: it keeps the generation, so it needs no apply (§7).
-5. **Apply in the window.** `user add` changed the configuration, so every node the user holds needs `node apply` before the export. The apply restarts the engines and drops every user's connections for a few seconds, so let the nightly job apply it at 03:20 China time (§13.6), or run `node apply` yourself between 03:00 and 03:45 China time, before the nodes' 04:00 reboot. Deliver after the apply.
+5. **Apply in the window.** `user add` changed the configuration, so every node the user holds needs `node apply` before the export. The apply restarts the engines and drops every user's connections for a few seconds, so run `node apply` yourself between 03:00 and 03:45 China time (19:00 to 19:45 UTC), before the nodes' 04:00 reboot; the nightly job that is to do it at 03:20 (§13.6) is not built yet. While no user is connected, as for the first users before the pilot starts, apply at any time. Deliver after the apply.
 
 ## 2. Export
 
