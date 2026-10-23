@@ -536,16 +536,6 @@ pub enum AgentError {
     /// The request line exceeds [`crate::MAX_REQUEST_LINE_BYTES`].
     #[error("the request line exceeds the frame limit")]
     RequestTooLarge,
-    /// This agent build does not serve the request yet: M4 builds the agent
-    /// in slices (design §22 M4), and a slice answers the requests of the
-    /// slices still to come with this rather than with a wrong error or a
-    /// guess. *Removal path:* the slice that serves the last request
-    /// removes the variant, so no released agent carries it.
-    #[error("this agent build does not serve {request:?} yet")]
-    NotServedYet {
-        /// The request.
-        request: RequestKind,
-    },
 }
 
 closed_enum! {
@@ -628,8 +618,6 @@ closed_enum! {
         UnknownRequest,
         /// [`AgentError::RequestTooLarge`].
         RequestTooLarge,
-        /// [`AgentError::NotServedYet`].
-        NotServedYet,
     }
 }
 
@@ -675,7 +663,6 @@ impl AgentError {
             Self::GateReasonNotPermitted { .. } => AgentErrorKind::GateReasonNotPermitted,
             Self::UnknownRequest => AgentErrorKind::UnknownRequest,
             Self::RequestTooLarge => AgentErrorKind::RequestTooLarge,
-            Self::NotServedYet { .. } => AgentErrorKind::NotServedYet,
         }
     }
 }

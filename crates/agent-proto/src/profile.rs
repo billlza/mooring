@@ -213,6 +213,12 @@ closed_enum! {
         /// `mooring-txn-recover.service`, which reverts a change a reboot
         /// left pending (design §11.2).
         RecoverUnit,
+        /// `mooring-target-check.service`, the hourly REALITY target check
+        /// (design §11.3), a process of its own so that a target that does
+        /// not answer never holds up the watch's loop.
+        TargetCheckUnit,
+        /// `mooring-target-check.timer`, which runs it every hour.
+        TargetCheckTimer,
         /// A drop-in for Debian's `wg-quick@wgexit.service` that skips the
         /// tunnel until the first `Apply` has installed its configuration.
         TunnelDropIn,
@@ -234,6 +240,8 @@ impl HostFile {
             Self::WatchUnit => "/etc/systemd/system/mooring-watch.service",
             Self::ReflectUnit => "/etc/systemd/system/mooring-reflect.service",
             Self::RecoverUnit => "/etc/systemd/system/mooring-txn-recover.service",
+            Self::TargetCheckUnit => "/etc/systemd/system/mooring-target-check.service",
+            Self::TargetCheckTimer => "/etc/systemd/system/mooring-target-check.timer",
             Self::TunnelDropIn => "/etc/systemd/system/wg-quick@wgexit.service.d/10-mooring.conf",
         }
     }
@@ -255,6 +263,8 @@ impl HostFile {
             Self::WatchUnit => "mooring-watch.service",
             Self::ReflectUnit => "mooring-reflect.service",
             Self::RecoverUnit => "mooring-txn-recover.service",
+            Self::TargetCheckUnit => "mooring-target-check.service",
+            Self::TargetCheckTimer => "mooring-target-check.timer",
             Self::TunnelDropIn => "wg-quick-wgexit.conf",
         }
     }
@@ -268,6 +278,8 @@ impl HostFile {
             Self::WatchUnit => Some("mooring-watch.service"),
             Self::ReflectUnit => Some("mooring-reflect.service"),
             Self::RecoverUnit => Some("mooring-txn-recover.service"),
+            Self::TargetCheckUnit => Some("mooring-target-check.service"),
+            Self::TargetCheckTimer => Some("mooring-target-check.timer"),
             Self::Sysctl
             | Self::KernelModules
             | Self::SshdDropIn
@@ -282,7 +294,7 @@ impl HostFile {
 /// The units the profile enables: its own and the Debian units of the
 /// ruleset and the tunnel, which start at boot once a generation has
 /// installed their files (the tunnel's drop-in skips it until then).
-pub const ENABLED_UNITS: [&str; 7] = [
+pub const ENABLED_UNITS: [&str; 8] = [
     "nftables.service",
     TUNNEL_UNIT,
     "mooring-xray.service",
@@ -290,6 +302,7 @@ pub const ENABLED_UNITS: [&str; 7] = [
     "mooring-watch.service",
     "mooring-reflect.service",
     "mooring-txn-recover.service",
+    "mooring-target-check.timer",
 ];
 
 /// The Debian packages a node needs: installed at first boot by the
@@ -723,6 +736,8 @@ impl HostProfile {
             HostFile::WatchUnit => self.watch_unit(),
             HostFile::ReflectUnit => reflect_unit(),
             HostFile::RecoverUnit => recover_unit(),
+            HostFile::TargetCheckUnit => target_check_unit(),
+            HostFile::TargetCheckTimer => target_check_timer(),
             HostFile::TunnelDropIn => vec![
                 "[Unit]".to_owned(),
                 format!("ConditionPathExists={}", ManagedFile::WgConf.path()),
@@ -916,6 +931,47 @@ fn reflect_unit() -> Vec<String> {
     lines.extend(hardening());
     lines.extend(install());
     lines
+}
+
+/// `mooring-target-check.service` (design §11.3): the hourly check of the
+/// configured target, as the watch's account with no capability, writing
+/// only the watch's directory; it runs once a generation is installed.
+/// The timer starts it, so it has no `[Install]`.
+fn target_check_unit() -> Vec<String> {
+    let mut lines = vec![
+        "[Unit]".to_owned(),
+        "Description=Mooring: the hourly REALITY target check".to_owned(),
+        format!(
+            "ConditionPathExists={}",
+            ManagedFile::WatchConfig.current_path()
+        ),
+        String::new(),
+        "[Service]".to_owned(),
+        "Type=oneshot".to_owned(),
+        format!("User={WATCH_ACCOUNT}"),
+        format!("Group={STATE_GROUP}"),
+        format!("ExecStart={AGENT_CURRENT_PATH} target-watch"),
+        "ReadWritePaths=/var/lib/mooring/watch".to_owned(),
+        "CapabilityBoundingSet=".to_owned(),
+    ];
+    lines.extend(hardening());
+    lines
+}
+
+/// `mooring-target-check.timer`: five minutes after boot, then an hour
+/// after each run.
+fn target_check_timer() -> Vec<String> {
+    vec![
+        "[Unit]".to_owned(),
+        "Description=Mooring: run the REALITY target check every hour".to_owned(),
+        String::new(),
+        "[Timer]".to_owned(),
+        "OnBootSec=5min".to_owned(),
+        "OnUnitActiveSec=1h".to_owned(),
+        String::new(),
+        "[Install]".to_owned(),
+        "WantedBy=timers.target".to_owned(),
+    ]
 }
 
 /// `mooring-txn-recover.service` (design §11.2): at boot, after the
@@ -1213,6 +1269,37 @@ mod tests {
             PROFILE.render(HostFile::TunnelDropIn),
             format!("{HEADER}[Unit]\nConditionPathExists=/etc/wireguard/wgexit.conf\n")
         );
+        assert_eq!(
+            PROFILE.render(HostFile::TargetCheckUnit),
+            format!(
+                "{HEADER}[Unit]\n\
+                 Description=Mooring: the hourly REALITY target check\n\
+                 ConditionPathExists=/etc/mooring/current/watch.json\n\
+                 \n\
+                 [Service]\n\
+                 Type=oneshot\n\
+                 User=mooring-watch\n\
+                 Group=mooring\n\
+                 ExecStart=/usr/local/lib/mooring/agent/current target-watch\n\
+                 ReadWritePaths=/var/lib/mooring/watch\n\
+                 CapabilityBoundingSet=\n\
+                 {sandbox}"
+            )
+        );
+        assert_eq!(
+            PROFILE.render(HostFile::TargetCheckTimer),
+            format!(
+                "{HEADER}[Unit]\n\
+                 Description=Mooring: run the REALITY target check every hour\n\
+                 \n\
+                 [Timer]\n\
+                 OnBootSec=5min\n\
+                 OnUnitActiveSec=1h\n\
+                 \n\
+                 [Install]\n\
+                 WantedBy=timers.target\n"
+            )
+        );
     }
 
     /// Every unit file defines the unit it is named after, every profile
@@ -1223,14 +1310,21 @@ mod tests {
             .iter()
             .filter_map(|file| file.unit())
             .collect();
+        // A unit is enabled exactly when it can be: it has an `[Install]`
+        // section. The target check's service is started by its timer.
         for file in HostFile::ALL {
             if let Some(unit) = file.unit() {
                 assert_eq!(file.path(), format!("/etc/systemd/system/{unit}"));
                 assert_eq!(file.staged_name(), unit);
-                assert!(ENABLED_UNITS.contains(&unit), "{unit}");
+                assert_eq!(
+                    ENABLED_UNITS.contains(&unit),
+                    PROFILE.render(*file).contains("\n[Install]\n"),
+                    "{unit}"
+                );
             }
         }
-        assert_eq!(units.len(), 5);
+        assert_eq!(units.len(), 7);
+        assert!(!ENABLED_UNITS.contains(&"mooring-target-check.service"));
         assert_eq!(
             TUNNEL_UNIT,
             format!("wg-quick@{}.service", crate::WG_INTERFACE)

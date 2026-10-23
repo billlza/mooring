@@ -42,9 +42,13 @@ pub(crate) fn stage(dir: &Path, profile: &HostProfile) -> Result<(), AgentError>
     write_json(&dir.join(VERSION_FILE), &profile.version, 0o644)
 }
 
-/// Whether a staged unit file runs a program of the current generation.
+/// Whether a staged unit file runs a program of the current generation
+/// (an engine): `systemd-analyze verify` checks that a unit's programs
+/// exist, and before the first swap those do not. A path it only names in
+/// a condition does not need to exist.
 fn runs_a_generation(text: &str) -> bool {
-    text.contains(CURRENT_DIR)
+    text.lines()
+        .any(|line| line.starts_with("ExecStart=") && line.contains(CURRENT_DIR))
 }
 
 /// The host validators (design §11.2 step 3), run after the bundle's on
@@ -263,7 +267,8 @@ fn command(step: HostStep, tool: Tool, args: &[&str]) -> Command {
 /// (design §11.2 step 5): `/run/mooring` first, which the watch's unit
 /// needs to start (its lock, and a `ReadWritePaths` entry that must
 /// exist); the kernel parameters; the units reloaded and enabled, and the
-/// watch or the reflector restarted when its unit changed; journald, which
+/// watch, the reflector or the target check's timer restarted when its
+/// unit changed; journald, which
 /// reads its drop-in only at start; sshd. Restarting an engine whose unit
 /// changed is the transaction's own step, with its configuration's. The
 /// kernel modules and the upgrade policy take effect when they are next
@@ -289,7 +294,11 @@ pub(crate) fn commands(changed: &BTreeSet<HostFile>) -> Vec<Command> {
         let mut enable = vec!["enable"];
         enable.extend(ENABLED_UNITS);
         commands.push(command(HostStep::Units, Tool::Systemctl, &enable));
-        for file in [HostFile::WatchUnit, HostFile::ReflectUnit] {
+        for file in [
+            HostFile::WatchUnit,
+            HostFile::ReflectUnit,
+            HostFile::TargetCheckTimer,
+        ] {
             if changed.contains(&file)
                 && let Some(unit) = file.unit()
             {

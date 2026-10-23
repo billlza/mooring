@@ -1492,7 +1492,7 @@ fn a_transaction_converges_the_host_profile_and_applies_what_it_needs() {
         "txn-revert 2",
         "/usr/sbin/sysctl --system",
         "/usr/bin/systemctl daemon-reload",
-        "/usr/bin/systemctl enable nftables.service wg-quick@wgexit.service mooring-xray.service mooring-hy2.service mooring-watch.service mooring-reflect.service mooring-txn-recover.service",
+        "/usr/bin/systemctl enable nftables.service wg-quick@wgexit.service mooring-xray.service mooring-hy2.service mooring-watch.service mooring-reflect.service mooring-txn-recover.service mooring-target-check.timer",
         "/usr/bin/systemctl restart mooring-watch.service",
         "/usr/bin/systemctl reload ssh.service",
         "/usr/bin/systemctl restart mooring-xray.service",
@@ -1602,7 +1602,12 @@ fn the_host_validators_check_the_staged_generation() {
         )
     );
     let verified = faults.verified.borrow();
-    assert_eq!(verified.len(), 5);
+    assert_eq!(verified.len(), 7);
+    let check = verified
+        .iter()
+        .find(|text| text.contains("target-watch"))
+        .unwrap();
+    assert!(check.contains(&format!("ConditionPathExists={staged_dir}/watch.json")));
     let xray = verified
         .iter()
         .find(|text| text.contains("Description=Mooring Xray"))

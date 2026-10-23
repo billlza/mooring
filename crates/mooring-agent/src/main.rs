@@ -8,9 +8,8 @@
 //!   reply on stdout. `Hello`, `Bootstrap`, `RevokeBootstrap`, the blobs,
 //!   the gate's requests, `Shutdown`, the transactions (`Apply`,
 //!   `TxnStatus`, `Confirm`, `Rollback`), `ActivateAgent`, `Resume`,
-//!   `Status`, `Usage`, `UsageSeries`, `Events` and the Mac report are
-//!   served; `TargetCheck` is answered `NotServedYet` until its slice
-//!   lands;
+//!   `Status`, `Usage`, `UsageSeries`, `Events`, `TargetCheck` and the Mac
+//!   report are served;
 //! - `reflect [--port 27900]`, the reflector unit, on the uplink's address;
 //! - `halted-check`, the engines' `ExecCondition`: exit 0 when they may
 //!   start, 1 while the node is halted (or its marker cannot be read);
@@ -19,7 +18,8 @@
 //!   print the protocol number;
 //! - `txn <N>`, `txn-revert <N>` and `txn-recover`: a transaction's unit,
 //!   its confirm timer and the revert at boot;
-//! - `watch`, the `mooring-watch` unit, which also keeps the accounting.
+//! - `watch`, the `mooring-watch` unit, which also keeps the accounting;
+//! - `target-watch`, the hourly target check's unit.
 //!
 //! On any other OS than Linux it only says so and exits 1; its logic is
 //! tested on any host with a stand-in node.
@@ -57,6 +57,8 @@ mod serve;
 mod status;
 #[cfg(any(target_os = "linux", test))]
 mod store;
+#[cfg(any(target_os = "linux", test))]
+mod target;
 #[cfg(test)]
 mod tests;
 #[cfg(any(target_os = "linux", test))]

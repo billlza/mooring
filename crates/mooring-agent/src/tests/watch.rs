@@ -2122,3 +2122,68 @@ fn the_last_commit_is_the_newest_committed_record() {
         "a damaged record is an error, never skipped"
     );
 }
+
+#[test]
+fn the_hourly_target_check_raises_target_degraded_for_the_configured_target_only() {
+    use crate::target::TargetReading;
+    let world = World::new();
+    let reading = |ipv4: &str, degraded: bool| TargetReading {
+        at: UnixTime::from_secs(OCT_8),
+        target: WatchTarget {
+            host: TargetHost::new("www.example.com").unwrap(),
+            ipv4: ipv4.parse().unwrap(),
+        },
+        degraded,
+    };
+    // Before the first Apply a reading means nothing.
+    write_json(
+        &world.paths.target_reading(),
+        &reading("198.51.100.7", true),
+        0o640,
+    )
+    .unwrap();
+    let node = world.node(OCT_8);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    let degraded = |world: &World| world.conditions().contains(&WatchErrorKind::TargetDegraded);
+    tick(&mut watch, &world, &node);
+    assert!(!degraded(&world));
+    world.install(1, TxnState::Committed);
+    tick(&mut watch, &world, &node);
+    assert!(degraded(&world));
+    // A result about another target than the configured one says nothing.
+    write_json(
+        &world.paths.target_reading(),
+        &reading("198.51.100.8", true),
+        0o640,
+    )
+    .unwrap();
+    tick(&mut watch, &world, &node);
+    assert!(!degraded(&world));
+    write_json(
+        &world.paths.target_reading(),
+        &reading("198.51.100.7", true),
+        0o640,
+    )
+    .unwrap();
+    tick(&mut watch, &world, &node);
+    write_json(
+        &world.paths.target_reading(),
+        &reading("198.51.100.7", false),
+        0o640,
+    )
+    .unwrap();
+    tick(&mut watch, &world, &node);
+    assert!(!degraded(&world));
+    let raised = AgentEventKind::ConditionRaised {
+        condition: WatchError::TargetDegraded,
+    };
+    let cleared = AgentEventKind::ConditionCleared {
+        condition: WatchErrorKind::TargetDegraded,
+    };
+    let target_events: Vec<AgentEventKind> = world
+        .events()
+        .into_iter()
+        .filter(|event| *event == raised || *event == cleared)
+        .collect();
+    assert_eq!(target_events, vec![raised, cleared, raised, cleared]);
+}

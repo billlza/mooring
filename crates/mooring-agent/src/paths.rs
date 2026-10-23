@@ -211,6 +211,12 @@ impl Paths {
         self.watch_dir().join("status.json")
     }
 
+    /// The hourly target check's latest result,
+    /// `/var/lib/mooring/watch/target.json` (design §11.3).
+    pub(crate) fn target_reading(&self) -> PathBuf {
+        self.watch_dir().join("target.json")
+    }
+
     /// The node's event journal, `/var/lib/mooring/watch/journal.jsonl`
     /// (design §15.7).
     pub(crate) fn journal(&self) -> PathBuf {
