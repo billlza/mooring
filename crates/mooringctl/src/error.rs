@@ -5,6 +5,7 @@
 //! the Mac itself.
 
 use std::io;
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
 use mooring_daemon_core::ControlError;
@@ -14,7 +15,7 @@ use mooring_export::ExportError;
 use mooring_keys::KeysError;
 use mooring_macsys::MacsysError;
 use mooring_model::error::ModelError;
-use mooring_model::iface::MacAddr;
+use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::{PublicAlias, UserId};
 use mooring_store::{SecretStoreError, SnapshotReadError, StoreError};
 
@@ -339,6 +340,57 @@ pub(crate) enum LocalError {
     /// only as JSON.
     #[error("this build prints a deployment's status only as JSON (use --json)")]
     DeployedSummary,
+    /// `exit init` found a deployment; it creates one only once.
+    #[error("a deployment exists already ({}); `exit init` creates one only once", path.display())]
+    DeploymentExists {
+        /// The state file.
+        path: PathBuf,
+    },
+    /// The interface's default gateway is not the pinned M7.
+    #[error(
+        "the gateway of {} is {found}, not the pinned M7 ({pinned}): give the interface that faces the M7",
+        interface.as_str()
+    )]
+    EgressNotTheRouter {
+        /// The interface given.
+        interface: BsdName,
+        /// Its gateway's link-layer address.
+        found: MacAddr,
+        /// The pinned one.
+        pinned: MacAddr,
+    },
+    /// No address of the interface lies with its gateway in a private LAN
+    /// subnet, which the egress selector records.
+    #[error(
+        "{} has no address in a private LAN subnet with its gateway {gateway}",
+        interface.as_str()
+    )]
+    EgressSubnet {
+        /// The interface given.
+        interface: BsdName,
+        /// Its default gateway.
+        gateway: Ipv4Addr,
+    },
+    /// The pilot's values were refused by the model.
+    #[error("the pilot's values were not accepted")]
+    Pilot(#[source] ModelError),
+    /// The carrier check is recorded already.
+    #[error(
+        "the carrier check is recorded already; replacing it is a configuration change, which this build does not make"
+    )]
+    CarrierRecorded,
+    /// The carrier prefixes given were not accepted.
+    #[error("the carrier prefixes were not accepted")]
+    CarrierCheck(#[source] ModelError),
+    /// The billing cycles are monthly, and `sim set-anchor` moves only
+    /// fixed-length ones.
+    #[error(
+        "the SIM's billing cycles are monthly; `sim set-anchor` moves fixed-length cycles only"
+    )]
+    CycleNotFixed,
+    /// The SIM policy the change would record was not accepted.
+    #[error("the SIM policy was not accepted")]
+    SimChange(#[source] ModelError),
 }
 
 /// What a refusal means, in words.

@@ -5,7 +5,6 @@
 //! makes `user export` require, and `user export`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::Infallible;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -18,45 +17,15 @@ use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::SecretEntry;
 use mooring_model::{
     AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Capability, ClientLine,
-    ClientProfile, LocalLabel, ModelError, NodeId, StateV2, User, UserId, UserNodePublic,
-    UserPolicy, UserStatus,
+    ClientProfile, LocalLabel, ModelError, NodeId, User, UserId, UserNodePublic, UserPolicy,
+    UserStatus,
 };
-use mooring_store::{ChangeError, Store, StoreError, read_snapshot, update_config_with_secrets};
+use mooring_store::{Store, read_snapshot, update_config_with_secrets};
 
 use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::prompt::{Console, Line};
-
-fn state_read(error: StoreError) -> LocalError {
-    LocalError::StateRead(Box::new(error))
-}
-
-/// The state, or `NoState` when this Mac has no deployment yet: no support
-/// directory (the store would fail to open its lock there) or no
-/// `state.json` in it.
-fn load(store: &Store) -> Result<StateV2, LocalError> {
-    if !store.dir().is_dir() {
-        return Err(LocalError::NoState {
-            path: store.state_path(),
-        });
-    }
-    store.load().map_err(|error| match error {
-        StoreError::NotInitialized { path } => LocalError::NoState { path },
-        other => state_read(other),
-    })
-}
-
-fn output(error: io::Error) -> CommandError {
-    CommandError::Local(LocalError::Output(error))
-}
-
-/// A change whose closure cannot refuse: only the store can fail it.
-fn state_change(error: ChangeError<Infallible>) -> LocalError {
-    match error {
-        ChangeError::Store(error) => LocalError::StateChange(Box::new(error)),
-        ChangeError::Refused(never) => match never {},
-    }
-}
+use crate::state::{load, output, state_change};
 
 fn keys(error: KeysError) -> LocalError {
     LocalError::Keys(error)

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use mooring_macsys::MacsysError;
+use mooring_macsys::{InterfaceAddrV4, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry};
 use mooring_model::time::UnixTime;
@@ -261,11 +261,13 @@ impl RefusingPort {
 }
 
 /// A link layer whose `lo0` has the default gateway 127.0.0.1 and whose
-/// neighbour answers are scripted (the last one repeats).
+/// neighbour answers are scripted (the last one repeats), as are its IPv4
+/// addresses.
 pub(crate) struct FakeLink {
     pub(crate) gateway: Result<Ipv4Addr, MacsysError>,
     pub(crate) neighbours: RefCell<VecDeque<Result<[u8; 6], MacsysError>>>,
     pub(crate) neighbour_calls: Cell<usize>,
+    pub(crate) addresses: Result<Vec<InterfaceAddrV4>, MacsysError>,
 }
 
 impl FakeLink {
@@ -274,6 +276,10 @@ impl FakeLink {
             gateway: Ok(Ipv4Addr::LOCALHOST),
             neighbours: RefCell::new(neighbours.iter().copied().collect()),
             neighbour_calls: Cell::new(0),
+            addresses: Ok(vec![InterfaceAddrV4 {
+                addr: Ipv4Addr::LOCALHOST,
+                prefix_len: Some(8),
+            }]),
         }
     }
 
@@ -305,6 +311,11 @@ impl LinkLayer for FakeLink {
         } else {
             *answers.front().unwrap()
         }
+    }
+
+    fn ipv4_addresses(&self, index: InterfaceIndex) -> Result<Vec<InterfaceAddrV4>, MacsysError> {
+        assert_eq!(index, lo0());
+        self.addresses.clone()
     }
 }
 

@@ -94,6 +94,17 @@ pub enum Carrier {
     OnePMobile,
 }
 
+impl Carrier {
+    /// The carrier's name as it writes it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Smarty => "SMARTY",
+            Self::OnePMobile => "1pMobile",
+        }
+    }
+}
+
 /// What a capped plan does once its allowance is used up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
