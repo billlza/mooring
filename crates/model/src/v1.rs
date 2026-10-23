@@ -400,7 +400,7 @@ impl TryFrom<ExitSiteV1> for ExitSite {
         Ok(Self {
             egress: site.egress,
             uplink: site.uplink,
-            egress_check: site.egress_check,
+            egress_check: Some(site.egress_check),
             sim: site.sim.try_into()?,
             probe: site.probe,
             flow_cap: site.flow_cap,
@@ -463,7 +463,7 @@ mod tests {
             exit: ExitSiteV1 {
                 egress: site.egress,
                 uplink: site.uplink,
-                egress_check: site.egress_check,
+                egress_check: site.egress_check.unwrap(),
                 sim: SimPolicyV1::new(
                     CycleDay::new(1).unwrap(),
                     V1_GOLDEN_WARN_BYTES,
@@ -612,7 +612,7 @@ mod tests {
         let exit = deployment.exit();
         assert_eq!(exit.egress, parts.exit.egress);
         assert_eq!(exit.uplink, parts.exit.uplink);
-        assert_eq!(exit.egress_check, parts.exit.egress_check);
+        assert_eq!(exit.egress_check, Some(parts.exit.egress_check));
         assert_eq!(exit.probe, parts.exit.probe);
         assert_eq!(exit.flow_cap, parts.exit.flow_cap);
         assert_eq!(exit.uplink_baseline, None);

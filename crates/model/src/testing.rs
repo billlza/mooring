@@ -54,12 +54,12 @@ pub(crate) fn exit_site() -> ExitSite {
             subnet: LanSubnet::new("192.168.1.0/24".parse().unwrap()).unwrap(),
         },
         uplink: Uplink::SameAsExit,
-        egress_check: EgressCheck {
+        egress_check: Some(EgressCheck {
             carrier_prefixes: NonEmpty::new(
                 CarrierPrefix::new("31.120.0.0/14".parse().unwrap()).unwrap(),
             ),
             pairing: Pairing::Paired,
-        },
+        }),
         sim: SimPolicy::new(
             CycleRule::Monthly {
                 bill_day: BillDay::new(1).unwrap(),

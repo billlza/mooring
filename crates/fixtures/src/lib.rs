@@ -298,10 +298,10 @@ fn exit_site() -> Result<ExitSite, ModelError> {
             subnet: "192.168.1.0/24".parse::<LanSubnet>()?,
         },
         uplink: Uplink::SameAsExit,
-        egress_check: EgressCheck {
+        egress_check: Some(EgressCheck {
             carrier_prefixes: NonEmpty::new("31.120.0.0/14".parse::<CarrierPrefix>()?),
             pairing: Pairing::Paired,
-        },
+        }),
         sim: SimPolicy::new(
             CycleRule::Monthly {
                 bill_day: BillDay::new(1)?,
@@ -919,6 +919,8 @@ mod tests {
                 .deployment
                 .exit()
                 .egress_check
+                .as_ref()
+                .unwrap()
                 .in_carrier(Ipv4Addr::new(31, 121, 0, 1))
         );
         assert_eq!(

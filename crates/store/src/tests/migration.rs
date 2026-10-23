@@ -635,7 +635,7 @@ fn v1_variants(parts: DeploymentParts, sim: SimPolicy) -> DeploymentParts {
         gw_lladdr: MacAddr::parse("02:68:6f:6d:65:01").unwrap(),
         subnet: "10.0.0.0/24".parse().unwrap(),
     });
-    exit.egress_check.pairing = Pairing::Unpaired;
+    exit.egress_check.as_mut().unwrap().pairing = Pairing::Unpaired;
     exit.sim = sim;
     let mut policy = parts.policy;
     policy.block_quic = false;

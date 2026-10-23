@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use crate::alerting::AlertSettings;
 use crate::counters::ConfigGeneration;
 use crate::error::{EntityId, ModelError};
-use crate::exit::{ExitSite, TrafficPolicy};
+use crate::exit::{EgressCheck, ExitSite, TrafficPolicy};
 use crate::ids::{NodeId, PublicAlias, ShortId, UserId};
 use crate::keys::Ed25519Pub;
 use crate::node::{AppliedConfig, Node, NodeAddress, NodeLifecycle};
@@ -616,6 +616,15 @@ pub enum Bookkeeping {
         /// The revision accepted and the day.
         record: AgreementRecord,
     },
+    /// The line's carrier check, observed on the line and recorded for the
+    /// first time (design §10.2). The check is Mac-only, so no bundle or
+    /// export changes. A check recorded already is refused
+    /// (`CarrierAlreadyRecorded`): replacing one weakens the exit's guard
+    /// against a foreign egress (P0-2), so it is not bookkeeping.
+    CarrierRecorded {
+        /// The carrier prefixes and pairing mode.
+        check: EgressCheck,
+    },
 }
 
 impl Deployment {
@@ -710,6 +719,12 @@ impl Deployment {
                     Some(recorded) if record.version == recorded.version => {}
                     Some(_) | None => user.agreement = Some(record),
                 }
+            }
+            Bookkeeping::CarrierRecorded { check } => {
+                if parts.exit.egress_check.is_some() {
+                    return Err(ModelError::CarrierAlreadyRecorded);
+                }
+                parts.exit.egress_check = Some(check);
             }
         }
         Self::try_from(parts)
@@ -1712,6 +1727,31 @@ mod tests {
                 node: node_id("lon1"),
             }),
             Err(ModelError::NotRevoking { user: user_id(2) })
+        );
+    }
+
+    /// The carrier check is recorded once, as bookkeeping: before it the
+    /// site has none, and a second record is refused, because replacing a
+    /// check is a configuration change (design §10.2, P0-2).
+    #[test]
+    fn the_carrier_check_is_recorded_once_and_keeps_the_generation() {
+        let check = exit_site().egress_check.unwrap();
+        let mut parts = two_node_parts();
+        parts.exit.egress_check = None;
+        let unobserved = build(parts).unwrap();
+        let generation = unobserved.config_generation();
+        let recorded = unobserved
+            .record(Bookkeeping::CarrierRecorded {
+                check: check.clone(),
+            })
+            .unwrap();
+        assert_eq!(recorded.exit().egress_check, Some(check.clone()));
+        assert_eq!(recorded.config_generation(), generation);
+        let mut other = check.clone();
+        other.pairing = crate::exit::Pairing::Unpaired;
+        assert_eq!(
+            recorded.record(Bookkeeping::CarrierRecorded { check: other }),
+            Err(ModelError::CarrierAlreadyRecorded)
         );
     }
 

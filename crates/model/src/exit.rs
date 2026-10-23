@@ -363,9 +363,13 @@ pub struct ExitSite {
     pub egress: InterfaceSelector,
     /// The tunnel uplink.
     pub uplink: Uplink,
-    /// The carrier check; changed only by explicit operator action.
-    pub egress_check: EgressCheck,
-    /// SIM accounting: the bill day, the plan and the thresholds.
+    /// The carrier check: `None` until the line's carrier prefixes are
+    /// observed on the line and recorded (`Bookkeeping::CarrierRecorded`),
+    /// and the exit serves nothing until then (design §10.2). Changed only
+    /// by explicit operator action. The key is required.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub egress_check: Option<EgressCheck>,
+    /// SIM accounting: the cycle rule, the plan and the thresholds.
     pub sim: SimPolicy,
     /// Probe cadence and ports.
     pub probe: ProbePolicy,
@@ -533,6 +537,25 @@ mod tests {
             )
             .is_err()
         );
+        // The site's check is required, and `null` until it is recorded.
+        let site = serde_json::to_string(&crate::testing::exit_site()).unwrap();
+        let unobserved = site.replace(
+            r#""egress_check":{"carrier_prefixes":["31.120.0.0/14"],"pairing":"paired"}"#,
+            r#""egress_check":null"#,
+        );
+        assert_ne!(unobserved, site);
+        assert_eq!(
+            serde_json::from_str::<ExitSite>(&unobserved)
+                .unwrap()
+                .egress_check,
+            None
+        );
+        let missing = site.replace(
+            r#""egress_check":{"carrier_prefixes":["31.120.0.0/14"],"pairing":"paired"},"#,
+            "",
+        );
+        assert_ne!(missing, site);
+        assert!(serde_json::from_str::<ExitSite>(&missing).is_err());
         let policy = TrafficPolicy::default();
         assert!(
             policy.deny_cn

@@ -82,10 +82,10 @@ pub(crate) fn exit_site() -> ExitSite {
             subnet: "192.168.1.0/24".parse::<LanSubnet>().unwrap(),
         },
         uplink: Uplink::SameAsExit,
-        egress_check: EgressCheck {
+        egress_check: Some(EgressCheck {
             carrier_prefixes: NonEmpty::new("31.120.0.0/14".parse::<CarrierPrefix>().unwrap()),
             pairing: Pairing::Paired,
-        },
+        }),
         sim: SimPolicy::new(
             CycleRule::Monthly {
                 bill_day: BillDay::new(1).unwrap(),

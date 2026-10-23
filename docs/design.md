@@ -620,7 +620,8 @@ pub struct Viewer {                             // decision F5: a key pair gener
 pub struct ExitSite {
     pub egress: InterfaceSelector,              // the wired NIC facing the M7
     pub uplink: Uplink,                         // SameAsExit | Separate(InterfaceSelector)
-    pub egress_check: EgressCheck,              // fixed from M2 data; changed only by explicit operator action
+    pub egress_check: Option<EgressCheck>,      // observed on the line (M2b), recorded once by Bookkeeping::CarrierRecorded;
+                                                // None until then, and the exit serves nothing (§10.2); changed only by explicit operator action
     pub sim: SimPolicy,                         // below
     pub probe: ProbePolicy,                     // direct 30 s, in-chain 300 s, base_port 47101
     pub flow_cap: FlowCap,                      // node-wide new-flow cap into wgexit; sized from M2
@@ -788,7 +789,7 @@ Expiry defaults stay pending, and the expiry record defaults to none. A new user
 - `Uuid`: canonical lowercase, non-nil, version 4, RFC 9562 variant. Every UUID is a credential, so `Uuid` has no `Serialize`, `Deserialize` or `Display`, its `Debug` is redacted, and it is zeroized on drop. A test stops compiling if it ever gains either serde trait.
 - The REALITY ClientHello is export's `ClientHello { Chrome, ChromeX25519Mlkem768 }` (§9.2), not a model type.
 
-**Missing keys are decode errors.** Every `Option` in the state (`sim.plan`, `plan.speed_cap_mbps`, `exit.uplink_baseline`, `capacity.max_active_users`, `deployment.auto_quota`, `deployment.alerting`, `reality.target`, `user.alias`, `user.agreement`, `policy.expires_at`, `policy.quota`; version 1's `sim.hard_stop_bytes`), and the `viewers` list, must be present: an explicit `null` means none, and a missing key fails to decode. A lost key therefore never silently drops a plan, a target or a policy.
+**Missing keys are decode errors.** Every `Option` in the state (`sim.plan`, `plan.speed_cap_mbps`, `exit.egress_check`, `exit.uplink_baseline`, `capacity.max_active_users`, `deployment.auto_quota`, `deployment.alerting`, `reality.target`, `user.alias`, `user.agreement`, `policy.expires_at`, `policy.quota`; version 1's `sim.hard_stop_bytes`), and the `viewers` list, must be present: an explicit `null` means none, and a missing key fails to decode. A lost key therefore never silently drops a plan, a target or a policy.
 
 **`Lab` variants.** Lab addresses exist only behind `cfg(feature = "lab")`, which arrives with the lab lanes (M5); M1 has no `lab` feature. There is no runtime "private address in release" error. Instead, the release verifier asserts that `cargo tree -e features -p mooringctl` contains no `lab`, and that no shipped binary contains the lab marker string.
 
@@ -799,6 +800,7 @@ Expiry defaults stay pending, and the expiry record defaults to none. A new user
   - `RevocationCommitted{user, node}` drops a `RevokePending` user's credentials on a node that committed the revocation; with none left the user becomes `Revoked` (§13.5).
   - `RetirementShutDown{node}` moves a `Retiring` node to `RetiredPendingProviderDeletion` and drops every user's credentials on it (§13.4).
   - `AgreementRecorded{user, record}` records the agreement revision a user accepted (M5, below); it only lets that user's own export be made.
+  - `CarrierRecorded{check}` records the line's carrier check, observed on the line, when none is recorded (M5a, 2026-10-23). The check is Mac-only: no bundle and no export carries it. A deployment can therefore be initialised, its nodes applied and its users exported before the SIM is in the M7, and the check recorded on the day it is, without a `node apply`. A recorded check is never replaced this way (`CarrierAlreadyRecorded`): replacing it would loosen the guard against a foreign egress (P0-2), so it is a configuration change.
 - Only that record sets a confirmed generation. A configuration change (`update_config`, `update_config_with_secrets`) is refused with `AppliedEdited{node}` if, after the closure, any node holds an `AppliedConfig` it did not hold before, whether newly set, lowered, raised or with another digest (`crates/store/src/store.rs`, `change_config`); moving a node out of `Applied` (to retire it) is allowed, since it only withdraws a confirmation and exports then refuse the node. A closure therefore cannot forge a confirmation, even at the generation the store is about to stamp.
 - Exports refuse a node whose applied generation is older than the deployment's (`NodeNotApplied{Stale}`, §9.2), so an export always matches what every node in it has confirmed. Any generation bump, including one with no VPS-visible effect, therefore needs a `node apply` of each node a user holds credentials on before that user's file can be exported again.
 - Suspending, resuming and starting a revocation are configuration changes, never bookkeeping: each changes which users the nodes serve, so it bumps the generation and needs a `node apply`. A suspension keeps the user's secrets referenced, so plain `update_config` accepts it, and a resume restores the same credentials and the same export file without delivering anything new into China.
@@ -1425,6 +1427,7 @@ Each tick does the following:
 **Preflight** runs before the engine starts. It requires all of the following:
 - the egress interface resolves;
 - at least one `direct` probe succeeds;
+- the carrier check is recorded (otherwise `CarrierCheckUnrecorded`, M5): `exit init` runs before the SIM's prefixes are known, and the exit serves nothing until they are observed and recorded;
 - the returned IP is inside `carrier_prefixes` (otherwise `OutsideCarrierPrefixes`) and is not any node's IP;
 - in `Separate` mode, `uplink` succeeds and returns a different IP;
 - *(revision 5; plan, M5)* the Mac is attached to no foreign network (P0-2, below). Otherwise the result is `Down(ForeignNetworkAttached{findings})`, every finding with its interface (`daemon-core`'s `foreign_networks`, built). A network is foreign when any of these holds (critique D-11):

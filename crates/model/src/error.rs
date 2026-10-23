@@ -539,6 +539,10 @@ pub enum ModelError {
         /// The older revision offered.
         offered: AgreementVersion,
     },
+    /// The carrier check is recorded already; replacing it is not a
+    /// bookkeeping record.
+    #[error("the exit's carrier check is recorded already; replacing it is a configuration change")]
+    CarrierAlreadyRecorded,
     /// A retirement step names a node that is not retiring.
     #[error("node {node} is {stage}, not retiring")]
     NodeNotRetiring {
@@ -739,6 +743,8 @@ kinds! {
         NoCredentialsOnNode,
         /// See [`ModelError::AgreementRegressed`].
         AgreementRegressed,
+        /// See [`ModelError::CarrierAlreadyRecorded`].
+        CarrierAlreadyRecorded,
         /// See [`ModelError::NodeNotRetiring`].
         NodeNotRetiring,
         /// See [`ModelError::RevokedUserHoldsCredentials`].
@@ -839,6 +845,7 @@ impl ModelError {
             Self::RevocationAlreadyStarted { .. } => ModelErrorKind::RevocationAlreadyStarted,
             Self::NoCredentialsOnNode { .. } => ModelErrorKind::NoCredentialsOnNode,
             Self::AgreementRegressed { .. } => ModelErrorKind::AgreementRegressed,
+            Self::CarrierAlreadyRecorded => ModelErrorKind::CarrierAlreadyRecorded,
             Self::NodeNotRetiring { .. } => ModelErrorKind::NodeNotRetiring,
             Self::RevokedUserHoldsCredentials { .. } => ModelErrorKind::RevokedUserHoldsCredentials,
             Self::RevokePendingWithoutCredentials { .. } => {
@@ -1284,6 +1291,12 @@ mod tests {
                     },
                 })
                 .unwrap_err(),
+            ),
+            (
+                K::CarrierAlreadyRecorded,
+                record_error(Bookkeeping::CarrierRecorded {
+                    check: testing::exit_site().egress_check.unwrap(),
+                }),
             ),
             (
                 K::NodeNotRetiring,
