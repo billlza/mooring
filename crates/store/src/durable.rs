@@ -117,6 +117,17 @@ pub(crate) fn write_durably(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), 
     sync_dir(dir)
 }
 
+/// Removes `dir/name` and flushes the directory, so the removal survives a
+/// crash; a file that is gone already is fine.
+pub(crate) fn remove_durably(dir: &Path, name: &str) -> Result<(), StoreError> {
+    let target = dir.join(name);
+    match fs::remove_file(&target) {
+        Ok(()) => sync_dir(dir),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(IoOp::RemoveLatch, &target)(error)),
+    }
+}
+
 /// Removes a leftover temporary file; a missing one is the normal case.
 fn remove_stale(temp: &Path) -> Result<(), StoreError> {
     match fs::remove_file(temp) {

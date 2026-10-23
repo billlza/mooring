@@ -4,6 +4,10 @@
 //! data model of `mooringctl status --follow --json` ([`MacStatusV1`]) and
 //! the pure logic the daemon (M5) and Mooring.app (M7) build on.
 //!
+//! - [`exit`]: the exit's state machine: preflight, supervision of
+//!   `mooring-exit`, direct probes, verdicts and latches.
+//! - [`meter`]: the SIM meter, the line's bytes per UTC day from the
+//!   egress interface's counters.
 //! - [`forecast`]: the SIM forecast from the meter's daily bins.
 //! - [`capacity`]: whether the uplink over the mobile line is saturated.
 //! - [`usage`]: per-user usage from the agents' usage series, and activity.
@@ -14,6 +18,8 @@
 //! - [`router`]: the M7's status types, and the MR7450 `model.json`
 //!   allowlist parser and redactor ([`router::netgear`]).
 //! - [`status`]: [`MacStatusV1`] itself.
+//! - [`snapshot`]: a [`MacStatusV1`] assembled from what the daemon holds
+//!   at one instant.
 //! - [`console`]: [`ConsoleStatus`], the console's document: the
 //!   deployment's status, or the router alone before `exit init`.
 //! - [`control`]: the daemon's control channel, its requests, replies and
@@ -51,7 +57,9 @@ pub mod capacity;
 pub mod console;
 pub mod control;
 pub mod error;
+pub mod exit;
 pub mod forecast;
+pub mod meter;
 pub mod network;
 pub mod notify;
 pub mod period;
@@ -59,6 +67,7 @@ pub mod policy;
 pub mod report;
 pub mod router;
 pub mod share;
+pub mod snapshot;
 pub mod status;
 pub mod usage;
 mod wire;
@@ -85,5 +94,6 @@ pub use network::{ForeignNetworkFinding, NetworkSnapshot, foreign_networks};
 pub use period::{BillingCycle, UsagePeriods};
 pub use policy::{ExpiryState, PolicyAction, QuotaState, UserAction};
 pub use router::{RouterReading, RouterStatus};
+pub use snapshot::{NodePoll, SimTotals, SnapshotError, StatusInputs, assemble};
 pub use status::{MAC_STATUS_VERSION, MacStatusParts, MacStatusV1};
 pub use usage::{NodeLedger, UsageReport, UserUsage};

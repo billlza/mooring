@@ -45,6 +45,12 @@
 //! its latest console status for diagnosis, with the same durable write
 //! (design §10.1).
 //!
+//! # The SIM meter
+//!
+//! [`write_sim_meter`] replaces `usage/sim-meter.json`, the line's bytes per
+//! UTC day, and [`read_sim_meter`] reads it back with a bound; the daemon
+//! encodes and decodes it (design §10.1).
+//!
 //! # Secrets
 //!
 //! The state holds no secrets. They live in a [`SecretStore`]; the
@@ -61,16 +67,19 @@
 
 mod durable;
 mod error;
+mod latch;
 mod migrate;
 mod ordered;
 mod router_pin;
 mod secrets;
+mod sim_meter;
 mod status_snapshot;
 mod store;
 #[cfg(test)]
 mod tests;
 
 pub use error::{ChangeError, ChangeErrorKind, CleanupFailure, IoOp, StoreError, StoreErrorKind};
+pub use latch::{LATCH_FILE, clear_latch, read_latch, write_latch};
 pub use migrate::migrate;
 pub use ordered::{record_with_secrets, update_config_with_secrets};
 pub use router_pin::{
@@ -81,5 +90,6 @@ pub use secrets::{
     InMemorySecretStore, SecretOp, SecretStore, SecretStoreError, SecretStoreErrorKind,
     SnapshotReadError, SnapshotReadErrorKind, read_snapshot,
 };
+pub use sim_meter::{SIM_METER_FILE, USAGE_DIRECTORY, read_sim_meter, write_sim_meter};
 pub use status_snapshot::{STATUS_SNAPSHOT_FILE, write_status_snapshot};
 pub use store::{LOCK_FILE, STATE_FILE, Store};

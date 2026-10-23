@@ -371,6 +371,29 @@ impl ResolvedInterface {
     }
 }
 
+impl ResolvedInterface {
+    /// The interface's identity, which a latched violation records.
+    #[must_use]
+    pub fn identity(&self) -> EgressIdentity {
+        EgressIdentity {
+            bsd_name: self.bsd_name.clone(),
+            lladdr: self.lladdr,
+        }
+    }
+}
+
+/// The identity of the egress interface a violation was seen through: its
+/// name and link-layer address. Another identity is another interface, and
+/// clears the latch (design §10.2).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EgressIdentity {
+    /// Its BSD name.
+    pub bsd_name: BsdName,
+    /// Its link-layer address.
+    pub lladdr: MacAddr,
+}
+
 /// The resolved tunnel uplink.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]

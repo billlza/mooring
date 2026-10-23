@@ -43,6 +43,14 @@ pub enum IoOp {
     SyncDir,
     /// Opening or reading the router identity file.
     ReadRouterPin,
+    /// Opening or reading the exit's latch.
+    ReadLatch,
+    /// Removing the exit's latch.
+    RemoveLatch,
+    /// Opening or reading the SIM meter's document.
+    ReadSimMeter,
+    /// Creating or inspecting the usage directory.
+    CreateUsageDir,
 }
 
 impl fmt::Display for IoOp {
@@ -59,6 +67,10 @@ impl fmt::Display for IoOp {
             Self::OpenDir => "open the store directory",
             Self::SyncDir => "sync the store directory",
             Self::ReadRouterPin => "read the router identity file",
+            Self::ReadLatch => "read the exit's latch",
+            Self::RemoveLatch => "remove the exit's latch",
+            Self::ReadSimMeter => "read the SIM meter",
+            Self::CreateUsageDir => "create the usage directory",
         })
     }
 }
@@ -257,6 +269,20 @@ pub enum StoreError {
         #[source]
         source: SecretStoreError,
     },
+    /// Something other than a directory (a link included) is where the
+    /// usage directory belongs; nothing was written.
+    #[error("{} is not a directory", path.display())]
+    UsageDirNotDirectory {
+        /// The usage directory's path.
+        path: PathBuf,
+    },
+    /// The exit's latch (`run/latch.json`) exists but is not a version-1
+    /// latch; the daemon keeps the exit down rather than read it as none.
+    #[error("the exit's latch {} is corrupt", path.display())]
+    LatchCorrupt {
+        /// The latch file.
+        path: PathBuf,
+    },
     /// The router identity file (`router-identity.json`) exists but is not
     /// a version-1 router identity; nothing was read from it.
     #[error("router identity file {} is corrupt: {fault}", path.display())]
@@ -325,6 +351,10 @@ kinds! {
         SecretCleanup,
         /// See [`StoreError::RouterPinCorrupt`].
         RouterPinCorrupt,
+        /// See [`StoreError::LatchCorrupt`].
+        LatchCorrupt,
+        /// See [`StoreError::UsageDirNotDirectory`].
+        UsageDirNotDirectory,
     }
 }
 
@@ -354,6 +384,8 @@ impl StoreError {
             Self::SecretWrite { .. } => StoreErrorKind::SecretWrite,
             Self::SecretCleanup { .. } => StoreErrorKind::SecretCleanup,
             Self::RouterPinCorrupt { .. } => StoreErrorKind::RouterPinCorrupt,
+            Self::LatchCorrupt { .. } => StoreErrorKind::LatchCorrupt,
+            Self::UsageDirNotDirectory { .. } => StoreErrorKind::UsageDirNotDirectory,
         }
     }
 }

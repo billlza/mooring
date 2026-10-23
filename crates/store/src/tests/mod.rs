@@ -15,11 +15,13 @@ mod cas;
 mod concurrency;
 mod decode;
 mod durability;
+mod latch;
 mod migration;
 mod ordering;
 mod properties;
 mod router_pin;
 mod secrets;
+mod sim_meter;
 mod status_snapshot;
 mod taxonomy;
 

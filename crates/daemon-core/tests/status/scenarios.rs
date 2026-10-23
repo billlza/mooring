@@ -14,6 +14,7 @@ use std::num::NonZeroU64;
 use mooring_agent_proto::{
     EgressViolationHold, GateState, Generation, Holds, Inbound, Resolution, StatusV1, WatchError,
 };
+use mooring_daemon_core::MacStatusV1;
 use mooring_daemon_core::alert::{AlertCondition, AlertMachine, AlertTiming, OpenAlert};
 use mooring_daemon_core::capacity::{
     CapacityMonitor, CapacitySample, CapacityStatus, CapacityThresholds, RttSample,
@@ -22,9 +23,7 @@ use mooring_daemon_core::forecast::{Crossing, DailySimBytes, SimForecast, SimThr
 use mooring_daemon_core::network::{
     Exemptions, InterfaceObservation, IpFamily, NetworkSnapshot, foreign_networks,
 };
-use mooring_daemon_core::policy::{
-    ExpiryState, QuotaState, automatic_quota, effective_quota, evaluate, user_alerts,
-};
+use mooring_daemon_core::policy::{evaluate, user_alerts};
 use mooring_daemon_core::router::{
     Band, BandNumber, Battery, BatteryPercent, BatteryState, CarrierName, Celsius, ChargeSource,
     DataService, FirmwareVersion, LteBandwidth, LteCarrier, LteCarriers, LteSignal, Mcc, Mnc,
@@ -32,16 +31,14 @@ use mooring_daemon_core::router::{
     RouterSettings, RouterStatus, RouterStatusParts, RouterUnavailableReason, RouterWifi, Rsrp,
     Rsrq, Rssi, Sinr, ThermalState, WebAppVersion, WifiApStatus, WwanCounters,
 };
+use mooring_daemon_core::snapshot::{self, NodePoll, SimTotals, StatusInputs};
 use mooring_daemon_core::status::{
     AgentUnreachable, CarrierCheck, DegradedReason, DownReason, EgressFacts, EngineExit,
-    EngineProcess, ExitSection, ExitState, ForecastView, InChainOutcome, InChainResult, Latch,
-    LinkState, MacEngines, MeterAccuracy, NodeAgentState, NodeReport, NodeRow, PowerSource,
-    PowerStatus, ProbeStage, ProcessEnd, ProtocolVerdicts, SimMeterStatus, UsageView, UserRow,
+    EngineProcess, ExitSection, ExitState, InChainOutcome, InChainResult, Latch, LinkState,
+    MacEngines, MeterAccuracy, NodeAgentState, PowerSource, PowerStatus, ProbeStage, ProcessEnd,
+    ProtocolVerdicts,
 };
-use mooring_daemon_core::usage::{
-    LedgerEnd, LedgerStart, LifetimeBase, NodeLedger, UsageAccuracy, activity, aggregate,
-};
-use mooring_daemon_core::{BillingCycle, MacStatusParts, MacStatusV1};
+use mooring_daemon_core::usage::{LedgerEnd, LedgerStart, LifetimeBase, NodeLedger, aggregate};
 use mooring_fixtures::Fixture;
 use mooring_model::exit::ProbeProtocol;
 use mooring_model::ids::LocalLabel;
@@ -86,104 +83,36 @@ struct Inputs {
 }
 
 fn assemble(inputs: Inputs) -> MacStatusV1 {
-    let deployment = &inputs.deployment;
-    let sim = &deployment.exit().sim;
-    let users = deployment.users();
     let used: u64 = inputs.sim_daily.iter().map(|day| day.bytes).sum();
-    let forecast = match SimForecast::project(sim, inputs.at, &inputs.sim_daily) {
-        Ok(forecast) => ForecastView::Projected(forecast),
-        Err(error) => ForecastView::Unavailable {
-            reason: error.kind(),
-        },
-    };
-    let report = aggregate(deployment, &inputs.ledgers, inputs.through);
-    let activity = activity(users, &inputs.statuses, inputs.at).unwrap();
-    let usage = match &report {
-        Ok(report) => UsageView::Report {
-            periods: report.periods,
-        },
-        Err(error) => UsageView::Unavailable {
-            reason: error.kind(),
-        },
-    };
-    let automatic = automatic_quota(deployment, inputs.at).unwrap();
-    let rows = users
-        .iter()
-        .map(|(id, user)| {
-            let usage = report.as_ref().ok().map(|report| report.users[id].clone());
-            let quota = effective_quota(user, automatic);
-            let quota = match &usage {
-                Some(usage) => QuotaState::of(quota, usage.cycle_served_bytes()),
-                None => QuotaState::without_usage(quota),
-            };
-            (
-                id.clone(),
-                UserRow {
-                    alias: user.alias.clone(),
-                    status: user.status,
-                    nodes: user.per_node.keys().cloned().collect(),
-                    activity: activity[id].clone(),
-                    usage,
-                    quota,
-                    expiry: ExpiryState::of(&user.policy, inputs.at),
-                    accuracy: UsageAccuracy::of(user),
-                },
-            )
+    // Each node is polled a second after its status's own time.
+    let polls: BTreeMap<NodeId, NodePoll> = inputs
+        .statuses
+        .into_iter()
+        .map(|(node, status)| {
+            let polled_at = UnixTime::from_secs(status.now.as_secs() + 1);
+            (node, NodePoll { polled_at, status })
         })
         .collect();
-    let nodes = deployment
-        .nodes()
-        .iter()
-        .map(|(id, node)| {
-            let agent = match inputs.statuses.get(id) {
-                Some(status) => NodeAgentState::Reported(Box::new(NodeReport::of(
-                    UnixTime::from_secs(status.now.as_secs() + 1),
-                    status,
-                ))),
-                None => inputs
-                    .unreachable
-                    .get(id)
-                    .cloned()
-                    .unwrap_or(NodeAgentState::NotPolled),
-            };
-            (
-                id.clone(),
-                NodeRow {
-                    role: node.role,
-                    stage: node.lifecycle.stage(),
-                    current_generation: deployment.config_generation(),
-                    pending_apply_since: inputs.pending_apply.get(id).copied(),
-                    verdicts: inputs
-                        .verdicts
-                        .get(id)
-                        .copied()
-                        .unwrap_or(ProtocolVerdicts {
-                            reality: None,
-                            hy2: None,
-                        }),
-                    agent,
-                },
-            )
-        })
-        .collect();
-    MacStatusV1::new(MacStatusParts {
+    snapshot::assemble(StatusInputs {
+        deployment: &inputs.deployment,
         at: inputs.at,
         exit: inputs.exit,
-        sim: SimMeterStatus {
-            cycle: BillingCycle::of_instant(sim.cycle(), inputs.at).unwrap(),
+        sim: SimTotals {
             // The SIM is near-symmetric: what users download arrives and
             // leaves again through the tunnel.
             rx_bytes: used - used * 47 / 100,
             tx_bytes: used * 47 / 100,
+            daily: &inputs.sim_daily,
             accuracy: inputs.sim_accuracy,
-            thresholds: sim.thresholds(),
-            forecast,
         },
         router: inputs.router,
         capacity: inputs.capacity,
-        usage,
-        users: rows,
-        nodes,
+        ledgers: &inputs.ledgers,
+        through: inputs.through,
+        polls: &polls,
+        unreachable: &inputs.unreachable,
+        verdicts: &inputs.verdicts,
+        pending_apply: &inputs.pending_apply,
         alerts: inputs.alerts,
     })
     .unwrap()
