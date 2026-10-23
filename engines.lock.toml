@@ -2,10 +2,12 @@
 #
 # Pinned inputs for the Go engines (design §4). Integrity values here are
 # Level 1: they detect an accidental wrong or corrupted artifact, not a
-# malicious one. Engine builds run on the research computer, never on the exit
-# Mac (design D-7). Output digests are filled by `cargo xtask engines build`
-# and checked by `cargo xtask engines verify`; an empty table means the
-# artifacts have not been built from these inputs yet.
+# malicious one. The engines are built on a hosted runner
+# (.github/workflows/engines.yml), never on the exit Mac (design D-7). While
+# no output digests are recorded, `cargo xtask engines-verify` prints those
+# of the first reproducible hosted build for review and pinning; it checks
+# every later build against them. An empty table means the artifacts have
+# not been built from these inputs yet.
 
 schema = 1
 

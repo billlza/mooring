@@ -5,7 +5,7 @@ use std::path::Path;
 
 use mooring_model::Sha256Digest;
 
-use super::{EnginesError, Lock, Target, compare, outputs_toml, unquote};
+use super::{EnginesError, Lock, Target, check_build_id, compare, outputs_toml, unquote};
 
 fn repository_lock() -> Lock {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -210,16 +210,20 @@ fn the_printed_outputs_pin_the_build_exactly() {
     ));
 }
 
-/// A `go version -m` report of a binary built as the recipe says.
-fn report(go: &str, tags: Option<&str>, ldflags: &str) -> String {
+/// A `go version -m` report of a binary built under `-trimpath`, its
+/// settings in cmd/go's order (go1.27.3 `src/cmd/go/internal/load/pkg.go`):
+/// no `-ldflags`, which cmd/go records only without `-trimpath`.
+fn report(go: &str, gcflags: Option<&str>, tags: Option<&str>) -> String {
     let mut text = format!(
         "/out/linux-amd64/mooring-hy2: {go}\n\
          \tpath\tgithub.com/sagernet/sing-box/cmd/sing-box\n\
          \tmod\tgithub.com/sagernet/sing-box\t(devel)\t\n\
          \tbuild\t-buildmode=exe\n\
-         \tbuild\t-compiler=gc\n\
-         \tbuild\t-ldflags={ldflags}\n"
+         \tbuild\t-compiler=gc\n"
     );
+    if let Some(gcflags) = gcflags {
+        text.push_str(&format!("\tbuild\t-gcflags={gcflags}\n"));
+    }
     if let Some(tags) = tags {
         text.push_str(&format!("\tbuild\t-tags={tags}\n"));
     }
@@ -235,43 +239,104 @@ fn build_information_is_checked_against_the_recipe() {
         .into_iter()
         .find(|build| build.output == "linux-amd64/mooring-hy2")
         .unwrap();
-    // As `debug/buildinfo` quotes a value with spaces and quotes.
-    let ldflags = "\"-X 'github.com/sagernet/sing-box/constant.Version=1.14.2' -X runtime.godebugDefault=multipathtcp=0,tlssha1=1 -checklinkname=0 -s -w -buildid=\"";
     let tags = "with_quic,badlinkname,tfogo_checklinkname0";
-    let good = report("go1.27.3", Some(tags), ldflags);
+    let good = report("go1.27.3", None, Some(tags));
     assert_eq!(hy2.check_metadata("go1.27.3", &good), Ok(()));
+    // As `debug/buildinfo` quotes a value with spaces and quotes.
+    let ldflags = "\tbuild\t-ldflags=\"-X 'github.com/sagernet/sing-box/constant.Version=1.14.2' -s -w -buildid=\"\n";
     for (bad, why) in [
-        (report("go1.27.2", Some(tags), ldflags), "another Go"),
-        (report("go1.27.3", Some("with_quic"), ldflags), "-tags"),
-        (report("go1.27.3", None, ldflags), "-tags"),
-        (report("go1.27.3", Some(tags), "\"-s -w\""), "-ldflags"),
+        (report("go1.27.2", None, Some(tags)), "another Go"),
+        (report("go1.27.3", None, Some("with_quic")), "-tags"),
+        (report("go1.27.3", None, None), "-tags"),
+        (report("go1.27.3", Some("all=-l=4"), Some(tags)), "gcflags"),
+        (
+            good.replace("\tbuild\t-tags", &format!("{ldflags}\tbuild\t-tags")),
+            "-ldflags is recorded",
+        ),
         (
             good.replace("CGO_ENABLED=0", "CGO_ENABLED=1"),
             "CGO_ENABLED",
         ),
         (good.replace("\tbuild\t-trimpath=true\n", ""), "-trimpath"),
         (good.replace("GOOS=linux", "GOOS=darwin"), "GOOS"),
+        (good.replace("GOARCH=amd64", "GOARCH=arm64"), "GOARCH"),
     ] {
         let problem = hy2.check_metadata("go1.27.3", &bad).unwrap_err();
         assert!(problem.contains(why), "{why}: {problem}");
     }
     let xray = &lock.builds()[0];
-    let xray_report = report(
-        "go1.27.3",
-        None,
-        "\"-X github.com/xtls/xray-core/core.build=v26.9.30 -s -w -buildid=\"",
-    );
+    let xray_report = report("go1.27.3", Some("all=-l=4"), None);
     assert_eq!(xray.check_metadata("go1.27.3", &xray_report), Ok(()));
-    let tagged = report(
-        "go1.27.3",
-        Some("with_quic"),
-        "\"-X github.com/xtls/xray-core/core.build=v26.9.30 -s -w -buildid=\"",
+    for (bad, why) in [
+        (
+            report("go1.27.3", Some("all=-l=4"), Some("with_quic")),
+            "tags",
+        ),
+        (report("go1.27.3", None, None), "-gcflags"),
+        (report("go1.27.3", Some("all=-l"), None), "-gcflags"),
+    ] {
+        let problem = xray.check_metadata("go1.27.3", &bad).unwrap_err();
+        assert!(problem.contains(why), "{why}: {problem}");
+    }
+}
+
+/// The recipe's `-X` stamps, as each engine's `version` command prints them
+/// (Xray `core/core.go`, sing-box `cmd/sing-box/cmd_version.go` at the pinned
+/// commits); an unstamped build prints Xray's "Custom" or another version.
+#[test]
+fn the_version_stamp_is_the_recipes() {
+    let builds = repository_lock().builds();
+    let xray = &builds[0];
+    assert_eq!(
+        xray.check_version(
+            "Xray 26.9.30 (Xray, Penetrates Everything.) v26.9.30 (go1.27.3 linux/amd64)\n\
+             A unified platform for anti-censorship.\n"
+        ),
+        Ok(())
     );
-    assert!(
-        xray.check_metadata("go1.27.3", &tagged)
-            .unwrap_err()
-            .contains("tags")
+    let arm = &builds[1];
+    assert_eq!(arm.target, Target::LinuxArm64);
+    assert_eq!(
+        arm.version_line,
+        "Xray 26.9.30 (Xray, Penetrates Everything.) v26.9.30 (go1.27.3 linux/arm64)"
     );
+    for unstamped in [
+        "Xray 26.9.30 (Xray, Penetrates Everything.) Custom (go1.27.3 linux/amd64)\n",
+        "Xray 26.9.30 (Xray, Penetrates Everything.) v26.9.30 (go1.27.2 linux/amd64)\n",
+        "",
+    ] {
+        let problem = xray.check_version(unstamped).unwrap_err();
+        assert!(problem.contains("the recipe stamps"), "{problem}");
+    }
+    let hy2 = &builds[3];
+    assert_eq!(hy2.output, "linux-amd64/mooring-hy2");
+    assert_eq!(
+        hy2.check_version(
+            "sing-box version 1.14.2\n\nEnvironment: go1.27.3 linux/amd64\nCGO: disabled\n"
+        ),
+        Ok(())
+    );
+    assert!(hy2.check_version("sing-box version unknown\n").is_err());
+    assert!(hy2.check_version("sing-box version 1.14.21\n").is_err());
+}
+
+#[test]
+fn the_build_id_is_empty_as_the_recipe_makes_it() {
+    assert_eq!(check_build_id("\n"), Ok(()));
+    for report in ["abc/def\n", "", "\n\n"] {
+        let problem = check_build_id(report).unwrap_err();
+        assert!(problem.contains("-buildid="), "{problem}");
+    }
+}
+
+#[test]
+fn the_hosted_runner_runs_its_own_outputs() {
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        assert_eq!(Target::host(), Some(Target::LinuxAmd64));
+    }
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        assert_eq!(Target::host(), Some(Target::DarwinArm64));
+    }
 }
 
 #[test]

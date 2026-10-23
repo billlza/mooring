@@ -14,8 +14,9 @@
 //!   pinned patch;
 //! - `engines-verify <dir>` checks `<dir>/out` against the output digests
 //!   the lock records, and prints them while none are recorded;
-//! - `engines-metadata <dir>` checks each binary's build information
-//!   (`go version -m`) against its recipe.
+//! - `engines-metadata <dir>` checks each binary against its recipe: its
+//!   build information (`go version -m`), its empty build ID and, for the
+//!   binaries built for this computer, the version stamp it prints.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -29,6 +30,10 @@ use serde::Deserialize;
 
 /// The lock, relative to the workspace root.
 const LOCK: &str = "engines.lock.toml";
+
+/// The codename in Xray's version statement (`core/core.go` at the pinned
+/// commit).
+const XRAY_CODENAME: &str = "Xray, Penetrates Everything.";
 
 /// Where a build's outputs go inside its directory.
 const OUT: &str = "out";
@@ -79,8 +84,15 @@ pub(crate) enum EnginesError {
     OutputsNotPinned,
     #[error("{output} is in the lock but not in the build")]
     OutputMissing { output: String },
-    #[error("{output}'s build information differs from its recipe: {problem}")]
+    #[error("{output} is not built as its recipe says: {problem}")]
     Metadata { output: String, problem: String },
+    #[error(
+        "no engine is built for this computer ({os}-{arch}); check the outputs on the hosted runner"
+    )]
+    NoNativeOutput {
+        os: &'static str,
+        arch: &'static str,
+    },
 }
 
 /// A Go target, `<os>-<arch>`.
@@ -93,6 +105,19 @@ pub(crate) enum Target {
 }
 
 impl Target {
+    /// This computer's target, when it is one of the three.
+    pub(crate) const fn host() -> Option<Self> {
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            Some(Self::LinuxAmd64)
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            Some(Self::LinuxArm64)
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Some(Self::DarwinArm64)
+        } else {
+            None
+        }
+    }
+
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::LinuxAmd64 => "linux-amd64",
@@ -345,7 +370,15 @@ impl Lock {
                 target,
                 output: format!("{}/xray", target.name()),
                 tags: Vec::new(),
-                ldflags: self.xray.ldflags.clone(),
+                gcflags: Some(self.xray.gcflags.clone()),
+                version_line: format!(
+                    "Xray {} ({XRAY_CODENAME}) {} ({} {}/{})",
+                    self.xray.tag.trim_start_matches('v'),
+                    self.xray.tag,
+                    self.go.version,
+                    target.goos(),
+                    target.goarch(),
+                ),
                 args: vec![
                     "build".to_owned(),
                     "-trimpath".to_owned(),
@@ -367,7 +400,11 @@ impl Lock {
                     target,
                     output: format!("{}/{name}", target.name()),
                     tags: tags.clone(),
-                    ldflags: self.sing_box.ldflags.clone(),
+                    gcflags: None,
+                    version_line: format!(
+                        "sing-box version {}",
+                        self.sing_box.tag.trim_start_matches('v')
+                    ),
                     args: vec![
                         "build".to_owned(),
                         "-trimpath".to_owned(),
@@ -409,7 +446,9 @@ pub(crate) struct Build {
     pub(crate) output: String,
     /// The build tags, in recipe order.
     pub(crate) tags: Vec<String>,
-    pub(crate) ldflags: String,
+    pub(crate) gcflags: Option<String>,
+    /// The first line `<binary> version` prints: the recipe's `-X` stamp.
+    pub(crate) version_line: String,
     /// `go` arguments; the empty one after `-o` is the output path.
     pub(crate) args: Vec<String>,
 }
@@ -431,7 +470,12 @@ impl Build {
 
     /// Checks `go version -m`'s report on the built binary against the
     /// recipe: the pinned Go, `-trimpath`, `CGO_ENABLED=0`, the target, the
-    /// exact tag set and the ldflags.
+    /// gcflags and the exact tag set.
+    ///
+    /// The report cannot show the ldflags: under `-trimpath` cmd/go records
+    /// none (go1.27.3 `src/cmd/go/internal/load/pkg.go:2469-2481`,
+    /// go.dev/issue/52372). Their effects are checked instead, by
+    /// [`check_build_id`] and [`Build::check_version`].
     pub(crate) fn check_metadata(&self, go_version: &str, report: &str) -> Result<(), String> {
         let mut lines = report.lines();
         let first = lines.next().ok_or("an empty report")?;
@@ -452,7 +496,19 @@ impl Build {
         want("CGO_ENABLED", "0")?;
         want("GOOS", self.target.goos())?;
         want("GOARCH", self.target.goarch())?;
-        want("-ldflags", &self.ldflags)?;
+        if settings.contains_key("-ldflags") {
+            return Err(
+                "-ldflags is recorded, which cmd/go does only without -trimpath; review this check against the pinned Go"
+                    .to_owned(),
+            );
+        }
+        match &self.gcflags {
+            Some(gcflags) => want("-gcflags", gcflags)?,
+            None if settings.contains_key("-gcflags") => {
+                return Err("built with gcflags; the recipe has none".to_owned());
+            }
+            None => {}
+        }
         if self.tags.is_empty() {
             if settings.contains_key("-tags") {
                 return Err("built with tags; the recipe has none".to_owned());
@@ -461,6 +517,33 @@ impl Build {
             want("-tags", &self.tags.join(","))?;
         }
         Ok(())
+    }
+
+    /// Checks what the built binary printed for `version` against the
+    /// recipe's `-X` stamp.
+    pub(crate) fn check_version(&self, printed: &str) -> Result<(), String> {
+        match printed.lines().next() {
+            Some(line) if line == self.version_line => Ok(()),
+            line => Err(format!(
+                "`version` prints {line:?}, the recipe stamps {:?}",
+                self.version_line
+            )),
+        }
+    }
+}
+
+/// Checks `go tool buildid`'s report on a built binary: the ID is empty, as
+/// the recipe's `-buildid=` makes it. That flag is part of the single
+/// `-ldflags` argument, so an empty ID shows the recipe's ldflags reached
+/// the linker.
+pub(crate) fn check_build_id(report: &str) -> Result<(), String> {
+    if report == "\n" {
+        Ok(())
+    } else {
+        Err(format!(
+            "the build ID is {:?}; the recipe's -buildid= makes it empty",
+            report.trim_end()
+        ))
     }
 }
 
@@ -822,11 +905,24 @@ pub(crate) fn verify(root: &Path, dir: &Path, out: &mut impl Write) -> Result<()
     result
 }
 
-/// `engines-metadata <dir>`.
+/// `engines-metadata <dir>`: every binary's build information and build
+/// ID, and the version stamps of the binaries built for this computer.
 pub(crate) fn metadata(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(), EnginesError> {
     let lock = Lock::read(&root.join(LOCK))?;
-    for build in lock.builds() {
+    let builds = lock.builds();
+    let host = Target::host();
+    if !builds.iter().any(|build| Some(build.target) == host) {
+        return Err(EnginesError::NoNativeOutput {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+        });
+    }
+    for build in builds {
         let binary = dir.join(OUT).join(&build.output);
+        let not_as_recipe = |problem| EnginesError::Metadata {
+            output: build.output.clone(),
+            problem,
+        };
         let report = run(Command::new("go").args([
             OsStr::new("version"),
             OsStr::new("-m"),
@@ -834,11 +930,21 @@ pub(crate) fn metadata(root: &Path, dir: &Path, out: &mut impl Write) -> Result<
         ]))?;
         build
             .check_metadata(&lock.go.version, &report)
-            .map_err(|problem| EnginesError::Metadata {
-                output: build.output.clone(),
-                problem,
-            })?;
-        writeln!(out, "{}: built as its recipe says", build.output).map_err(|source| {
+            .map_err(not_as_recipe)?;
+        let build_id = run(Command::new("go").args([
+            OsStr::new("tool"),
+            OsStr::new("buildid"),
+            binary.as_os_str(),
+        ]))?;
+        check_build_id(&build_id).map_err(not_as_recipe)?;
+        let stamp = if Some(build.target) == host {
+            let printed = run(Command::new(&binary).arg("version"))?;
+            build.check_version(&printed).map_err(not_as_recipe)?;
+            format!("prints {:?}", build.version_line)
+        } else {
+            "built for another computer, so its version stamp is not run here".to_owned()
+        };
+        writeln!(out, "{}: built as its recipe says; {stamp}", build.output).map_err(|source| {
             EnginesError::Write {
                 path: PathBuf::from("<stdout>"),
                 source,
