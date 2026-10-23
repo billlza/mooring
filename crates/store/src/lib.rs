@@ -35,9 +35,10 @@
 //! # The router identity
 //!
 //! Beside the state, [`write_router_pin`] records the M7 gateway's
-//! link-layer address as `router-identity.json` (same durable write, mode
-//! 0600, under the same lock), and [`read_router_pin`] reads it back
-//! (design §15.6 rule 4).
+//! link-layer address and the Mac's interface to it as
+//! `router-identity.json` (same durable write, mode 0600, under the same
+//! lock), and [`read_router_pin`] reads it back, a version-1 file without
+//! the interface too (design §15.6 rule 4, §5.1).
 //!
 //! # The status snapshot
 //!
@@ -83,7 +84,7 @@ pub use latch::{LATCH_FILE, clear_latch, read_latch, write_latch};
 pub use migrate::migrate;
 pub use ordered::{record_with_secrets, update_config_with_secrets};
 pub use router_pin::{
-    MAX_ROUTER_PIN_BYTES, ROUTER_PIN_FILE, RouterPin, RouterPinFault, read_router_pin,
+    MAX_ROUTER_PIN_BYTES, ROUTER_PIN_FILE, RouterPin, RouterPinFault, StoredPin, read_router_pin,
     write_router_pin,
 };
 pub use secrets::{

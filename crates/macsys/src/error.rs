@@ -350,6 +350,10 @@ pub enum ProcessCall {
     PidPath,
     /// `kill`.
     Kill,
+    /// `killpg`.
+    KillGroup,
+    /// `dup2`, onto standard error.
+    Dup2,
 }
 
 impl fmt::Display for ProcessCall {
@@ -357,6 +361,8 @@ impl fmt::Display for ProcessCall {
         f.write_str(match self {
             Self::PidPath => "proc_pidpath",
             Self::Kill => "kill",
+            Self::KillGroup => "killpg",
+            Self::Dup2 => "dup2",
         })
     }
 }

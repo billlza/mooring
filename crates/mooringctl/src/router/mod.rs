@@ -38,7 +38,7 @@ use mooring_daemon_core::router::netgear::{
 use mooring_daemon_core::{RouterParseError, RouterStatus};
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretMaterial, SecretRef};
-use mooring_store::{RouterPin, SecretStore, SecretStoreError, read_router_pin};
+use mooring_store::{SecretStore, SecretStoreError, StoredPin, read_router_pin};
 
 use crate::error::{CommandError, LocalError};
 use crate::router::error::{
@@ -69,12 +69,31 @@ impl fmt::Debug for RouterEnv<'_> {
     }
 }
 
-/// Step 1: the pinned identity; `NotConfigured{Pin}` without one.
-pub(crate) fn configured_pin(support_dir: &Path) -> Result<RouterPin, CommandError> {
+/// The pinned identity, version 1 or 2; `NotConfigured{Pin}` without one.
+fn configured_pin(support_dir: &Path) -> Result<StoredPin, CommandError> {
     read_router_pin(support_dir)
         .map_err(|error| CommandError::Local(LocalError::Store(error)))?
         .ok_or(CommandError::Router(RouterError::NotConfigured {
             missing: Missing::Pin,
+        }))
+}
+
+/// Step 1: the pinned identity's address; `NotConfigured{Pin}` without a
+/// pin.
+pub(crate) fn pinned_address(support_dir: &Path) -> Result<MacAddr, CommandError> {
+    Ok(configured_pin(support_dir)?.gateway_lladdr())
+}
+
+/// The Mac's interface to the M7, as the pin records it (design §5.1: the
+/// daemon polls on it before a deployment exists): `NotConfigured{Pin}`
+/// without a pin, and `NotConfigured{Interface}` for a version-1 pin, which
+/// records none.
+pub(crate) fn pinned_interface(support_dir: &Path) -> Result<BsdName, CommandError> {
+    configured_pin(support_dir)?
+        .interface()
+        .cloned()
+        .ok_or(CommandError::Router(RouterError::NotConfigured {
+            missing: Missing::Interface,
         }))
 }
 
@@ -110,7 +129,7 @@ struct Fetched {
 fn fetch(
     env: &RouterEnv<'_>,
     interface: &BsdName,
-    pin: &RouterPin,
+    pinned: MacAddr,
     password: Option<&RouterAdminPassword>,
 ) -> Result<Fetched, CommandError> {
     let attachment = attach(env.link, interface)?;
@@ -118,7 +137,7 @@ fn fetch(
     let anonymous = client.model_json()?;
     let session = parse_netgear_session(anonymous.as_bytes())
         .map_err(|error| RouterError::Document { error, login: None })?;
-    let verified = check_identity(env.link, &attachment, pin, env.port)?;
+    let verified = check_identity(env.link, &attachment, pinned, env.port)?;
     let Some(password) = password else {
         return Ok(Fetched {
             body: anonymous,
@@ -156,9 +175,9 @@ pub(crate) fn status(
     secrets: &dyn SecretStore,
     interface: &BsdName,
 ) -> Result<RouterStatus, CommandError> {
-    let pin = configured_pin(support_dir)?;
+    let pinned = pinned_address(support_dir)?;
     let password = configured_password(secrets)?;
-    let fetched = fetch(env, interface, &pin, Some(&password))?;
+    let fetched = fetch(env, interface, pinned, Some(&password))?;
     parse_netgear_model_json(fetched.body.as_bytes()).map_err(|error| {
         CommandError::Router(RouterError::Document {
             error,
@@ -178,13 +197,13 @@ pub(crate) fn capture(
     interface: &BsdName,
     anonymous: bool,
 ) -> Result<RedactedModelJson, CommandError> {
-    let pin = configured_pin(support_dir)?;
+    let pinned = pinned_address(support_dir)?;
     let password = if anonymous {
         None
     } else {
         Some(configured_password(secrets)?)
     };
-    let fetched = fetch(env, interface, &pin, password.as_ref())?;
+    let fetched = fetch(env, interface, pinned, password.as_ref())?;
     if !anonymous {
         let refused = |error| {
             CommandError::Router(RouterError::Document {
@@ -281,24 +300,38 @@ pub(crate) fn pin_candidate(
 /// What `router pin` does with an existing pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PinDecision {
-    /// The same address is pinned: nothing is written.
+    /// The same address is pinned with the same interface: nothing is
+    /// written.
     AlreadyPinned,
-    /// Write the pin (there is none, or `--replace` replaces another).
+    /// The same address is pinned, with no interface (a version-1 pin) or
+    /// another one: the interface is recorded with it, without asking, as
+    /// the identity does not change.
+    RecordInterface,
+    /// Write the pin, once the operator confirms the address (there is none,
+    /// or `--replace` replaces another).
     Write,
 }
 
-/// Decides what to do with `existing`: the same address is already
-/// pinned; another one is replaced only with `replace`
-/// (`PinExists` otherwise).
+/// Decides what to do with `existing` for `lladdr` on `interface`: the
+/// same address on the same interface is already pinned; the same address
+/// gets the interface recorded; another address is replaced only with
+/// `replace` (`PinExists` otherwise).
 pub(crate) fn decide_pin(
-    existing: Option<&RouterPin>,
+    existing: Option<&StoredPin>,
     lladdr: MacAddr,
+    interface: &BsdName,
     replace: bool,
 ) -> Result<PinDecision, LocalError> {
     match existing {
-        Some(pin) if pin.gateway_lladdr == lladdr => Ok(PinDecision::AlreadyPinned),
+        Some(pin) if pin.gateway_lladdr() == lladdr => {
+            if pin.interface() == Some(interface) {
+                Ok(PinDecision::AlreadyPinned)
+            } else {
+                Ok(PinDecision::RecordInterface)
+            }
+        }
         Some(pin) if !replace => Err(LocalError::PinExists {
-            pinned: pin.gateway_lladdr,
+            pinned: pin.gateway_lladdr(),
         }),
         Some(_) | None => Ok(PinDecision::Write),
     }

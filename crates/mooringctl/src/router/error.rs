@@ -127,7 +127,8 @@ pub(crate) enum Missing {
     Pin,
     /// No admin password is stored.
     Password,
-    /// The daemon was not given the interface to the M7.
+    /// The pin records no interface to the M7 (a version-1 pin): the
+    /// daemon has none to poll on.
     Interface,
 }
 
@@ -137,7 +138,7 @@ impl fmt::Display for Missing {
             Self::Pin => "no router identity is pinned (mooringctl router pin)",
             Self::Password => "no M7 admin password is stored (mooringctl router set-password)",
             Self::Interface => {
-                "the daemon was given no interface to the M7 (mooringctl daemon --router-interface)"
+                "the router pin records no interface to the M7 (mooringctl router pin --interface <bsd>)"
             }
         })
     }

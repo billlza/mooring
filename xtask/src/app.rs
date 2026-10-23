@@ -1,39 +1,35 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The console's development build (design §5.1, M5, M7), macOS only and
-//! not `ci` steps:
+//! not a `ci` step: `app` builds `Mooring.app` at
+//! `<target>/app/Mooring.app`. It signs `mooringctl` as `cargo xtask
+//! mooringctl` does, runs MooringKit's tests, generates the Xcode project
+//! from `apple/project.yml`, builds the app unsigned (Swift warnings are
+//! errors) and requires Xcode's own result bundle to report no error and no
+//! warning, then copies the app with the signed `mooringctl` inside it
+//! (`Contents/MacOS/mooringctl`, the same bytes, so one keychain approval
+//! covers both copies), checks that the daemon's plist sits in
+//! `Contents/Library/LaunchAgents` as `apple/App/LaunchAgents` has it,
+//! signs the power helper Xcode built beside it (`mooring-power`, as
+//! `com.bill.mooring.power`), signs the bundle ad hoc, and checks the three
+//! signatures.
 //!
-//! - `app` builds `Mooring.app` at `<target>/app/Mooring.app`: it signs
-//!   `mooringctl` as `cargo xtask mooringctl` does, runs MooringKit's
-//!   tests, generates the Xcode project from `apple/project.yml`, builds
-//!   the app unsigned (Swift warnings are errors) and requires Xcode's own
-//!   result bundle to report no error and no warning, then copies the app
-//!   with the signed `mooringctl` inside it (`Contents/MacOS/mooringctl`,
-//!   the same bytes, so one keychain approval covers both copies), signs
-//!   the bundle ad hoc, and checks both signatures.
-//! - `agent-install <bsd>` runs the daemon as a per-session LaunchAgent,
-//!   `com.bill.mooring.daemon`, polling the M7 on `<bsd>`, from the plist
-//!   it writes to `<target>/launchd/` (loaded with `launchctl bootstrap`,
-//!   so it is gone after logout: the app's `SMAppService` registration is
-//!   M7's). The plist names the app in `AssociatedBundleIdentifiers`: macOS
-//!   applies local network privacy to a LaunchAgent and asks the user
-//!   about its responsible app (Apple TN3179, read 2026-10-22). Measured
-//!   2026-10-22: without that, the agent's connection to the M7 failed
-//!   with `EHOSTUNREACH` while the same binary run from a shell reached it.
-//! - `agent-uninstall` stops it and removes the plist.
+//! The daemon is registered from the app itself, with `SMAppService`
+//! (design §5.1, M7): launchd runs the `mooringctl` inside the bundle, so
+//! a build replaces the executable a registered daemon runs, and `app`
+//! restarts it on the new build (`launchctl kickstart -k`). Measured
+//! 2026-10-23 on macOS 27.0 with a test agent: an ad-hoc-signed app's
+//! registration is enabled at once, it lasts when the bundle is rebuilt and
+//! signed again in place, and `kickstart -k` starts the new executable.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::fs::{self, DirBuilder};
+use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::thread;
-use std::time::Duration;
 
-use mooring_model::iface::BsdName;
 use serde::Deserialize;
 
 use crate::cargo::Cargo;
@@ -46,29 +42,15 @@ use crate::output::{OutputError, say};
 /// The app's bundle identifier (`apple/project.yml`).
 pub(crate) const APP_IDENTIFIER: &str = "com.bill.mooring";
 
+/// The power helper's signing identifier (design §5.1).
+pub(crate) const POWER_IDENTIFIER: &str = "com.bill.mooring.power";
+
 /// The daemon's launchd label (design §5.1: `com.bill.mooring.daemon.plist`).
 pub(crate) const AGENT_LABEL: &str = "com.bill.mooring.daemon";
 
 /// `launchctl print`'s exit status for a service that is not loaded
 /// (observed on macOS 27.0.1, 2026-10-22).
 const LAUNCHCTL_NOT_FOUND: i32 = 113;
-
-/// How long a stop waits for launchd to unload the agent: `launchctl
-/// print` is asked up to `checks` times, `interval` apart. `launchctl
-/// bootout` can return while the old process is still exiting, and a
-/// `bootstrap` then fails with "Input/output error" (5) (observed on macOS
-/// 27.0.1, 2026-10-22, with the old daemon waiting at a keychain prompt).
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct StopWait {
-    pub(crate) checks: u32,
-    pub(crate) interval: Duration,
-}
-
-/// Up to ten seconds, a tenth of a second apart.
-pub(crate) const STOP_WAIT: StopWait = StopWait {
-    checks: 100,
-    interval: Duration::from_millis(100),
-};
 
 const XCRUN: &str = "/usr/bin/xcrun";
 
@@ -130,12 +112,6 @@ pub(crate) enum AppError {
         expected: &'static str,
         fault: SignatureFault,
     },
-    #[error("{interface:?} is not a BSD interface name (for example en9)")]
-    Interface { interface: String },
-    #[error("{} does not exist; run `cargo xtask app` first", path.display())]
-    AppNotBuilt { path: PathBuf },
-    #[error("HOME is not set to an absolute path")]
-    Home,
     #[error("`id -u` printed {0:?}, not a user id")]
     UserId(String),
     #[error(
@@ -143,18 +119,18 @@ pub(crate) enum AppError {
     )]
     AgentState { service: String, code: Option<i32> },
     #[error(
-        "`launchctl bootout {service}` returned, but the service was still loaded {waited:?} later"
-    )]
-    AgentStillLoaded { service: String, waited: Duration },
-    #[error(
-        "{service} is loaded, but its plist {} is gone, so it cannot be started again on this build; run `cargo xtask agent-install <bsd>`",
-        path.display()
-    )]
-    AgentPlistMissing { service: String, path: PathBuf },
-    #[error(
-        "{service} is loaded and runs from the target directory; run `cargo xtask agent-uninstall` first"
+        "{service} is loaded and runs from the target directory; stop it first (Mooring.app's menu: Stop the Daemon)"
     )]
     AgentLoaded { service: String },
+    #[error(
+        "the built app's {} is not the daemon's plist {}",
+        embedded.display(),
+        source_plist.display()
+    )]
+    AgentPlistMismatch {
+        embedded: PathBuf,
+        source_plist: PathBuf,
+    },
     #[error(
         "{} gives no Simplified Chinese text for {missing:?}, which macOS shows in its own alerts",
         path.display()
@@ -295,7 +271,12 @@ pub(crate) struct AppPaths {
     pub(crate) built: PathBuf,
     pub(crate) app: PathBuf,
     pub(crate) embedded: PathBuf,
+    /// The power helper Xcode built into the app, beside `mooringctl`.
+    pub(crate) power: PathBuf,
     pub(crate) signed: PathBuf,
+    /// The daemon's plist in the repository.
+    pub(crate) agent_plist_source: PathBuf,
+    /// The daemon's plist in the built app, which `SMAppService` registers.
     pub(crate) agent_plist: PathBuf,
 }
 
@@ -318,9 +299,18 @@ impl AppPaths {
                 .join("apple")
                 .join("DerivedData/Build/Products/Release/Mooring.app"),
             embedded: app.join("Contents").join("MacOS").join("mooringctl"),
+            power: app.join("Contents").join("MacOS").join("mooring-power"),
+            agent_plist_source: apple
+                .join("App")
+                .join("LaunchAgents")
+                .join(format!("{AGENT_LABEL}.plist")),
+            agent_plist: app
+                .join("Contents")
+                .join("Library")
+                .join("LaunchAgents")
+                .join(format!("{AGENT_LABEL}.plist")),
             app,
             signed: signed_copy(target),
-            agent_plist: target.join("launchd").join(format!("{AGENT_LABEL}.plist")),
         }
     }
 }
@@ -550,18 +540,16 @@ pub(crate) fn build(cargo: &Cargo, out: &mut impl Write) -> Result<(), AppError>
     let paths = AppPaths::new(&root, &target);
     let xcodegen = find_xcodegen(std::env::var_os("PATH"))?;
     assemble(&mut System, &root, &paths, &xcodegen, out)?;
-    restart_loaded_agent(&mut System, &root, &paths, STOP_WAIT, out)
+    restart_loaded_agent(&mut System, &root, out)
 }
 
-/// After a build, starts the development agent again if it is loaded: it
-/// runs the `mooringctl` inside the app, which the build has replaced, and
-/// a daemon left on the old build answers the new CLI in its old shape.
-/// macOS asks again for the keychain item, as the ad-hoc signature changed.
+/// After a build, restarts the daemon if it is loaded: it runs the
+/// `mooringctl` inside the app, which the build has replaced, and a daemon
+/// left on the old build answers the new CLI in its old shape. macOS asks
+/// again for the keychain item, as the ad-hoc signature changed.
 pub(crate) fn restart_loaded_agent(
     programs: &mut impl Programs,
     root: &Path,
-    paths: &AppPaths,
-    wait: StopWait,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     let domain = gui_domain(programs, root)?;
@@ -569,20 +557,13 @@ pub(crate) fn restart_loaded_agent(
     if !agent_loaded(programs, root, &service)? {
         return Ok(());
     }
-    if !paths.agent_plist.is_file() {
-        return Err(AppError::AgentPlistMissing {
-            service,
-            path: paths.agent_plist.clone(),
-        });
-    }
-    stop_agent(programs, root, &domain, wait)?;
     programs.run(
         &step(
             LAUNCHCTL,
             &[
-                OsStr::new("bootstrap"),
-                OsStr::new(&domain),
-                paths.agent_plist.as_os_str(),
+                OsStr::new("kickstart"),
+                OsStr::new("-k"),
+                OsStr::new(&service),
             ],
             root,
         ),
@@ -595,8 +576,8 @@ pub(crate) fn restart_loaded_agent(
     Ok(())
 }
 
-/// `AgentLoaded` while the development agent is loaded: removing the
-/// target directory would pull its executable away from under it.
+/// `AgentLoaded` while the daemon is loaded: removing the target directory
+/// would pull its executable away from under it.
 pub(crate) fn refuse_while_agent_loaded(
     programs: &mut impl Programs,
     root: &Path,
@@ -616,7 +597,8 @@ pub(crate) fn refuse_while_agent_loaded_on_this_mac(root: &Path) -> Result<(), A
 }
 
 /// The build after `mooringctl` is signed: the steps, the result bundle's
-/// check, the copy, the embedded CLI, the signature and its checks.
+/// check, the copy, the embedded CLI, the helper's signature, the bundle's,
+/// and the checks of all three.
 pub(crate) fn assemble(
     programs: &mut impl Programs,
     root: &Path,
@@ -658,7 +640,27 @@ pub(crate) fn assemble(
         Capture::Inherit,
     )?;
     fs::copy(&paths.signed, &paths.embedded).map_err(file_error("copy", &paths.signed))?;
+    check_agent_plist(paths)?;
     check_alert_strings(programs, root, paths)?;
+    // Xcode leaves the helper signed by the linker alone, under its file
+    // name: it is signed as itself, before the bundle that seals it.
+    programs.run(
+        &step(
+            CODESIGN,
+            &[
+                OsStr::new("--force"),
+                OsStr::new("--sign"),
+                OsStr::new("-"),
+                OsStr::new("--options"),
+                OsStr::new("runtime"),
+                OsStr::new("--identifier"),
+                OsStr::new(POWER_IDENTIFIER),
+                paths.power.as_os_str(),
+            ],
+            root,
+        ),
+        Capture::Inherit,
+    )?;
     // The hardened runtime refuses injected libraries, here as for the
     // `mooringctl` inside (`mooringctl::sign_args`).
     programs.run(
@@ -691,6 +693,7 @@ pub(crate) fn assemble(
     for (path, expected) in [
         (&paths.app, APP_IDENTIFIER),
         (&paths.embedded, mooringctl::SIGNING_IDENTIFIER),
+        (&paths.power, POWER_IDENTIFIER),
     ] {
         let report = programs.run(
             &step(CODESIGN, &[OsStr::new("-dv"), path.as_os_str()], root),
@@ -704,11 +707,29 @@ pub(crate) fn assemble(
     }
     say!(
         out,
-        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} inside",
+        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} and {} inside",
         paths.app.display(),
-        paths.embedded.display()
+        paths.embedded.display(),
+        paths.power.display()
     )?;
     Ok(())
+}
+
+/// Checks that the built app carries the daemon's plist exactly as the
+/// repository has it: Xcode's copy phase copies it unprocessed
+/// (`apple/project.yml`), and `SMAppService` registers this file.
+fn check_agent_plist(paths: &AppPaths) -> Result<(), AppError> {
+    let source = fs::read(&paths.agent_plist_source)
+        .map_err(file_error("read", &paths.agent_plist_source))?;
+    let embedded = fs::read(&paths.agent_plist).map_err(file_error("read", &paths.agent_plist))?;
+    if embedded == source {
+        Ok(())
+    } else {
+        Err(AppError::AgentPlistMismatch {
+            embedded: paths.agent_plist.clone(),
+            source_plist: paths.agent_plist_source.clone(),
+        })
+    }
 }
 
 /// Checks that the built app's Simplified Chinese `InfoPlist.strings`,
@@ -919,63 +940,6 @@ pub(crate) fn check_catalog(
     }
 }
 
-/// Escapes text for an XML property list.
-fn xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-/// The LaunchAgent's property list (design §5.1): the app's `mooringctl
-/// daemon` polling `interface`, kept alive, its stderr appended to `log`,
-/// and the app named as its responsible code for local network privacy.
-/// launchd starts it again no sooner than a minute after its last start,
-/// so a daemon that keeps failing still asks the M7 at most once a minute
-/// (§15.6 rule 7) and logs a line a minute; at a stop it has 5 s after
-/// SIGTERM before SIGKILL, inside [`STOP_WAIT`].
-pub(crate) fn agent_plist(program: &Path, interface: &BsdName, log: &Path) -> String {
-    let program = xml(&program.to_string_lossy());
-    let log = xml(&log.to_string_lossy());
-    let interface = xml(interface.as_str());
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key>
-	<string>{AGENT_LABEL}</string>
-	<key>AssociatedBundleIdentifiers</key>
-	<array>
-		<string>{APP_IDENTIFIER}</string>
-	</array>
-	<key>ProgramArguments</key>
-	<array>
-		<string>{program}</string>
-		<string>daemon</string>
-		<string>--router-interface</string>
-		<string>{interface}</string>
-	</array>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>KeepAlive</key>
-	<true/>
-	<key>ProcessType</key>
-	<string>Standard</string>
-	<key>ThrottleInterval</key>
-	<integer>60</integer>
-	<key>ExitTimeOut</key>
-	<integer>5</integer>
-	<key>StandardOutPath</key>
-	<string>/dev/null</string>
-	<key>StandardErrorPath</key>
-	<string>{log}</string>
-</dict>
-</plist>
-"#
-    )
-}
-
 /// The user's launchd domain, `gui/<uid>`.
 fn gui_domain(programs: &mut impl Programs, root: &Path) -> Result<String, AppError> {
     let printed = programs.run(&step(ID, &[OsStr::new("-u")], root), Capture::Stdout)?;
@@ -985,38 +949,6 @@ fn gui_domain(programs: &mut impl Programs, root: &Path) -> Result<String, AppEr
     } else {
         Err(AppError::UserId(text))
     }
-}
-
-/// Stops the agent if it is loaded, and waits until launchd no longer
-/// lists it; `true` if it was loaded.
-fn stop_agent(
-    programs: &mut impl Programs,
-    root: &Path,
-    domain: &str,
-    wait: StopWait,
-) -> Result<bool, AppError> {
-    let service = format!("{domain}/{AGENT_LABEL}");
-    if !agent_loaded(programs, root, &service)? {
-        return Ok(false);
-    }
-    programs.run(
-        &step(
-            LAUNCHCTL,
-            &[OsStr::new("bootout"), OsStr::new(&service)],
-            root,
-        ),
-        Capture::Inherit,
-    )?;
-    for _ in 0..wait.checks {
-        if !agent_loaded(programs, root, &service)? {
-            return Ok(true);
-        }
-        thread::sleep(wait.interval);
-    }
-    Err(AppError::AgentStillLoaded {
-        service,
-        waited: wait.interval * wait.checks,
-    })
 }
 
 /// Whether launchd lists `service`, by `launchctl print`'s exit status.
@@ -1036,150 +968,25 @@ fn agent_loaded(
     }
 }
 
-/// `cargo xtask agent-install <bsd>`.
-pub(crate) fn install_agent(
-    cargo: &Cargo,
-    out: &mut impl Write,
-    interface: &str,
-) -> Result<(), AppError> {
-    require_macos("agent-install", std::env::consts::OS)?;
-    let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
-    let root = cargo.workspace_root().to_path_buf();
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|home| home.is_absolute())
-        .ok_or(AppError::Home)?;
-    install(
-        &mut System,
-        &root,
-        &AppPaths::new(&root, &target),
-        &home,
-        interface,
-        STOP_WAIT,
-        out,
-    )
-}
-
-/// The install after the paths are known.
-pub(crate) fn install(
-    programs: &mut impl Programs,
-    root: &Path,
-    paths: &AppPaths,
-    home: &Path,
-    interface: &str,
-    wait: StopWait,
-    out: &mut impl Write,
-) -> Result<(), AppError> {
-    let interface = BsdName::parse(interface).map_err(|_| AppError::Interface {
-        interface: interface.to_owned(),
-    })?;
-    if !paths.embedded.is_file() {
-        return Err(AppError::AppNotBuilt {
-            path: paths.embedded.clone(),
-        });
-    }
-    let logs = home.join("Library").join("Logs").join("Mooring");
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&logs)
-        .map_err(file_error("create", &logs))?;
-    let log = logs.join("daemon.log");
-    if let Some(parent) = paths.agent_plist.parent() {
-        fs::create_dir_all(parent).map_err(file_error("create", parent))?;
-    }
-    fs::write(
-        &paths.agent_plist,
-        agent_plist(&paths.embedded, &interface, &log),
-    )
-    .map_err(file_error("write", &paths.agent_plist))?;
-    let domain = gui_domain(programs, root)?;
-    let replaced = stop_agent(programs, root, &domain, wait)?;
-    programs.run(
-        &step(
-            LAUNCHCTL,
-            &[
-                OsStr::new("bootstrap"),
-                OsStr::new(&domain),
-                paths.agent_plist.as_os_str(),
-            ],
-            root,
-        ),
-        Capture::Inherit,
-    )?;
-    say!(
-        out,
-        "agent-install: {AGENT_LABEL} {} in {domain}, polling the M7 on {}; its log is {}",
-        if replaced { "restarted" } else { "started" },
-        interface.as_str(),
-        log.display()
-    )?;
-    say!(
-        out,
-        "agent-install: on its first poll macOS asks to let mooringctl use the keychain item and to let Mooring reach the local network; allow both"
-    )?;
-    Ok(())
-}
-
-/// `cargo xtask agent-uninstall`.
-pub(crate) fn uninstall_agent(cargo: &Cargo, out: &mut impl Write) -> Result<(), AppError> {
-    require_macos("agent-uninstall", std::env::consts::OS)?;
-    let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
-    let root = cargo.workspace_root().to_path_buf();
-    uninstall(
-        &mut System,
-        &root,
-        &AppPaths::new(&root, &target),
-        STOP_WAIT,
-        out,
-    )
-}
-
-/// The uninstall after the paths are known.
-pub(crate) fn uninstall(
-    programs: &mut impl Programs,
-    root: &Path,
-    paths: &AppPaths,
-    wait: StopWait,
-    out: &mut impl Write,
-) -> Result<(), AppError> {
-    let domain = gui_domain(programs, root)?;
-    let stopped = stop_agent(programs, root, &domain, wait)?;
-    let removed = match fs::remove_file(&paths.agent_plist) {
-        Ok(()) => true,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => return Err(file_error("remove", &paths.agent_plist)(error)),
-    };
-    say!(
-        out,
-        "agent-uninstall: {AGENT_LABEL} {}; {} {}",
-        if stopped { "stopped" } else { "was not loaded" },
-        paths.agent_plist.display(),
-        if removed { "removed" } else { "was not there" }
-    )?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
     use super::{
-        AGENT_LABEL, AppError, AppPaths, Capture, Programs, Step, StopWait, agent_plist, assemble,
-        build_steps, check_build_results, find_xcodegen, install, refuse_while_agent_loaded,
-        require_macos, restart_loaded_agent, tail, uninstall,
+        AGENT_LABEL, AppError, AppPaths, Capture, Programs, Step, assemble, build_steps,
+        check_build_results, find_xcodegen, refuse_while_agent_loaded, require_macos,
+        restart_loaded_agent, tail,
     };
     use crate::mooringctl::SignatureFault;
     use crate::testing::Scratch;
-    use mooring_model::iface::BsdName;
 
     /// A stand-in for the programs: records each step, answers `run` from
     /// `outputs` (the next one each time) and `status` from `statuses`, and
-    /// makes the app directory when `ditto` is asked to copy it.
+    /// makes the app directory when `ditto` is asked to copy it, with the
+    /// daemon's plist in it when the repository has one.
     #[derive(Default)]
     struct Fake {
         steps: Vec<(String, Capture)>,
@@ -1199,7 +1006,17 @@ mod tests {
         fn run(&mut self, step: &Step, capture: Capture) -> Result<Vec<u8>, AppError> {
             self.steps.push((line(step), capture));
             if step.program == Path::new(super::DITTO) {
-                fs::create_dir_all(PathBuf::from(&step.args[1]).join("Contents/MacOS")).unwrap();
+                let app = PathBuf::from(&step.args[1]);
+                fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+                let source = step
+                    .dir
+                    .join("apple/App/LaunchAgents")
+                    .join(format!("{AGENT_LABEL}.plist"));
+                if let Ok(plist) = fs::read(source) {
+                    let agents = app.join("Contents/Library/LaunchAgents");
+                    fs::create_dir_all(&agents).unwrap();
+                    fs::write(agents.join(format!("{AGENT_LABEL}.plist")), plist).unwrap();
+                }
             }
             self.outputs.pop_front().unwrap_or(Ok(Vec::new()))
         }
@@ -1210,18 +1027,18 @@ mod tests {
         }
     }
 
-    /// Three checks, no pause between them.
-    const NO_WAIT: StopWait = StopWait {
-        checks: 3,
-        interval: std::time::Duration::ZERO,
-    };
-
     const CLEAN: &str = r#"{"actionTitle":"Build","status":"succeeded","errorCount":0,"errors":[],"warningCount":0,"warnings":[],"analyzerWarningCount":0,"analyzerWarnings":[],"destination":{}}"#;
 
     fn paths(scratch: &Scratch) -> (PathBuf, AppPaths) {
         let root = scratch.0.join("repo");
         let target = scratch.0.join("target");
         (root.clone(), AppPaths::new(&root, &target))
+    }
+
+    /// The daemon's plist in the scratch repository.
+    fn agent_plist(paths: &AppPaths) {
+        fs::create_dir_all(paths.agent_plist_source.parent().unwrap()).unwrap();
+        fs::write(&paths.agent_plist_source, b"the daemon's plist").unwrap();
     }
 
     /// A one-string catalog and the extracted strings it matches.
@@ -1259,10 +1076,20 @@ mod tests {
             paths.embedded,
             Path::new("/t/app/Mooring.app/Contents/MacOS/mooringctl")
         );
+        assert_eq!(
+            paths.power,
+            Path::new("/t/app/Mooring.app/Contents/MacOS/mooring-power")
+        );
         assert_eq!(paths.signed, Path::new("/t/signed/mooringctl"));
         assert_eq!(
+            paths.agent_plist_source,
+            Path::new("/r/apple/App/LaunchAgents/com.bill.mooring.daemon.plist")
+        );
+        assert_eq!(
             paths.agent_plist,
-            Path::new("/t/launchd/com.bill.mooring.daemon.plist")
+            Path::new(
+                "/t/app/Mooring.app/Contents/Library/LaunchAgents/com.bill.mooring.daemon.plist"
+            )
         );
         assert_eq!(
             paths.built,
@@ -1310,13 +1137,14 @@ mod tests {
     }
 
     /// The assembly runs the builds, checks the result bundle, copies the
-    /// app, puts the signed CLI inside it, signs the bundle and checks both
-    /// identifiers, in that order.
+    /// app, puts the signed CLI inside it, signs the helper and then the
+    /// bundle, and checks the three identifiers, in that order.
     #[test]
-    fn the_app_is_assembled_in_order_and_both_signatures_checked() {
+    fn the_app_is_assembled_in_order_and_its_signatures_checked() {
         let scratch = Scratch::new("app-assemble");
         let (root, paths) = paths(&scratch);
         strings(&paths);
+        agent_plist(&paths);
         fs::create_dir_all(paths.signed.parent().unwrap()).unwrap();
         fs::write(&paths.signed, b"signed mooringctl").unwrap();
         let mut fake = Fake::default();
@@ -1329,8 +1157,10 @@ mod tests {
             Ok(ALERT_STRINGS.to_vec()),
             Ok(Vec::new()),
             Ok(Vec::new()),
+            Ok(Vec::new()),
             Ok(signed_report("com.bill.mooring")),
             Ok(signed_report("com.bill.mooring.mooringctl")),
+            Ok(signed_report("com.bill.mooring.power")),
         ] {
             fake.outputs.push_back(output);
         }
@@ -1338,8 +1168,9 @@ mod tests {
         assemble(&mut fake, &root, &paths, Path::new("/x/xcodegen"), &mut out).unwrap();
         let app = paths.app.display().to_string();
         let embedded = paths.embedded.display().to_string();
+        let power = paths.power.display().to_string();
         let steps: Vec<String> = fake.steps.iter().map(|(line, _)| line.clone()).collect();
-        assert_eq!(steps.len(), 10, "{steps:#?}");
+        assert_eq!(steps.len(), 12, "{steps:#?}");
         assert!(steps[0].starts_with("/usr/bin/xcrun swift test "));
         assert!(steps[1].starts_with("/x/xcodegen generate "));
         assert!(steps[2].starts_with("/usr/bin/xcrun xcodebuild "));
@@ -1356,33 +1187,44 @@ mod tests {
         );
         assert_eq!(
             steps[6],
-            format!("/usr/bin/codesign --force --sign - --options runtime {app}")
+            format!(
+                "/usr/bin/codesign --force --sign - --options runtime --identifier com.bill.mooring.power {power}"
+            )
         );
         assert_eq!(
             steps[7],
+            format!("/usr/bin/codesign --force --sign - --options runtime {app}")
+        );
+        assert_eq!(
+            steps[8],
             format!("/usr/bin/codesign --verify --strict {app}")
         );
-        assert_eq!(steps[8], format!("/usr/bin/codesign -dv {app}"));
-        assert_eq!(steps[9], format!("/usr/bin/codesign -dv {embedded}"));
+        assert_eq!(steps[9], format!("/usr/bin/codesign -dv {app}"));
+        assert_eq!(steps[10], format!("/usr/bin/codesign -dv {embedded}"));
+        assert_eq!(steps[11], format!("/usr/bin/codesign -dv {power}"));
         assert_eq!(fake.steps[3].1, Capture::Stdout);
         assert_eq!(fake.steps[5].1, Capture::Stdout);
-        assert_eq!(fake.steps[8].1, Capture::Stderr);
+        for checked in &fake.steps[9..] {
+            assert_eq!(checked.1, Capture::Stderr);
+        }
         assert_eq!(fs::read(&paths.embedded).unwrap(), b"signed mooringctl");
+        assert_eq!(fs::read(&paths.agent_plist).unwrap(), b"the daemon's plist");
         assert_eq!(
             String::from_utf8(out).unwrap(),
             format!(
-                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} inside\n"
+                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} and {power} inside\n"
             )
         );
     }
 
     /// A build with a warning stops before anything is copied; an embedded
-    /// CLI signed under another identifier fails the assembly.
+    /// CLI, or a helper, signed under another identifier fails the assembly.
     #[test]
     fn the_assembly_stops_at_a_warning_or_a_wrong_identifier() {
         let scratch = Scratch::new("app-refusals");
         let (root, paths) = paths(&scratch);
         strings(&paths);
+        agent_plist(&paths);
         fs::create_dir_all(paths.signed.parent().unwrap()).unwrap();
         fs::write(&paths.signed, b"signed").unwrap();
         let mut fake = Fake::default();
@@ -1410,6 +1252,7 @@ mod tests {
             Ok(ALERT_STRINGS.to_vec()),
             Ok(Vec::new()),
             Ok(Vec::new()),
+            Ok(Vec::new()),
             Ok(signed_report("com.bill.mooring")),
             Ok(signed_report("mooringctl-020ac5c52e8594c4")),
         ] {
@@ -1426,6 +1269,35 @@ mod tests {
             "{error:?}"
         );
 
+        // A helper still under the linker's identifier, its file name.
+        let mut fake = Fake::default();
+        for output in [
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(CLEAN.as_bytes().to_vec()),
+            Ok(Vec::new()),
+            Ok(ALERT_STRINGS.to_vec()),
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(signed_report("com.bill.mooring")),
+            Ok(signed_report("com.bill.mooring.mooringctl")),
+            Ok(signed_report("mooring-power")),
+        ] {
+            fake.outputs.push_back(output);
+        }
+        let error =
+            assemble(&mut fake, &root, &paths, Path::new("/x"), &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                AppError::Signature { path, expected: "com.bill.mooring.power", fault: SignatureFault::Different(found) }
+                    if *path == paths.power && found == "mooring-power"
+            ),
+            "{error:?}"
+        );
+
         // An app signed without the hardened runtime fails it too.
         let mut fake = Fake::default();
         for output in [
@@ -1435,6 +1307,7 @@ mod tests {
             Ok(CLEAN.as_bytes().to_vec()),
             Ok(Vec::new()),
             Ok(ALERT_STRINGS.to_vec()),
+            Ok(Vec::new()),
             Ok(Vec::new()),
             Ok(Vec::new()),
             Ok(String::from_utf8(signed_report("com.bill.mooring"))
@@ -1468,6 +1341,7 @@ mod tests {
         let scratch = Scratch::new("app-alert");
         let (root, paths) = paths(&scratch);
         strings(&paths);
+        agent_plist(&paths);
         fs::create_dir_all(paths.signed.parent().unwrap()).unwrap();
         fs::write(&paths.signed, b"signed").unwrap();
         for answer in [
@@ -1509,199 +1383,18 @@ mod tests {
         .into_bytes()
     }
 
-    #[test]
-    fn the_agent_plist_runs_the_apps_daemon_and_names_the_app() {
-        let plist = agent_plist(
-            Path::new("/t/app/Mooring.app/Contents/MacOS/mooringctl"),
-            &BsdName::parse("en9").unwrap(),
-            Path::new("/Users/u/Library/Logs/Mooring/daemon.log"),
-        );
-        for part in [
-            "<key>Label</key>\n\t<string>com.bill.mooring.daemon</string>",
-            "<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>com.bill.mooring</string>\n\t</array>",
-            "<string>/t/app/Mooring.app/Contents/MacOS/mooringctl</string>\n\t\t<string>daemon</string>\n\t\t<string>--router-interface</string>\n\t\t<string>en9</string>",
-            "<key>KeepAlive</key>\n\t<true/>\n\t<key>ProcessType</key>\n\t<string>Standard</string>",
-            "<key>StandardErrorPath</key>\n\t<string>/Users/u/Library/Logs/Mooring/daemon.log</string>",
-            "<key>ThrottleInterval</key>\n\t<integer>60</integer>\n\t<key>ExitTimeOut</key>\n\t<integer>5</integer>",
-        ] {
-            assert!(plist.contains(part), "{part}\n{plist}");
-        }
-        assert!(plist.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"));
-        // Text is escaped for XML.
-        let escaped = agent_plist(
-            Path::new("/a&b/<c>/mooringctl"),
-            &BsdName::parse("en9").unwrap(),
-            Path::new("/l\"og"),
-        );
-        assert!(escaped.contains("<string>/a&amp;b/&lt;c&gt;/mooringctl</string>"));
-        assert!(escaped.contains("<string>/l&quot;og</string>"));
-    }
-
-    /// Install writes the plist and the log folder, stops a loaded agent
-    /// first, and bootstraps it into the user's domain.
-    #[test]
-    fn install_bootstraps_the_agent_and_replaces_a_loaded_one() {
-        let scratch = Scratch::new("agent-install");
-        let (root, paths) = paths(&scratch);
-        let home = scratch.0.join("home");
-        fs::create_dir_all(&home).unwrap();
-        let mut fake = Fake::default();
-        let error = install(
-            &mut fake,
-            &root,
-            &paths,
-            &home,
-            "en9",
-            NO_WAIT,
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert!(matches!(error, AppError::AppNotBuilt { .. }), "{error:?}");
-        fs::create_dir_all(paths.embedded.parent().unwrap()).unwrap();
-        fs::write(&paths.embedded, b"cli").unwrap();
-        for bad in ["", "en 9", "../en9", "en9/x"] {
-            assert!(
-                matches!(
-                    install(
-                        &mut fake,
-                        &root,
-                        &paths,
-                        &home,
-                        bad,
-                        NO_WAIT,
-                        &mut Vec::new()
-                    ),
-                    Err(AppError::Interface { .. })
-                ),
-                "{bad:?}"
-            );
-        }
-        assert!(fake.steps.is_empty());
-
-        // A loaded agent is booted out, and the new one is bootstrapped only
-        // once launchd no longer lists the old one, however many checks
-        // that takes within the wait.
-        let print = format!("/bin/launchctl print gui/501/{AGENT_LABEL}");
-        let bootout = format!("/bin/launchctl bootout gui/501/{AGENT_LABEL}");
-        for (statuses, verb, after_id) in [
-            (&[113][..], "started", vec![&print]),
-            (&[0, 113], "restarted", vec![&print, &bootout, &print]),
-            (
-                &[0, 0, 0, 113],
-                "restarted",
-                vec![&print, &bootout, &print, &print, &print],
-            ),
-        ] {
-            let mut fake = Fake::default();
-            fake.outputs.push_back(Ok(b"501\n".to_vec()));
-            fake.statuses.extend(statuses.iter().copied().map(Some));
-            let mut out = Vec::new();
-            install(&mut fake, &root, &paths, &home, "en9", NO_WAIT, &mut out).unwrap();
-            assert!(fake.statuses.is_empty(), "{statuses:?}");
-            let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
-            let mut expected = vec!["/usr/bin/id -u".to_owned()];
-            expected.extend(after_id.into_iter().cloned());
-            expected.push(format!(
-                "/bin/launchctl bootstrap gui/501 {}",
-                paths.agent_plist.display()
-            ));
-            assert_eq!(steps, expected);
-            let log = home.join("Library/Logs/Mooring");
-            assert_eq!(
-                fs::metadata(&log).unwrap().permissions().mode() & 0o777,
-                0o700
-            );
-            let plist = fs::read_to_string(&paths.agent_plist).unwrap();
-            assert!(plist.contains("<string>en9</string>"));
-            assert!(plist.contains(&log.join("daemon.log").display().to_string()));
-            let out = String::from_utf8(out).unwrap();
-            assert!(
-                out.starts_with(&format!(
-                    "agent-install: {AGENT_LABEL} {verb} in gui/501, polling the M7 on en9; its log is "
-                )),
-                "{out}"
-            );
-        }
-
-        // An agent still listed after every check stops the install before
-        // its bootstrap, which would fail.
-        let mut fake = Fake::default();
-        fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.extend([Some(0); 4]);
-        let error = install(
-            &mut fake,
-            &root,
-            &paths,
-            &home,
-            "en9",
-            NO_WAIT,
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(&error, AppError::AgentStillLoaded { service, .. } if *service == format!("gui/501/{AGENT_LABEL}")),
-            "{error:?}"
-        );
-        assert!(fake.statuses.is_empty());
-        assert!(
-            fake.steps
-                .iter()
-                .all(|(line, _)| !line.contains(" bootstrap "))
-        );
-
-        // Any other answer from `launchctl print`, before the bootout or
-        // after it, is an error, not a guess.
-        for statuses in [&[Some(5)][..], &[Some(0), None]] {
-            let mut fake = Fake::default();
-            fake.outputs.push_back(Ok(b"501\n".to_vec()));
-            fake.statuses.extend(statuses.iter().copied());
-            let error = install(
-                &mut fake,
-                &root,
-                &paths,
-                &home,
-                "en9",
-                NO_WAIT,
-                &mut Vec::new(),
-            )
-            .unwrap_err();
-            assert!(
-                matches!(&error, AppError::AgentState { code, .. } if code == statuses.last().unwrap()),
-                "{error:?}"
-            );
-            assert!(fake.statuses.is_empty());
-        }
-        let mut fake = Fake::default();
-        fake.outputs.push_back(Ok(b"root\n".to_vec()));
-        let error = install(
-            &mut fake,
-            &root,
-            &paths,
-            &home,
-            "en9",
-            NO_WAIT,
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(&error, AppError::UserId(text) if text == "root"),
-            "{error:?}"
-        );
-    }
-
-    /// After a build a loaded agent is started again from its plist; one
-    /// that is not loaded is left alone, and one whose plist is gone is
-    /// left running, with an error.
+    /// After a build a loaded daemon is restarted on the new executable;
+    /// one that is not loaded is left alone.
     #[test]
     fn a_build_restarts_a_loaded_agent() {
         let scratch = Scratch::new("app-restart");
-        let (root, paths) = paths(&scratch);
+        let (root, _) = paths(&scratch);
         let print = format!("/bin/launchctl print gui/501/{AGENT_LABEL}");
         let mut fake = Fake::default();
         fake.outputs.push_back(Ok(b"501\n".to_vec()));
         fake.statuses.push_back(Some(113));
         let mut out = Vec::new();
-        restart_loaded_agent(&mut fake, &root, &paths, NO_WAIT, &mut out).unwrap();
+        restart_loaded_agent(&mut fake, &root, &mut out).unwrap();
         let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
         assert_eq!(steps, ["/usr/bin/id -u", print.as_str()]);
         assert!(out.is_empty());
@@ -1709,39 +1402,15 @@ mod tests {
         let mut fake = Fake::default();
         fake.outputs.push_back(Ok(b"501\n".to_vec()));
         fake.statuses.push_back(Some(0));
-        let error =
-            restart_loaded_agent(&mut fake, &root, &paths, NO_WAIT, &mut Vec::new()).unwrap_err();
-        assert!(
-            matches!(&error, AppError::AgentPlistMissing { path, .. } if *path == paths.agent_plist),
-            "{error:?}"
-        );
-        assert!(
-            fake.steps
-                .iter()
-                .all(|(line, _)| !line.contains(" bootout "))
-        );
-
-        fs::create_dir_all(paths.agent_plist.parent().unwrap()).unwrap();
-        fs::write(&paths.agent_plist, b"plist").unwrap();
-        let mut fake = Fake::default();
-        fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.extend([Some(0), Some(0), Some(113)]);
         let mut out = Vec::new();
-        restart_loaded_agent(&mut fake, &root, &paths, NO_WAIT, &mut out).unwrap();
+        restart_loaded_agent(&mut fake, &root, &mut out).unwrap();
         let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
-        let bootstrap = format!(
-            "/bin/launchctl bootstrap gui/501 {}",
-            paths.agent_plist.display()
-        );
         assert_eq!(
             steps,
             [
                 "/usr/bin/id -u",
                 print.as_str(),
-                print.as_str(),
-                &format!("/bin/launchctl bootout gui/501/{AGENT_LABEL}"),
-                print.as_str(),
-                bootstrap.as_str(),
+                &format!("/bin/launchctl kickstart -k gui/501/{AGENT_LABEL}"),
             ]
         );
         assert!(fake.statuses.is_empty());
@@ -1750,6 +1419,89 @@ mod tests {
                 .unwrap()
                 .starts_with(&format!("app: {AGENT_LABEL} restarted on this build"))
         );
+
+        // launchd answering neither found nor not found is an error, and
+        // nothing is restarted.
+        let mut fake = Fake::default();
+        fake.outputs.push_back(Ok(b"501\n".to_vec()));
+        fake.statuses.push_back(Some(5));
+        let error = restart_loaded_agent(&mut fake, &root, &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(&error, AppError::AgentState { code: Some(5), .. }),
+            "{error:?}"
+        );
+        assert!(
+            fake.steps
+                .iter()
+                .all(|(line, _)| !line.contains(" kickstart "))
+        );
+    }
+
+    /// An app without the daemon's plist fails the assembly before the
+    /// bundle is signed, and one whose plist differs from the repository's
+    /// (as if Xcode had processed it) is refused.
+    #[test]
+    fn the_daemon_plist_must_be_the_repositorys() {
+        let scratch = Scratch::new("app-plist");
+        let (root, paths) = paths(&scratch);
+        strings(&paths);
+        fs::create_dir_all(paths.signed.parent().unwrap()).unwrap();
+        fs::write(&paths.signed, b"signed").unwrap();
+        // No plist in the repository, so the fake copies none into the app.
+        let mut fake = Fake::default();
+        for _ in 0..3 {
+            fake.outputs.push_back(Ok(Vec::new()));
+        }
+        fake.outputs.push_back(Ok(CLEAN.as_bytes().to_vec()));
+        let error =
+            assemble(&mut fake, &root, &paths, Path::new("/x"), &mut Vec::new()).unwrap_err();
+        assert!(matches!(error, AppError::File { .. }), "{error:?}");
+        assert!(
+            fake.steps
+                .iter()
+                .all(|(line, _)| !line.contains("codesign"))
+        );
+        // The same bytes pass; any other bytes are refused.
+        agent_plist(&paths);
+        fs::create_dir_all(paths.agent_plist.parent().unwrap()).unwrap();
+        fs::write(&paths.agent_plist, b"the daemon's plist").unwrap();
+        super::check_agent_plist(&paths).unwrap();
+        fs::write(&paths.agent_plist, b"<binary plist>").unwrap();
+        let error = super::check_agent_plist(&paths).unwrap_err();
+        assert!(
+            matches!(&error, AppError::AgentPlistMismatch { embedded, source_plist }
+                if *embedded == paths.agent_plist && *source_plist == paths.agent_plist_source),
+            "{error:?}"
+        );
+        assert!(error.to_string().starts_with("the built app's "), "{error}");
+    }
+
+    /// The repository's daemon plist runs the `mooringctl` inside the app
+    /// as `mooringctl daemon`, names the app for local network privacy,
+    /// and names no interface and no log (design §5.1).
+    #[test]
+    fn the_repositorys_daemon_plist_runs_the_bundled_daemon() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let paths = AppPaths::new(root, &root.join("target"));
+        let plist = fs::read_to_string(&paths.agent_plist_source).unwrap();
+        for part in [
+            "<key>Label</key>\n\t<string>com.bill.mooring.daemon</string>",
+            "<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>com.bill.mooring</string>\n\t</array>",
+            "<key>BundleProgram</key>\n\t<string>Contents/MacOS/mooringctl</string>",
+            "<key>ProgramArguments</key>\n\t<array>\n\t\t<string>mooringctl</string>\n\t\t<string>daemon</string>\n\t</array>",
+            "<key>KeepAlive</key>\n\t<true/>\n\t<key>ProcessType</key>\n\t<string>Standard</string>",
+            "<key>ThrottleInterval</key>\n\t<integer>60</integer>\n\t<key>ExitTimeOut</key>\n\t<integer>5</integer>",
+        ] {
+            assert!(plist.contains(part), "{part}\n{plist}");
+        }
+        for absent in [
+            "router-interface",
+            "StandardErrorPath",
+            "StandardOutPath",
+            "/Users/",
+        ] {
+            assert!(!plist.contains(absent), "{absent}");
+        }
     }
 
     /// Clean is refused while the agent is loaded.
@@ -1769,45 +1521,6 @@ mod tests {
             );
             assert_eq!(result.is_ok(), !refused);
         }
-    }
-
-    #[test]
-    fn uninstall_stops_a_loaded_agent_and_removes_its_plist() {
-        let scratch = Scratch::new("agent-uninstall");
-        let (root, paths) = paths(&scratch);
-        fs::create_dir_all(paths.agent_plist.parent().unwrap()).unwrap();
-        fs::write(&paths.agent_plist, b"plist").unwrap();
-        let mut fake = Fake::default();
-        fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.extend([Some(0), Some(0), Some(113)]);
-        let mut out = Vec::new();
-        uninstall(&mut fake, &root, &paths, NO_WAIT, &mut out).unwrap();
-        assert!(!paths.agent_plist.exists());
-        assert!(fake.statuses.is_empty());
-        let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
-        let print = format!("/bin/launchctl print gui/501/{AGENT_LABEL}");
-        assert_eq!(
-            steps,
-            [
-                "/usr/bin/id -u",
-                &print,
-                &format!("/bin/launchctl bootout gui/501/{AGENT_LABEL}"),
-                &print,
-                &print,
-            ]
-        );
-        assert!(String::from_utf8(out).unwrap().contains(" stopped; "));
-        // Again: nothing loaded, nothing to remove.
-        let mut fake = Fake::default();
-        fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.push_back(Some(113));
-        let mut out = Vec::new();
-        uninstall(&mut fake, &root, &paths, NO_WAIT, &mut out).unwrap();
-        let out = String::from_utf8(out).unwrap();
-        assert!(
-            out.contains(" was not loaded; ") && out.ends_with(" was not there\n"),
-            "{out}"
-        );
     }
 
     #[test]

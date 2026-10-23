@@ -4,7 +4,7 @@
 //! the exit site's interfaces against a scripted interface list, the
 //! foreign-network snapshot, the direct probe against a loopback
 //! reflector, the engine's check, start and stop against a stand-in
-//! script, the power source's line, the SIM meter's thread, and the
+//! script, the power helper's lines and pipes, the SIM meter's thread, and the
 //! engine an earlier daemon left.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -37,7 +37,7 @@ use crate::runtime::engine::{Engine, EngineError};
 use crate::runtime::meter::{MeterThread, Reader, Watched};
 use crate::runtime::network::foreign;
 use crate::runtime::ports::{ENGINE_PID_FILE, stop_stale_engine};
-use crate::runtime::power::parse;
+use crate::runtime::power::read_lines;
 use crate::runtime::probe::{direct, in_chain};
 use crate::runtime::resolve::{ResolveError, exit_interfaces, resolve};
 
@@ -335,6 +335,20 @@ fn lo0() -> InterfaceIndex {
     super::support::lo0()
 }
 
+/// A reflector answers and closes at once; on loopback its close can come
+/// before the connect's poll looks, which socket2 reports as a hang-up
+/// with no error (about 1 connect in 170 here). Every probe still reads
+/// its answer.
+#[test]
+fn a_reflector_that_closes_before_the_connect_is_polled_is_still_read() {
+    for _ in 0..1000 {
+        assert_eq!(
+            direct(lo0(), reflector(b"45.67.89.10\n")),
+            Ok(Ipv4Addr::new(45, 67, 89, 10))
+        );
+    }
+}
+
 #[test]
 fn the_direct_probe_reads_the_address_the_reflector_saw() {
     assert_eq!(
@@ -451,29 +465,160 @@ fn a_missing_engine_is_a_spawn_failure() {
     ));
 }
 
+/// The helper's lines are read as events, in order, until the output
+/// ends; a line that is not an event, one cut short or one past the bound
+/// ends the reading, saying which.
 #[test]
-fn pmset_names_the_power_source_on_its_first_line() {
-    for (stdout, source) in [
-        (
-            &b"Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%; charged\n"[..],
-            PowerSource::Ac,
+fn the_power_helpers_lines_are_read_as_events_until_one_is_not() {
+    use mooring_daemon_core::power::{HelperEvent, MAX_HELPER_LINE_BYTES};
+
+    let read = |input: &[u8]| {
+        let mut events = Vec::new();
+        let ended = read_lines(input, |event| {
+            events.push(event);
+            true
+        });
+        (events, ended)
+    };
+    let (events, ended) =
+        read(b"{\"power_source\":\"ac\"}\n\"did_wake\"\n{\"will_sleep\":{\"id\":3}}\n");
+    assert_eq!(
+        events,
+        [
+            HelperEvent::PowerSource(PowerSource::Ac),
+            HelperEvent::DidWake,
+            HelperEvent::WillSleep { id: 3 }
+        ]
+    );
+    assert_eq!(ended, "the power helper exited");
+    let (events, ended) = read(b"\"did_wake\"\n{\"power_source\":\"solar\"}\n\"did_wake\"\n");
+    assert_eq!(events, [HelperEvent::DidWake]);
+    assert!(
+        ended.starts_with("the power helper wrote a line that is not an event"),
+        "{ended}"
+    );
+    let (events, ended) = read(b"\"did_wake\"");
+    assert_eq!(events, []);
+    assert_eq!(ended, "the power helper's output ended within a line");
+    let long = vec![b' '; MAX_HELPER_LINE_BYTES + 10];
+    let (events, ended) = read(&long);
+    assert_eq!(events, []);
+    assert_eq!(
+        ended,
+        "the power helper wrote a line longer than its protocol allows"
+    );
+    // A reader that stops taking events ends the reading.
+    let ended = read_lines(&b"\"did_wake\"\n\"did_wake\"\n"[..], |_| false);
+    assert_eq!(ended, "the daemon stopped reading the power helper");
+}
+
+/// The helper lies beside the daemon's executable; one that is not there
+/// cannot be started, which names it.
+#[test]
+fn the_power_helper_lies_beside_mooringctl() {
+    use crate::runtime::power::{helper_path, spawn_at};
+
+    assert_eq!(
+        helper_path(std::path::Path::new(
+            "/A/Mooring.app/Contents/MacOS/mooringctl"
+        )),
+        std::path::Path::new("/A/Mooring.app/Contents/MacOS/mooring-power")
+    );
+    let missing = std::path::Path::new("/nonexistent/mooring-power");
+    let error = spawn_at(missing).unwrap_err();
+    assert!(
+        matches!(&error, LocalError::PowerHelperSpawn { path, .. } if path == missing),
+        "{error:?}"
+    );
+}
+
+/// A helper process that writes events and ends: they arrive in order on
+/// the link, then the end; the daemon's commands reach its stdin.
+#[test]
+fn a_helper_process_is_read_and_written_through_its_pipes() {
+    use crate::runtime::power::{PowerMessage, spawn_at};
+    use mooring_daemon_core::power::{HelperCommand, HelperEvent};
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("mooring-power");
+    let seen = dir.path().join("seen");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf '{{\"power_source\":\"battery\"}}\\n'\nIFS= read -r line\nprintf '%s\\n' \"$line\" > '{}'\nprintf '\"did_wake\"\\n'\n",
+            seen.display()
         ),
-        (b"Now drawing from 'Battery Power'\n", PowerSource::Battery),
-        (b"Now drawing from 'UPS Power'", PowerSource::Battery),
-    ] {
-        assert_eq!(parse(stdout).unwrap(), source);
-    }
-    for stdout in [
-        &b""[..],
-        b"\n",
-        b"Now drawing from 'Solar Power'\n",
-        b" Now drawing from 'AC Power'\n",
-        b"-InternalBattery-0\nNow drawing from 'AC Power'\n",
-    ] {
-        assert!(matches!(parse(stdout), Err(LocalError::PowerUnreadable)));
-    }
-    // This Mac answers one of them.
-    assert!(crate::runtime::power::power_source().is_ok());
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut link = spawn_at(&script).unwrap();
+    let wait = Duration::from_secs(10);
+    assert_eq!(
+        link.messages.recv_timeout(wait).unwrap(),
+        PowerMessage::Event(HelperEvent::PowerSource(PowerSource::Battery))
+    );
+    link.send(&HelperCommand::Hold(true)).unwrap();
+    assert_eq!(
+        link.messages.recv_timeout(wait).unwrap(),
+        PowerMessage::Event(HelperEvent::DidWake)
+    );
+    assert_eq!(
+        link.messages.recv_timeout(wait).unwrap(),
+        PowerMessage::Ended("the power helper exited".to_owned())
+    );
+    assert_eq!(fs::read_to_string(&seen).unwrap(), "{\"hold\":true}\n");
+}
+
+/// A closed link reaps its helper: one that exits at the end of its input
+/// is waited for, one that ignores it is killed after
+/// [`HELPER_EXIT_WAIT`](crate::runtime::power::HELPER_EXIT_WAIT); a link
+/// dropped unclosed reaps it too. None is left behind, not even a zombie.
+#[test]
+fn a_closed_helper_is_reaped_and_one_that_lingers_is_killed() {
+    use crate::runtime::power::{PowerMessage, spawn_at};
+    use mooring_daemon_core::power::HelperEvent;
+
+    let dir = tempfile::tempdir().unwrap();
+    let start = |name: &str, rest: &str| {
+        let script = dir.path().join(name);
+        let pid_file = dir.path().join(format!("{name}.pid"));
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho $$ > '{}'\nprintf '{{\"power_source\":\"ac\"}}\\n'\n{rest}\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let link = spawn_at(&script).unwrap();
+        assert_eq!(
+            link.messages.recv_timeout(Duration::from_secs(10)).unwrap(),
+            PowerMessage::Event(HelperEvent::PowerSource(PowerSource::Ac))
+        );
+        let pid = fs::read_to_string(pid_file).unwrap().trim().to_owned();
+        (link, pid)
+    };
+    // Gone: `ps` lists no such process, running or zombie.
+    let gone = |pid: &str| {
+        let listed = Command::new("/bin/ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .unwrap();
+        !listed.status.success() && listed.stdout.is_empty()
+    };
+    let (link, pid) = start("obedient", "cat > /dev/null");
+    assert_eq!(link.close(), "exit status: 0");
+    assert!(gone(&pid), "{pid}");
+    let (link, pid) = start("lingering", "exec /bin/sleep 30");
+    let closing = Instant::now();
+    let end = link.close();
+    assert!(end.starts_with("killed after 1s: signal: 9"), "{end}");
+    assert!(closing.elapsed() < Duration::from_secs(5));
+    assert!(gone(&pid), "{pid}");
+    let (link, pid) = start("dropped", "cat > /dev/null");
+    drop(link);
+    assert!(gone(&pid), "{pid}");
 }
 
 /// 2026-10-24T00:00:00Z.

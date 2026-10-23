@@ -46,13 +46,13 @@ pub(crate) fn facing_the_m7(
     env: &Env<'_>,
     interface: &BsdName,
 ) -> Result<InterfaceIndex, CommandError> {
-    let pinned = router::configured_pin(&support_dir(env)?)?;
+    let pinned = router::pinned_address(&support_dir(env)?)?;
     let candidate = router::pin_candidate(&env.router, interface)?;
-    if candidate.lladdr != pinned.gateway_lladdr {
+    if candidate.lladdr != pinned {
         return Err(LocalError::EgressNotTheRouter {
             interface: interface.clone(),
             found: candidate.lladdr,
-            pinned: pinned.gateway_lladdr,
+            pinned,
         }
         .into());
     }

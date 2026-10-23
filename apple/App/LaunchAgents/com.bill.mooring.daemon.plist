@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Mooring's daemon (design §5.1): Mooring.app registers it with
+     SMAppService.agent(plistName:), and launchd runs the mooringctl inside
+     the app's own bundle. The daemon reads the M7's interface from the
+     router pin and writes its own log, so the plist names neither. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.bill.mooring.daemon</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.bill.mooring</string>
+	</array>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/mooringctl</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>mooringctl</string>
+		<string>daemon</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Standard</string>
+	<key>ThrottleInterval</key>
+	<integer>60</integer>
+	<key>ExitTimeOut</key>
+	<integer>5</integer>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>16384</integer>
+	</dict>
+</dict>
+</plist>

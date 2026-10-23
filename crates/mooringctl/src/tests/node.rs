@@ -30,7 +30,7 @@ use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
 use crate::node::NodeError;
 use crate::node::dial::relay;
-use crate::node::ssh::{Remote, SshTarget, escaped, reply};
+use crate::node::ssh::{Remote, Session, SshTarget, escaped, reply};
 use crate::prompt::Answer;
 
 const ADDRESS: &str = "45.67.89.10";
@@ -637,6 +637,7 @@ fn the_ssh_command_line_is_the_designs() {
         interface: mooring_model::iface::BsdName::parse("en9").unwrap(),
         mooringctl: PathBuf::from("/Applications/Mooring.app/Contents/MacOS/mooringctl"),
         remote: Remote::ForcedCommand,
+        deadline: None,
     };
     let args: Vec<String> = target
         .args()
@@ -692,6 +693,155 @@ fn the_ssh_command_line_is_the_designs() {
         r"ProxyCommand='/Users/o'\''brien/mooringctl' dial-bound --interface en9 %h %p"
     );
     assert_eq!(args.last().map(String::as_str), Some("true"));
+}
+
+/// A session past its deadline is ended with its dialler, however long
+/// ssh's own timeouts would wait, and fails as such: here the dialler never
+/// connects, and ssh would wait 15 s (`ConnectTimeout`). Without a
+/// deadline, a dialler that fails ends the session as ssh's own failure.
+#[test]
+fn a_session_past_its_deadline_is_ended_with_its_dialler() {
+    use std::time::{Duration, Instant};
+
+    use crate::node::NodeLinks;
+    use crate::node::ssh::SshLinks;
+
+    let dir = tempfile::tempdir().unwrap();
+    let dialler = dir.path().join("dialler");
+    let pid_file = dir.path().join("dialler.pid");
+    fs::write(
+        &dialler,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\necho $$ > '{}'\nexec /bin/sleep 30\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&dialler, fs::Permissions::from_mode(0o755)).unwrap();
+    // A new script's first run waits on the system's scan of it, seconds on
+    // a loaded Mac: that run is spent before the clock starts.
+    assert!(
+        std::process::Command::new(&dialler)
+            .arg("warm")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Duration::from_secs(3);
+    let started = Instant::now();
+    let target = SshTarget {
+        address: PublicIpv4::new(ADDRESS.parse().unwrap()).unwrap(),
+        identity: dir.path().join("ops_ed25519"),
+        known_hosts: dir.path().join("known_hosts"),
+        interface: mooring_model::iface::BsdName::parse("en9").unwrap(),
+        mooringctl: dialler.clone(),
+        remote: Remote::ForcedCommand,
+        deadline: Some(started + deadline),
+    };
+    let session = std::thread::spawn({
+        let target = target.clone();
+        move || SshLinks.open(target).request(&LineRequest::Hello)
+    });
+    // The dialler runs while ssh waits for a banner that never comes.
+    let until = started + deadline;
+    let pid: u32 = loop {
+        if let Some(pid) = fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(Instant::now() < until, "ssh did not start the dialler");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let error = session.join().unwrap().unwrap_err();
+    let took = started.elapsed();
+    assert!(matches!(error, NodeError::PastDeadline), "{error:?}");
+    assert!(
+        took >= deadline && took < deadline + Duration::from_secs(5),
+        "{took:?}"
+    );
+    // The dialler, in ssh's group, went with it.
+    let until = Instant::now() + Duration::from_secs(5);
+    while mooring_macsys::process_path(pid).unwrap().is_some() {
+        assert!(Instant::now() < until, "the dialler outlived the session");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    fs::write(&dialler, "#!/bin/sh\nexit 1\n").unwrap();
+    let error = SshLinks
+        .open(SshTarget {
+            deadline: None,
+            ..target
+        })
+        .request(&LineRequest::Hello)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            NodeError::Ssh {
+                code: Some(255),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// What a session left decides its outcome: a session killed at its
+/// deadline is `PastDeadline` unless its reply had arrived whole, and one
+/// that was not is ssh's own failure or the reply's.
+#[test]
+fn a_session_killed_at_its_deadline_is_past_it_unless_its_reply_was_whole() {
+    let session = |past_deadline, stdout: &[u8]| Session {
+        past_deadline,
+        code: if past_deadline { None } else { Some(255) },
+        stdout: stdout.to_vec(),
+        stderr: "Connection closed".to_owned(),
+        written: Ok(()),
+    };
+    let whole = b"{\"Ok\":\"BootstrapRevoked\"}\n";
+    let cut = b"{\"Ok\":\"Bootst";
+    for past_deadline in [true, false] {
+        assert_eq!(
+            session(past_deadline, whole).replied().unwrap(),
+            Response::BootstrapRevoked
+        );
+    }
+    assert!(matches!(
+        session(true, cut).replied(),
+        Err(NodeError::PastDeadline)
+    ));
+    assert!(matches!(
+        session(false, cut).replied(),
+        Err(NodeError::Reply(_))
+    ));
+    assert!(matches!(
+        session(true, b"").replied(),
+        Err(NodeError::PastDeadline)
+    ));
+    assert!(matches!(
+        session(false, b"").replied(),
+        Err(NodeError::Ssh { code: Some(255), stderr }) if stderr == "Connection closed"
+    ));
+    // A command session: killed, it is past its deadline; one that exited
+    // 0 with nothing printed ran, deadline or not.
+    assert!(matches!(
+        session(true, b"").ran(),
+        Err(NodeError::PastDeadline)
+    ));
+    assert!(matches!(
+        session(false, b"").ran(),
+        Err(NodeError::Ssh {
+            code: Some(255),
+            ..
+        })
+    ));
+    let ran = Session {
+        code: Some(0),
+        ..session(false, b"")
+    };
+    ran.ran().unwrap();
 }
 
 #[test]

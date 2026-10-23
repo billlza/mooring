@@ -121,6 +121,7 @@ pub(crate) fn adopt(
             interface: args.interface.clone(),
             mooringctl: mooringctl.clone(),
             remote,
+            deadline: None,
         })
     };
     let mut generation = state.deployment.config_generation();

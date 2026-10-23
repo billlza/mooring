@@ -9,6 +9,7 @@ import SwiftUI
 
 struct MenuView: View {
     let model: ConsoleModel
+    let daemon: DaemonService
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -16,6 +17,8 @@ struct MenuView: View {
             Text(String(localized: "Exit: \(deployed.exit.state.headline)"))
         }
         summary
+        Divider()
+        daemonItems
         Divider()
         Button("Open Console") {
             openWindow(id: ConsoleWindow.id)
@@ -53,6 +56,28 @@ struct MenuView: View {
             return Text("Not reading the daemon's status")
         case (.noCommand, _):
             return Text("No mooringctl in this app")
+        }
+    }
+
+    /// The daemon's registration and what can be done with it.
+    @ViewBuilder private var daemonItems: some View {
+        switch daemon.daemon {
+        case .enabled:
+            Text("Daemon: starts at login")
+            Button("Stop the Daemon") { daemon.stop() }
+        case .requiresApproval:
+            Text("Daemon: waiting for your approval in Login Items")
+            Button("Open Login Items…") { daemon.openLoginItems() }
+        case .notRegistered:
+            Text("Daemon: not started")
+            Button("Start the Daemon at Login") { daemon.start() }
+        }
+        Toggle(
+            "Open Mooring at Login",
+            isOn: Binding(get: { daemon.openAtLogin }, set: { daemon.setOpenAtLogin($0) })
+        )
+        if let failure = daemon.failure {
+            Text("Could not change it: \(failure)")
         }
     }
 }

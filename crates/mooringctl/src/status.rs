@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::console::ConsoleStatus;
 use mooring_daemon_core::control::{
-    DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, decode_reply,
-    encode_line,
+    CONTROL_PROTOCOL, DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES,
+    ProtocolLine, decode_protocol_line, decode_reply, encode_line,
 };
 use mooring_daemon_core::router::RouterReading;
 use mooring_model::time::UnixTime;
@@ -90,7 +90,7 @@ pub(crate) fn status(
         Reading::Once => (DaemonRequest::Status, ANSWER_TIMEOUT, ANSWER_TIMEOUT),
         Reading::Follow { .. } => (DaemonRequest::Subscribe, FOLLOW_SILENCE, PARENT_CHECK),
     };
-    let mut reader = BufReader::new(connect(&socket, request, tick)?);
+    let mut reader = connect(&socket, request, tick)?;
     let mut deadline = Instant::now() + first_wait;
     let mut newest: Option<UnixTime> = None;
     loop {
@@ -158,16 +158,17 @@ pub(crate) enum Next {
     Deadline,
 }
 
-/// Connects to the daemon and sends `request`; each read then waits at
-/// most `tick`. No socket, or no one listening on it, is
-/// `DaemonNotRunning`. The time limits are set before connecting: a busy
-/// daemon writes its refusal and closes at once, and setsockopt(2) fails
-/// on macOS once the peer has shut the socket down.
+/// Connects to the daemon, sends `request` and reads the daemon's protocol
+/// line (see [`check_protocol`]); each read then waits at most `tick`. No
+/// socket, or no one listening on it, is `DaemonNotRunning`. The time
+/// limits are set before connecting: a busy daemon writes its refusal and
+/// closes at once, and setsockopt(2) fails on macOS once the peer has shut
+/// the socket down.
 pub(crate) fn connect(
     socket: &Path,
     request: DaemonRequest,
     tick: Duration,
-) -> Result<UnixStream, LocalError> {
+) -> Result<BufReader<UnixStream>, LocalError> {
     let io_error = |source| LocalError::DaemonIo {
         path: socket.to_path_buf(),
         source,
@@ -186,7 +187,35 @@ pub(crate) fn connect(
             },
             _ => io_error(error),
         })?;
-    send_request(UnixStream::from(client), request, socket)
+    let mut reader = BufReader::new(send_request(UnixStream::from(client), request, socket)?);
+    check_protocol(&mut reader, socket)?;
+    Ok(reader)
+}
+
+/// Reads the daemon's first line, within [`ANSWER_TIMEOUT`]: it must name
+/// this build's control protocol (design §15.1). A first line that names
+/// none is `DaemonProtocolMissing`, and one that names another protocol
+/// `DaemonProtocolOther`; either way no reply is read.
+pub(crate) fn check_protocol(
+    reader: &mut BufReader<UnixStream>,
+    socket: &Path,
+) -> Result<(), LocalError> {
+    let line = match read_reply_line(reader, socket, Instant::now() + ANSWER_TIMEOUT, &|| true)? {
+        Next::Line(line) => line,
+        Next::Deadline | Next::ParentGone => {
+            return Err(LocalError::DaemonSilent {
+                secs: ANSWER_TIMEOUT.as_secs(),
+            });
+        }
+    };
+    match decode_protocol_line(&line) {
+        Ok(ProtocolLine { control_protocol }) if control_protocol == CONTROL_PROTOCOL => Ok(()),
+        Ok(ProtocolLine { control_protocol }) => Err(LocalError::DaemonProtocolOther {
+            daemon: control_protocol,
+            client: CONTROL_PROTOCOL,
+        }),
+        Err(_) => Err(LocalError::DaemonProtocolMissing),
+    }
 }
 
 /// Sends `request` on `stream`. A busy daemon writes its refusal and

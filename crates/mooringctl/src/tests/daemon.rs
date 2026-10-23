@@ -20,23 +20,24 @@ use std::time::Duration;
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::console::{ConsoleStatus, UndeployedStatus};
 use mooring_daemon_core::control::{
-    DaemonReply, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, Refusal, decode_reply, encode_line,
+    DaemonReply, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, ProtocolLine, Refusal, decode_reply,
+    encode_line,
 };
 use mooring_daemon_core::router::netgear::parse_netgear_model_json;
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
-use mooring_model::iface::BsdName;
 use mooring_model::time::UnixTime;
-use mooring_store::{STATE_FILE, STATUS_SNAPSHOT_FILE};
+use mooring_store::{ROUTER_PIN_FILE, STATE_FILE, STATUS_SNAPSHOT_FILE};
 use tempfile::TempDir;
 
 use super::support::FakeParent;
 use super::support::{FIXTURE, Harness, NOW};
 use crate::cli::Cli;
 use crate::daemon::hub::Hub;
+use crate::daemon::log::LOG_FILE;
 use crate::daemon::serve::{End, Limits, accept, serve};
 use crate::daemon::{
-    Control, LoopState, Polled, RunPaths, Waited, after_poll, poll_once, start, unavailable_reason,
-    wait_for_next_poll,
+    Control, LoopState, PollOutcome, Polled, RunPaths, Waited, after_poll, poll_once, poll_router,
+    start, unavailable_reason, wait_for_next_poll,
 };
 use crate::error::{CommandError, EXIT_LOCAL, LocalError};
 use crate::router::error::{Missing, RouterError, UnreachableCause};
@@ -123,6 +124,19 @@ fn unavailable(at: u64) -> Arc<[u8]> {
             last_polled_at: None,
         },
     )
+}
+
+/// The line every connection begins with.
+fn protocol_line() -> Vec<u8> {
+    encode_line(&ProtocolLine::CURRENT, MAX_REPLY_LINE_BYTES).unwrap()
+}
+
+/// Reads the protocol line a connection begins with, exactly, and checks
+/// it.
+fn read_protocol_line(client: &mut UnixStream) {
+    let mut line = vec![0; protocol_line().len()];
+    client.read_exact(&mut line).unwrap();
+    assert_eq!(line, protocol_line());
 }
 
 fn read_reply(reader: &mut impl BufRead) -> DaemonReply {
@@ -432,13 +446,12 @@ fn a_deployment_that_appears_ends_the_router_console_at_its_next_poll() {
     let mut harness = harness();
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
-    let interface = BsdName::parse("lo0").unwrap();
     let hub = Hub::default();
     let mut state = LoopState::default();
     let mut log = Vec::new();
     assert_eq!(
         harness
-            .with_env(|env| poll_once(env, &support, Some(&interface), &hub, &mut log, &mut state))
+            .with_env(|env| poll_once(env, &support, &hub, &mut log, &mut state))
             .unwrap(),
         Polled::Published
     );
@@ -446,11 +459,49 @@ fn a_deployment_that_appears_ends_the_router_console_at_its_next_poll() {
     fs::write(support.join(STATE_FILE), b"{}").unwrap();
     assert_eq!(
         harness
-            .with_env(|env| poll_once(env, &support, Some(&interface), &hub, &mut log, &mut state))
+            .with_env(|env| poll_once(env, &support, &hub, &mut log, &mut state))
             .unwrap(),
         Polled::DeploymentAppeared
     );
     assert_eq!(hub.latest().unwrap().unwrap().seq, 1);
+}
+
+/// The daemon polls on the interface the router pin records, read at each
+/// poll: without a pin, and with a version-1 pin, which records none, the
+/// panel says the adapter is not set up and the log names what is missing;
+/// once `router pin --interface` records it, the next poll reads the M7.
+#[test]
+fn the_daemon_polls_on_the_interface_the_pin_records() {
+    let mut harness = harness();
+    let support = harness.support_dir();
+    let poll = |harness: &mut Harness| harness.with_env(|env| poll_router(env, &support));
+    let missing = |outcome: PollOutcome| match outcome {
+        Err(CommandError::Router(RouterError::NotConfigured { missing })) => missing,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(missing(poll(&mut harness)), Missing::Pin);
+    fs::create_dir_all(&support).unwrap();
+    fs::write(
+        support.join(ROUTER_PIN_FILE),
+        "{\"version\": 1, \"gateway_lladdr\": \"02:00:5e:10:20:30\", \"pinned_at\": 1791900000}\n",
+    )
+    .unwrap();
+    assert_eq!(missing(poll(&mut harness)), Missing::Interface);
+    assert_eq!(
+        unavailable_reason(&CommandError::Router(RouterError::NotConfigured {
+            missing: Missing::Interface
+        })),
+        RouterUnavailableReason::NotConfigured
+    );
+    // Pinned with the interface: the poll goes to the M7 on it, and only
+    // the password is missing now.
+    let outcome = harness.run(&["router", "pin", "--interface", "lo0"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        harness.console.asked.is_empty(),
+        "the identity did not change"
+    );
+    assert_eq!(missing(poll(&mut harness)), Missing::Password);
 }
 
 /// The wait for the next poll ends early when the acceptor ends, or when
@@ -500,7 +551,7 @@ fn failures_map_to_panel_reasons() {
     );
     assert_eq!(
         Missing::Interface.to_string(),
-        "the daemon was given no interface to the M7 (mooringctl daemon --router-interface)"
+        "the router pin records no interface to the M7 (mooringctl router pin --interface <bsd>)"
     );
 }
 
@@ -508,15 +559,16 @@ fn failures_map_to_panel_reasons() {
 
 /// Serves one connection on a socket pair whose client has already sent
 /// `request` (the pair buffers it, so a slow test thread cannot make it
-/// late): the client end, and how the connection ended.
+/// late): the client end, past the protocol line the connection begins
+/// with, and how the connection ended.
 fn serve_pair(control: &Arc<Control>, request: &[u8]) -> (UnixStream, Running<End>) {
     let (mut client, server) = UnixStream::pair().unwrap();
     client.write_all(request).unwrap();
     let control = Arc::clone(control);
-    (
-        bounded(client),
-        Running::start(move || serve(server, &control, QUICK)),
-    )
+    let served = Running::start(move || serve(server, &control, QUICK));
+    let mut client = bounded(client);
+    read_protocol_line(&mut client);
+    (client, served)
 }
 
 /// What the connections share, with a fresh hub, and the receiving end of
@@ -765,8 +817,13 @@ fn clients_beyond_the_limit_are_told_busy() {
     let mut first_reader = BufReader::new(first.try_clone().unwrap());
     let mut line = Vec::new();
     first_reader.read_until(b'\n', &mut line).unwrap();
+    assert_eq!(line, protocol_line());
+    line.clear();
+    first_reader.read_until(b'\n', &mut line).unwrap();
     assert_eq!(line, &*unavailable(1));
-    let second = bounded(UnixStream::connect(&path).unwrap());
+    // A busy daemon names its protocol too, then refuses.
+    let mut second = bounded(UnixStream::connect(&path).unwrap());
+    read_protocol_line(&mut second);
     let mut second_reader = BufReader::new(second);
     assert_eq!(
         read_reply(&mut second_reader),
@@ -792,8 +849,9 @@ fn clients_beyond_the_limit_are_told_busy() {
         let _ = third.write_all(b"\"status\"\n");
         let mut all = Vec::new();
         third.read_to_end(&mut all).unwrap();
-        if all != busy {
-            assert_eq!(all, &*unavailable(1));
+        let answer = all.strip_prefix(protocol_line().as_slice()).unwrap();
+        if answer != busy {
+            assert_eq!(answer, &*unavailable(1));
             break;
         }
         assert!(started.elapsed() < DEADLINE, "the slot was never freed");
@@ -804,9 +862,17 @@ fn clients_beyond_the_limit_are_told_busy() {
 // --- The client ---------------------------------------------------------
 
 /// A fake daemon on the harness's control socket that answers one
-/// connection with `replies`, then closes it, and returns the request it
-/// read.
+/// connection as the daemon does, with the protocol line and then
+/// `replies`, then closes it, and returns the request it read.
 fn fake_daemon(harness: &Harness, replies: Vec<Vec<u8>>) -> Running<Vec<u8>> {
+    let mut lines = vec![protocol_line()];
+    lines.extend(replies);
+    raw_daemon(harness, lines)
+}
+
+/// [`fake_daemon`] with exactly `lines`, and no protocol line unless one of
+/// them is.
+fn raw_daemon(harness: &Harness, lines: Vec<Vec<u8>>) -> Running<Vec<u8>> {
     let paths = RunPaths::under(&harness.support_dir());
     fs::create_dir_all(&paths.dir).unwrap();
     let listener = UnixListener::bind(&paths.socket).unwrap();
@@ -816,8 +882,8 @@ fn fake_daemon(harness: &Harness, replies: Vec<Vec<u8>>) -> Running<Vec<u8>> {
         let mut request = Vec::new();
         reader.read_until(b'\n', &mut request).unwrap();
         let mut stream = stream;
-        for reply in replies {
-            stream.write_all(&reply).unwrap();
+        for line in lines {
+            stream.write_all(&line).unwrap();
         }
         request
     })
@@ -952,6 +1018,7 @@ fn lingering_daemon(
         reader.read_until(b'\n', &mut request).unwrap();
         assert_eq!(request, b"\"subscribe\"\n");
         let mut stream = stream;
+        stream.write_all(&protocol_line()).unwrap();
         stream.write_all(&first).unwrap();
         thread::sleep(pause);
         stream.write_all(&then).unwrap();
@@ -1278,6 +1345,42 @@ fn a_busy_daemon_is_reported_as_busy() {
     }
 }
 
+/// A daemon whose first line names no protocol, as one built before the
+/// line does, or names another protocol, is refused before any reply is
+/// read, saying what to do; one that closes first is closed.
+#[test]
+fn a_daemon_of_no_or_another_protocol_is_refused_before_its_replies() {
+    let mut harness = harness();
+    for (lines, stderr) in [
+        (
+            vec![available_line(NOW)],
+            "mooringctl: the daemon did not name its control protocol on its first line, as a daemon built before this mooringctl may not: restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+        ),
+        (
+            vec![b"{\"control_protocol\":2}\n".to_vec(), available_line(NOW)],
+            "mooringctl: the daemon speaks control protocol 2 and this mooringctl speaks 1: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+        ),
+        (
+            vec![
+                b"{\"control_protocol\":1,\"build\":7}\n".to_vec(),
+                available_line(NOW),
+            ],
+            "mooringctl: the daemon did not name its control protocol on its first line, as a daemon built before this mooringctl may not: restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+        ),
+        (vec![], "mooringctl: the daemon closed the status stream\n"),
+    ] {
+        for args in [&["status", "--json"][..], &["status", "--follow", "--json"]] {
+            let daemon = raw_daemon(&harness, lines.clone());
+            let outcome = harness.run(args);
+            daemon.result();
+            assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
+            assert_eq!(outcome.stdout, "", "{args:?}");
+            assert_eq!(outcome.stderr, stderr, "{args:?}");
+            fs::remove_file(RunPaths::under(&harness.support_dir()).socket).unwrap();
+        }
+    }
+}
+
 #[test]
 fn status_reports_a_refusal_a_closed_stream_and_a_cut_line() {
     let mut harness = harness();
@@ -1367,15 +1470,29 @@ fn status_without_a_daemon_says_it_is_not_running() {
 }
 
 /// A deployment whose state cannot be read stops the daemon, through the
-/// command line: it never serves an exit it cannot read.
+/// command line: it never serves an exit it cannot read. The command opens
+/// its log in the home it is given first, and points stderr at it (here a
+/// stand-in that counts); its last error still reaches `err`, which in the
+/// binary is that log.
 #[test]
 fn the_daemon_stops_on_a_state_it_cannot_read() {
     let mut harness = harness();
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
     fs::write(support.join(STATE_FILE), b"{}").unwrap();
-    let outcome =
-        Running::start(move || harness.run(&["daemon", "--router-interface", "lo0"])).result();
+    let log = harness
+        .home
+        .path()
+        .join("Library")
+        .join("Logs")
+        .join("Mooring")
+        .join(LOG_FILE);
+    // Read before the harness, and its home, go with the thread.
+    let (outcome, redirected, log_mode) = Running::start(move || {
+        let outcome = harness.run(&["daemon"]);
+        (outcome, harness.redirected.get(), mode(&log))
+    })
+    .result();
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert!(
         outcome
@@ -1384,4 +1501,6 @@ fn the_daemon_stops_on_a_state_it_cannot_read() {
         "{}",
         outcome.stderr
     );
+    assert_eq!(redirected, 1);
+    assert_eq!(log_mode, 0o600);
 }

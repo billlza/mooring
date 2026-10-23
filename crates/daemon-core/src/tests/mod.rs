@@ -13,6 +13,7 @@ mod meter;
 mod netgear;
 mod notify;
 mod policy;
+mod power;
 mod router;
 mod snapshot;
 mod support;

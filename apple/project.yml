@@ -4,8 +4,9 @@
 # project from this spec next to it (apple/Mooring.xcodeproj, not kept in
 # git) and builds it unsigned (CODE_SIGNING_ALLOWED=NO) into the target
 # directory; the bundle is then signed ad hoc there, with the hardened
-# runtime, and with the signed `mooringctl` inside it. Warnings are errors,
-# in Swift as in Rust (design §16).
+# runtime, and with the signed `mooringctl` inside it, which the daemon's
+# plist in Contents/Library/LaunchAgents runs. Warnings are errors, in
+# Swift as in Rust (design §16).
 name: Mooring
 options:
   deploymentTarget:
@@ -36,8 +37,23 @@ targets:
         excludes:
           - Info.plist
           - "*.license"
+          - LaunchAgents
+      # The daemon's plist, which SMAppService registers from the bundle
+      # (design §5.1); copied as it is, never processed.
+      - path: App/LaunchAgents/com.bill.mooring.daemon.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
     dependencies:
       - package: MooringKit
+        product: MooringKit
+      # The power helper, beside mooringctl in Contents/MacOS (design §5.1).
+      - target: mooring-power
+        embed: true
+        codeSign: false
+        copy:
+          destination: executables
     settings:
       base:
         PRODUCT_NAME: Mooring
@@ -45,6 +61,19 @@ targets:
         INFOPLIST_FILE: App/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         COMBINE_HIDPI_IMAGES: YES
+  mooring-power:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Power
+    dependencies:
+      - package: MooringKit
+        product: MooringPower
+    settings:
+      base:
+        PRODUCT_NAME: mooring-power
+        PRODUCT_BUNDLE_IDENTIFIER: com.bill.mooring.power
+        SKIP_INSTALL: YES
 schemes:
   Mooring:
     build:

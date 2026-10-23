@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::time::Duration;
 
 use mooring_fixtures::Fixture;
 use mooring_model::collections::NonEmpty;
@@ -28,8 +29,8 @@ use crate::exit::{
 };
 use crate::network::ForeignNetworkFinding;
 use crate::status::{
-    DegradedReason, DownReason, ExitSection, ExitState, LinkState, PowerSource, PowerStatus,
-    ProbeStage, ProcessEnd,
+    DegradedReason, DownReason, DrainOutcome, ExitSection, ExitState, LinkState, PowerSource,
+    PowerStatus, ProbeStage, ProcessEnd,
 };
 
 /// Inside the fixtures' carrier prefix, 31.120.0.0/14.
@@ -56,6 +57,7 @@ enum Call {
     CloseGate,
     Shutdown,
     ClearHold,
+    Drain(Duration),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,7 +141,7 @@ fn call_name(node: &NodeId) -> &'static str {
 fn chained(ip: Ipv4Addr) -> InChainProbe {
     InChainProbe {
         ip,
-        latency: std::time::Duration::from_millis(120),
+        latency: Duration::from_millis(120),
     }
 }
 
@@ -252,6 +254,7 @@ impl ExitPorts for Fake {
             NodeCall::CloseGate(_) => Call::CloseGate,
             NodeCall::Shutdown(_) => Call::Shutdown,
             NodeCall::ClearHold => Call::ClearHold,
+            NodeCall::Drain { within } => Call::Drain(*within),
         };
         self.log.push(Event::Call(name, kind));
         self.calls
@@ -272,6 +275,7 @@ struct World {
     foreign: BTreeSet<ForeignNetworkFinding>,
     sim_bytes: u64,
     power: PowerStatus,
+    power_helper_running: bool,
     nodes_degraded: Vec<DegradedReason>,
 }
 
@@ -295,6 +299,7 @@ impl World {
             egress,
             foreign: BTreeSet::new(),
             sim_bytes: 0,
+            power_helper_running: true,
             nodes_degraded: Vec::new(),
             power: PowerStatus {
                 source: PowerSource::Ac,
@@ -309,7 +314,7 @@ impl World {
     fn inputs(&self, retry: bool) -> TickInputs<'_> {
         TickInputs {
             now: UnixTime::from_secs(self.now),
-            mono: std::time::Duration::from_secs(self.mono),
+            mono: Duration::from_secs(self.mono),
             deployment: &self.deployment,
             exit_enabled: self.enabled,
             egress: self.egress.clone(),
@@ -319,6 +324,7 @@ impl World {
                 bytes: self.sim_bytes,
             },
             power: self.power,
+            power_helper_running: self.power_helper_running,
             retry,
             nodes_degraded: self.nodes_degraded.clone(),
         }
@@ -412,15 +418,15 @@ fn a_good_probe_starts_the_engine_which_verifies_after_the_grace() {
     world.advance(10);
     assert_eq!(world.tick(&mut machine, &mut fake).since, verified_at);
     // The next round is due 30 s after the first.
-    let mono = |world: &World| std::time::Duration::from_secs(world.mono);
+    let mono = |world: &World| Duration::from_secs(world.mono);
     assert_eq!(
         machine.next_probe_in(mono(&world), &world.deployment),
-        Some(std::time::Duration::from_secs(10))
+        Some(Duration::from_secs(10))
     );
     world.advance(10);
     assert_eq!(
         machine.next_probe_in(mono(&world), &world.deployment),
-        Some(std::time::Duration::ZERO)
+        Some(Duration::ZERO)
     );
     world.tick(&mut machine, &mut fake);
     assert_eq!(
@@ -1204,6 +1210,180 @@ fn on_battery_a_running_exit_is_degraded() {
         }
     );
     assert_eq!(section.power.source, PowerSource::Battery);
+}
+
+/// Without the power helper a running exit is degraded: nothing keeps the
+/// Mac awake and no sleep is drained.
+#[test]
+fn without_the_power_helper_a_running_exit_is_degraded() {
+    let mut world = World::new();
+    let (mut machine, mut fake) = world.serving();
+    world.power_helper_running = false;
+    world.advance(2);
+    assert_eq!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Degraded {
+            reasons: NonEmpty::new(DegradedReason::PowerHelperExited)
+        }
+    );
+    world.power_helper_running = true;
+    world.advance(2);
+    assert_eq!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Verifying
+    );
+}
+
+/// A sleep stops the engine first, then asks every node with a site to
+/// close its gate for the drain, and the exit stays paused, the engine
+/// stopped, until the wake; the tick after the wake probes afresh and
+/// starts the engine again.
+#[test]
+fn a_sleep_stops_the_engine_drains_the_nodes_and_pauses_until_the_wake() {
+    let mut world = World::new();
+    let (mut machine, mut fake) = world.serving();
+    let deployment = world.deployment.clone();
+    let mut left = [3_000, 2_500, 2_000].map(Duration::from_millis).into_iter();
+    let mut budget = || left.next();
+    let outcome = machine
+        .sleep(
+            UnixTime::from_secs(world.now),
+            &deployment,
+            &mut fake,
+            &mut budget,
+        )
+        .unwrap();
+    assert_eq!(outcome, DrainOutcome::Completed);
+    assert!(machine.paused());
+    let log = fake.take_log();
+    assert_eq!(log.first(), Some(&Event::Stop), "{log:?}");
+    let drained: Vec<&Event> = log
+        .iter()
+        .filter(|event| matches!(event, Event::Call(_, Call::Drain(_))))
+        .collect();
+    // Each call is bounded by what was left of the budget when it was made.
+    assert_eq!(
+        drained,
+        [
+            &Event::Call("ams1", Call::Drain(Duration::from_millis(3_000))),
+            &Event::Call("lon1", Call::Drain(Duration::from_millis(2_500)))
+        ]
+    );
+    // Paused: ticks keep the engine stopped and probe nothing.
+    for _ in 0..3 {
+        world.advance(30);
+        let section = world.tick(&mut machine, &mut fake);
+        assert_eq!(section.state, ExitState::Paused);
+        assert_eq!(section.engines.exit.pid, None);
+    }
+    assert_eq!(fake.take_log(), []);
+    // Woken: the next tick probes at once and starts the engine.
+    machine.wake();
+    assert!(!machine.paused());
+    world.advance(2);
+    let section = world.tick(&mut machine, &mut fake);
+    assert_eq!(section.state, ExitState::Starting);
+    let log = fake.take_log();
+    assert!(
+        matches!(log.first(), Some(Event::Probe(_))),
+        "a fresh direct probe first: {log:?}"
+    );
+    assert!(log.contains(&Event::Start("one")), "{log:?}");
+}
+
+/// The drain's budget is checked before each node and after the last: a
+/// budget that runs out stops the calls (`TimedOut`), and one that runs out
+/// during the last call times the drain out too; a node that cannot be
+/// reached is `Failed`, the other nodes still asked.
+#[test]
+fn a_drain_past_its_budget_times_out_and_an_unreached_node_fails_it() {
+    let mut world = World::new();
+    let (mut machine, mut fake) = world.serving();
+    let deployment = world.deployment.clone();
+    let mut left = [Some(Duration::from_millis(1_500)), None].into_iter();
+    let mut budget = || left.next().flatten();
+    let outcome = machine
+        .sleep(
+            UnixTime::from_secs(world.now),
+            &deployment,
+            &mut fake,
+            &mut budget,
+        )
+        .unwrap();
+    assert_eq!(outcome, DrainOutcome::TimedOut);
+    let drained: Vec<Event> = fake
+        .take_log()
+        .into_iter()
+        .filter(|event| matches!(event, Event::Call(_, Call::Drain(_))))
+        .collect();
+    assert_eq!(
+        drained,
+        [Event::Call(
+            "ams1",
+            Call::Drain(Duration::from_millis(1_500))
+        )]
+    );
+    // Both nodes asked, and the budget gone by the end: timed out.
+    let mut world = World::new();
+    let (mut machine, mut fake) = world.serving();
+    let mut left = [
+        Some(Duration::from_secs(2)),
+        Some(Duration::from_secs(1)),
+        None,
+    ]
+    .into_iter();
+    let mut budget = || left.next().flatten();
+    let outcome = machine
+        .sleep(
+            UnixTime::from_secs(world.now),
+            &deployment,
+            &mut fake,
+            &mut budget,
+        )
+        .unwrap();
+    assert_eq!(outcome, DrainOutcome::TimedOut);
+    assert!(
+        fake.take_log()
+            .contains(&Event::Call("lon1", Call::Drain(Duration::from_secs(1))))
+    );
+
+    let mut world = World::new();
+    let (mut machine, mut fake) = world.serving();
+    fake.calls
+        .insert("ams1", VecDeque::from([Err(CallFault::Unreachable)]));
+    let mut budget = || Some(Duration::from_secs(4));
+    let outcome = machine
+        .sleep(
+            UnixTime::from_secs(world.now),
+            &deployment,
+            &mut fake,
+            &mut budget,
+        )
+        .unwrap();
+    assert_eq!(outcome, DrainOutcome::Failed);
+    assert!(
+        fake.take_log()
+            .contains(&Event::Call("lon1", Call::Drain(Duration::from_secs(4))))
+    );
+    // A sleep with no engine running drains all the same.
+    let mut world = World::new();
+    world.enabled = false;
+    let mut machine = world.machine();
+    let mut fake = Fake::new();
+    world.tick(&mut machine, &mut fake);
+    fake.take_log();
+    let outcome = machine
+        .sleep(
+            UnixTime::from_secs(world.now),
+            &deployment,
+            &mut fake,
+            &mut budget,
+        )
+        .unwrap();
+    assert_eq!(outcome, DrainOutcome::Completed);
+    let log = fake.take_log();
+    assert!(!log.contains(&Event::Stop), "{log:?}");
+    assert_eq!(log.len(), 2, "{log:?}");
 }
 
 #[test]

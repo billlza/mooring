@@ -3,7 +3,7 @@
 
 This runbook is for the operator. It covers building Mooring.app, running the daemon that polls the M7, reading the console, and stopping both.
 
-The design is §5.1, §10.1, §15.1 and §15.6 (revision 9). This is the development build: it runs from the repository's target directory, signed ad hoc, and the daemon runs until logout. M7 replaces this with a signed app that registers the daemon itself (`SMAppService`).
+The design is §5.1, §10.1, §15.1 and §15.6. This is the development build: it runs from the repository's target directory, signed ad hoc, and the app registers the daemon it carries as a login item (`SMAppService`, M7), so it runs at every login until it is stopped from the app.
 
 Before a deployment exists the console shows the M7 router only, and every other screen says it needs a deployment. Once `mooringctl exit init` has created one, the daemon serves the exit from its next poll (within a minute), with no restart: it resolves the egress, checks for foreign networks, meters the SIM and, once the exit is enabled and its preflight passes, runs `mooring-exit` (design §10.1, §10.2). The swap-day runbook (`swap-day.md`) covers that part. Mooring.app then shows the deployment's status on every screen (section 3); `mooringctl status --json` prints the same document.
 
@@ -11,7 +11,7 @@ With a deployment, the daemon reads each applied node's WireGuard key from the k
 
 ## 0. Once
 
-The M7's identity and admin password are recorded as for `router status`. Run these from Terminal.app's own shell, in the workspace root (design §15.6 rules 3, 4 and 10):
+The M7's identity, the Mac's interface to it and its admin password are recorded as for `router status`. Run these from Terminal.app's own shell, in the workspace root (design §15.6 rules 3, 4 and 10):
 
 ```
 cargo xtask mooringctl
@@ -19,7 +19,7 @@ cargo xtask mooringctl
 ./target/signed/mooringctl router set-password
 ```
 
-`en9` is the Mac's interface to the M7, the USB Ethernet adapter. Check it with `ifconfig`: it is the one with the address `192.168.1.x`.
+`en9` is the Mac's interface to the M7, the USB Ethernet adapter. Check it with `ifconfig`: it is the one with the address `192.168.1.x`. The pin records it, and the daemon polls the M7 on it until a deployment exists. A pin made before 2026-10-23 records no interface: run `router pin --interface en9` once more, which records it without asking again (the address is the same).
 
 XcodeGen must be installed: `brew install xcodegen`.
 
@@ -29,30 +29,44 @@ XcodeGen must be installed: `brew install xcodegen`.
 cargo xtask app
 ```
 
-It builds `target/app/Mooring.app` with `mooringctl` inside it, after:
+It builds `target/app/Mooring.app` with `mooringctl` inside it, the power helper `mooring-power` beside it, and the daemon's plist in `Contents/Library/LaunchAgents`, after:
 - MooringKit's tests;
 - Xcode's own check that the build, made clean, has no error or warning;
-- a check that every string on screen has a Simplified Chinese translation, and so does the local network alert's text.
+- a check that every string on screen has a Simplified Chinese translation, and so does the local network alert's text;
+- a check that the daemon's plist in the app is `apple/App/LaunchAgents`' own.
 
-Both are signed ad hoc with the hardened runtime. If the daemon is running (section 2), the build restarts it on the new `mooringctl`, and macOS asks again for the keychain (section 2, question 1).
+The app, `mooringctl` and the helper are each signed ad hoc with the hardened runtime, and the build checks each one's identifier. If the daemon is running (section 2), the build restarts it on the new `mooringctl` (`launchctl kickstart -k`), and macOS asks again for the keychain (section 2, question 1).
 
 The app's language follows macOS.
 
 ## 2. Start the daemon
 
 ```
-cargo xtask agent-install en9
+open target/app/Mooring.app
 ```
 
-This runs `mooringctl daemon --router-interface en9` as a LaunchAgent until logout. It polls the M7 every 60 s. Its log is `~/Library/Logs/Mooring/daemon.log`, one line when it starts and one each time the poll's outcome changes.
+The app's menu (the antenna in the menu bar), and the banner above the console while the daemon is not started, offer **Start the Daemon at Login**. The app registers the daemon its bundle carries with macOS (`SMAppService`): launchd starts `mooringctl daemon` from the app at once and at every login, and keeps it running, until **Stop the Daemon** in the menu. macOS notifies that a background item was added; System Settings › General › Login Items lists it under Mooring. If macOS asks for approval first, the banner says so, and **Open Login Items…** opens that page: turn Mooring on there.
 
-If the agent is already loaded, the command stops it first and starts the new one once launchd no longer lists the old one. It waits up to 10 s for that, and otherwise stops and says so.
+The daemon polls the M7 every 60 s on the interface the pin records (section 0). Its log is `~/Library/Logs/Mooring/daemon.log`, one line when it starts and one each time the poll's outcome changes; at 5 MiB it is renamed `daemon.log.1` (replacing the one before) and a new file begun. The daemon's last error, when it stops, is the log's last line.
 
 On the first poll, macOS asks two questions. Allow both:
 1. **The keychain:** "mooringctl wants to use your confidential information stored in "com.bill.mooring.dev"". Choose **Always Allow**; it asks for the Mac's login password. This is the M7's admin password, which only `mooringctl` reads.
 2. **Local network:** "Mooring would like to find and connect to devices on your local network". Choose **Allow**. Without it the daemon's connection to the M7 fails with "host unreachable": macOS applies local network privacy to a LaunchAgent (design §5.1).
 
 Rebuilding `mooringctl` changes its signature (it is signed ad hoc), and macOS asks again for the keychain. Rebuilding the app may ask again for local network access.
+
+**Open Mooring at Login** in the menu makes the console open at login too.
+
+**Power, with a deployment.** The daemon starts the power helper from the app (`Contents/MacOS/mooring-power`) and does not start without it. While the exit is enabled and the Mac is on mains, the helper holds two assertions that keep the Mac awake; `pmset -g assertions` lists them as "Mooring exit". On battery it releases them and the exit is `Degraded` (`OnBattery`). Mooring never changes `pmset` settings.
+
+If the Mac sleeps anyway (the lid closed, or Sleep chosen from the Apple menu), the daemon first stops `mooring-exit`, then asks each node to close its gate for the drain, within 4 s in all, and lets the sleep proceed. The exit is `Paused` until the Mac wakes, and then it probes and starts again. The Exit screen shows the last sleep, the drain's outcome and the last wake. A drain that timed out or failed is no fault in itself: each node notices the Mac's silence within about 30 s.
+
+**From the development agent.** Before 2026-10-23, `cargo xtask agent-install en9` ran the daemon from `target/launchd/`, under the same label. On a Mac that ran it, stop it and remove its plist once, before **Start the Daemon at Login**:
+
+```
+launchctl bootout gui/$(id -u)/com.bill.mooring.daemon
+rm target/launchd/com.bill.mooring.daemon.plist
+```
 
 ## 3. Open the console
 
@@ -91,19 +105,23 @@ The same status is available in Terminal:
 
 ## 4. Stop
 
-```
-cargo xtask agent-uninstall
-```
-
-Quit the app from its menu. Quitting the app does not stop the daemon; this command does.
+**Stop the Daemon** in the app's menu: launchd stops it and no longer starts it at login. Quitting the app does not stop the daemon.
 
 `cargo xtask clean` is refused while the daemon is loaded: it runs from the target directory that `clean` removes.
 
 ## Troubleshooting
 
-**`the Mooring daemon is not running`:** the agent is not loaded.
-- Run `cargo xtask agent-install en9` again.
-- Run `launchctl print gui/$(id -u)/com.bill.mooring.daemon` to see its state and last exit.
+**`the Mooring daemon is not running`:** the daemon is not started, or it stopped.
+- Start it from the app's menu (section 2).
+- Run `launchctl print gui/$(id -u)/com.bill.mooring.daemon` to see its state and last exit, and read the last lines of `~/Library/Logs/Mooring/daemon.log`.
+
+**The exit is `Degraded` with `PowerHelperExited`:** the power helper ended, so nothing keeps the Mac awake. The daemon's log says why and how it ended ("the power helper ended: … (exit status …)"), and the daemon starts it again a minute later ("the power helper started again").
+
+**The daemon stops at its start with "the power helper … could not be started" or "did not report the power source":** the app lacks the helper, or it failed. Rebuild the app (section 1).
+
+**"The daemon did not name its control protocol" or "the daemon speaks control protocol N and this mooringctl speaks M":** the daemon runs another build than the app, as after the app was rebuilt or updated while the daemon kept running. **Stop the Daemon**, then **Start the Daemon at Login**, in the app's menu. In Terminal, use the `mooringctl` inside the app (section 3).
+
+**"The router adapter is not set up":** the M7 is not pinned, its password is not stored, or the pin records no interface (one made before 2026-10-23). The daemon's log names which; run section 0's command for it.
 
 **The router screen says "The Mac could not poll the M7":** the keychain or the kernel's tables failed. The daemon's log names which.
 

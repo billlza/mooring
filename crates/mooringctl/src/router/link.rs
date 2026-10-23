@@ -13,7 +13,6 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use mooring_macsys::{Interface, InterfaceAddrV4, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
-use mooring_store::RouterPin;
 
 use crate::error::{CommandError, LocalError};
 use crate::router::error::{
@@ -189,11 +188,11 @@ impl VerifiedIdentity {
 pub(crate) fn check_identity(
     link: &dyn LinkLayer,
     attachment: &Attachment,
-    pin: &RouterPin,
+    pinned: MacAddr,
     port: u16,
 ) -> Result<VerifiedIdentity, CommandError> {
     let found = match gateway_link(link, attachment)? {
-        GatewayLink::Address(addr) if addr == pin.gateway_lladdr => {
+        GatewayLink::Address(addr) if addr == pinned => {
             return Ok(VerifiedIdentity {
                 endpoint: attachment.endpoint(port),
             });
@@ -208,7 +207,7 @@ pub(crate) fn check_identity(
         }
     };
     Err(CommandError::Router(RouterError::IdentityMismatch {
-        expected: pin.gateway_lladdr,
+        expected: pinned,
         found,
     }))
 }

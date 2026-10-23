@@ -15,6 +15,7 @@
 //! - [`notify`]: the push notices and the daily digest (Level 0).
 //! - [`network`]: the foreign-network check.
 //! - [`policy`]: quota (own and automatic) and expiry evaluation.
+//! - [`power`]: the power helper's protocol (`mooring-power`).
 //! - [`router`]: the M7's status types, and the MR7450 `model.json`
 //!   allowlist parser and redactor ([`router::netgear`]).
 //! - [`status`]: [`MacStatusV1`] itself.
@@ -64,6 +65,7 @@ pub mod network;
 pub mod notify;
 pub mod period;
 pub mod policy;
+pub mod power;
 pub mod report;
 pub mod router;
 pub mod share;

@@ -57,6 +57,16 @@
 //! degrades the exit, naming the node and protocol; a round that verifies
 //! makes it `Serving`. `mooring-probe` failing only degrades: it never takes
 //! the exit down.
+//!
+//! # Sleep
+//!
+//! When macOS is about to sleep (design §10.3), [`ExitMachine::sleep`]
+//! stops `mooring-exit` first, which needs no network, then asks every node
+//! with a site to close its gate and hold it for the Mac's drain
+//! (`GateSet{Closed, MacDrain}`) while its budget lasts, and the exit is
+//! `Paused`: no tick starts the engine again, so no handshake can complete
+//! between the drain and the sleep, until [`ExitMachine::wake`]. The next
+//! tick after that runs the preflight with a fresh direct probe.
 
 mod in_chain;
 
@@ -75,9 +85,9 @@ use mooring_model::{Deployment, NodeId, Sha256Digest, UnixTime};
 use crate::alert::MacEngine;
 use crate::network::ForeignNetworkFinding;
 use crate::status::{
-    CarrierCheck, DegradedReason, DownReason, EgressFacts, EngineExit, EngineProcess, ExitSection,
-    ExitState, Latch, LinkState, MacEngines, PowerSource, PowerStatus, ProbeStage, ProcessEnd,
-    ProtocolVerdicts,
+    CarrierCheck, DegradedReason, DownReason, DrainOutcome, EgressFacts, EngineExit, EngineProcess,
+    ExitSection, ExitState, Latch, LinkState, MacEngines, PowerSource, PowerStatus, ProbeStage,
+    ProcessEnd, ProtocolVerdicts,
 };
 
 pub use in_chain::{IN_CHAIN_FIRST, InChainProbe, InChainTarget, RenderedProber};
@@ -178,6 +188,9 @@ pub struct TickInputs<'a> {
     pub sim: SimUse,
     /// The Mac's power.
     pub power: PowerStatus,
+    /// Whether the power helper runs; without it the exit is degraded
+    /// (`PowerHelperExited`).
+    pub power_helper_running: bool,
     /// Whether the operator asked to retry (`exit retry`).
     pub retry: bool,
     /// What the node polls found wrong (`WatchStale`), which degrades a
@@ -235,6 +248,15 @@ pub enum NodeCall {
     Shutdown(LatchRecord),
     /// Clear the violation's hold (`ClearHold{EgressViolation}`).
     ClearHold,
+    /// Close the gate and hold it closed for the Mac's sleep
+    /// (`GateSet{Closed, MacDrain}`), `within` what is left of the drain's
+    /// budget, past which the call is abandoned: sent by
+    /// [`ExitMachine::sleep`] only, never queued. The node clears it itself
+    /// once a handshake completes after it and its receive count grows.
+    Drain {
+        /// The budget left when the call is made.
+        within: Duration,
+    },
 }
 
 /// The daemon's effects, as the machine uses them.
@@ -364,6 +386,8 @@ pub struct ExitMachine {
     pending: BTreeMap<NodeId, Pending>,
     /// `mooring-probe` and the in-chain probes.
     in_chain: in_chain::InChain,
+    /// Between a sleep's drain and the wake: the engine stays stopped.
+    paused: bool,
 }
 
 impl ExitMachine {
@@ -395,6 +419,7 @@ impl ExitMachine {
             resend: latch_present,
             pending: BTreeMap::new(),
             in_chain: in_chain::InChain::default(),
+            paused: false,
         }
     }
 
@@ -435,6 +460,60 @@ impl ExitMachine {
             .collect()
     }
 
+    /// The sleep drain (design §10.3), when macOS is about to sleep at
+    /// `now`: stops `mooring-exit` and `mooring-probe` first, so the exit is
+    /// `Paused` from here until [`Self::wake`], then asks every node of
+    /// `deployment` with a site, in id order, to close its gate for the
+    /// drain, each within what `budget_left` says is left of the budget
+    /// (`None` once it has run out). `Completed` when every node closed it
+    /// within the budget, `TimedOut` when the budget ran out first, and
+    /// otherwise `Failed`, when a node could not be reached or refused: the
+    /// daemon lets the sleep proceed in every case, and a node that was not
+    /// told notices the Mac's silence itself.
+    pub fn sleep<P: ExitPorts>(
+        &mut self,
+        now: UnixTime,
+        deployment: &Deployment,
+        ports: &mut P,
+        budget_left: &mut dyn FnMut() -> Option<Duration>,
+    ) -> Result<DrainOutcome, P::Error> {
+        self.paused = true;
+        self.stop_engine(now, ports)?;
+        self.in_chain.stop_prober(now, ports)?;
+        self.set_state(ExitState::Paused, now);
+        let mut outcome = DrainOutcome::Completed;
+        for node in deployment.nodes().values() {
+            if node.lifecycle.site().is_none() {
+                continue;
+            }
+            let Some(within) = budget_left() else {
+                return Ok(DrainOutcome::TimedOut);
+            };
+            if ports.call(&node.id, &NodeCall::Drain { within }).is_err() {
+                outcome = DrainOutcome::Failed;
+            }
+        }
+        if budget_left().is_none() {
+            return Ok(DrainOutcome::TimedOut);
+        }
+        Ok(outcome)
+    }
+
+    /// The Mac woke (design §10.3): the next tick re-resolves the
+    /// interfaces and runs the preflight with a fresh direct probe, and
+    /// starts the engine if it passes.
+    pub fn wake(&mut self) {
+        self.paused = false;
+        self.probed_at = None;
+        self.round = None;
+    }
+
+    /// Whether the exit is paused for a sleep.
+    #[must_use]
+    pub const fn paused(&self) -> bool {
+        self.paused
+    }
+
     /// One tick: observes, decides, acts through `ports`, and returns the
     /// exit's section of the status.
     pub fn tick<P: ExitPorts>(
@@ -444,6 +523,12 @@ impl ExitMachine {
     ) -> Result<ExitSection, P::Error> {
         self.prune_crashes(inputs.mono);
         self.probing = false;
+        if self.paused {
+            self.stop_engine(inputs.now, ports)?;
+            self.in_chain.stop_prober(inputs.now, ports)?;
+            self.set_state(ExitState::Paused, inputs.now);
+            return Ok(self.section(inputs));
+        }
         self.reap(inputs, ports)?;
         self.clear_stale_latch(inputs, ports)?;
         if std::mem::take(&mut self.resend)
@@ -463,7 +548,7 @@ impl ExitMachine {
             ExitState::Disabled
         };
         if matches!(state, ExitState::Down { .. } | ExitState::Disabled) {
-            self.stop_engine(inputs, ports)?;
+            self.stop_engine(inputs.now, ports)?;
         }
         if !matches!(self.engine, Engine::Running { .. }) {
             self.in_chain.stop_prober(inputs.now, ports)?;
@@ -729,7 +814,7 @@ impl ExitMachine {
         egress: &Egress,
         ports: &mut P,
     ) -> Result<(), P::Error> {
-        self.stop_engine(inputs, ports)?;
+        self.stop_engine(inputs.now, ports)?;
         let latch = LatchRecord {
             violation,
             at: inputs.now,
@@ -791,7 +876,7 @@ impl ExitMachine {
         match self.engine {
             Engine::Running { digest, .. } if digest == rendered.digest => {}
             Engine::Running { .. } => {
-                self.stop_engine(inputs, ports)?;
+                self.stop_engine(inputs.now, ports)?;
                 if let Some(state) = self.start(inputs, &rendered, ports)? {
                     return Ok(state);
                 }
@@ -880,6 +965,9 @@ impl ExitMachine {
         if inputs.power.source == PowerSource::Battery {
             reasons.push(DegradedReason::OnBattery);
         }
+        if !inputs.power_helper_running {
+            reasons.push(DegradedReason::PowerHelperExited);
+        }
         reasons.extend(inputs.nodes_degraded.iter().cloned());
         reasons.extend(self.in_chain.failures_since(started));
         match NonEmpty::try_from(reasons) {
@@ -891,18 +979,11 @@ impl ExitMachine {
         }
     }
 
-    fn stop_engine<P: ExitPorts>(
-        &mut self,
-        inputs: &TickInputs<'_>,
-        ports: &mut P,
-    ) -> Result<(), P::Error> {
+    fn stop_engine<P: ExitPorts>(&mut self, now: UnixTime, ports: &mut P) -> Result<(), P::Error> {
         match self.engine {
             Engine::Running { .. } => {
                 let end = ports.stop()?;
-                self.last_exit = Some(EngineExit {
-                    at: inputs.now,
-                    end,
-                });
+                self.last_exit = Some(EngineExit { at: now, end });
                 self.engine = Engine::Stopped;
             }
             Engine::Backoff { .. } => self.engine = Engine::Stopped,

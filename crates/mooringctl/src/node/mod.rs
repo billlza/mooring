@@ -132,4 +132,11 @@ pub(crate) enum NodeError {
     /// Relaying the connection failed.
     #[error("relaying the connection to the node failed")]
     Relay(#[source] io::Error),
+    /// The session's deadline passed before its reply arrived whole: ssh
+    /// and its dialler were killed.
+    #[error("the ssh session was ended at its deadline, before a whole reply")]
+    PastDeadline,
+    /// The session past its deadline could not be killed.
+    #[error("the ssh session past its deadline could not be ended")]
+    End(#[source] mooring_macsys::MacsysError),
 }

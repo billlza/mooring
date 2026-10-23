@@ -6,6 +6,11 @@
 //! a newline, each within its bound. The CLI is the only client: Mooring.app
 //! runs the CLI, never the socket.
 //!
+//! The daemon's first line on every connection, before any reply, names
+//! the protocol it speaks ([`ProtocolLine`], design §15.1), so that a
+//! client of another protocol, such as an app updated under a daemon not
+//! yet restarted, says so instead of failing to read a reply.
+//!
 //! [`DaemonRequest::Status`] answers with the latest status once, and
 //! [`DaemonRequest::Subscribe`] with the latest and then each new one,
 //! until either side closes. [`DaemonRequest::Retry`] (`exit retry`, M5c)
@@ -34,6 +39,26 @@ pub const MAX_REQUEST_LINE_BYTES: usize = 256;
 /// agent protocol's lines. A status of the 20-user fixture deployment is a
 /// few tens of KiB (`a_reply_line_holds_the_largest_fixture_status`).
 pub const MAX_REPLY_LINE_BYTES: usize = 1 << 20;
+
+/// The control channel's protocol (design §15.1), which the daemon names
+/// on the first line of every connection. From the first release on, any
+/// change to a request, a reply or this line's own shape raises it.
+pub const CONTROL_PROTOCOL: u32 = 1;
+
+/// The first line of every connection: the protocol the daemon speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolLine {
+    /// The daemon's [`CONTROL_PROTOCOL`].
+    pub control_protocol: u32,
+}
+
+impl ProtocolLine {
+    /// The line this build's daemon sends.
+    pub const CURRENT: Self = Self {
+        control_protocol: CONTROL_PROTOCOL,
+    };
+}
 
 /// What the CLI asks the daemon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -105,10 +130,19 @@ pub fn decode_reply(line: &[u8]) -> Result<DaemonReply, ControlError> {
     decode_line(line, MAX_REPLY_LINE_BYTES)
 }
 
+/// A connection's first line (with or without its newline), within the
+/// bound of a reply line.
+pub fn decode_protocol_line(line: &[u8]) -> Result<ProtocolLine, ControlError> {
+    decode_line(line, MAX_REPLY_LINE_BYTES)
+}
+
 /// One JSON document on one line within `max` bytes, its newline
 /// included. A line with a newline inside it, or anything after the
 /// document, is malformed.
-fn decode_line<T: for<'de> Deserialize<'de>>(line: &[u8], max: usize) -> Result<T, ControlError> {
+pub(crate) fn decode_line<T: for<'de> Deserialize<'de>>(
+    line: &[u8],
+    max: usize,
+) -> Result<T, ControlError> {
     let bytes = line.len();
     if bytes > max {
         return Err(ControlError::LineTooLong { bytes, max });

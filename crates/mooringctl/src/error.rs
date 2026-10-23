@@ -311,13 +311,38 @@ pub(crate) enum LocalError {
         #[source]
         source: io::Error,
     },
-    /// `/usr/bin/pmset` could not be run or failed.
-    #[error("running /usr/bin/pmset failed")]
-    Power(#[source] io::Error),
-    /// `/usr/bin/pmset -g ps` did not name the power source on its first
-    /// line.
-    #[error("/usr/bin/pmset -g ps did not name the power source")]
-    PowerUnreadable,
+    /// The daemon's own path, beside which the power helper lies, could
+    /// not be found.
+    #[error("the daemon's own executable could not be found")]
+    PowerHelperPath(#[source] io::Error),
+    /// The power helper could not be started.
+    #[error("the power helper {} could not be started", path.display())]
+    PowerHelperSpawn {
+        /// The helper.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// A command to the power helper could not be encoded.
+    #[error("a command to the power helper could not be encoded")]
+    PowerHelperLine(#[source] ControlError),
+    /// A command could not be written to the power helper.
+    #[error("a command could not be written to the power helper")]
+    PowerHelperWrite(#[source] io::Error),
+    /// The power helper did not report the power source in time after it
+    /// started.
+    #[error("the power helper did not report the power source within {waited:?}")]
+    PowerHelperSilent {
+        /// How long the daemon waited.
+        waited: std::time::Duration,
+    },
+    /// The power helper ended before it reported the power source.
+    #[error("the power helper ended before it reported the power source: {0}")]
+    PowerHelperEnded(String),
+    /// The power helper's first report was not the power source.
+    #[error("the power helper's first report was {0:?}, not the power source")]
+    PowerHelperFirstReport(mooring_daemon_core::power::HelperEvent),
     /// A node cannot be reached: the egress, which faces the M7, does not
     /// resolve.
     #[error("the node cannot be reached: the egress does not resolve")]
@@ -371,6 +396,27 @@ pub(crate) enum LocalError {
     /// The daemon's control socket stopped accepting connections.
     #[error("the daemon's control socket stopped accepting connections")]
     Acceptor(#[source] io::Error),
+    /// The daemon's log directory could not be created.
+    #[error("cannot create the daemon's log directory {}", path.display())]
+    LogDir {
+        /// The directory.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The daemon's log could not be opened.
+    #[error("cannot open the daemon's log {}", path.display())]
+    LogFile {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// Standard error could not be pointed at the daemon's log.
+    #[error("cannot send the daemon's standard error to its log")]
+    LogRedirect(#[source] MacsysError),
     /// No daemon listens on the control socket.
     #[error("the Mooring daemon is not running (nothing listens on {})", path.display())]
     DaemonNotRunning {
@@ -398,6 +444,23 @@ pub(crate) enum LocalError {
     /// The daemon closed the status stream.
     #[error("the daemon closed the status stream")]
     DaemonClosed,
+    /// The daemon's first line did not name its control protocol (design
+    /// §15.1): a daemon built before the protocol line, or something else
+    /// on the socket.
+    #[error(
+        "the daemon did not name its control protocol on its first line, as a daemon built before this mooringctl may not: restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)"
+    )]
+    DaemonProtocolMissing,
+    /// The daemon speaks another control protocol than this mooringctl.
+    #[error(
+        "the daemon speaks control protocol {daemon} and this mooringctl speaks {client}: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)"
+    )]
+    DaemonProtocolOther {
+        /// The daemon's.
+        daemon: u32,
+        /// This mooringctl's.
+        client: u32,
+    },
     /// No adopted node's reflector answered `exit observe`.
     #[error("no node's reflector answered; adopt a node first, and check the line")]
     NothingObserved,

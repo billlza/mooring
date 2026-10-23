@@ -4,6 +4,8 @@
 //! node's address from its site, its pinned host key, and the interface
 //! that faces the M7.
 
+use std::time::Instant;
+
 use mooring_model::NodeId;
 use mooring_model::iface::BsdName;
 use mooring_model::node::{Node, NodeAddress, NodeLifecycle};
@@ -33,12 +35,14 @@ pub(crate) fn deployed_node<'d>(
 }
 
 /// The operations key's sessions to `node`, after checking that
-/// `interface` faces the M7. The node's `known_hosts` is rewritten from
+/// `interface` faces the M7, each ending by `deadline` if there is one
+/// ([`SshTarget::deadline`]). The node's `known_hosts` is rewritten from
 /// the state's pin, so the pin in the state is the one ssh checks.
 pub(crate) fn ops_session<'a>(
     env: &Env<'a>,
     node: &Node,
     interface: &BsdName,
+    deadline: Option<Instant>,
 ) -> Result<Box<dyn NodeSession + 'a>, CommandError> {
     facing_the_m7(env, interface)?;
     let site = match &node.lifecycle {
@@ -63,6 +67,7 @@ pub(crate) fn ops_session<'a>(
         interface: interface.clone(),
         mooringctl: std::env::current_exe().map_err(LocalError::CurrentExe)?,
         remote: Remote::ForcedCommand,
+        deadline,
     });
     Ok(session)
 }

@@ -255,7 +255,7 @@ extension RouterUnavailableReason {
     var advice: LocalizedStringKey {
         switch self {
         case .notConfigured:
-            "Pin the M7 (`mooringctl router pin --interface en9`), store its admin password (`mooringctl router set-password`), and give the daemon the interface."
+            "Pin the M7 on the Mac's interface to it (`mooringctl router pin --interface en9`, which records the interface the daemon polls on) and store its admin password (`mooringctl router set-password`)."
         case .unreachable:
             "The M7 did not answer on its interface. Check that it is on and that the USB Ethernet adapter is connected."
         case .authFailed:

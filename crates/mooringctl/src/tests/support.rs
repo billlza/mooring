@@ -11,11 +11,13 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use clap::Parser;
 use mooring_agent_proto::{LineRequest, RequestKind, Response, Sha256Hex};
 use mooring_daemon_core::meter::CounterReading;
+use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::status::PowerSource;
 use mooring_macsys::{Interface, InterfaceAddrV4, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
@@ -37,6 +39,7 @@ use crate::prompt::{Answer, Console, Line};
 use crate::router::RouterEnv;
 use crate::router::http::Timeouts;
 use crate::router::link::LinkLayer;
+use crate::runtime::power::{PowerLink, PowerMessage};
 use crate::runtime::probe::ProbeFailure;
 
 /// The router fixture: the M2a capture, re-redacted (an administrator's
@@ -623,6 +626,89 @@ impl FakeParent {
     }
 }
 
+/// A stand-in for the power helper: each start opens a channel whose first
+/// event is the power source (unless `silent`), keeps its sender for the
+/// test, and collects the commands the daemon writes; `refuse` makes the
+/// next starts fail.
+#[derive(Debug, Default)]
+pub(crate) struct FakeHelper {
+    pub(crate) handle: HelperHandle,
+    pub(crate) starts: Cell<u32>,
+    pub(crate) refuse: Cell<bool>,
+    pub(crate) silent: Cell<bool>,
+}
+
+/// What a test keeps of the fake helper while the daemon holds the
+/// harness: the running helper's event channel and every command written.
+#[derive(Clone, Default)]
+pub(crate) struct HelperHandle {
+    events: Arc<Mutex<Option<mpsc::Sender<PowerMessage>>>>,
+    commands: Arc<Mutex<Vec<u8>>>,
+}
+
+impl std::fmt::Debug for HelperHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HelperHandle").finish_non_exhaustive()
+    }
+}
+
+impl HelperHandle {
+    /// Sends `event` to the running helper's reader channel.
+    pub(crate) fn send(&self, message: PowerMessage) {
+        self.events
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("a helper was started")
+            .send(message)
+            .unwrap();
+    }
+
+    /// The command lines the daemon wrote, in order.
+    pub(crate) fn commands(&self) -> Vec<String> {
+        String::from_utf8(self.commands.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+/// The commands' sink, shared with the test.
+struct SharedSink(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| std::io::Error::other("poisoned"))?
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl FakeHelper {
+    fn start(&self, source: PowerSource) -> PowerLink {
+        self.starts.set(self.starts.get() + 1);
+        let (sender, messages) = mpsc::channel();
+        if !self.silent.get() {
+            sender
+                .send(PowerMessage::Event(HelperEvent::PowerSource(source)))
+                .unwrap();
+        }
+        *self.handle.events.lock().unwrap() = Some(sender);
+        PowerLink::new(
+            messages,
+            Box::new(SharedSink(Arc::clone(&self.handle.commands))),
+            None,
+        )
+    }
+}
+
 /// Everything a command runs against, owned by the test.
 pub(crate) struct Harness {
     pub(crate) home: TempDir,
@@ -639,14 +725,20 @@ pub(crate) struct Harness {
     pub(crate) engine_pins: Vec<(&'static str, String)>,
     /// The Mac engine pins the daemon checks its engine against.
     pub(crate) mac_pins: Vec<(&'static str, String)>,
-    /// The power source the daemon reads.
+    /// The power source the fake power helper reports when it starts.
     pub(crate) power: PowerSource,
+    /// The running fake helper's event channel, to send it more events,
+    /// and every command the daemon wrote to any helper it started.
+    pub(crate) helper: FakeHelper,
     /// The counter readings the SIM meter's thread is given, in order;
     /// once they are used up, the interface reads as absent.
-    pub(crate) readings: std::sync::Arc<std::sync::Mutex<VecDeque<CounterReading>>>,
+    pub(crate) readings: Arc<Mutex<VecDeque<CounterReading>>>,
     /// The direct probes' answers, in order, and the reflectors asked.
     pub(crate) probes: RefCell<VecDeque<Result<Ipv4Addr, ProbeFailure>>>,
     pub(crate) probed: RefCell<Vec<(InterfaceIndex, SocketAddrV4)>>,
+    /// How many times the daemon pointed standard error at its log; the
+    /// test process's own stderr is never touched.
+    pub(crate) redirected: Cell<u32>,
 }
 
 impl Harness {
@@ -669,9 +761,11 @@ impl Harness {
             engine_pins: Vec::new(),
             mac_pins: Vec::new(),
             power: PowerSource::Ac,
-            readings: std::sync::Arc::default(),
+            helper: FakeHelper::default(),
+            readings: Arc::default(),
             probes: RefCell::new(VecDeque::new()),
             probed: RefCell::new(Vec::new()),
+            redirected: Cell::new(0),
         }
     }
 
@@ -703,6 +797,7 @@ impl Harness {
             &dir,
             &RouterPin {
                 gateway_lladdr: MacAddr::from_bytes(lladdr).unwrap(),
+                interface: BsdName::parse("lo0").unwrap(),
                 pinned_at: UnixTime::from_secs(NOW - 60),
             },
         )
@@ -738,10 +833,19 @@ impl Harness {
             .map(|(path, hex)| (*path, hex.as_str()))
             .collect();
         let source = self.power;
-        let power = move || Ok(source);
-        let readings = std::sync::Arc::clone(&self.readings);
+        let helper = &self.helper;
+        let power_helper = move || {
+            if helper.refuse.get() {
+                return Err(LocalError::PowerHelperSpawn {
+                    path: PathBuf::from("mooring-power"),
+                    source: std::io::Error::other("refused by the test"),
+                });
+            }
+            Ok(helper.start(source))
+        };
+        let readings = Arc::clone(&self.readings);
         let meter_reader = move || -> crate::runtime::meter::Reader {
-            let readings = std::sync::Arc::clone(&readings);
+            let readings = Arc::clone(&readings);
             Box::new(move |_| {
                 Ok(readings
                     .lock()
@@ -759,6 +863,11 @@ impl Harness {
                     kind: Some(std::io::ErrorKind::ConnectionRefused),
                 }))
         };
+        let redirected = &self.redirected;
+        let redirect = move |_: std::os::fd::BorrowedFd<'_>| {
+            redirected.set(redirected.get() + 1);
+            Ok(())
+        };
         let mut env = Env {
             router: RouterEnv {
                 link: &self.link,
@@ -775,9 +884,10 @@ impl Harness {
             nodes: &self.nodes,
             engine_pins: &pins,
             mac_pins: &mac_pins,
-            power: &power,
+            power_helper: &power_helper,
             meter_reader: &meter_reader,
             probe: &probe,
+            redirect_stderr: &redirect,
         };
         work(&mut env)
     }

@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The kernel's boot time and the daemon's engine processes (design §10.1):
-//! when the kernel booted (`kern.boottime`), which tells the SIM meter a
-//! reading of this boot from one of an earlier boot; and a process's
+//! The kernel's boot time and the daemon's processes (design §10.1,
+//! §15.10): when the kernel booted (`kern.boottime`), which tells the SIM
+//! meter a reading of this boot from one of an earlier boot; a process's
 //! executable (`proc_pidpath`) and its end (`kill` with `SIGKILL`), with
 //! which the daemon stops an engine an earlier daemon left, and only when
-//! it is that engine.
+//! it is that engine; a process group's end (`killpg` with `SIGKILL`), with
+//! which an ssh session past its deadline ends with its dialler; and the
+//! daemon's own standard error pointed at its log (`dup2`).
 
 use std::ffi::OsStr;
 use std::mem::size_of;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::ptr;
@@ -92,5 +95,70 @@ pub fn kill_process(pid: u32) -> Result<(), MacsysError> {
     match last_errno() {
         libc::ESRCH => Ok(()),
         errno => Err(failed(errno)),
+    }
+}
+
+/// What [`kill_group`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupKill {
+    /// Its members were sent `SIGKILL`.
+    Killed,
+    /// There is no such group (`ESRCH`).
+    Gone,
+    /// The group is still there, but `killpg` found none of its members to
+    /// signal (`EPERM`): they are all exiting, or none is this user's. For a
+    /// group of this process's own children they are exiting: the group
+    /// lasts until its last member is reaped.
+    Exiting,
+}
+
+/// Ends every process of the group `group` with `SIGKILL`, and says what it
+/// found. `group` is a group's id, the id of the process that leads it: 0,
+/// which `killpg` reads as the caller's own group, and 1, launchd's, are
+/// refused.
+pub fn kill_group(group: u32) -> Result<GroupKill, MacsysError> {
+    let failed = |errno| MacsysError::Process {
+        call: ProcessCall::KillGroup,
+        errno,
+    };
+    let group = libc::pid_t::try_from(group)
+        .ok()
+        .filter(|&group| group > 1)
+        .ok_or_else(|| failed(libc::EINVAL))?;
+    // SAFETY: `killpg` has no memory preconditions; `group` is above 1, so
+    // it names one group by its id, never the caller's own.
+    let status = unsafe { libc::killpg(group, libc::SIGKILL) };
+    if status == 0 {
+        return Ok(GroupKill::Killed);
+    }
+    match last_errno() {
+        libc::ESRCH => Ok(GroupKill::Gone),
+        libc::EPERM => Ok(GroupKill::Exiting),
+        errno => Err(failed(errno)),
+    }
+}
+
+/// Points this process's standard error at `file`: from then on whatever
+/// the process writes to stderr, a panic's message too, goes to it. The
+/// daemon does this with its log, as launchd gives an agent registered with
+/// `SMAppService` no log of its own (design §5.1, §15.10).
+pub fn redirect_stderr(file: BorrowedFd<'_>) -> Result<(), MacsysError> {
+    loop {
+        // SAFETY: `dup2` has no memory preconditions; `file` is open for
+        // the borrow, and descriptor 2 becomes a duplicate of it, which the
+        // process keeps after the borrow ends.
+        let status = unsafe { libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) };
+        if status == libc::STDERR_FILENO {
+            return Ok(());
+        }
+        match last_errno() {
+            libc::EINTR => {}
+            errno => {
+                return Err(MacsysError::Process {
+                    call: ProcessCall::Dup2,
+                    errno,
+                });
+            }
+        }
     }
 }

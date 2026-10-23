@@ -7,7 +7,7 @@
 //! `exit enable` and `exit disable`, the operator's runtime intent; and
 //! `exit retry`, which asks the daemon to clear a latched violation.
 
-use std::io::{BufReader, Write};
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Instant;
 
@@ -60,13 +60,13 @@ pub(crate) fn init(
     {
         return Err(LocalError::DeploymentExists { path: state_path }.into());
     }
-    let pinned = router::configured_pin(&dir)?;
+    let pinned = router::pinned_address(&dir)?;
     let candidate = router::pin_candidate(&env.router, interface)?;
-    if candidate.lladdr != pinned.gateway_lladdr {
+    if candidate.lladdr != pinned {
         return Err(LocalError::EgressNotTheRouter {
             interface: interface.clone(),
             found: candidate.lladdr,
-            pinned: pinned.gateway_lladdr,
+            pinned,
         }
         .into());
     }
@@ -82,14 +82,14 @@ pub(crate) fn init(
     })?;
     let init = DeploymentInit::pilot(
         InterfaceSelector::GatewayLinkAddr {
-            gw_lladdr: pinned.gateway_lladdr,
+            gw_lladdr: pinned,
             subnet,
         },
         cycle_anchor,
         flow_cap,
     )
     .map_err(LocalError::Pilot)?;
-    describe(out, interface, pinned.gateway_lladdr, subnet, &init)?;
+    describe(out, interface, pinned, subnet, &init)?;
     confirm(env, yes, "Create the deployment with these values?")?;
     let state = store.init(init).map_err(|error| match error {
         StoreError::AlreadyInitialized { path } => LocalError::DeploymentExists { path },
@@ -307,7 +307,7 @@ pub(crate) fn set_enabled(
 /// its next tick; `mooringctl status` then shows what it found.
 pub(crate) fn retry(env: &mut Env<'_>, out: &mut dyn Write) -> Result<(), CommandError> {
     let socket = RunPaths::under(&support_dir(env)?).socket;
-    let mut reader = BufReader::new(connect(&socket, DaemonRequest::Retry, ANSWER_TIMEOUT)?);
+    let mut reader = connect(&socket, DaemonRequest::Retry, ANSWER_TIMEOUT)?;
     let line = match read_reply_line(
         &mut reader,
         &socket,

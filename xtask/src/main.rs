@@ -96,15 +96,6 @@ fn run(invocation: Invocation) -> Result<(), XtaskError> {
         Command::Mooringctl => Ok(mooringctl::run(&cargo, mooringctl::MOORINGCTL, &mut out)?),
         Command::Fieldkit => Ok(mooringctl::run(&cargo, mooringctl::FIELDKIT, &mut out)?),
         Command::App => Ok(app::build(&cargo, &mut out)?),
-        Command::AgentInstall => match invocation.argument.as_deref() {
-            Some(interface) => Ok(app::install_agent(&cargo, &mut out, interface)?),
-            // `Command::parse` gives `agent-install` its argument or fails.
-            None => Err(XtaskError::Usage(UsageError::MissingArgument {
-                command: Command::AgentInstall,
-                argument: "<bsd>",
-            })),
-        },
-        Command::AgentUninstall => Ok(app::uninstall_agent(&cargo, &mut out)?),
         Command::EnginesPins => Ok(engines::pins(cargo.workspace_root(), &mut out)?),
         Command::EnginesPrepare => Ok(engines::prepare(
             cargo.workspace_root(),

@@ -8,8 +8,8 @@ use serde::{Serialize, Serializer};
 use super::router;
 use crate::console::{ConsoleStatus, UndeployedStatus};
 use crate::control::{
-    DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, Refusal,
-    decode_reply, decode_request, encode_line,
+    CONTROL_PROTOCOL, DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES,
+    ProtocolLine, Refusal, decode_protocol_line, decode_reply, decode_request, encode_line,
 };
 use crate::error::{ControlError, ControlErrorKind};
 use mooring_model::UnixTime;
@@ -68,6 +68,40 @@ fn replies_have_fixed_lines() {
     assert!(line.starts_with(b"{\"status\":{\"no_deployment\":{\"version\":1,"));
     assert_eq!(line.iter().filter(|&&byte| byte == b'\n').count(), 1);
     assert_eq!(decode_reply(&line).unwrap(), reply);
+}
+
+/// The first line of a connection names the protocol, protocol 1 in this
+/// build, and only that line is read as one: a reply, a line with another
+/// key or another type is not.
+#[test]
+fn the_protocol_line_is_fixed() {
+    assert_eq!(CONTROL_PROTOCOL, 1);
+    let line = encode_line(&ProtocolLine::CURRENT, MAX_REPLY_LINE_BYTES).unwrap();
+    assert_eq!(line, b"{\"control_protocol\":1}\n");
+    assert_eq!(decode_protocol_line(&line).unwrap(), ProtocolLine::CURRENT);
+    assert_eq!(
+        decode_protocol_line(b"{\"control_protocol\":7}").unwrap(),
+        ProtocolLine {
+            control_protocol: 7
+        }
+    );
+    for line in [
+        &b"{\"refused\":{\"reason\":\"busy\"}}\n"[..],
+        b"\"retry_queued\"\n",
+        b"{\"control_protocol\":1,\"zz\":1}\n",
+        b"{\"control_protocol\":\"1\"}\n",
+        b"{\"control_protocol\":-1}\n",
+        b"{\"control_protocol\":1}\n{\"control_protocol\":1}\n",
+        b"{}\n",
+    ] {
+        assert_eq!(
+            decode_protocol_line(line),
+            Err(ControlError::Malformed),
+            "{line:?}"
+        );
+    }
+    // A protocol line is not a reply either.
+    assert_eq!(decode_reply(&line), Err(ControlError::Malformed));
 }
 
 /// Anything but one known document on one line is malformed, and nothing

@@ -5,8 +5,9 @@
 //! status over the control socket.
 //!
 //! Before a deployment exists it is the router console: it polls the M7
-//! every [`POLL_INTERVAL`] on the interface it is given (the same read as
-//! `router status`), keeps the latest [`ConsoleStatus`] in the [`hub`],
+//! every [`POLL_INTERVAL`] on the interface the router pin records (the
+//! same read as `router status`), keeps the latest [`ConsoleStatus`] in the
+//! [`hub`],
 //! writes it to `status.json`, and serves it on `run/control.sock`
 //! ([`serve`]). Once `exit init` has created a deployment it runs the exit
 //! ([`deployed`]), at once if the deployment is there when it starts, or
@@ -18,6 +19,7 @@
 
 pub(crate) mod deployed;
 pub(crate) mod hub;
+pub(crate) mod log;
 pub(crate) mod serve;
 
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
@@ -311,20 +313,24 @@ pub(crate) fn after_poll(
     Ok(())
 }
 
-/// One poll of the M7 on `interface` (none given: `NotConfigured`).
-pub(crate) fn poll_router(
+/// One poll of the M7 on `interface`: the deployment's egress once there
+/// is one.
+pub(crate) fn poll_router_on(
     env: &Env<'_>,
     support_dir: &Path,
-    interface: Option<&BsdName>,
+    interface: &BsdName,
 ) -> PollOutcome {
-    match interface {
-        Some(interface) => router::status(&env.router, support_dir, &*env.secrets, interface),
-        None => Err(CommandError::Router(
-            router::error::RouterError::NotConfigured {
-                missing: router::error::Missing::Interface,
-            },
-        )),
-    }
+    router::status(&env.router, support_dir, &*env.secrets, interface)
+}
+
+/// One poll of the M7 before a deployment exists, on the interface the
+/// router pin records: `NotConfigured{Pin}` without a pin, and
+/// `NotConfigured{Interface}` with a version-1 pin, which records none
+/// (design §5.1). The pin is read at each poll, so a `router pin
+/// --interface` takes effect at the next one.
+pub(crate) fn poll_router(env: &Env<'_>, support_dir: &Path) -> PollOutcome {
+    let interface = router::pinned_interface(support_dir)?;
+    poll_router_on(env, support_dir, &interface)
 }
 
 /// How a turn of the router console's loop ended.
@@ -338,12 +344,11 @@ pub(crate) enum Polled {
 }
 
 /// One turn of the router console: if a deployment has appeared since the
-/// last, nothing else; otherwise a poll of the M7 on `interface` and what
-/// follows it ([`after_poll`]).
+/// last, nothing else; otherwise a poll of the M7 and what follows it
+/// ([`after_poll`]).
 pub(crate) fn poll_once(
     env: &mut Env<'_>,
     support_dir: &Path,
-    interface: Option<&BsdName>,
     hub: &Hub,
     log: &mut dyn Write,
     state: &mut LoopState,
@@ -352,7 +357,7 @@ pub(crate) fn poll_once(
         return Ok(Polled::DeploymentAppeared);
     }
     let polled_at = (env.clock)()?;
-    let outcome = poll_router(env, support_dir, interface);
+    let outcome = poll_router(env, support_dir);
     let now = (env.clock)()?;
     after_poll(hub, support_dir, log, state, polled_at, &outcome, now)?;
     Ok(Polled::Published)
@@ -377,14 +382,10 @@ pub(crate) fn wait_for_next_poll(until: Instant, acceptor_ended: &mpsc::Receiver
     }
 }
 
-/// `mooringctl daemon [--router-interface <bsd>]`: starts, then serves
-/// until it fails: as the router console until a deployment exists, then
-/// as the exit. It never returns `Ok`.
-pub(crate) fn run(
-    env: &mut Env<'_>,
-    log: &mut dyn Write,
-    interface: Option<&BsdName>,
-) -> Result<(), CommandError> {
+/// `mooringctl daemon`: starts, then serves until it fails: as the router
+/// console until a deployment exists, then as the exit. It never returns
+/// `Ok`.
+pub(crate) fn run(env: &mut Env<'_>, log: &mut dyn Write) -> Result<(), CommandError> {
     let support_dir = crate::app::support_dir(env)?;
     let started = start(&support_dir)?;
     let (retry, retries) = mpsc::channel();
@@ -400,20 +401,14 @@ pub(crate) fn run(
         say(
             log,
             begun,
-            &match interface {
-                Some(interface) => format!(
-                    "daemon started: polling the M7 on {} every {} s",
-                    interface.as_str(),
-                    POLL_INTERVAL.as_secs()
-                ),
-                None => {
-                    "daemon started: no router interface given, so the M7 is not polled".to_owned()
-                }
-            },
+            &format!(
+                "daemon started: polling the M7 every {} s on the interface the router pin records",
+                POLL_INTERVAL.as_secs()
+            ),
         )?;
         loop {
             let next = Instant::now() + POLL_INTERVAL;
-            if poll_once(env, &support_dir, interface, &control.hub, log, &mut state)?
+            if poll_once(env, &support_dir, &control.hub, log, &mut state)?
                 == Polled::DeploymentAppeared
             {
                 say(log, (env.clock)()?, "a deployment exists: serving the exit")?;
