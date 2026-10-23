@@ -260,7 +260,7 @@ Everything in this section is *(inference)* unless a source is cited.
 
 ### 4.1 Build recipes
 
-All builds run through `cargo xtask engines build`, with `GOTOOLCHAIN=local`, `-mod=readonly`, `CGO_ENABLED=0` and `-trimpath`.
+All builds run through `cargo xtask engines-build`, with `GOTOOLCHAIN=local`, `-mod=readonly`, `CGO_ENABLED=0` and `-trimpath`.
 
 **Xray** (linux-amd64, plus linux-arm64 for the local lanes). Flags from upstream `xray-release.yml:208-218`:
 ```
@@ -285,7 +285,7 @@ go build -trimpath -tags "<role tags>,badlinkname,tfogo_checklinkname0" \
 
 **Gates, enforced permanently in `xtask engines verify` and the release verifier:**
 - Two clean builds produce byte-identical **unsigned** outputs, and those match the sha256 values in `engines.lock.toml`. Darwin binaries are compared before codesign.
-- `go version -m <bin>` shows the pinned Go version, `-trimpath`, `CGO_ENABLED=0`, the exact tag set (including `badlinkname,tfogo_checklinkname0` for sing-box), and the ldflags (`godebugDefault`, `-checklinkname=0`).
+- `go version -m <bin>` shows the pinned Go version, `-trimpath`, `CGO_ENABLED=0`, the target, Xray's gcflags and the exact tag set (including `badlinkname,tfogo_checklinkname0` for sing-box). It cannot show the ldflags: under `-trimpath` cmd/go records none (go1.27.3 `src/cmd/go/internal/load/pkg.go:2469-2481`, go.dev/issue/52372; found by the first hosted run, 2026-10-23), and a recorded `-ldflags` is refused as a toolchain change to review. The ldflags are checked by their effects instead: every binary's build ID is empty, as the `-buildid=` inside the single `-ldflags` argument makes it, and the binaries built for the runner print their `-X` version stamps (`xray version`, `mooring-hy2 version`). `godebugDefault`, `-checklinkname=0` and `-s -w` leave no stamp of their own; the pinned digests hold the bytes they produce.
 - Upstream package tests pass under the pinned Go: Xray `proxy/vless` and `transport/internet/reality`; sing-box `protocol/hysteria2` and `protocol/wireguard`. If either fails, a reviewed commit pins the newest Go 1.26 patch (go1.26.9 on go.dev on 2026-10-15) and records the reason.
 - `govulncheck` runs with the exact role tags against each engine's module graph. A reachable finding blocks the release until a reviewed dependency bump lands (§4.4).
 
@@ -321,7 +321,7 @@ go build -trimpath -tags "<role tags>,badlinkname,tfogo_checklinkname0" \
 **Go engines.**
 - A reachable govulncheck finding is fixed by a reviewed bump of that module to its latest stable version (`go get <module>@<stable>`). The `go.mod`/`go.sum` diff is recorded as a patch under `engines/patches/` with its sha256 in `engines.lock.toml`, in the same way CFM's 0.5 line carries `native/macos/patches/sing-box-v1.14.2-security-dependencies.patch`. At `f5b425d` that patch takes `golang.org/x/crypto` from upstream v1.14.2's v0.54.0 to v0.57.0 and `golang.org/x/net` from v0.57.0 to v0.60.0 (`:714-727`): x/crypto v0.57.0 and x/net v0.59.0 came with a dependency refresh at `49a16d4` (2026-09-25), and x/net v0.60.0 with `f5b425d` for the Go advisories of 2026-10-08. Whether Mooring's sing-box and Xray builds need any of these bumps is for M0's govulncheck run to decide *(inference: at least x/net, whose advisory the same upstream pin carries)*.
 - A Go point release with security fixes triggers a rebuild of every engine.
-- `cargo xtask engines audit` runs monthly and before every release.
+- govulncheck runs on every output with its own tags and target in every hosted engine build (`cargo xtask engines-govulncheck`), and the build runs again monthly and before every release. A reviewed bump is listed in the lock's `security-bumps`; `engines-prepare` makes the go.mod/go.sum patch from the lock on the hosted runner, scans the patched trees, and the patch is reviewed against sum.golang.org and pinned before any build uses it.
 
 **Rust.** `cargo deny` runs with `multiple-versions = "deny"`.
 - Direct crypto dependencies use one generation: `x25519-dalek 3.0.0`, `ed25519-dalek 3.0.0`, `sha2 0.11.0`, `getrandom 0.4.x`, `rand_core 0.10` (crates.io index, 2026-10-08).
@@ -2701,6 +2701,8 @@ M2 (M2a and M2b) can run in parallel with M3–M7 as soon as the hardware is att
 - The musl `mooring-agent` stub.
 - XcodeGen `apple/project.yml` and the `MooringKit` package.
 - The REALITY ancestry check, recorded.
+
+**Status 2026-10-23 (engines built on hosted CI, D-7):** `.github/workflows/engines.yml` builds every engine from `engines.lock.toml`'s pins: go1.27.3 (GO-2026-6809), Xray v26.9.30 with the REALITY replace to e1986a4 and x/net v0.61.0, and sing-box v1.14.2 with x/crypto v0.58.0, x/net v0.61.0 and grpc v1.84.0 (go directive 1.26.0), each bump answering a reachable govulncheck finding or an advisory the pinned version carries (the lock says which). Run 39915405073 built everything twice from clean caches, byte for byte the same, and passed the build-information gate, upstream's package tests and govulncheck on all six outputs; the output digests it printed are pinned, and run 39918017282 rebuilt and verified against them. `xtask engines-{pins,prepare,build,verify,metadata,govulncheck}` replace the planned `engines {build,verify,upstream-tests,audit}`; upstream's tests are run by the workflow. Still open from the list below: RealiTLScanner and the recorded REALITY ancestry check.
 
 **Status at revision 4.**
 - *Done on this Mac:* the skeleton, `LICENSE`, `rust-toolchain.toml` (1.98.1), workspace lints, `deny.toml` with justified skips, the crates with their declared edges (now implemented, M1), `xtask ci`, `graph-check`, `kinds-coverage`, `deny-skips` and `clean`, and the input pins of `engines.lock.toml`: the Go 1.27.1 tarball digests (1.27.2 since revision 8, §4), Xray v26.9.30 with the REALITY replace to e1986a4, and sing-box v1.14.2 with its role tags.
