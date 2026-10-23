@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use mooring_export::ExportFormat;
+use mooring_model::dns::DnsName;
 use mooring_model::exit::{FlowCap, Pairing};
 use mooring_model::iface::BsdName;
 use mooring_model::ipv4::CarrierPrefix;
@@ -266,6 +267,66 @@ pub(crate) enum NodeCommand {
         #[arg(long, conflicts_with = "root_identity")]
         resume: bool,
         /// Adopt without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// The node's REALITY target.
+    #[command(subcommand)]
+    Target(TargetCommand),
+    /// Render the node's bundle for the current generation, install it
+    /// with a transaction, confirm it and record what the node confirmed.
+    Apply {
+        /// The node's id.
+        node: NodeId,
+        /// The Mac's interface to the M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// The engine directory `cargo xtask engines-verify` accepted.
+        #[arg(long, value_name = "DIR")]
+        engines: PathBuf,
+    },
+}
+
+/// A target command.
+#[derive(Debug, Subcommand)]
+pub(crate) enum TargetCommand {
+    /// Have the node measure a candidate target and print every rule it
+    /// fails, the operator's attestation aside.
+    Check {
+        /// The node's id.
+        node: NodeId,
+        /// The candidate host.
+        host: DnsName,
+        /// The Mac's interface to the M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// The engine directory `cargo xtask engines-verify` accepted.
+        #[arg(long, value_name = "DIR")]
+        engines: PathBuf,
+    },
+    /// Measure the target again, qualify it with the attestation and
+    /// store it.
+    Set {
+        /// The node's id.
+        node: NodeId,
+        /// The host.
+        host: DnsName,
+        /// The Mac's interface to the M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// The engine directory `cargo xtask engines-verify` accepted.
+        #[arg(long, value_name = "DIR")]
+        engines: PathBuf,
+        /// The target is announced by the VPS's ASN.
+        #[arg(long)]
+        same_asn: bool,
+        /// The target is not served by a CDN.
+        #[arg(long)]
+        not_cdn: bool,
+        /// Where the evidence for both lives (https).
+        #[arg(long, value_name = "URL")]
+        evidence: String,
+        /// Store without asking.
         #[arg(long)]
         yes: bool,
     },

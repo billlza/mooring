@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use mooring_agent_proto::{
-    LineRequest, MAX_RESPONSE_LINE_BYTES, Response, read_reply, write_request,
+    LineRequest, MAX_RESPONSE_LINE_BYTES, Response, Sha256Hex, read_reply, write_put_blob,
+    write_request,
 };
 use mooring_model::iface::BsdName;
 use mooring_model::ipv4::PublicIpv4;
@@ -202,6 +203,12 @@ impl AgentLink for SshAgent {
     fn request(&mut self, request: &LineRequest) -> Result<Response, NodeError> {
         let mut input = Vec::new();
         write_request(&mut input, request).map_err(NodeError::Encode)?;
+        self.reply(&input)
+    }
+
+    fn put_blob(&mut self, sha256: Sha256Hex, payload: &[u8]) -> Result<Response, NodeError> {
+        let mut input = Vec::new();
+        write_put_blob(&mut input, sha256, payload).map_err(NodeError::Encode)?;
         self.reply(&input)
     }
 }

@@ -8,12 +8,14 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
+use mooring_agent_proto::{AgentError, Sha256Hex};
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_export::ExportError;
 use mooring_keys::KeysError;
 use mooring_macsys::MacsysError;
+use mooring_model::dns::DnsName;
 use mooring_model::error::ModelError;
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::node::LifecycleStage;
@@ -501,6 +503,93 @@ pub(crate) enum LocalError {
         /// The operating system's error.
         #[source]
         source: io::Error,
+    },
+    /// The node is not adopted or applied.
+    #[error("node {node} is {stage}; it must be adopted first")]
+    NodeNotDeployed {
+        /// The node.
+        node: NodeId,
+        /// Its stage.
+        stage: LifecycleStage,
+    },
+    /// An engine file is missing or unreadable.
+    #[error("cannot read the engine {}", path.display())]
+    EngineRead {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// An engine file does not hash to its pin.
+    #[error(
+        "{} hashes to {actual}, not to engines.lock.toml's digest: give the directory `cargo xtask engines-verify` accepted",
+        path.display()
+    )]
+    EngineDigest {
+        /// The file.
+        path: PathBuf,
+        /// Its digest.
+        actual: String,
+    },
+    /// The engine directory lacks a pinned file.
+    #[error("no pinned engine file at {}", path.display())]
+    EngineFile {
+        /// Where it should be.
+        path: PathBuf,
+    },
+    /// A blob the node lacks is neither a bundle file nor an engine.
+    #[error("the node lacks the blob {sha256}, which this Mac cannot supply")]
+    EngineMissing {
+        /// The blob.
+        sha256: Sha256Hex,
+    },
+    /// A target value was not accepted.
+    #[error("the target value was not accepted")]
+    Target(#[source] ModelError),
+    /// The host name is not one the agent takes.
+    #[error("{host} is not a host name the agent takes")]
+    TargetHost {
+        /// The host.
+        host: DnsName,
+    },
+    /// The target failed a rule; nothing was stored.
+    #[error("{host} was not stored: it fails the rules printed above")]
+    TargetRefused {
+        /// The host.
+        host: DnsName,
+    },
+    /// The transaction failed on the node.
+    #[error("the transaction for generation {generation} failed on the node")]
+    TxnFailed {
+        /// Its generation.
+        generation: u64,
+        /// The agent's error.
+        #[source]
+        source: AgentError,
+    },
+    /// The transaction was reverted by a `Rollback`.
+    #[error("the transaction for generation {generation} was rolled back")]
+    TxnReverted {
+        /// Its generation.
+        generation: u64,
+    },
+    /// The transaction was confirmed by someone else while this command
+    /// waited.
+    #[error("the transaction for generation {generation} was confirmed elsewhere")]
+    TxnAlreadyCommitted {
+        /// Its generation.
+        generation: u64,
+    },
+    /// The transaction did not reach confirmation in time.
+    #[error(
+        "the transaction for generation {generation} did not await confirmation within {secs} s; the node reverts it unless it is confirmed"
+    )]
+    TxnTimeout {
+        /// Its generation.
+        generation: u64,
+        /// How long the command waited.
+        secs: u64,
     },
     /// A node's address is not a public IPv4 address.
     #[error("the node's address was not accepted")]

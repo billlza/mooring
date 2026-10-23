@@ -7,6 +7,7 @@
 //! other host, and the live keychain is never touched.
 
 mod add;
+mod apply;
 mod capture;
 mod daemon;
 mod exit;

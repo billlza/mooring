@@ -280,6 +280,11 @@ fn hello(address: Ipv4Addr, debian: u16) -> Response {
     }))
 }
 
+/// The `Hello` of a Debian 13 amd64 node at `address`.
+pub(crate) fn hello_at(address: Ipv4Addr) -> Response {
+    hello(address, 13)
+}
+
 fn agent_file(harness: &Harness) -> PathBuf {
     let path = harness.home.path().join("mooring-agent");
     fs::write(&path, b"\x7fELF a static agent").unwrap();

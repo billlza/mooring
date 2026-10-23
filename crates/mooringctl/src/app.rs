@@ -25,7 +25,9 @@ use mooring_model::time::UnixTime;
 use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, write_router_pin};
 
 use crate::backup::BackupCheck;
-use crate::cli::{Command, ExitCommand, NodeCommand, RouterCommand, SimCommand, UserCommand};
+use crate::cli::{
+    Command, ExitCommand, NodeCommand, RouterCommand, SimCommand, TargetCommand, UserCommand,
+};
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::paths;
 use crate::prompt::{self, Answer, Console};
@@ -53,6 +55,8 @@ pub(crate) struct Env<'a> {
     pub(crate) parent: &'a dyn Fn() -> u32,
     /// How nodes are reached (`/usr/bin/ssh` in the binary).
     pub(crate) nodes: &'a dyn crate::node::NodeLinks,
+    /// The engine files' pins (`node::engines::PINS` in the binary).
+    pub(crate) engine_pins: crate::node::engines::Pins<'a>,
 }
 
 /// The system clock, in whole seconds since the epoch.
@@ -133,6 +137,51 @@ pub(crate) fn run(
                 yes,
             },
         ),
+        Command::Node(NodeCommand::Target(TargetCommand::Check {
+            node,
+            host,
+            interface,
+            engines,
+        })) => crate::node::target::check(
+            env,
+            out,
+            &crate::node::target::TargetArgs {
+                node: &node,
+                host: &host,
+                interface: &interface,
+                engines: &engines,
+            },
+        ),
+        Command::Node(NodeCommand::Target(TargetCommand::Set {
+            node,
+            host,
+            interface,
+            engines,
+            same_asn,
+            not_cdn,
+            evidence,
+            yes,
+        })) => crate::node::target::set(
+            env,
+            out,
+            &crate::node::target::TargetArgs {
+                node: &node,
+                host: &host,
+                interface: &interface,
+                engines: &engines,
+            },
+            &crate::node::target::Attested {
+                same_asn,
+                not_cdn,
+                evidence: &evidence,
+            },
+            yes,
+        ),
+        Command::Node(NodeCommand::Apply {
+            node,
+            interface,
+            engines,
+        }) => crate::node::apply::apply(env, out, &node, &interface, &engines),
         Command::Sim(SimCommand::SetAnchor { anchor, yes }) => {
             crate::sim::set_anchor(env, out, anchor, yes)
         }

@@ -125,6 +125,7 @@ fn main() -> ExitCode {
         backups: &backups,
         parent: &std::os::unix::process::parent_id,
         nodes: &SshLinks,
+        engine_pins: &node::engines::PINS,
     };
     let code = run(
         cli.command,

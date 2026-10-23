@@ -5,15 +5,20 @@
 //! it, one per session.
 
 pub(crate) mod adopt;
+pub(crate) mod apply;
 pub(crate) mod dial;
+pub(crate) mod engines;
 pub(crate) mod files;
 pub(crate) mod new;
+pub(crate) mod session;
 pub(crate) mod ssh;
+pub(crate) mod target;
 
+use std::collections::BTreeSet;
 use std::io;
 
 use mooring_agent_proto::{
-    AgentError, LineRequest, ReadError, RequestKind, Response, ResponseKind, WriteError,
+    AgentError, LineRequest, ReadError, RequestKind, Response, ResponseKind, Sha256Hex, WriteError,
 };
 
 /// One node's agent: each call is one request and its reply.
@@ -21,6 +26,43 @@ pub(crate) trait AgentLink {
     /// Sends `request` and returns the agent's reply; the agent's own
     /// refusal is [`NodeError::Agent`].
     fn request(&mut self, request: &LineRequest) -> Result<Response, NodeError>;
+
+    /// Uploads `payload` as the blob `sha256`.
+    fn put_blob(&mut self, sha256: Sha256Hex, payload: &[u8]) -> Result<Response, NodeError>;
+}
+
+/// Uploads every blob of `wanted` the node does not hold, asking first with
+/// `HaveBlobs` (design §11.1); `source` gives each missing blob's bytes.
+/// Returns how many were uploaded.
+pub(crate) fn upload_missing(
+    session: &mut dyn NodeSession,
+    wanted: BTreeSet<Sha256Hex>,
+    mut source: impl FnMut(&Sha256Hex) -> Result<Vec<u8>, crate::error::LocalError>,
+) -> Result<usize, crate::error::CommandError> {
+    let reply = session.request(&LineRequest::HaveBlobs {
+        blobs: wanted.clone(),
+    })?;
+    let Response::Blobs { present } = reply else {
+        return Err(NodeError::Unexpected {
+            request: RequestKind::HaveBlobs,
+            response: reply.kind(),
+        }
+        .into());
+    };
+    let mut uploaded = 0;
+    for sha256 in wanted.difference(&present) {
+        let bytes = source(sha256)?;
+        let reply = session.put_blob(*sha256, &bytes)?;
+        if reply != (Response::BlobStored { sha256: *sha256 }) {
+            return Err(NodeError::Unexpected {
+                request: RequestKind::PutBlob,
+                response: reply.kind(),
+            }
+            .into());
+        }
+        uploaded += 1;
+    }
+    Ok(uploaded)
 }
 
 /// One node as one [`ssh::SshTarget`] reaches it: agent requests, and the

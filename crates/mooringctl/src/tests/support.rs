@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use mooring_agent_proto::{LineRequest, RequestKind, Response};
+use mooring_agent_proto::{LineRequest, RequestKind, Response, Sha256Hex};
 use mooring_macsys::{InterfaceAddrV4, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry};
@@ -337,6 +337,8 @@ pub(crate) enum Expected {
         remote: ExpectedRemote,
         kind: RequestKind,
     },
+    /// A blob upload over the forced command.
+    PutBlob { identity: &'static str },
     /// An empty request.
     Empty {
         identity: &'static str,
@@ -374,6 +376,7 @@ pub(crate) struct FakeNodes {
 pub(crate) enum Sent {
     Run(Vec<u8>),
     Request(LineRequest),
+    PutBlob(Sha256Hex, usize),
     Empty,
 }
 
@@ -421,6 +424,10 @@ impl FakeNodes {
                     }
                 }
             }
+            (Expected::PutBlob { identity: wanted }, Sent::PutBlob(..)) => {
+                assert_eq!(identity, *wanted);
+                assert_eq!(remote, None);
+            }
             (
                 Expected::Empty {
                     identity: wanted,
@@ -464,6 +471,10 @@ impl FakeSession<'_> {
 impl AgentLink for FakeSession<'_> {
     fn request(&mut self, request: &LineRequest) -> Result<Response, NodeError> {
         self.replied(Sent::Request(request.clone()))
+    }
+
+    fn put_blob(&mut self, sha256: Sha256Hex, payload: &[u8]) -> Result<Response, NodeError> {
+        self.replied(Sent::PutBlob(sha256, payload.len()))
     }
 }
 
@@ -597,6 +608,8 @@ pub(crate) struct Harness {
     pub(crate) backups: FakeBackups,
     pub(crate) parent: FakeParent,
     pub(crate) nodes: FakeNodes,
+    /// The engine pins the commands check files against.
+    pub(crate) engine_pins: Vec<(&'static str, String)>,
 }
 
 impl Harness {
@@ -616,6 +629,7 @@ impl Harness {
             },
             parent: FakeParent::staying(),
             nodes: FakeNodes::default(),
+            engine_pins: Vec::new(),
         }
     }
 
@@ -671,6 +685,11 @@ impl Harness {
     pub(crate) fn with_env<T>(&mut self, work: impl FnOnce(&mut Env<'_>) -> T) -> T {
         let clock = || Ok(UnixTime::from_secs(NOW));
         let parent = || self.parent.id();
+        let pins: Vec<(&str, &str)> = self
+            .engine_pins
+            .iter()
+            .map(|(path, hex)| (*path, hex.as_str()))
+            .collect();
         let mut env = Env {
             router: RouterEnv {
                 link: &self.link,
@@ -685,6 +704,7 @@ impl Harness {
             backups: &self.backups,
             parent: &parent,
             nodes: &self.nodes,
+            engine_pins: &pins,
         };
         work(&mut env)
     }
