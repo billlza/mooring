@@ -16,6 +16,7 @@ use mooring_agent_proto::{
 use serde_json::Value;
 
 use super::stage::{XRAY, program};
+use crate::accounting::stats::XRAY_API_SERVER;
 use crate::gate;
 use crate::host::{Node, Tool};
 use crate::paths::Paths;
@@ -30,9 +31,6 @@ pub(crate) const UNITS: [&str; 3] = [
     "mooring-hy2.service",
     "wg-quick@wgexit.service",
 ];
-
-/// The Xray API the rendered configuration listens on (design §8.2).
-const XRAY_API: &str = "--server=127.0.0.1:10085";
 
 /// A listener the generation's configuration opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -200,7 +198,11 @@ fn passes(paths: &Paths, node: &dyn Node, dir: &Path, check: HealthCheck) -> boo
             }
         }
         HealthCheck::XrayApi => node
-            .run_program(&program(dir, XRAY), &["api", "statssys", XRAY_API], &[])
+            .run_program(
+                &program(dir, XRAY),
+                &["api", "statssys", XRAY_API_SERVER],
+                &[],
+            )
             .is_ok_and(|output| output.success),
         HealthCheck::ExitClosedSet => gate::state(node).is_ok(),
         HealthCheck::OwnerGuard => node

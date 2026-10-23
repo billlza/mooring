@@ -59,6 +59,11 @@ closed_enum! {
         /// New exit flows refused over the node-wide flow cap
         /// (`ExitFlowCapHit`).
         FlowCap,
+        /// New exit flows Xray opened to the node's own reflector: the
+        /// Mac's in-chain probes, which only the probe identity may route
+        /// there. Its growth is the accounting canary's evidence that Xray
+        /// dispatched a probe (`AccountingCanaryMissing`).
+        ProbeFlows,
     }
 }
 
@@ -69,6 +74,7 @@ impl NftCounter {
             Self::XrayGuard => "xray_guard",
             Self::Hy2Guard => "hy2_guard",
             Self::FlowCap => "flow_cap",
+            Self::ProbeFlows => "probe_flows",
         }
     }
 }
@@ -119,7 +125,7 @@ mod tests {
         let counters: BTreeSet<&str> = NftCounter::ALL.iter().map(|c| c.name()).collect();
         assert_eq!(
             counters,
-            BTreeSet::from(["flow_cap", "hy2_guard", "xray_guard"])
+            BTreeSet::from(["flow_cap", "hy2_guard", "probe_flows", "xray_guard"])
         );
         for user in EngineUser::ALL {
             assert!(UnitName::new(format!("{}.service", user.name())).is_ok());

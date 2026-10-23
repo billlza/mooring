@@ -4,14 +4,14 @@
 //! [`crate::ManagedFile::WatchConfig`]) and the conditions it reports in the
 //! node status ([`WatchError`], design §14 "watch (VPS)").
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::num::NonZeroU16;
 
 use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
-use crate::{InboundSet, TargetHost, UnixTime, ValueError};
+use crate::{InboundSet, StatsEmail, TargetHost, UnixTime, ValueError};
 
 /// Seconds between watch ticks (§11.3).
 pub const WATCH_TICK_SECS: u64 = 5;
@@ -52,6 +52,11 @@ pub struct WatchConfig {
     pub keepalive_secs: NonZeroU16,
     /// The REALITY target the hourly check re-verifies.
     pub target: WatchTarget,
+    /// The accounting emails the generation's `xray.json` gives its
+    /// clients: every identity it serves, on each inbound. The watch keeps
+    /// `StatusV1::last_active` for these only (design §11.5), and reads
+    /// them here so that it never needs `xray.json`, which holds secrets.
+    pub emails: BTreeSet<StatsEmail>,
 }
 
 impl WatchConfig {
@@ -136,16 +141,21 @@ pub enum WatchError {
         /// When the reboot became required.
         since: UnixTime,
     },
-    /// The probe identity's accounting counter on each of `inbounds` is
-    /// missing or did not grow although the Mac's in-chain probes reached
-    /// the node through that inbound (critique C-11): Xray is not counting
-    /// what the bundle routes through it (the stats policy or the
+    /// The probe identity has no accounting counter although the Mac's
+    /// in-chain probes reached the node (critique C-11): Xray is not
+    /// counting what the bundle routes through it (the stats policy or the
     /// accounting emails are wrong), so every user's usage on this node
-    /// would read zero. One condition holds every inbound concerned, so
-    /// both can be reported at once (the likely case when the stats policy
-    /// is off). The evidence the watch uses for the probes, and its window,
-    /// are settled with the watch (M4); the Mac can make the same check
-    /// from [`crate::StatusV1::last_active`] and its own probe results.
+    /// would read zero. The watch's evidence of a probe is the nft counter
+    /// [`crate::NftCounter::ProbeFlows`], which counts the exit flows to
+    /// the node's own reflector, which only the probe identity may open:
+    /// the condition is raised when that counter grew between two polls in
+    /// one run of Xray and the later poll holds no counter for a probe
+    /// email. The nft counter does not tell the inbounds apart, so the
+    /// watch names every inbound; one condition holds every inbound
+    /// concerned, so both can be reported at once (the likely case when
+    /// the stats policy is off). The Mac, which knows the inbound of each
+    /// of its probes, can narrow it from [`crate::StatusV1::last_active`]
+    /// and its own probe results.
     #[error("the probe's traffic on {inbounds} is not being counted")]
     AccountingCanaryMissing {
         /// The inbounds whose probe counters are missing.
@@ -343,12 +353,16 @@ mod tests {
                 host: TargetHost::new("www.example.com").unwrap(),
                 ipv4: Ipv4Addr::new(198, 51, 100, 7),
             },
+            emails: ["u01@reality", "probe@hy2"]
+                .into_iter()
+                .map(|email| email.parse().unwrap())
+                .collect(),
         };
         assert_eq!(config.rx_growth_window_secs(), 30);
         let json = serde_json::to_string(&config).unwrap();
         assert_eq!(
             json,
-            r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"}}"#
+            r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"]}"#
         );
         assert_eq!(serde_json::from_str::<WatchConfig>(&json).unwrap(), config);
         assert!(serde_json::from_str::<WatchConfig>(&json.replace(":10,", ":0,")).is_err());

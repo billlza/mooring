@@ -27,13 +27,13 @@ fn session(role: Role) -> Session<'static> {
     }
 }
 
-fn frame(request: &LineRequest) -> Vec<u8> {
+pub(super) fn frame(request: &LineRequest) -> Vec<u8> {
     let mut bytes = Vec::new();
     write_request(&mut bytes, request).unwrap();
     bytes
 }
 
-fn ask(paths: &Paths, node: &FakeNode, role: Role, bytes: Vec<u8>) -> Reply {
+pub(super) fn ask(paths: &Paths, node: &FakeNode, role: Role, bytes: Vec<u8>) -> Reply {
     answer(paths, node, session(role), &mut Cursor::new(bytes))
 }
 
@@ -268,12 +268,9 @@ fn the_mac_report_is_stored_with_the_nodes_time_and_read_back() {
 
 /// The requests this slice does not serve yet; the list shrinks as M4's
 /// slices land, and `NotServedYet` goes when it is empty.
-const NOT_SERVED_YET: [RequestKind; 6] = [
+const NOT_SERVED_YET: [RequestKind; 3] = [
     RequestKind::Bootstrap,
     RequestKind::RevokeBootstrap,
-    RequestKind::Status,
-    RequestKind::Usage,
-    RequestKind::UsageSeries,
     RequestKind::TargetCheck,
 ];
 
@@ -314,6 +311,9 @@ fn requests_of_later_slices_are_answered_not_served_yet() {
             RequestKind::Apply,
             RequestKind::TxnStatus,
             RequestKind::Rollback,
+            RequestKind::Status,
+            RequestKind::Usage,
+            RequestKind::UsageSeries,
             RequestKind::Events,
             RequestKind::GateSet,
             RequestKind::ClearHold,

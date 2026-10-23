@@ -12,6 +12,9 @@
 //!   flow cap) or to the REALITY target's ports, and `mooring-hy2` only the
 //!   loopback handoff. Every other engine-originated connection is
 //!   counted and rejected.
+//! - `exit_flow` counts the exit flows to `$VPS4`'s reflector, which only
+//!   the Mac's in-chain probes open (the accounting canary's evidence,
+//!   design §11.5), then applies the flow cap.
 //! - `prerouting_nat` folds each Hysteria2 hop range onto its listener,
 //!   only for traffic addressed to `$VPS4`.
 
@@ -69,6 +72,11 @@ pub(crate) fn write(input: &NftInput, sink: &mut dyn TextSink) {
     );
     write_output(input, sink);
     sink.put("\tchain exit_flow {\n");
+    sink.put("\t\tip daddr $VPS4 tcp dport ");
+    sink.show(&input.reflector);
+    sink.put(" ct state new counter name ");
+    sink.put(NftCounter::ProbeFlows.name());
+    sink.put("\n");
     sink.put("\t\tct state new ct count over $FLOW_CAP counter name ");
     sink.put(NftCounter::FlowCap.name());
     sink.put(" reject\n");

@@ -211,7 +211,10 @@ proptest! {
             prop_assert_ne!(new.digest(), old.digest());
             for file in ManagedFile::ALL {
                 let changed = new.file(*file).sha256() != old.file(*file).sha256();
-                let user_bearing = matches!(file, ManagedFile::XrayConfig | ManagedFile::Hy2Config);
+                let user_bearing = matches!(
+                    file,
+                    ManagedFile::XrayConfig | ManagedFile::Hy2Config | ManagedFile::WatchConfig
+                );
                 prop_assert_eq!(changed, user_bearing, "{}", file);
             }
         }

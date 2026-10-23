@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
 use ipnet::Ipv4Net;
-use mooring_agent_proto::ManagedFile;
+use mooring_agent_proto::{ManagedFile, StatsEmail};
 use mooring_fixtures::Fixture;
 use mooring_keys::x25519::{RealityKeyPair, WgKeyPair};
 use mooring_model::exit::ProbeProtocol;
@@ -545,6 +545,22 @@ fn watch_config_pins_the_target_and_keepalive() {
             assert_eq!(watch.keepalive_secs.get(), node.wg.keepalive.seconds());
             assert_eq!(watch.target.host.as_str(), target.host().as_str());
             assert_eq!(watch.target.ipv4, target.ipv4().get());
+            let xray: serde_json::Value =
+                serde_json::from_slice(bundle.file(ManagedFile::XrayConfig).expose_bytes())
+                    .unwrap();
+            let clients: BTreeSet<StatsEmail> = xray["inbounds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|inbound| inbound["settings"]["clients"].as_array())
+                .flatten()
+                .map(|client| client["email"].as_str().unwrap().parse().unwrap())
+                .collect();
+            assert_eq!(
+                watch.emails, clients,
+                "the watch keeps last_active for exactly xray.json's clients"
+            );
+            assert!(!watch.emails.is_empty(), "the probe at least");
         }
     }
 }
@@ -613,13 +629,25 @@ fn nftables_drops_by_default_and_gates_exit_traffic_first() {
             );
             assert!(output[3].starts_with("meta skuid"));
 
+            let reflector = input
+                .iter()
+                .find_map(|rule| {
+                    rule.strip_prefix("ip daddr $VPS4 tcp dport ")?
+                        .strip_suffix(" ct state new add @refl_src { ip saddr limit rate over 5/second burst 10 packets } drop")
+                })
+                .expect("the reflector's per-source limit");
+            let probes = format!(
+                "ip daddr $VPS4 tcp dport {reflector} ct state new counter name probe_flows"
+            );
             let exit_flow = chain(text, "exit_flow");
             assert_eq!(
                 exit_flow,
                 [
+                    probes.as_str(),
                     "ct state new ct count over $FLOW_CAP counter name flow_cap reject",
                     "accept"
-                ]
+                ],
+                "the in-chain probes are counted, with no verdict, before the flow cap"
             );
         }
     }

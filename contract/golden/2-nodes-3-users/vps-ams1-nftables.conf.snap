@@ -20,6 +20,10 @@ table inet mooring {
 		packets 0 bytes 0
 	}
 
+	counter probe_flows {
+		packets 0 bytes 0
+	}
+
 	set exit_closed {
 		type ifname
 		elements = { "wgexit" }
@@ -84,6 +88,7 @@ table inet mooring {
 	}
 
 	chain exit_flow {
+		ip daddr $VPS4 tcp dport 27900 ct state new counter name probe_flows
 		ct state new ct count over $FLOW_CAP counter name flow_cap reject
 		accept
 	}

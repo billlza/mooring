@@ -153,7 +153,7 @@ const RTF_UP: u16 = 0x1;
 
 /// The interface of the up IPv4 default routes in `/proc/net/route`, which
 /// must be one.
-fn uplink(paths: &Paths) -> Result<IfName, AgentError> {
+pub(crate) fn uplink(paths: &Paths) -> Result<IfName, AgentError> {
     let field = HostFact::Uplink;
     let table = fs::read_to_string(paths.at("/proc/net/route")).map_err(|_| unavailable(field))?;
     let defaults: BTreeSet<&str> = table

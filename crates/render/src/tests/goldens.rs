@@ -191,8 +191,8 @@ fn cloud_init_golden_matches() {
 /// its secrets (design §7). The fixtures derive each user's credentials
 /// from its number alone, so suspending the second and third users of
 /// `1-node-3-users` must render exactly the `1-node-1-user` goldens:
-/// `xray.json` and `hy2.json` lose both users, and the other files, which
-/// list no users, are unchanged.
+/// `xray.json`, `hy2.json` and `watch.json` (its accounting emails) lose
+/// both users, and the other files, which list no users, are unchanged.
 #[test]
 fn suspended_users_render_the_goldens_of_a_deployment_without_them() {
     let three = mooring_fixtures::one_node_three_users().unwrap();
@@ -208,7 +208,10 @@ fn suspended_users_render_the_goldens_of_a_deployment_without_them() {
     let before = vps(&three, &lon1);
     for (file, bytes) in rendered.files() {
         Golden::managed("1-node-1-user", &lon1, file, bytes.expose_bytes()).assert();
-        let lists_users = matches!(file, ManagedFile::XrayConfig | ManagedFile::Hy2Config);
+        let lists_users = matches!(
+            file,
+            ManagedFile::XrayConfig | ManagedFile::Hy2Config | ManagedFile::WatchConfig
+        );
         assert_eq!(
             bytes.expose_bytes() == before.file(file).expose_bytes(),
             !lists_users,

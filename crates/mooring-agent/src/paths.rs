@@ -9,7 +9,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use mooring_agent_proto::{
-    AGENT_CURRENT_PATH, CURRENT_DIR, ETC_DIR, Generation, ManagedFile, Sha256Hex, WG_INTERFACE,
+    AGENT_CURRENT_PATH, CURRENT_DIR, ETC_DIR, Generation, IfName, ManagedFile, Sha256Hex,
+    UsageMonth, WG_INTERFACE,
 };
 
 /// The agent's state directory.
@@ -208,6 +209,31 @@ impl Paths {
     /// (design §15.7).
     pub(crate) fn journal(&self) -> PathBuf {
         self.watch_dir().join("journal.jsonl")
+    }
+
+    /// The accounting files, `/var/lib/mooring/usage` (design §11.5).
+    pub(crate) fn usage_dir(&self) -> PathBuf {
+        self.var_lib().join("usage")
+    }
+
+    /// The latest accounting poll and the usage series,
+    /// `/var/lib/mooring/usage/accounting.json`.
+    pub(crate) fn accounting(&self) -> PathBuf {
+        self.usage_dir().join("accounting.json")
+    }
+
+    /// One month's usage, `/var/lib/mooring/usage/<YYYY-MM>.json`.
+    pub(crate) fn usage_month(&self, month: UsageMonth) -> PathBuf {
+        self.usage_dir().join(format!("{month}.json"))
+    }
+
+    /// One of `interface`'s kernel counters,
+    /// `/sys/class/net/<interface>/statistics/<counter>`.
+    pub(crate) fn net_statistic(&self, interface: &IfName, counter: &str) -> PathBuf {
+        self.at("/sys/class/net")
+            .join(interface.as_str())
+            .join("statistics")
+            .join(counter)
     }
 
     /// The current generation's `watch.json`.
