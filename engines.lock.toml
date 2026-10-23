@@ -64,7 +64,12 @@ patch-sha256 = "c028be2535f0eb40ecbf2fdcfc2a34c88ff402f52d26a0afffcc0ae19f5822b2
 
 # "<target>" = "<sha256 of the unsigned binary>", filled from the first
 # reproducible hosted build and checked by `cargo xtask engines-verify`.
+# From hosted run 39915405073 (2026-10-23): two clean builds byte for byte
+# the same, build information, upstream tests and govulncheck passed; the
+# uploaded artifact hashed to the same values on this Mac.
 [xray.outputs]
+"linux-amd64" = "49e1f3b3a0c3c82cbcdb167e0eb604dc7125e7b86927f7431b994d9a8415f5cf"
+"linux-arm64" = "b66ba500b9f654bbe3b34224ddc06390d4858c1157f14faa46b48f009ca6714b"
 
 [sing-box]
 module = "github.com/sagernet/sing-box"
@@ -115,8 +120,12 @@ tags = ["with_quic", "with_utls"]
 targets = ["linux-amd64", "linux-arm64"]
 tags = ["with_quic"]
 
-# "<role>/<target>" = "<sha256 of the unsigned binary>".
+# "<role>/<target>" = "<sha256 of the unsigned binary>", from the same run.
 [sing-box.outputs]
+"mooring-exit/darwin-arm64" = "e0a858dda89aab39298d728158af5d57e255301b5853778a83cf6de650179a8a"
+"mooring-probe/darwin-arm64" = "12f571e947f841a0ca3cdc6f7385942d60b0fd0a835e9f33528a4ff3c8074caa"
+"mooring-hy2/linux-amd64" = "dcf12e2314dd0a0897284fb4eb82adf2db931d3c14c20210c9547b3427b8dd58"
+"mooring-hy2/linux-arm64" = "0e8a249a7004acc30b9dd1d3cc737e0eedd0b16e13104ee5a6b1e4b077596ad2"
 
 [geodata]
 source = "Xray-linux-64.zip from the XTLS/Xray-core v26.9.30 release"
@@ -126,5 +135,7 @@ zip-url = "https://github.com/XTLS/Xray-core/releases/download/v26.9.30/Xray-lin
 zip-sha256 = "f851110beaff16e78d643f0ccfd9524b4a44dfd59bae3e34bb52bba378f7690e"
 files = ["geoip.dat", "geosite.dat"]
 
-# "<file>" = "<sha256>", from the first hosted build.
+# "<file>" = "<sha256>", from the same run.
 [geodata.outputs]
+"geoip.dat" = "3cf2236c19063c1c80803368cca5ff589c5033129fdf9ba154230c689b81fc2a"
+"geosite.dat" = "51211fde21696bbde05d1102f47f586261e98987a3cae23f7dd1cd742c62c2d2"

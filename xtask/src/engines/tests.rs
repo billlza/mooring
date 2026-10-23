@@ -7,7 +7,7 @@ use mooring_model::Sha256Digest;
 
 use super::{
     EnginePatch, EnginesError, Lock, Target, bump_module, check_build_id, compare, outputs_toml,
-    unquote,
+    pinned, unquote,
 };
 
 /// sing-box's security bumps, as the lock writes them.
@@ -148,8 +148,8 @@ fn a_lock_that_contradicts_itself_is_refused() {
             "sha256",
         ),
         (
-            "[geodata.outputs]",
-            "[geodata.outputs]\n\"geoip.dat\" = \"abc\"",
+            "\"geoip.dat\" = \"3cf2236c",
+            "\"geoip.dat\" = \"3CF2236C",
             "sha256",
         ),
         (
@@ -205,20 +205,38 @@ fn manifest() -> BTreeMap<String, Sha256Digest> {
     manifest
 }
 
-/// The printed tables, once pasted into the lock, make the build verify;
-/// any other digest, or a missing output, does not.
+/// The lock's text without its output digests: the three output tables
+/// stay, empty.
+fn unpinned_text() -> String {
+    let text = text();
+    let mut kept = Vec::new();
+    let mut in_outputs = false;
+    for line in text.lines() {
+        if line.starts_with('[') {
+            in_outputs = line.ends_with(".outputs]");
+        } else if in_outputs && line.starts_with('"') {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n") + "\n"
+}
+
+/// The printed tables, once pasted into a lock without digests, make the
+/// build verify; any other digest, or a missing output, does not.
 #[test]
 fn the_printed_outputs_pin_the_build_exactly() {
     let manifest = manifest();
+    let unpinned = Lock::parse(&unpinned_text()).unwrap();
     assert!(matches!(
-        compare(&repository_lock(), &manifest),
+        compare(&unpinned, &manifest),
         Err(EnginesError::OutputsNotPinned)
     ));
     let printed = outputs_toml(&manifest);
-    let pinned_text = text()
+    let pinned_text = unpinned_text()
         .replacen("[xray.outputs]\n", "", 1)
         .replacen("[sing-box.outputs]\n", "", 1)
-        .replacen("[geodata.outputs]", "", 1)
+        .replacen("[geodata.outputs]\n", "", 1)
         + "\n"
         + &printed;
     let lock = Lock::parse(&pinned_text).unwrap();
@@ -473,4 +491,36 @@ fn every_output_builds_and_scans_its_main_package() {
             build.output
         );
     }
+}
+
+/// The repository lock pins every output the lock builds, the geodata
+/// included, exactly as the hosted build printed them.
+#[test]
+fn the_repository_lock_pins_every_output() {
+    let lock = repository_lock();
+    let outputs: BTreeMap<String, &String> = lock.recorded_outputs().into_iter().collect();
+    let mut expected: Vec<String> = lock
+        .builds()
+        .into_iter()
+        .map(|build| build.output)
+        .collect();
+    expected.extend([
+        "geodata/geoip.dat".to_owned(),
+        "geodata/geosite.dat".to_owned(),
+    ]);
+    expected.sort();
+    assert_eq!(outputs.keys().cloned().collect::<Vec<_>>(), expected);
+    assert_eq!(
+        outputs["linux-amd64/xray"],
+        "49e1f3b3a0c3c82cbcdb167e0eb604dc7125e7b86927f7431b994d9a8415f5cf"
+    );
+    assert_eq!(
+        outputs["darwin-arm64/mooring-exit"],
+        "e0a858dda89aab39298d728158af5d57e255301b5853778a83cf6de650179a8a"
+    );
+    let manifest: BTreeMap<String, Sha256Digest> = outputs
+        .iter()
+        .map(|(output, digest)| ((*output).clone(), pinned(digest).unwrap().unwrap()))
+        .collect();
+    assert!(compare(&lock, &manifest).is_ok());
 }
