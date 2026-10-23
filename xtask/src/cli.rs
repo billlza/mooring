@@ -20,6 +20,11 @@ pub(crate) enum Command {
     App,
     AgentInstall,
     AgentUninstall,
+    EnginesPins,
+    EnginesPrepare,
+    EnginesBuild,
+    EnginesVerify,
+    EnginesMetadata,
 }
 
 /// A parsed command line: the command, and its argument when it takes one.
@@ -30,7 +35,7 @@ pub(crate) struct Invocation {
 }
 
 impl Command {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 17] = [
         Self::Ci,
         Self::GraphCheck,
         Self::KindsCoverage,
@@ -43,6 +48,11 @@ impl Command {
         Self::App,
         Self::AgentInstall,
         Self::AgentUninstall,
+        Self::EnginesPins,
+        Self::EnginesPrepare,
+        Self::EnginesBuild,
+        Self::EnginesVerify,
+        Self::EnginesMetadata,
     ];
 
     pub(crate) const fn name(self) -> &'static str {
@@ -59,6 +69,11 @@ impl Command {
             Self::App => "app",
             Self::AgentInstall => "agent-install",
             Self::AgentUninstall => "agent-uninstall",
+            Self::EnginesPins => "engines-pins",
+            Self::EnginesPrepare => "engines-prepare",
+            Self::EnginesBuild => "engines-build",
+            Self::EnginesVerify => "engines-verify",
+            Self::EnginesMetadata => "engines-metadata",
         }
     }
 
@@ -66,7 +81,12 @@ impl Command {
     pub(crate) const fn argument(self) -> Option<&'static str> {
         match self {
             Self::AgentInstall => Some("<bsd>"),
-            Self::Ci
+            Self::EnginesPrepare
+            | Self::EnginesBuild
+            | Self::EnginesVerify
+            | Self::EnginesMetadata => Some("<dir>"),
+            Self::EnginesPins
+            | Self::Ci
             | Self::GraphCheck
             | Self::KindsCoverage
             | Self::DenySkips
@@ -109,6 +129,21 @@ impl Command {
             }
             Self::AgentUninstall => {
                 "stop the daemon's LaunchAgent and remove its plist (macOS only)"
+            }
+            Self::EnginesPins => {
+                "print engines.lock.toml's pins as KEY=value lines for the hosted build"
+            }
+            Self::EnginesPrepare => {
+                "write the REALITY replace's go.mod/go.sum change as <dir>/xray-reality.patch (hosted runner)"
+            }
+            Self::EnginesBuild => {
+                "build every engine from the pinned sources in <dir> into <dir>/out (hosted runner)"
+            }
+            Self::EnginesVerify => {
+                "check <dir>/out against engines.lock.toml's output digests, printing them while none are pinned"
+            }
+            Self::EnginesMetadata => {
+                "check each engine's go version -m build information against its recipe (hosted runner)"
             }
         }
     }

@@ -10,14 +10,23 @@
 schema = 1
 
 [go]
-# go1.27.2 (the standard-library advisories of 2026-10-08), checked on
-# 2026-10-15: both values equal https://go.dev/dl/?mode=json&include=all and
-# the .sha256 files at https://dl.google.com/go/; darwin-arm64 also equals
-# CFM's scripts/dependency_pins.env:38 at f5b425d.
-version = "go1.27.2"
-darwin-arm64-sha256 = "76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5"
-linux-amd64-sha256 = "ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
+# go1.27.3, the security release of 2026-10-19: go1.27.2 lacks the fix for
+# GO-2026-6809 (crypto/x509 distrusts compromised intermediates, published
+# 2026-10-21, affects 1.27.0 up to 1.27.3; read at vuln.go.dev). Checked on
+# 2026-10-23: both values equal https://go.dev/dl/?mode=json&include=all and
+# the .sha256 files at https://dl.google.com/go/.
+version = "go1.27.3"
+darwin-arm64-sha256 = "dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2"
+linux-amd64-sha256 = "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
 env = { GOTOOLCHAIN = "local", CGO_ENABLED = "0", GOFLAGS = "-mod=readonly -trimpath" }
+
+[govulncheck]
+# Installed by the hosted build with `go install`, which checks it against
+# the checksum database; the sum is sum.golang.org's (2026-10-23). v1.8.0
+# (2026-09-08) rather than v1.9.0, which was 12 days old.
+module = "golang.org/x/vuln"
+version = "v1.8.0"
+sum = "h1:clG4qBU6zH5VKjti8n5j8BBuYzoSha392xXMkXS351U="
 
 [xray]
 module = "github.com/xtls/xray-core"
@@ -33,7 +42,14 @@ reality-replace-commit = "e1986a4d31ca33c087a72ab4644aef1295693b69"
 ldflags = "-X github.com/xtls/xray-core/core.build=v26.9.30 -s -w -buildid="
 gcflags = "all=-l=4"
 targets = ["linux-amd64", "linux-arm64"]
+# The go.mod and go.sum change the replace makes, so that the build runs
+# with -mod=readonly (design §4.4). `cargo xtask engines-prepare` writes it
+# on the hosted runner; it is reviewed, committed here and pinned.
+patch = "engines/patches/xray-reality-e1986a4.patch"
+patch-sha256 = ""
 
+# "<target>" = "<sha256 of the unsigned binary>", filled from the first
+# reproducible hosted build and checked by `cargo xtask engines-verify`.
 [xray.outputs]
 
 [sing-box]
@@ -56,9 +72,16 @@ tags = ["with_quic", "with_utls"]
 targets = ["linux-amd64", "linux-arm64"]
 tags = ["with_quic"]
 
+# "<role>/<target>" = "<sha256 of the unsigned binary>".
 [sing-box.outputs]
 
 [geodata]
 source = "Xray-linux-64.zip from the XTLS/Xray-core v26.9.30 release"
-zip-sha256 = ""
+zip-url = "https://github.com/XTLS/Xray-core/releases/download/v26.9.30/Xray-linux-64.zip"
+# Upstream's Xray-linux-64.zip.dgst (SHA2-256), read 2026-10-23; the hosted
+# build checks its own download against it.
+zip-sha256 = "f851110beaff16e78d643f0ccfd9524b4a44dfd59bae3e34bb52bba378f7690e"
 files = ["geoip.dat", "geosite.dat"]
+
+# "<file>" = "<sha256>", from the first hosted build.
+[geodata.outputs]

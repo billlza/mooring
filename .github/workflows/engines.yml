@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The Go engines (design §4), built on a hosted runner: D-7 keeps Go builds
+# off the exit Mac. Every input is a pin of engines.lock.toml, which
+# `cargo xtask engines-pins` prints: the Go tarball and its sha256, the
+# Xray and sing-box commits, the geodata archive and its sha256, and
+# govulncheck. The gates are design §4.1's: two clean builds, byte for
+# byte the same and the same as the digests the lock records; each
+# binary's build information as its recipe says; upstream's package tests;
+# govulncheck with each role's tags.
+name: engines
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "feat/**"]
+    paths:
+      - engines.lock.toml
+      - engines/**
+      - xtask/src/engines.rs
+      - xtask/src/engines/**
+      - .github/workflows/engines.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engines-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Pins
+        run: cargo xtask engines-pins | tee -a "$GITHUB_ENV"
+      - name: Go, checked against its pinned sha256
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/go.tar.gz" "https://dl.google.com/go/${GO_VERSION}.linux-amd64.tar.gz"
+          echo "${GO_LINUX_AMD64_SHA256}  $RUNNER_TEMP/go.tar.gz" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/go.tar.gz"
+          echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+      - name: Xray at its pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: XTLS/Xray-core
+          ref: ${{ env.XRAY_COMMIT }}
+          path: build/xray
+          persist-credentials: false
+      - name: sing-box at its pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SagerNet/sing-box
+          ref: ${{ env.SING_BOX_COMMIT }}
+          path: build/sing-box
+          persist-credentials: false
+      - name: Geodata archive
+        run: |
+          curl -fsSLo build/Xray-linux-64.zip "$GEODATA_URL"
+          echo "${GEODATA_SHA256}  build/Xray-linux-64.zip" | sha256sum -c -
+      - name: The REALITY patch, while it is not pinned
+        id: prepare
+        run: |
+          if grep -q '^patch-sha256 = ""' engines.lock.toml; then
+            cargo xtask engines-prepare build
+            echo "prepared=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload the REALITY patch for review
+        if: steps.prepare.outputs.prepared == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xray-reality-patch
+          path: build/xray-reality.patch
+      - name: Stop until the patch is pinned
+        if: steps.prepare.outputs.prepared == 'true'
+        run: |
+          echo "Review build/xray-reality.patch, commit it as engines/patches/xray-reality-e1986a4.patch and pin its sha256."
+          exit 1
+      - name: First build
+        env:
+          GOCACHE: ${{ runner.temp }}/first/cache
+          GOMODCACHE: ${{ runner.temp }}/first/mod
+        run: |
+          cargo xtask engines-build build
+          mv build/out "$RUNNER_TEMP/first-out"
+      - name: Second build, from clean caches
+        env:
+          GOCACHE: ${{ runner.temp }}/second/cache
+          GOMODCACHE: ${{ runner.temp }}/second/mod
+        run: cargo xtask engines-build build
+      - name: The two builds are byte for byte the same
+        run: |
+          diff -r "$RUNNER_TEMP/first-out" build/out
+          cat build/out/MANIFEST.json
+      - name: Build information
+        run: cargo xtask engines-metadata build
+      - name: Upstream package tests
+        env:
+          GOCACHE: ${{ runner.temp }}/second/cache
+          GOMODCACHE: ${{ runner.temp }}/second/mod
+          GOFLAGS: -mod=readonly
+        run: |
+          (cd build/xray && go test ./proxy/vless/... ./transport/internet/reality/...)
+          (cd build/sing-box && go test -tags with_quic ./protocol/hysteria2/...)
+          (cd build/sing-box && go test -tags with_gvisor,with_wireguard ./protocol/wireguard/...)
+      - name: govulncheck
+        env:
+          GOCACHE: ${{ runner.temp }}/second/cache
+          GOMODCACHE: ${{ runner.temp }}/second/mod
+        run: |
+          go install "$GOVULNCHECK"
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          (cd build/xray && GOFLAGS=-mod=readonly govulncheck ./main/...)
+          (cd build/sing-box && govulncheck -tags with_quic ./cmd/sing-box)
+          (cd build/sing-box && GOOS=darwin GOARCH=arm64 govulncheck -tags with_gvisor,with_wireguard ./cmd/sing-box)
+          (cd build/sing-box && GOOS=darwin GOARCH=arm64 govulncheck -tags with_quic,with_utls ./cmd/sing-box)
+      - name: Upload the engines
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: engines-xray-${{ env.XRAY_TAG }}-sing-box-${{ env.SING_BOX_TAG }}
+          path: build/out
+          retention-days: 90
+      - name: The digests the lock records
+        run: cargo xtask engines-verify build

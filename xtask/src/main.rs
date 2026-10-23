@@ -12,6 +12,7 @@ mod ci;
 mod clean;
 mod cli;
 mod deny_skips;
+mod engines;
 mod graph_check;
 mod kinds;
 #[cfg(test)]
@@ -63,6 +64,8 @@ enum XtaskError {
     #[error(transparent)]
     App(#[from] AppError),
     #[error(transparent)]
+    Engines(#[from] engines::EnginesError),
+    #[error(transparent)]
     Output(#[from] output::OutputError),
 }
 
@@ -102,7 +105,41 @@ fn run(invocation: Invocation) -> Result<(), XtaskError> {
             })),
         },
         Command::AgentUninstall => Ok(app::uninstall_agent(&cargo, &mut out)?),
+        Command::EnginesPins => Ok(engines::pins(cargo.workspace_root(), &mut out)?),
+        Command::EnginesPrepare => Ok(engines::prepare(
+            cargo.workspace_root(),
+            dir_of(&invocation)?,
+            &mut out,
+        )?),
+        Command::EnginesBuild => Ok(engines::build(
+            cargo.workspace_root(),
+            dir_of(&invocation)?,
+            &mut out,
+        )?),
+        Command::EnginesVerify => Ok(engines::verify(
+            cargo.workspace_root(),
+            dir_of(&invocation)?,
+            &mut out,
+        )?),
+        Command::EnginesMetadata => Ok(engines::metadata(
+            cargo.workspace_root(),
+            dir_of(&invocation)?,
+            &mut out,
+        )?),
     }
+}
+
+/// The `<dir>` an engines command takes; `Command::parse` gives it one or
+/// fails.
+fn dir_of(invocation: &Invocation) -> Result<&std::path::Path, XtaskError> {
+    invocation
+        .argument
+        .as_deref()
+        .map(std::path::Path::new)
+        .ok_or(XtaskError::Usage(UsageError::MissingArgument {
+            command: invocation.command,
+            argument: "<dir>",
+        }))
 }
 
 /// Writes the error and its chain of causes; usage errors also get the usage text.
