@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The workspace gates on a hosted Linux runner (design D-7: builds and
+# lanes run off the exit Mac). `cargo xtask ci` is the same command the
+# Mac runs; on Linux it says that it skipped the Swift tests. The agent's
+# musl targets are linted besides, since they compile its Linux-only code.
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest@0.9.136,cargo-deny@0.20.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cargo xtask ci
+        run: cargo xtask ci
+      - name: The agent's Linux targets
+        run: |
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            cargo clippy -p mooring-agent --target "$target" --all-targets --locked -- -D warnings
+          done
