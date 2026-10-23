@@ -35,10 +35,7 @@ public struct StreamEnd: Error, Hashable, Sendable {
 
 /// Why a line is not shown.
 public enum LineRefusal: Hashable, Sendable {
-    /// The line is a deployment's status, which this build does not show
-    /// yet.
-    case deploymentNotShown
-    /// The undeployed document names another version than this build reads.
+    /// The document names another version than this build reads.
     case unsupportedVersion(UInt32)
     /// The line is not a document this build reads; the decoder's reason.
     case unreadable(String)
@@ -216,8 +213,6 @@ public struct StatusCommand: Sendable {
     static func event(for line: [UInt8]) -> StreamEvent {
         do {
             return .status(try ConsoleStatus.decode(line: line))
-        } catch ConsoleDecodingError.deploymentNotShown {
-            return .refused(.deploymentNotShown)
         } catch ConsoleDecodingError.unsupportedVersion(let version) {
             return .refused(.unsupportedVersion(version))
         } catch {

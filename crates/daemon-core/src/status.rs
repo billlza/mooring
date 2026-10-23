@@ -49,7 +49,7 @@ use crate::forecast::SimForecast;
 use crate::network::ForeignNetworkFinding;
 use crate::period::{BillingCycle, UsagePeriods};
 use crate::policy::{ExpiryState, QuotaState};
-use crate::router::RouterReading;
+use crate::router::{RouterAdvisory, RouterReading};
 use crate::usage::{UsageAccuracy, UserActivity, UserUsage};
 use crate::wire::mac_time;
 
@@ -753,6 +753,11 @@ pub struct MacStatusParts {
 ///   (`UsageMismatch`);
 /// - the open alerts are in strictly increasing key order, so no alert is
 ///   listed twice (`AlertsNotOrdered`).
+///
+/// On the wire it also carries the router panel's advisories, as the
+/// undeployed document does ([`RouterReading::advisories`]), so the app
+/// shows them without a rule of its own; a document whose advisories do not
+/// follow from its panel is refused (`AdvisoriesMismatch`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "MacStatusRepr", into = "MacStatusRepr")]
 pub struct MacStatusV1(MacStatusParts);
@@ -765,6 +770,7 @@ struct MacStatusRepr {
     exit: ExitSection,
     sim: SimMeterStatus,
     router: RouterReading,
+    advisories: Vec<RouterAdvisory>,
     #[serde(deserialize_with = "Option::deserialize")]
     capacity: Option<CapacityStatus>,
     usage: UsageView,
@@ -819,6 +825,9 @@ impl TryFrom<MacStatusRepr> for MacStatusV1 {
                 found: repr.version,
             });
         }
+        if repr.advisories != repr.router.advisories() {
+            return Err(StatusError::AdvisoriesMismatch);
+        }
         Self::new(MacStatusParts {
             at: repr.at,
             exit: repr.exit,
@@ -841,6 +850,7 @@ impl From<MacStatusV1> for MacStatusRepr {
             at: parts.at,
             exit: parts.exit,
             sim: parts.sim,
+            advisories: parts.router.advisories(),
             router: parts.router,
             capacity: parts.capacity,
             usage: parts.usage,

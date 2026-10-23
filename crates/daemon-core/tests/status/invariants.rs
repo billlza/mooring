@@ -7,6 +7,7 @@
 use std::net::Ipv4Addr;
 
 use mooring_daemon_core::alert::{AlertCondition, OpenAlert, Severity};
+use mooring_daemon_core::router::{RouterAdvisory, RouterReading, RouterStatus};
 use mooring_daemon_core::status::{DegradedReason, DownReason, ExitState, Latch, UsageView};
 use mooring_daemon_core::{
     MacStatusParts, MacStatusV1, StatusError, StatusErrorKind, UsageErrorKind,
@@ -195,7 +196,17 @@ fn the_document_is_version_1_with_every_key_required_and_known() {
     assert!(serde_json::from_value::<MacStatusV1>(extra).is_err());
     // Every top-level key, and the optional ones inside, are required.
     for key in [
-        "version", "at", "exit", "sim", "router", "capacity", "usage", "users", "nodes", "alerts",
+        "version",
+        "at",
+        "exit",
+        "sim",
+        "router",
+        "advisories",
+        "capacity",
+        "usage",
+        "users",
+        "nodes",
+        "alerts",
     ] {
         let mut missing = document.clone();
         missing.as_object_mut().unwrap().remove(key);
@@ -265,6 +276,10 @@ fn every_status_error_kind_is_named_once() {
             StatusErrorKind::AlertsNotOrdered,
             StatusError::AlertsNotOrdered { key },
         ),
+        (
+            StatusErrorKind::AdvisoriesMismatch,
+            StatusError::AdvisoriesMismatch,
+        ),
     ];
     for (kind, error) in &errors {
         assert_eq!(error.kind(), *kind);
@@ -273,5 +288,69 @@ fn every_status_error_kind_is_named_once() {
     assert_eq!(
         errors.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
         StatusErrorKind::ALL
+    );
+}
+
+/// The advisories follow from the router panel, as in the undeployed
+/// document: the document carries them, and refuses any others.
+#[test]
+fn the_advisories_follow_from_the_router_panel() {
+    let mut with_settings_on = serving();
+    let RouterReading::Available { polled_at, status } = with_settings_on.router else {
+        panic!("the serving scenario reads the M7");
+    };
+    let mut router = status.parts().clone();
+    router.settings.upnp = true;
+    router.settings.wifi_offload = true;
+    with_settings_on.router = RouterReading::Available {
+        polled_at,
+        status: Box::new(RouterStatus::new(router).unwrap()),
+    };
+    let mut cases = scenarios::all();
+    cases.push(("settings on", MacStatusV1::new(with_settings_on).unwrap()));
+    for (name, status) in cases {
+        let document = serde_json::to_value(&status).unwrap();
+        let expected = status.parts().router.advisories();
+        assert_eq!(
+            document["advisories"],
+            serde_json::to_value(&expected).unwrap(),
+            "{name}"
+        );
+        assert_eq!(
+            serde_json::from_value::<MacStatusV1>(document.clone()).unwrap(),
+            status,
+            "{name}"
+        );
+        let mut fewer = expected.clone();
+        if fewer.pop().is_none() {
+            fewer.push(RouterAdvisory::UpnpOn);
+        }
+        let mut twice = expected.clone();
+        twice.extend(expected.iter().copied());
+        let mut reversed = expected.clone();
+        reversed.reverse();
+        for others in [fewer, twice, reversed] {
+            if others == expected {
+                continue;
+            }
+            let mut changed = document.clone();
+            changed["advisories"] = serde_json::to_value(&others).unwrap();
+            let error = serde_json::from_value::<MacStatusV1>(changed).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&StatusError::AdvisoriesMismatch.to_string()),
+                "{name}, {others:?}: {error}"
+            );
+        }
+    }
+    assert_eq!(
+        MacStatusV1::new(serving())
+            .unwrap()
+            .parts()
+            .router
+            .advisories(),
+        [],
+        "the serving scenario's M7 has every setting the exit needs off"
     );
 }

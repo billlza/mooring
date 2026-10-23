@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The menu bar item: the router's state in a line, the console window, and
-// Quit. Quitting the app leaves the daemon running (design §5.1).
+// The menu bar item: the exit's state (once there is a deployment) and the
+// router's in a line each, the console window, and Quit. Quitting the app
+// leaves the daemon running (design §5.1).
 
 import MooringKit
 import SwiftUI
@@ -11,6 +12,9 @@ struct MenuView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        if case (.live, .deployed(let deployed)?) = (model.state, model.status) {
+            Text(String(localized: "Exit: \(deployed.exit.state.headline)"))
+        }
         summary
         Divider()
         Button("Open Console") {

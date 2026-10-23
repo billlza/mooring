@@ -55,10 +55,16 @@ struct ConsoleView: View {
             VStack(spacing: 0) {
                 StreamBanner(model: model)
                 Group {
-                    switch screen {
-                    case .overview: OverviewView(model: model)
-                    case .router: RouterView(model: model)
-                    case let other: NeedsDeploymentView(screen: other)
+                    switch (screen, model.status?.deployed) {
+                    case (.overview, _): OverviewView(model: model)
+                    case (.router, _): RouterView(model: model)
+                    case (.users, let deployed?): UsersView(status: deployed)
+                    case (.nodes, let deployed?): NodesView(status: deployed)
+                    case (.exit, let deployed?): ExitView(status: deployed)
+                    case (.sim, let deployed?): SimView(status: deployed)
+                    case (.capacity, let deployed?): CapacityView(status: deployed)
+                    case (.events, _?): EventsNotBuiltView()
+                    case (let other, nil): NeedsDeploymentView(screen: other)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -177,14 +183,25 @@ extension LineRefusal {
     /// Why the latest line is not shown, in the user's language.
     var text: String {
         switch self {
-        case .deploymentNotShown:
-            String(localized: "The daemon reports a deployment, which this build of Mooring.app does not show yet.")
         case .unsupportedVersion(let version):
             String(localized: "The daemon's document is version \(version); this build reads version 1.")
         case .unreadable(let why):
             String(localized: "A line from mooringctl could not be read: \(why)")
         case .tooLong:
             String(localized: "A line from mooringctl was longer than 1 MiB, so the app stopped reading it.")
+        }
+    }
+}
+
+/// The events screen: the event journals are not read by this build.
+struct EventsNotBuiltView: View {
+    var body: some View {
+        ContentUnavailableView {
+            Label("Events", systemImage: "list.bullet.rectangle")
+        } description: {
+            Text(
+                "The Mac's and the nodes' event journals are not read by this build yet; the open alerts are on the overview."
+            )
         }
     }
 }

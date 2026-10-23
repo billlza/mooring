@@ -2,17 +2,14 @@
 
 // The console's document (`mooring-daemon-core`'s `ConsoleStatus`): one
 // line of `mooringctl status --follow --json`. Before `exit init` there is
-// no deployment, and the document carries the router alone.
+// no deployment, and the document carries the router alone; once there is
+// one, the deployment's status (`DeployedStatus`).
 
 import Foundation
 
 /// Why a line could not be read as a console document.
 public enum ConsoleDecodingError: Error, Equatable, Sendable {
-    /// The document is a deployment's status, which this build of the app
-    /// does not show yet: its mirror of `MacStatusV1` is not built, so it
-    /// refuses the document rather than show part of it.
-    case deploymentNotShown
-    /// The undeployed document names another version than 1.
+    /// The document names another version than 1.
     case unsupportedVersion(UInt32)
 }
 
@@ -43,10 +40,11 @@ public struct UndeployedStatus: Decodable, Hashable, Sendable {
     }
 }
 
-/// What the console shows. This build shows the undeployed document only;
-/// a deployment's is refused with `deploymentNotShown`.
+/// What the console shows: the router alone before a deployment exists,
+/// and the deployment's status once it does.
 public enum ConsoleStatus: Decodable, Hashable, Sendable {
     case noDeployment(UndeployedStatus)
+    case deployed(DeployedStatus)
 
     public init(from decoder: any Decoder) throws {
         let (tag, value) = try decoder.onlyKey()
@@ -54,7 +52,7 @@ public enum ConsoleStatus: Decodable, Hashable, Sendable {
         case "no_deployment":
             self = .noDeployment(try UndeployedStatus(from: value))
         case "deployed":
-            throw ConsoleDecodingError.deploymentNotShown
+            self = .deployed(try DeployedStatus(from: value))
         default:
             throw decoder.unknownVariant(tag)
         }
@@ -69,6 +67,7 @@ public enum ConsoleStatus: Decodable, Hashable, Sendable {
     public var router: RouterReading {
         switch self {
         case .noDeployment(let status): status.router
+        case .deployed(let status): status.router
         }
     }
 
@@ -76,6 +75,7 @@ public enum ConsoleStatus: Decodable, Hashable, Sendable {
     public var at: UnixTime {
         switch self {
         case .noDeployment(let status): status.at
+        case .deployed(let status): status.at
         }
     }
 
@@ -83,6 +83,15 @@ public enum ConsoleStatus: Decodable, Hashable, Sendable {
     public var advisories: [RouterAdvisory] {
         switch self {
         case .noDeployment(let status): status.advisories
+        case .deployed(let status): status.advisories
+        }
+    }
+
+    /// The deployment's status, if there is a deployment.
+    public var deployed: DeployedStatus? {
+        switch self {
+        case .noDeployment: nil
+        case .deployed(let status): status
         }
     }
 }

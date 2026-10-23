@@ -51,11 +51,23 @@ extension ConsoleModel {
             missing: Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/mooringctl").path)
     }
 
-    /// The menu bar's symbol: the router's state at a glance.
+    /// The menu bar's symbol: the exit's state at a glance once there is a
+    /// deployment, and the router's before.
     var menuSymbol: String {
-        switch (state, status?.router) {
-        case (.live, .available?): "antenna.radiowaves.left.and.right"
-        case (.live, .unavailable?): "antenna.radiowaves.left.and.right.slash"
+        switch (state, status) {
+        case (.live, .deployed(let deployed)?):
+            switch deployed.exit.state {
+            case .serving: "antenna.radiowaves.left.and.right"
+            case .degraded: "exclamationmark.circle"
+            case .down: "xmark.octagon"
+            case .disabled, .paused: "pause.circle"
+            case .preflight, .starting, .verifying: "hourglass"
+            }
+        case (.live, .noDeployment(let undeployed)?):
+            switch undeployed.router {
+            case .available: "antenna.radiowaves.left.and.right"
+            case .unavailable: "antenna.radiowaves.left.and.right.slash"
+            }
         default: "exclamationmark.triangle"
         }
     }
