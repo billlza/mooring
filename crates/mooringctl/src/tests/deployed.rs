@@ -16,15 +16,18 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
+use std::time::Instant;
 
 use mooring_agent_proto::WATCH_STALE_SECS;
 use mooring_agent_proto::{AgentError, Holds, RequestKind, Response};
 use mooring_daemon_core::alert::MacEngine;
 use mooring_daemon_core::console::ConsoleStatus;
 use mooring_daemon_core::control::{DaemonReply, decode_reply};
+use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::snapshot::NodePoll;
 use mooring_daemon_core::status::{
-    AgentUnreachable, DegradedReason, DownReason, ExitState, NodeAgentState,
+    AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, NodeAgentState,
+    PowerSource,
 };
 use mooring_macsys::{Interface, InterfaceAddrV4};
 use mooring_model::Sha256Digest;
@@ -36,14 +39,18 @@ use mooring_store::{
 };
 
 use super::runtime::STAND_IN;
-use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, lo0};
+use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent, lo0};
 use super::user::{fixture, harness_with, store};
-use crate::daemon::deployed::{Deployed, ENGINES_DIRECTORY, stale_watches, unreachable_cause};
+use crate::daemon::deployed::{
+    DRAIN_BUDGET, Deployed, ENGINES_DIRECTORY, budget_left, first_power_source, stale_watches,
+    unreachable_cause,
+};
 use crate::daemon::hub::Hub;
 use crate::daemon::{Control, RunPaths};
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::runtime::ports::{ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE};
+use crate::runtime::power::PowerMessage;
 
 /// Inside the fixtures' carrier prefix, 31.120.0.0/14.
 const CARRIER: Ipv4Addr = Ipv4Addr::new(31, 120, 5, 6);
@@ -162,7 +169,7 @@ fn the_exit_starts_its_engine_on_the_rendered_config_and_publishes_its_status() 
         let ran = support
             .join(ENGINES_DIRECTORY)
             .join("darwin-arm64/mooring-exit.ran");
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         while !ran.exists() {
             assert!(started.elapsed().as_secs() < 5);
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -328,6 +335,187 @@ fn a_refused_gate_call_is_not_tried_again() {
     assert!(log.contains("ams1: the agent refused GateSet"), "{log}");
     assert!(log.contains("lon1: GateSet not delivered"), "{log}");
     assert!(harness.nodes.script.borrow().is_empty());
+}
+
+/// The power helper (design §10.3): the daemon tells it to hold its
+/// assertions while the exit is enabled on mains, and to release them on
+/// battery; a sleep is drained (the engine stopped, every node's gate
+/// closed for the drain, each session bounded by the drain's budget) and
+/// let proceed once the paused status is published; the exit stays paused
+/// until the wake.
+#[test]
+fn the_power_helper_holds_on_mains_and_a_sleep_is_drained_before_it_proceeds() {
+    let mut harness = deployed();
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
+    for _ in 0..2 {
+        harness.nodes.expect(
+            Expected::Request {
+                identity: "ops_ed25519",
+                remote: ExpectedRemote::Forced,
+                kind: RequestKind::GateSet,
+            },
+            gate_closed(),
+        );
+    }
+    let helper = harness.helper.handle.clone();
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        assert_eq!(helper.commands(), ["{\"hold\":true}"]);
+        helper.send(PowerMessage::Event(HelperEvent::Assertions { held: true }));
+        exit.tick(&control, log, false).unwrap();
+        assert!(published(&control).parts().exit.power.assertions_held);
+        // The Mac will sleep: drained in the tick, then let proceed.
+        helper.send(PowerMessage::Event(HelperEvent::WillSleep { id: 1 }));
+        let asleep = Instant::now();
+        assert_eq!(exit.tick(&control, log, false).unwrap(), ExitState::Paused);
+        let drained = Instant::now();
+        let paused = published(&control);
+        let exit_section = &paused.parts().exit;
+        assert_eq!(exit_section.state, ExitState::Paused);
+        assert_eq!(exit_section.engines.exit.pid, None);
+        let drain = exit_section.power.last_drain.unwrap();
+        assert_eq!(drain.outcome, DrainOutcome::Completed);
+        assert_eq!(exit_section.power.last_sleep, Some(drain.at));
+        assert_eq!(
+            helper.commands(),
+            ["{\"hold\":true}", "{\"allow_sleep\":{\"id\":1}}"]
+        );
+        // Still paused until the wake: nothing starts the engine.
+        assert_eq!(exit.tick(&control, log, false).unwrap(), ExitState::Paused);
+        helper.send(PowerMessage::Event(HelperEvent::DidWake));
+        exit.tick(&control, log, false).unwrap();
+        let woken = published(&control);
+        assert_ne!(woken.parts().exit.state, ExitState::Paused);
+        assert!(woken.parts().exit.power.last_wake.is_some());
+        // On battery the hold is released, and the exit is degraded.
+        helper.send(PowerMessage::Event(HelperEvent::PowerSource(
+            PowerSource::Battery,
+        )));
+        exit.tick(&control, log, false).unwrap();
+        assert_eq!(helper.commands().last().unwrap(), "{\"hold\":false}");
+        (String::from_utf8(log.clone()).unwrap(), asleep, drained)
+    });
+    let (log, asleep, drained) = log;
+    // The drain's two sessions end by its budget; no other has a deadline.
+    let seen = harness.nodes.seen.borrow();
+    let deadlines: Vec<_> = seen
+        .iter()
+        .filter_map(|(target, sent)| match sent {
+            Sent::Request(request) if request.kind() == RequestKind::GateSet => {
+                Some(target.deadline.expect("a drain session has a deadline"))
+            }
+            _ => {
+                assert_eq!(target.deadline, None, "{sent:?}");
+                None
+            }
+        })
+        .collect();
+    assert_eq!(deadlines.len(), 2);
+    for deadline in deadlines {
+        assert!(deadline > asleep && deadline <= drained + DRAIN_BUDGET);
+    }
+    drop(seen);
+    assert!(log.contains("ams1: GateSet done"), "{log}");
+    assert!(log.contains("lon1: GateSet done"), "{log}");
+    assert!(log.contains("the Mac will sleep: drain Completed"), "{log}");
+    assert!(log.contains("the Mac woke"), "{log}");
+    assert!(log.contains("power: Battery"), "{log}");
+    assert!(harness.nodes.script.borrow().is_empty());
+}
+
+/// The drain's budget shrinks as time passes, and is none from its end on.
+#[test]
+fn the_drains_budget_is_what_is_left_of_it() {
+    let start = Instant::now();
+    let deadline = start + DRAIN_BUDGET;
+    assert_eq!(budget_left(deadline, start), Some(DRAIN_BUDGET));
+    assert_eq!(
+        budget_left(deadline, start + std::time::Duration::from_millis(2_500)),
+        Some(std::time::Duration::from_millis(1_500))
+    );
+    assert_eq!(budget_left(deadline, deadline), None);
+    assert_eq!(
+        budget_left(deadline, deadline + std::time::Duration::from_secs(1)),
+        None
+    );
+}
+
+/// A helper that ends degrades the exit (`PowerHelperExited`), and nothing
+/// holds the Mac awake; a helper that does not start, or does not report
+/// the power source in time, stops the daemon at its start.
+#[test]
+fn a_lost_power_helper_degrades_the_exit_and_a_missing_one_stops_the_start() {
+    let mut harness = deployed();
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
+    let helper = harness.helper.handle.clone();
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        exit.tick(&control, log, false).unwrap();
+        helper.send(PowerMessage::Ended("the power helper exited".to_owned()));
+        exit.tick(&control, log, false).unwrap();
+        let status = published(&control);
+        assert!(!status.parts().exit.power.assertions_held);
+        String::from_utf8(log.clone()).unwrap()
+    });
+    assert!(
+        log.contains("the power helper ended: the power helper exited (no process)"),
+        "{log}"
+    );
+    assert_eq!(harness.helper.starts.get(), 1);
+
+    let support = harness.support_dir();
+    harness.helper.refuse.set(true);
+    let error =
+        harness.with_env(|env| Deployed::open(env, &support, &mut Vec::new(), None).unwrap_err());
+    assert!(
+        matches!(
+            error,
+            CommandError::Local(LocalError::PowerHelperSpawn { .. })
+        ),
+        "{error:?}"
+    );
+    harness.helper.refuse.set(false);
+    harness.helper.silent.set(true);
+    let link = harness.with_env(|env| (env.power_helper)().unwrap());
+    let error = first_power_source(&link, std::time::Duration::from_millis(20)).unwrap_err();
+    assert!(
+        matches!(error, LocalError::PowerHelperSilent { .. }),
+        "{error:?}"
+    );
+    harness
+        .helper
+        .handle
+        .send(PowerMessage::Ended("gone".to_owned()));
+    let error = first_power_source(&link, std::time::Duration::from_secs(5)).unwrap_err();
+    assert!(
+        matches!(&error, LocalError::PowerHelperEnded(text) if text == "gone"),
+        "{error:?}"
+    );
+    // A helper whose first report is anything but the power source is
+    // refused, not skipped past.
+    let link = harness.with_env(|env| (env.power_helper)().unwrap());
+    harness
+        .helper
+        .handle
+        .send(PowerMessage::Event(HelperEvent::DidWake));
+    let error = first_power_source(&link, std::time::Duration::from_secs(5)).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            LocalError::PowerHelperFirstReport(HelperEvent::DidWake)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "the power helper's first report was DidWake, not the power source"
+    );
 }
 
 #[test]

@@ -1,0 +1,28 @@
+{
+  "events": [
+    {
+      "power_source": "ac"
+    },
+    {
+      "assertions": {
+        "held": true
+      }
+    },
+    {
+      "will_sleep": {
+        "id": 7
+      }
+    },
+    "did_wake"
+  ],
+  "commands": [
+    {
+      "hold": true
+    },
+    {
+      "allow_sleep": {
+        "id": 7
+      }
+    }
+  ]
+}

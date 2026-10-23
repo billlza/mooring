@@ -174,5 +174,6 @@ fn route_faults_and_calls_are_named() {
     assert_eq!(TerminalCall::SetAttributes.to_string(), "tcsetattr");
     assert_eq!(ProcessCall::PidPath.to_string(), "proc_pidpath");
     assert_eq!(ProcessCall::Kill.to_string(), "kill");
+    assert_eq!(ProcessCall::KillGroup.to_string(), "killpg");
     assert_eq!(ProcessCall::Dup2.to_string(), "dup2");
 }

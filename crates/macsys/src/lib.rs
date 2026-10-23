@@ -23,6 +23,8 @@
 //!   holds thousands of connections;
 //! - [`controlling_terminal`] and [`EchoOff`]: the process's terminal, and
 //!   its echo switched off while a password is typed;
+//! - [`kill_group`]: a process group ended, for an ssh session past its
+//!   deadline and the dialler it started;
 //! - [`redirect_stderr`]: the daemon's standard error pointed at its log.
 //!
 //! Nothing here shells out (no `arp`, `netstat` or `route`). The routing
@@ -54,6 +56,6 @@ pub use error::{MacsysError, MacsysErrorKind, ProcessCall, RlimitCall, RouteFaul
 pub use iflist::{Interface, InterfaceAddrV4, interface, interfaces};
 pub use interface::interface_index;
 pub use limits::{OpenFilesLimit, open_files_limit, raise_open_files};
-pub use process::{boot_time, kill_process, process_path, redirect_stderr};
+pub use process::{GroupKill, boot_time, kill_group, kill_process, process_path, redirect_stderr};
 pub use route::{default_gateway_v4, neighbour_v4};
 pub use terminal::{EchoOff, controlling_terminal};

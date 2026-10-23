@@ -47,6 +47,13 @@ targets:
             subpath: Contents/Library/LaunchAgents
     dependencies:
       - package: MooringKit
+        product: MooringKit
+      # The power helper, beside mooringctl in Contents/MacOS (design §5.1).
+      - target: mooring-power
+        embed: true
+        codeSign: false
+        copy:
+          destination: executables
     settings:
       base:
         PRODUCT_NAME: Mooring
@@ -54,6 +61,19 @@ targets:
         INFOPLIST_FILE: App/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         COMBINE_HIDPI_IMAGES: YES
+  mooring-power:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Power
+    dependencies:
+      - package: MooringKit
+        product: MooringPower
+    settings:
+      base:
+        PRODUCT_NAME: mooring-power
+        PRODUCT_BUNDLE_IDENTIFIER: com.bill.mooring.power
+        SKIP_INSTALL: YES
 schemes:
   Mooring:
     build:

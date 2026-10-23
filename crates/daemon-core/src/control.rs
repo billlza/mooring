@@ -108,7 +108,10 @@ pub fn decode_reply(line: &[u8]) -> Result<DaemonReply, ControlError> {
 /// One JSON document on one line within `max` bytes, its newline
 /// included. A line with a newline inside it, or anything after the
 /// document, is malformed.
-fn decode_line<T: for<'de> Deserialize<'de>>(line: &[u8], max: usize) -> Result<T, ControlError> {
+pub(crate) fn decode_line<T: for<'de> Deserialize<'de>>(
+    line: &[u8],
+    max: usize,
+) -> Result<T, ControlError> {
     let bytes = line.len();
     if bytes > max {
         return Err(ControlError::LineTooLong { bytes, max });

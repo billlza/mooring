@@ -7,7 +7,11 @@
 //! (`Status`, design §10.5) in the slot after a direct-probe round, so
 //! neither delays a probe; and it publishes the deployment's status when
 //! the exit's state changes and at least every [`PUBLISH_EVERY`]. The SIM
-//! meter reads the egress counters on a thread of its own.
+//! meter reads the egress counters on a thread of its own, and the power
+//! helper's events arrive on one (design §10.3, [`crate::runtime::power`]):
+//! the power source, the assertions it holds while the exit is enabled on
+//! mains, and the Mac's sleeps, each drained before the daemon lets it
+//! proceed, and wakes.
 //!
 //! The daemon keeps std threads, as the router console did (design §10.1,
 //! revision 9): this loop, the meter's thread, and the control socket's
@@ -17,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 use mooring_agent_proto::{LineRequest, ReadError, Response, WATCH_STALE_SECS};
@@ -25,10 +29,12 @@ use mooring_daemon_core::console::ConsoleStatus;
 use mooring_daemon_core::exit::{ExitMachine, SimUse, TickInputs};
 use mooring_daemon_core::meter::{MAX_SIM_METER_BYTES, SimMeter, accuracy};
 use mooring_daemon_core::period::BillingCycle;
+use mooring_daemon_core::power::{HelperCommand, HelperEvent};
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
 use mooring_daemon_core::snapshot::{NodePoll, SimTotals, StatusInputs, assemble};
 use mooring_daemon_core::status::{
-    AgentUnreachable, DegradedReason, ExitState, NodeAgentState, PowerSource, PowerStatus,
+    AgentUnreachable, DegradedReason, DrainRecord, ExitState, NodeAgentState, PowerSource,
+    PowerStatus,
 };
 use mooring_model::iface::BsdName;
 use mooring_model::time::UnixTime;
@@ -48,6 +54,7 @@ use crate::runtime::network::foreign;
 use crate::runtime::ports::{
     DaemonPorts, ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE, stop_stale_engine,
 };
+use crate::runtime::power::{PowerLink, PowerMessage};
 use crate::runtime::resolve::exit_interfaces;
 
 /// The loop's tick (design §10.1).
@@ -56,8 +63,18 @@ pub(crate) const TICK: Duration = Duration::from_secs(2);
 /// The longest the console goes without a new status.
 pub(crate) const PUBLISH_EVERY: Duration = Duration::from_secs(10);
 
-/// How often the power source is read.
-pub(crate) const POWER_EVERY: Duration = Duration::from_secs(60);
+/// How long the daemon waits for the power helper's first report of the
+/// power source after starting it.
+pub(crate) const HELPER_FIRST_REPORT: Duration = Duration::from_secs(5);
+
+/// How long after the power helper ended the daemon starts it again, as
+/// launchd throttles the daemon itself.
+pub(crate) const HELPER_RESTART_EVERY: Duration = Duration::from_secs(60);
+
+/// The sleep drain's budget (design §10.3): past it the daemon lets the
+/// sleep proceed (`TimedOut`); a node it did not tell notices the Mac's
+/// silence itself.
+pub(crate) const DRAIN_BUDGET: Duration = Duration::from_secs(4);
 
 /// How often each node's agent is polled (design §10.5).
 pub(crate) const NODE_POLL_EVERY: Duration = Duration::from_secs(600);
@@ -91,10 +108,22 @@ pub(crate) struct Deployed<'e, 'a> {
     router: RouterReading,
     router_failure: Option<String>,
     router_polled: Option<Instant>,
+    /// The power helper while it runs.
+    helper: Option<PowerLink>,
+    /// When the power helper ended, for its restart.
+    helper_lost: Option<Instant>,
     power: PowerSource,
-    power_read: Instant,
-    power_failure: Option<String>,
+    assertions_held: bool,
+    /// The hold the helper was last told to keep.
+    held_sent: Option<bool>,
+    last_sleep: Option<UnixTime>,
+    last_wake: Option<UnixTime>,
+    last_drain: Option<DrainRecord>,
+    /// A drained sleep to let proceed once its status is published.
+    allow_sleep: Option<u64>,
     published: Option<(Instant, ExitState)>,
+    /// The power status last published: a change publishes at once.
+    published_power: Option<PowerStatus>,
     snapshot_failure: Option<String>,
     meter_failure: Option<String>,
     nodes_polled: Option<Instant>,
@@ -115,10 +144,12 @@ impl std::fmt::Debug for Deployed<'_, '_> {
 impl<'e, 'a> Deployed<'e, 'a> {
     /// Prepares the exit: stops an engine an earlier daemon left, reads the
     /// latch and the SIM meter (a corrupt one of either stops the daemon:
-    /// neither is read as none), starts the meter's thread and reads the
-    /// power source; then it polls the M7 once, so every status it
-    /// publishes has a panel. `router` is the panel the router console last
-    /// showed, if it ran.
+    /// neither is read as none), starts the meter's thread and the power
+    /// helper and waits for its report of the power source (one that does
+    /// not start or report within [`HELPER_FIRST_REPORT`] stops the daemon:
+    /// the bundle that carries the daemon carries the helper); then it
+    /// polls the M7 once, so every status it publishes has a panel.
+    /// `router` is the panel the router console last showed, if it ran.
     pub(crate) fn open(
         env: &'e Env<'a>,
         support_dir: &Path,
@@ -163,7 +194,9 @@ impl<'e, 'a> Deployed<'e, 'a> {
             METER_TICK,
             PERSIST_EVERY,
         )?;
-        let power = (env.power)()?;
+        let helper = (env.power_helper)()?;
+        let power = first_power_source(&helper, HELPER_FIRST_REPORT)?;
+        say(log, now, &format!("power helper started: {power:?}"))?;
         let store = Store::new(support_dir);
         let state = store
             .load()
@@ -192,10 +225,17 @@ impl<'e, 'a> Deployed<'e, 'a> {
             router,
             router_failure,
             router_polled: Some(Instant::now()),
+            helper: Some(helper),
+            helper_lost: None,
             power,
-            power_read: Instant::now(),
-            power_failure: None,
+            assertions_held: false,
+            held_sent: None,
+            last_sleep: None,
+            last_wake: None,
+            last_drain: None,
+            allow_sleep: None,
             published: None,
+            published_power: None,
             snapshot_failure: None,
             meter_failure: None,
             nodes_polled: None,
@@ -237,12 +277,12 @@ impl<'e, 'a> Deployed<'e, 'a> {
             )?,
             None => BTreeSet::new(),
         };
-        self.read_power(log, now)?;
         let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), now)
             .map_err(LocalError::Cycle)?;
         let counted = self.meter.meter()?;
         let bytes = counted.cycle_bytes(cycle);
         self.ports.set_egress(egress_name.clone());
+        self.service_helper(log, now, deployment)?;
         let previous = self.published.as_ref().map(|(_, state)| state.clone());
         let section = self.machine.tick(
             &TickInputs {
@@ -258,11 +298,12 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 },
                 power: PowerStatus {
                     source: self.power,
-                    assertions_held: false,
-                    last_sleep: None,
-                    last_wake: None,
-                    last_drain: None,
+                    assertions_held: self.assertions_held,
+                    last_sleep: self.last_sleep,
+                    last_wake: self.last_wake,
+                    last_drain: self.last_drain,
                 },
+                power_helper_running: self.helper.is_some(),
                 retry,
                 nodes_degraded: stale_watches(&self.polls),
             },
@@ -291,7 +332,8 @@ impl<'e, 'a> Deployed<'e, 'a> {
             self.poll_nodes(log, deployment, egress_name.as_ref())?;
         }
         self.note_meter(log, now)?;
-        let state_changed = previous.as_ref() != Some(&section.state);
+        let state_changed = previous.as_ref() != Some(&section.state)
+            || self.published_power != Some(section.power);
         let stale = self
             .published
             .as_ref()
@@ -299,6 +341,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if state_changed || stale {
             let router = self.router.clone();
             let exit_state = section.state.clone();
+            let section_power = section.power;
             let status = assemble(StatusInputs {
                 deployment,
                 at: now,
@@ -331,9 +374,173 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 now,
             )?;
             self.published = Some((Instant::now(), exit_state.clone()));
+            self.published_power = Some(section_power);
+            self.tell_helper(log, now, state.runtime.exit_enabled)?;
             return Ok(exit_state);
         }
+        self.tell_helper(log, now, state.runtime.exit_enabled)?;
         Ok(section.state)
+    }
+
+    /// Takes the power helper's events: the source, the assertions it
+    /// holds, a sleep, which is drained at once, and a wake. When the
+    /// helper has ended it is started again [`HELPER_RESTART_EVERY`] later.
+    fn service_helper(
+        &mut self,
+        log: &mut dyn Write,
+        now: UnixTime,
+        deployment: &Deployment,
+    ) -> Result<(), CommandError> {
+        if self.helper.is_none() {
+            if self
+                .helper_lost
+                .is_some_and(|at| at.elapsed() >= HELPER_RESTART_EVERY)
+            {
+                self.restart_helper(log, now)?;
+            }
+            return Ok(());
+        }
+        while let Some(helper) = &self.helper {
+            let message = match helper.messages.try_recv() {
+                Ok(message) => message,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    PowerMessage::Ended("the power helper's reader stopped".to_owned())
+                }
+            };
+            match message {
+                PowerMessage::Event(HelperEvent::PowerSource(source)) => {
+                    if source != self.power {
+                        say(log, now, &format!("power: {source:?}"))?;
+                    }
+                    self.power = source;
+                }
+                PowerMessage::Event(HelperEvent::Assertions { held }) => {
+                    self.assertions_held = held;
+                }
+                PowerMessage::Event(HelperEvent::WillSleep { id }) => {
+                    self.drain_for_sleep(log, now, deployment, id)?;
+                }
+                PowerMessage::Event(HelperEvent::DidWake) => {
+                    self.last_wake = Some(now);
+                    self.machine.wake();
+                    say(log, now, "the Mac woke")?;
+                }
+                PowerMessage::Ended(text) => self.lose_helper(log, now, &text)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// The sleep drain (design §10.3): the machine stops the engine and
+    /// tells the nodes within [`DRAIN_BUDGET`], each call bounded by what is
+    /// left of it; the sleep is let proceed at the end of this tick, once
+    /// the paused status is published.
+    fn drain_for_sleep(
+        &mut self,
+        log: &mut dyn Write,
+        now: UnixTime,
+        deployment: &Deployment,
+        id: u64,
+    ) -> Result<(), CommandError> {
+        let started = Instant::now();
+        let deadline = started + DRAIN_BUDGET;
+        let outcome = self
+            .machine
+            .sleep(now, deployment, &mut self.ports, &mut || {
+                budget_left(deadline, Instant::now())
+            })?;
+        for note in self.ports.take_notes() {
+            say(log, now, &note)?;
+        }
+        say(
+            log,
+            now,
+            &format!(
+                "the Mac will sleep: drain {outcome:?} in {:?}",
+                started.elapsed()
+            ),
+        )?;
+        self.last_sleep = Some(now);
+        self.last_drain = Some(DrainRecord { at: now, outcome });
+        self.allow_sleep = Some(id);
+        Ok(())
+    }
+
+    /// Tells the helper the hold the exit wants, enabled on mains, when it
+    /// changed, and lets a drained sleep proceed. A helper that cannot be
+    /// written to is lost.
+    fn tell_helper(
+        &mut self,
+        log: &mut dyn Write,
+        now: UnixTime,
+        exit_enabled: bool,
+    ) -> Result<(), CommandError> {
+        let Some(helper) = &mut self.helper else {
+            return Ok(());
+        };
+        let wanted = exit_enabled && self.power == PowerSource::Ac;
+        let mut sent = Ok(());
+        if self.held_sent != Some(wanted) {
+            sent = helper.send(&HelperCommand::Hold(wanted));
+            if sent.is_ok() {
+                self.held_sent = Some(wanted);
+            }
+        }
+        if sent.is_ok()
+            && let Some(id) = self.allow_sleep.take()
+        {
+            sent = helper.send(&HelperCommand::AllowSleep { id });
+        }
+        if let Err(error) = sent {
+            self.lose_helper(log, now, &chain(&error))?;
+        }
+        Ok(())
+    }
+
+    /// The helper ended: the exit is degraded until it runs again, nothing
+    /// holds the Mac awake, and a sleep it was holding has proceeded (or the
+    /// helper died with it), so the exit is woken.
+    fn lose_helper(
+        &mut self,
+        log: &mut dyn Write,
+        now: UnixTime,
+        why: &str,
+    ) -> Result<(), CommandError> {
+        let end = self
+            .helper
+            .take()
+            .map_or_else(|| "not running".to_owned(), PowerLink::close);
+        say(log, now, &format!("the power helper ended: {why} ({end})"))?;
+        self.helper_lost = Some(Instant::now());
+        self.assertions_held = false;
+        self.held_sent = None;
+        self.allow_sleep = None;
+        if self.machine.paused() {
+            self.machine.wake();
+        }
+        Ok(())
+    }
+
+    /// Starts the helper again; one that does not start is tried again
+    /// [`HELPER_RESTART_EVERY`] later.
+    fn restart_helper(&mut self, log: &mut dyn Write, now: UnixTime) -> Result<(), CommandError> {
+        match (self.env.power_helper)() {
+            Ok(helper) => {
+                self.helper = Some(helper);
+                self.helper_lost = None;
+                say(log, now, "the power helper started again")?;
+            }
+            Err(error) => {
+                self.helper_lost = Some(Instant::now());
+                say(
+                    log,
+                    now,
+                    &format!("the power helper could not be started: {}", chain(&error)),
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Polls the M7 through the egress; without one it cannot be reached,
@@ -377,7 +584,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
         for node in sited {
             let now = (self.env.clock)()?;
             let outcome = match egress {
-                Some(egress) => ops_session(self.env, node, egress)
+                Some(egress) => ops_session(self.env, node, egress, None)
                     .and_then(|mut session| Ok(session.request(&LineRequest::Status)?)),
                 None => Err(LocalError::NodeUnreachableWithoutEgress.into()),
             };
@@ -420,31 +627,6 @@ impl<'e, 'a> Deployed<'e, 'a> {
         Ok(())
     }
 
-    /// Reads the power source every [`POWER_EVERY`]; a failed read is
-    /// logged once while it lasts and keeps the source last read.
-    fn read_power(&mut self, log: &mut dyn Write, now: UnixTime) -> Result<(), CommandError> {
-        if self.power_read.elapsed() < POWER_EVERY {
-            return Ok(());
-        }
-        self.power_read = Instant::now();
-        match (self.env.power)() {
-            Ok(source) => {
-                self.power = source;
-                if self.power_failure.take().is_some() {
-                    say(log, now, "the power source is read again")?;
-                }
-            }
-            Err(error) => {
-                let text = chain(&error);
-                if self.power_failure.as_deref() != Some(text.as_str()) {
-                    say(log, now, &format!("the power source was not read: {text}"))?;
-                    self.power_failure = Some(text);
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Logs a failing meter write once while it lasts, and its recovery.
     fn note_meter(&mut self, log: &mut dyn Write, now: UnixTime) -> Result<(), CommandError> {
         match self.meter.write_failure()? {
@@ -461,6 +643,33 @@ impl<'e, 'a> Deployed<'e, 'a> {
             }
         }
         Ok(())
+    }
+}
+
+/// What is left at `now` of a budget that ends at `deadline`; none once
+/// it has passed.
+pub(crate) fn budget_left(deadline: Instant, now: Instant) -> Option<Duration> {
+    deadline
+        .checked_duration_since(now)
+        .filter(|left| !left.is_zero())
+}
+
+/// The power helper's first report, within `wait`, which is the power
+/// source: the helper reports it before it listens for anything else. A
+/// helper that ends, stays silent or reports anything else first stops the
+/// daemon.
+pub(crate) fn first_power_source(
+    helper: &PowerLink,
+    wait: Duration,
+) -> Result<PowerSource, LocalError> {
+    match helper.messages.recv_timeout(wait) {
+        Ok(PowerMessage::Event(HelperEvent::PowerSource(source))) => Ok(source),
+        Ok(PowerMessage::Event(event)) => Err(LocalError::PowerHelperFirstReport(event)),
+        Ok(PowerMessage::Ended(text)) => Err(LocalError::PowerHelperEnded(text)),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(LocalError::PowerHelperSilent { waited: wait }),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(LocalError::PowerHelperEnded(
+            "the power helper's reader stopped".to_owned(),
+        )),
     }
 }
 
@@ -492,11 +701,13 @@ pub(crate) fn unreachable_cause(error: &CommandError) -> AgentUnreachable {
             NodeError::Encode(_) | NodeError::Agent(_) | NodeError::Unexpected { .. } => {
                 AgentUnreachable::ProtocolMismatch
             }
+            NodeError::PastDeadline => AgentUnreachable::Timeout,
             NodeError::Pipe
             | NodeError::Read(_)
             | NodeError::Ssh { .. }
             | NodeError::Connect(_)
-            | NodeError::Relay(_) => AgentUnreachable::Transport,
+            | NodeError::Relay(_)
+            | NodeError::End(_) => AgentUnreachable::Transport,
         },
         CommandError::Local(_) | CommandError::Router(_) => AgentUnreachable::Transport,
     }

@@ -59,9 +59,9 @@ pub(crate) struct Env<'a> {
     pub(crate) engine_pins: crate::node::engines::Pins<'a>,
     /// The Mac engines' pins (`node::engines::MAC_PINS` in the binary).
     pub(crate) mac_pins: crate::node::engines::Pins<'a>,
-    /// The Mac's power source (`/usr/bin/pmset` in the binary, until M7's
-    /// power helper reports it).
-    pub(crate) power: &'a dyn Fn() -> Result<mooring_daemon_core::status::PowerSource, LocalError>,
+    /// Starts the power helper (`runtime::power::spawn`, the helper beside
+    /// `mooringctl`, in the binary).
+    pub(crate) power_helper: &'a dyn Fn() -> Result<crate::runtime::power::PowerLink, LocalError>,
     /// Makes the SIM meter's counter reader (the kernel's counters in the
     /// binary), which the meter's thread owns.
     pub(crate) meter_reader: &'a dyn Fn() -> crate::runtime::meter::Reader,

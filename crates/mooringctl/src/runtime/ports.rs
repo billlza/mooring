@@ -20,6 +20,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+use std::time::Instant;
 
 use mooring_agent_proto::{ClearableHold, GateReason, LineRequest, Response, ShutdownReason};
 use mooring_daemon_core::exit::{
@@ -328,6 +329,15 @@ impl ExitPorts for DaemonPorts<'_, '_> {
             NodeCall::ClearHold => LineRequest::ClearHold {
                 hold: ClearableHold::EgressViolation,
             },
+            NodeCall::Drain { .. } => LineRequest::GateSet {
+                reason: GateReason::MacDrain,
+            },
+        };
+        // Only the drain is bounded (design §10.3): a gate closed for a
+        // violation, or a shutdown, is never cut short.
+        let deadline = match call {
+            NodeCall::Drain { within } => Some(Instant::now() + *within),
+            NodeCall::CloseGate(_) | NodeCall::Shutdown(_) | NodeCall::ClearHold => None,
         };
         let Some(interface) = self.egress.clone() else {
             self.notes
@@ -339,13 +349,15 @@ impl ExitPorts for DaemonPorts<'_, '_> {
                 .load()
                 .map_err(|error| LocalError::StateRead(Box::new(error)))?;
             let node = deployed_node(state.deployment.nodes(), node)?;
-            let mut session = ops_session(self.env, node, &interface)?;
+            let mut session = ops_session(self.env, node, &interface, deadline)?;
             Ok(session.request(&request)?)
         })();
         let expected = matches!(
             (call, &outcome),
-            (NodeCall::CloseGate(_), Ok(Response::GateClosed { .. }))
-                | (NodeCall::Shutdown(_), Ok(Response::Halted(_)))
+            (
+                NodeCall::CloseGate(_) | NodeCall::Drain { .. },
+                Ok(Response::GateClosed { .. })
+            ) | (NodeCall::Shutdown(_), Ok(Response::Halted(_)))
                 | (NodeCall::ClearHold, Ok(Response::HoldCleared { .. }))
         );
         if expected {

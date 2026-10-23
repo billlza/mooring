@@ -3,16 +3,29 @@
 //! Management SSH from the Mac (design §10.5): `/usr/bin/ssh` with the
 //! design's options, its ProxyCommand the interface-bound dialler, and one
 //! agent request per session, as the forced command serves one (§11.1).
+//!
+//! A target with a deadline (the sleep drain's, design §10.3) runs each
+//! session in a process group of its own, which is killed when the
+//! deadline passes: ssh's own timeouts (`ConnectTimeout`, the
+//! server-alive probes) allow a session far longer than the drain's
+//! budget, and the group ends the dialler with ssh, so no reader waits on
+//! a dialler still connecting. A target without one runs as before, in
+//! the caller's group, so a terminal's Ctrl-C still ends ssh with
+//! `mooringctl`.
 
 use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Instant;
 
 use mooring_agent_proto::{
     LineRequest, MAX_RESPONSE_LINE_BYTES, Response, Sha256Hex, read_reply, write_put_blob,
     write_request,
 };
+use mooring_macsys::GroupKill;
 use mooring_model::iface::BsdName;
 use mooring_model::ipv4::PublicIpv4;
 
@@ -49,6 +62,10 @@ pub(crate) struct SshTarget {
     pub(crate) mooringctl: PathBuf,
     /// What the session runs.
     pub(crate) remote: Remote,
+    /// When set, the instant by which each session ends: past it ssh and
+    /// its dialler are killed, and the session fails as
+    /// [`NodeError::PastDeadline`] unless its reply had arrived whole.
+    pub(crate) deadline: Option<Instant>,
 }
 
 impl SshTarget {
@@ -107,27 +124,52 @@ pub(crate) struct SshAgent {
 impl SshAgent {
     /// Runs one session that writes `input` to the remote side, and
     /// returns how ssh exited with what it printed: at most one reply line
-    /// and the end of output on stdout, and stderr escaped and capped.
+    /// and the end of output on stdout, and stderr escaped and capped. With
+    /// the target's deadline, a watcher kills the session's group when it
+    /// passes; the group lives until ssh is reaped, after the watcher is
+    /// joined, so its id names no other group.
     fn session(&self, input: &[u8]) -> Result<Session, NodeError> {
-        let mut child = Command::new(SSH)
+        let mut command = Command::new(SSH);
+        command
             .args(self.target.args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(NodeError::Spawn)?;
+            .stderr(Stdio::piped());
+        if self.target.deadline.is_some() {
+            command.process_group(0);
+        }
+        let mut child = command.spawn().map_err(NodeError::Spawn)?;
+        let group = child.id();
         let mut stdin = child.stdin.take().ok_or(NodeError::Pipe)?;
         let stdout = child.stdout.take().ok_or(NodeError::Pipe)?;
         let stderr = child.stderr.take().ok_or(NodeError::Pipe)?;
-        let (written, read, errors) = std::thread::scope(|scope| {
+        let (written, read, errors, ended) = std::thread::scope(|scope| {
             let errors = scope.spawn(|| read_capped(stderr, MAX_STDERR_BYTES * 4));
             let read = scope.spawn(|| read_capped(stdout, MAX_RESPONSE_LINE_BYTES + 2));
+            let watcher = self.target.deadline.map(|deadline| {
+                let (finished, finish) = mpsc::channel::<()>();
+                let watcher = scope.spawn(move || end_at(deadline, group, &finish));
+                (finished, watcher)
+            });
             let written = stdin.write_all(input).and_then(|()| stdin.flush());
             drop(stdin);
-            (written, read.join(), errors.join())
+            let read = read.join();
+            let errors = errors.join();
+            let ended = watcher.map(|(finished, watcher)| {
+                drop(finished);
+                watcher.join()
+            });
+            (written, read, errors, ended)
         });
         let status = child.wait().map_err(NodeError::Spawn)?;
+        let past_deadline = match ended {
+            None => false,
+            Some(joined) => joined
+                .map_err(|_| NodeError::Pipe)?
+                .map_err(NodeError::End)?,
+        };
         Ok(Session {
+            past_deadline,
             code: status.code(),
             stdout: read
                 .map_err(|_| NodeError::Pipe)?
@@ -144,39 +186,84 @@ impl SshAgent {
     /// Runs the target's remote command with `input` on its stdin, for a
     /// command that prints nothing: it must exit 0 with an empty stdout.
     fn run_command(&self, input: &[u8]) -> Result<(), NodeError> {
-        let session = self.session(input)?;
-        match (session.code, session.stdout.is_empty(), session.written) {
-            (Some(0), true, Ok(())) => Ok(()),
-            (code, _, _) => Err(NodeError::Ssh {
-                code,
-                stderr: session.stderr,
-            }),
-        }
+        self.session(input)?.ran()
     }
 
-    /// The reply of one request session. The reply decides: without one
-    /// the session failed in ssh, whose status and stderr say why (a broken
-    /// pipe on the request follows from that failure); with one, an agent
-    /// that refused a request may have answered before reading all of it.
+    /// The reply of one request session ([`Session::replied`]).
     fn reply(&self, input: &[u8]) -> Result<Response, NodeError> {
-        let session = self.session(input)?;
-        if session.stdout.is_empty() {
-            return Err(NodeError::Ssh {
-                code: session.code,
-                stderr: session.stderr,
-            });
+        self.session(input)?.replied()
+    }
+}
+
+/// Waits until the session finishes (`finish` is disconnected) or
+/// `deadline` passes, and then kills its `group`; says whether it did. A
+/// group whose members were all exiting as the deadline passed ended by
+/// itself, and its reply, if whole, stands.
+fn end_at(
+    deadline: Instant,
+    group: u32,
+    finish: &mpsc::Receiver<()>,
+) -> Result<bool, mooring_macsys::MacsysError> {
+    match finish.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            mooring_macsys::kill_group(group).map(|kill| kill == GroupKill::Killed)
         }
-        reply(&session.stdout)
+        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => Ok(false),
     }
 }
 
 /// What one ssh session left.
 #[derive(Debug)]
-struct Session {
-    code: Option<i32>,
-    stdout: Vec<u8>,
-    stderr: String,
-    written: std::io::Result<()>,
+pub(crate) struct Session {
+    /// Whether the session's group was killed at its deadline.
+    pub(crate) past_deadline: bool,
+    /// ssh's exit status, if it exited.
+    pub(crate) code: Option<i32>,
+    /// What it printed, capped.
+    pub(crate) stdout: Vec<u8>,
+    /// Its stderr, escaped and capped.
+    pub(crate) stderr: String,
+    /// How writing its input went.
+    pub(crate) written: std::io::Result<()>,
+}
+
+impl Session {
+    /// A command session's outcome: exit 0 with nothing printed, all its
+    /// input written. A session killed at its deadline otherwise is
+    /// [`NodeError::PastDeadline`].
+    pub(crate) fn ran(self) -> Result<(), NodeError> {
+        match (self.code, self.stdout.is_empty(), self.written) {
+            (Some(0), true, Ok(())) => Ok(()),
+            _ if self.past_deadline => Err(NodeError::PastDeadline),
+            (code, _, _) => Err(NodeError::Ssh {
+                code,
+                stderr: self.stderr,
+            }),
+        }
+    }
+
+    /// A request session's reply. The reply decides: without one the
+    /// session failed in ssh, whose status and stderr say why (a broken
+    /// pipe on the request follows from that failure); with one, an agent
+    /// that refused a request may have answered before reading all of it.
+    /// A session killed at its deadline without a whole reply is
+    /// [`NodeError::PastDeadline`]; a whole one stands.
+    pub(crate) fn replied(self) -> Result<Response, NodeError> {
+        if self.stdout.is_empty() {
+            return Err(if self.past_deadline {
+                NodeError::PastDeadline
+            } else {
+                NodeError::Ssh {
+                    code: self.code,
+                    stderr: self.stderr,
+                }
+            });
+        }
+        match reply(&self.stdout) {
+            Err(NodeError::Reply(_)) if self.past_deadline => Err(NodeError::PastDeadline),
+            replied => replied,
+        }
+    }
 }
 
 impl NodeSession for SshAgent {

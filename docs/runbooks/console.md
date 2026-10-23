@@ -29,13 +29,13 @@ XcodeGen must be installed: `brew install xcodegen`.
 cargo xtask app
 ```
 
-It builds `target/app/Mooring.app` with `mooringctl` inside it and the daemon's plist in `Contents/Library/LaunchAgents`, after:
+It builds `target/app/Mooring.app` with `mooringctl` inside it, the power helper `mooring-power` beside it, and the daemon's plist in `Contents/Library/LaunchAgents`, after:
 - MooringKit's tests;
 - Xcode's own check that the build, made clean, has no error or warning;
 - a check that every string on screen has a Simplified Chinese translation, and so does the local network alert's text;
 - a check that the daemon's plist in the app is `apple/App/LaunchAgents`' own.
 
-Both are signed ad hoc with the hardened runtime. If the daemon is running (section 2), the build restarts it on the new `mooringctl` (`launchctl kickstart -k`), and macOS asks again for the keychain (section 2, question 1).
+The app, `mooringctl` and the helper are each signed ad hoc with the hardened runtime, and the build checks each one's identifier. If the daemon is running (section 2), the build restarts it on the new `mooringctl` (`launchctl kickstart -k`), and macOS asks again for the keychain (section 2, question 1).
 
 The app's language follows macOS.
 
@@ -56,6 +56,10 @@ On the first poll, macOS asks two questions. Allow both:
 Rebuilding `mooringctl` changes its signature (it is signed ad hoc), and macOS asks again for the keychain. Rebuilding the app may ask again for local network access.
 
 **Open Mooring at Login** in the menu makes the console open at login too.
+
+**Power, with a deployment.** The daemon starts the power helper from the app (`Contents/MacOS/mooring-power`) and does not start without it. While the exit is enabled and the Mac is on mains, the helper holds two assertions that keep the Mac awake; `pmset -g assertions` lists them as "Mooring exit". On battery it releases them and the exit is `Degraded` (`OnBattery`). Mooring never changes `pmset` settings.
+
+If the Mac sleeps anyway (the lid closed, or Sleep chosen from the Apple menu), the daemon first stops `mooring-exit`, then asks each node to close its gate for the drain, within 4 s in all, and lets the sleep proceed. The exit is `Paused` until the Mac wakes, and then it probes and starts again. The Exit screen shows the last sleep, the drain's outcome and the last wake. A drain that timed out or failed is no fault in itself: each node notices the Mac's silence within about 30 s.
 
 **From the development agent.** Before 2026-10-23, `cargo xtask agent-install en9` ran the daemon from `target/launchd/`, under the same label. On a Mac that ran it, stop it and remove its plist once, before **Start the Daemon at Login**:
 
@@ -110,6 +114,10 @@ The same status is available in Terminal:
 **`the Mooring daemon is not running`:** the daemon is not started, or it stopped.
 - Start it from the app's menu (section 2).
 - Run `launchctl print gui/$(id -u)/com.bill.mooring.daemon` to see its state and last exit, and read the last lines of `~/Library/Logs/Mooring/daemon.log`.
+
+**The exit is `Degraded` with `PowerHelperExited`:** the power helper ended, so nothing keeps the Mac awake. The daemon's log says why and how it ended ("the power helper ended: … (exit status …)"), and the daemon starts it again a minute later ("the power helper started again").
+
+**The daemon stops at its start with "the power helper … could not be started" or "did not report the power source":** the app lacks the helper, or it failed. Rebuild the app (section 1).
 
 **"The router adapter is not set up":** the M7 is not pinned, its password is not stored, or the pin records no interface (one made before 2026-10-23). The daemon's log names which; run section 0's command for it.
 

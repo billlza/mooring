@@ -5,8 +5,9 @@
 //! meter a reading of this boot from one of an earlier boot; a process's
 //! executable (`proc_pidpath`) and its end (`kill` with `SIGKILL`), with
 //! which the daemon stops an engine an earlier daemon left, and only when
-//! it is that engine; and the daemon's own standard error pointed at its
-//! log (`dup2`).
+//! it is that engine; a process group's end (`killpg` with `SIGKILL`), with
+//! which an ssh session past its deadline ends with its dialler; and the
+//! daemon's own standard error pointed at its log (`dup2`).
 
 use std::ffi::OsStr;
 use std::mem::size_of;
@@ -93,6 +94,46 @@ pub fn kill_process(pid: u32) -> Result<(), MacsysError> {
     }
     match last_errno() {
         libc::ESRCH => Ok(()),
+        errno => Err(failed(errno)),
+    }
+}
+
+/// What [`kill_group`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupKill {
+    /// Its members were sent `SIGKILL`.
+    Killed,
+    /// There is no such group (`ESRCH`).
+    Gone,
+    /// The group is still there, but `killpg` found none of its members to
+    /// signal (`EPERM`): they are all exiting, or none is this user's. For a
+    /// group of this process's own children they are exiting: the group
+    /// lasts until its last member is reaped.
+    Exiting,
+}
+
+/// Ends every process of the group `group` with `SIGKILL`, and says what it
+/// found. `group` is a group's id, the id of the process that leads it: 0,
+/// which `killpg` reads as the caller's own group, and 1, launchd's, are
+/// refused.
+pub fn kill_group(group: u32) -> Result<GroupKill, MacsysError> {
+    let failed = |errno| MacsysError::Process {
+        call: ProcessCall::KillGroup,
+        errno,
+    };
+    let group = libc::pid_t::try_from(group)
+        .ok()
+        .filter(|&group| group > 1)
+        .ok_or_else(|| failed(libc::EINVAL))?;
+    // SAFETY: `killpg` has no memory preconditions; `group` is above 1, so
+    // it names one group by its id, never the caller's own.
+    let status = unsafe { libc::killpg(group, libc::SIGKILL) };
+    if status == 0 {
+        return Ok(GroupKill::Killed);
+    }
+    match last_errno() {
+        libc::ESRCH => Ok(GroupKill::Gone),
+        libc::EPERM => Ok(GroupKill::Exiting),
         errno => Err(failed(errno)),
     }
 }

@@ -131,7 +131,7 @@ fn main() -> ExitCode {
         nodes: &SshLinks,
         engine_pins: &node::engines::PINS,
         mac_pins: &node::engines::MAC_PINS,
-        power: &runtime::power::power_source,
+        power_helper: &runtime::power::spawn,
         meter_reader: &|| runtime::meter::kernel_reader(system_clock),
         probe: &runtime::probe::direct,
         redirect_stderr: &mooring_macsys::redirect_stderr,

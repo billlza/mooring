@@ -10,7 +10,9 @@
 //! (`Contents/MacOS/mooringctl`, the same bytes, so one keychain approval
 //! covers both copies), checks that the daemon's plist sits in
 //! `Contents/Library/LaunchAgents` as `apple/App/LaunchAgents` has it,
-//! signs the bundle ad hoc, and checks both signatures.
+//! signs the power helper Xcode built beside it (`mooring-power`, as
+//! `com.bill.mooring.power`), signs the bundle ad hoc, and checks the three
+//! signatures.
 //!
 //! The daemon is registered from the app itself, with `SMAppService`
 //! (design §5.1, M7): launchd runs the `mooringctl` inside the bundle, so
@@ -39,6 +41,9 @@ use crate::output::{OutputError, say};
 
 /// The app's bundle identifier (`apple/project.yml`).
 pub(crate) const APP_IDENTIFIER: &str = "com.bill.mooring";
+
+/// The power helper's signing identifier (design §5.1).
+pub(crate) const POWER_IDENTIFIER: &str = "com.bill.mooring.power";
 
 /// The daemon's launchd label (design §5.1: `com.bill.mooring.daemon.plist`).
 pub(crate) const AGENT_LABEL: &str = "com.bill.mooring.daemon";
@@ -266,6 +271,8 @@ pub(crate) struct AppPaths {
     pub(crate) built: PathBuf,
     pub(crate) app: PathBuf,
     pub(crate) embedded: PathBuf,
+    /// The power helper Xcode built into the app, beside `mooringctl`.
+    pub(crate) power: PathBuf,
     pub(crate) signed: PathBuf,
     /// The daemon's plist in the repository.
     pub(crate) agent_plist_source: PathBuf,
@@ -292,6 +299,7 @@ impl AppPaths {
                 .join("apple")
                 .join("DerivedData/Build/Products/Release/Mooring.app"),
             embedded: app.join("Contents").join("MacOS").join("mooringctl"),
+            power: app.join("Contents").join("MacOS").join("mooring-power"),
             agent_plist_source: apple
                 .join("App")
                 .join("LaunchAgents")
@@ -589,7 +597,8 @@ pub(crate) fn refuse_while_agent_loaded_on_this_mac(root: &Path) -> Result<(), A
 }
 
 /// The build after `mooringctl` is signed: the steps, the result bundle's
-/// check, the copy, the embedded CLI, the signature and its checks.
+/// check, the copy, the embedded CLI, the helper's signature, the bundle's,
+/// and the checks of all three.
 pub(crate) fn assemble(
     programs: &mut impl Programs,
     root: &Path,
@@ -633,6 +642,25 @@ pub(crate) fn assemble(
     fs::copy(&paths.signed, &paths.embedded).map_err(file_error("copy", &paths.signed))?;
     check_agent_plist(paths)?;
     check_alert_strings(programs, root, paths)?;
+    // Xcode leaves the helper signed by the linker alone, under its file
+    // name: it is signed as itself, before the bundle that seals it.
+    programs.run(
+        &step(
+            CODESIGN,
+            &[
+                OsStr::new("--force"),
+                OsStr::new("--sign"),
+                OsStr::new("-"),
+                OsStr::new("--options"),
+                OsStr::new("runtime"),
+                OsStr::new("--identifier"),
+                OsStr::new(POWER_IDENTIFIER),
+                paths.power.as_os_str(),
+            ],
+            root,
+        ),
+        Capture::Inherit,
+    )?;
     // The hardened runtime refuses injected libraries, here as for the
     // `mooringctl` inside (`mooringctl::sign_args`).
     programs.run(
@@ -665,6 +693,7 @@ pub(crate) fn assemble(
     for (path, expected) in [
         (&paths.app, APP_IDENTIFIER),
         (&paths.embedded, mooringctl::SIGNING_IDENTIFIER),
+        (&paths.power, POWER_IDENTIFIER),
     ] {
         let report = programs.run(
             &step(CODESIGN, &[OsStr::new("-dv"), path.as_os_str()], root),
@@ -678,9 +707,10 @@ pub(crate) fn assemble(
     }
     say!(
         out,
-        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} inside",
+        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} and {} inside",
         paths.app.display(),
-        paths.embedded.display()
+        paths.embedded.display(),
+        paths.power.display()
     )?;
     Ok(())
 }
@@ -1046,6 +1076,10 @@ mod tests {
             paths.embedded,
             Path::new("/t/app/Mooring.app/Contents/MacOS/mooringctl")
         );
+        assert_eq!(
+            paths.power,
+            Path::new("/t/app/Mooring.app/Contents/MacOS/mooring-power")
+        );
         assert_eq!(paths.signed, Path::new("/t/signed/mooringctl"));
         assert_eq!(
             paths.agent_plist_source,
@@ -1103,10 +1137,10 @@ mod tests {
     }
 
     /// The assembly runs the builds, checks the result bundle, copies the
-    /// app, puts the signed CLI inside it, signs the bundle and checks both
-    /// identifiers, in that order.
+    /// app, puts the signed CLI inside it, signs the helper and then the
+    /// bundle, and checks the three identifiers, in that order.
     #[test]
-    fn the_app_is_assembled_in_order_and_both_signatures_checked() {
+    fn the_app_is_assembled_in_order_and_its_signatures_checked() {
         let scratch = Scratch::new("app-assemble");
         let (root, paths) = paths(&scratch);
         strings(&paths);
@@ -1123,8 +1157,10 @@ mod tests {
             Ok(ALERT_STRINGS.to_vec()),
             Ok(Vec::new()),
             Ok(Vec::new()),
+            Ok(Vec::new()),
             Ok(signed_report("com.bill.mooring")),
             Ok(signed_report("com.bill.mooring.mooringctl")),
+            Ok(signed_report("com.bill.mooring.power")),
         ] {
             fake.outputs.push_back(output);
         }
@@ -1132,8 +1168,9 @@ mod tests {
         assemble(&mut fake, &root, &paths, Path::new("/x/xcodegen"), &mut out).unwrap();
         let app = paths.app.display().to_string();
         let embedded = paths.embedded.display().to_string();
+        let power = paths.power.display().to_string();
         let steps: Vec<String> = fake.steps.iter().map(|(line, _)| line.clone()).collect();
-        assert_eq!(steps.len(), 10, "{steps:#?}");
+        assert_eq!(steps.len(), 12, "{steps:#?}");
         assert!(steps[0].starts_with("/usr/bin/xcrun swift test "));
         assert!(steps[1].starts_with("/x/xcodegen generate "));
         assert!(steps[2].starts_with("/usr/bin/xcrun xcodebuild "));
@@ -1150,29 +1187,38 @@ mod tests {
         );
         assert_eq!(
             steps[6],
-            format!("/usr/bin/codesign --force --sign - --options runtime {app}")
+            format!(
+                "/usr/bin/codesign --force --sign - --options runtime --identifier com.bill.mooring.power {power}"
+            )
         );
         assert_eq!(
             steps[7],
+            format!("/usr/bin/codesign --force --sign - --options runtime {app}")
+        );
+        assert_eq!(
+            steps[8],
             format!("/usr/bin/codesign --verify --strict {app}")
         );
-        assert_eq!(steps[8], format!("/usr/bin/codesign -dv {app}"));
-        assert_eq!(steps[9], format!("/usr/bin/codesign -dv {embedded}"));
+        assert_eq!(steps[9], format!("/usr/bin/codesign -dv {app}"));
+        assert_eq!(steps[10], format!("/usr/bin/codesign -dv {embedded}"));
+        assert_eq!(steps[11], format!("/usr/bin/codesign -dv {power}"));
         assert_eq!(fake.steps[3].1, Capture::Stdout);
         assert_eq!(fake.steps[5].1, Capture::Stdout);
-        assert_eq!(fake.steps[8].1, Capture::Stderr);
+        for checked in &fake.steps[9..] {
+            assert_eq!(checked.1, Capture::Stderr);
+        }
         assert_eq!(fs::read(&paths.embedded).unwrap(), b"signed mooringctl");
         assert_eq!(fs::read(&paths.agent_plist).unwrap(), b"the daemon's plist");
         assert_eq!(
             String::from_utf8(out).unwrap(),
             format!(
-                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} inside\n"
+                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} and {power} inside\n"
             )
         );
     }
 
     /// A build with a warning stops before anything is copied; an embedded
-    /// CLI signed under another identifier fails the assembly.
+    /// CLI, or a helper, signed under another identifier fails the assembly.
     #[test]
     fn the_assembly_stops_at_a_warning_or_a_wrong_identifier() {
         let scratch = Scratch::new("app-refusals");
@@ -1206,6 +1252,7 @@ mod tests {
             Ok(ALERT_STRINGS.to_vec()),
             Ok(Vec::new()),
             Ok(Vec::new()),
+            Ok(Vec::new()),
             Ok(signed_report("com.bill.mooring")),
             Ok(signed_report("mooringctl-020ac5c52e8594c4")),
         ] {
@@ -1222,6 +1269,35 @@ mod tests {
             "{error:?}"
         );
 
+        // A helper still under the linker's identifier, its file name.
+        let mut fake = Fake::default();
+        for output in [
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(CLEAN.as_bytes().to_vec()),
+            Ok(Vec::new()),
+            Ok(ALERT_STRINGS.to_vec()),
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(Vec::new()),
+            Ok(signed_report("com.bill.mooring")),
+            Ok(signed_report("com.bill.mooring.mooringctl")),
+            Ok(signed_report("mooring-power")),
+        ] {
+            fake.outputs.push_back(output);
+        }
+        let error =
+            assemble(&mut fake, &root, &paths, Path::new("/x"), &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                AppError::Signature { path, expected: "com.bill.mooring.power", fault: SignatureFault::Different(found) }
+                    if *path == paths.power && found == "mooring-power"
+            ),
+            "{error:?}"
+        );
+
         // An app signed without the hardened runtime fails it too.
         let mut fake = Fake::default();
         for output in [
@@ -1231,6 +1307,7 @@ mod tests {
             Ok(CLEAN.as_bytes().to_vec()),
             Ok(Vec::new()),
             Ok(ALERT_STRINGS.to_vec()),
+            Ok(Vec::new()),
             Ok(Vec::new()),
             Ok(Vec::new()),
             Ok(String::from_utf8(signed_report("com.bill.mooring"))

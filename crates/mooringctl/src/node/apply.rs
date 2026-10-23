@@ -49,7 +49,7 @@ pub(crate) fn apply(
         .map_err(|error| LocalError::Secrets(Box::new(error)))?;
     let bundle =
         bundle(deployment, node, &secrets, engines.catalog()).map_err(LocalError::Render)?;
-    let mut session = ops_session(env, target, interface)?;
+    let mut session = ops_session(env, target, interface, None)?;
     let reply = session.request(&LineRequest::Hello)?;
     let Response::Hello(hello) = reply else {
         return Err(unexpected(RequestKind::Hello, &reply));

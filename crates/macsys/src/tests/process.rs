@@ -2,19 +2,22 @@
 
 //! The boot time and the process calls, live: the boot lies between the
 //! epoch and now, this test's own executable is its path, an engine
-//! stand-in is ended with `SIGKILL`, a process that is gone has no path and
-//! is no error to end, and a process's stderr pointed at a file writes
-//! there (in a child, so this test's own stderr is left alone).
+//! stand-in is ended with `SIGKILL`, a group is ended with its leader's
+//! children, a process or group that is gone has no path and is no error
+//! to end, and a process's stderr pointed at a file writes there (in a
+//! child, so this test's own stderr is left alone).
 
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsFd;
-use std::os::unix::process::ExitStatusExt;
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::error::{MacsysError, MacsysErrorKind, ProcessCall};
-use crate::process::{boot_time, kill_process, process_path, redirect_stderr};
+use crate::process::{
+    GroupKill, boot_time, kill_group, kill_process, process_path, redirect_stderr,
+};
 
 /// The environment variable that makes [`stderr_child`] redirect, naming
 /// the file.
@@ -50,6 +53,45 @@ fn a_process_path_is_its_executable_and_a_gone_process_has_none() {
     kill_process(pid).unwrap();
 }
 
+/// A group's leader and the child it started both end, as an ssh session
+/// and its dialler do; once the leader is reaped the group is exiting, then
+/// gone, and neither is an error; a group that cannot exist is gone.
+#[test]
+fn a_group_ends_with_its_leaders_children() {
+    let mut leader = Command::new("/bin/sh")
+        .args(["-c", "/bin/sleep 30 & echo $!; wait"])
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(leader.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let sleeper: u32 = line.trim().parse().unwrap();
+    // Alive, as the shell's fork or as /bin/sleep once it has exec'd.
+    let alive = process_path(sleeper).unwrap().is_some();
+    assert_eq!(kill_group(leader.id()).unwrap(), GroupKill::Killed);
+    assert!(alive);
+    assert_eq!(leader.wait().unwrap().signal(), Some(libc::SIGKILL));
+    // The orphaned sleeper is launchd's to reap: it goes within moments.
+    let until = Instant::now() + Duration::from_secs(5);
+    while process_path(sleeper).unwrap().is_some() {
+        assert!(
+            Instant::now() < until,
+            "the leader's child outlived its group"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let after = kill_group(leader.id()).unwrap();
+    assert!(
+        matches!(after, GroupKill::Exiting | GroupKill::Gone),
+        "{after:?}"
+    );
+    // Above the kernel's highest process id, 99999: no such group.
+    assert_eq!(kill_group(100_000).unwrap(), GroupKill::Gone);
+}
+
 #[test]
 fn pids_outside_the_kernel_range_are_refused() {
     for pid in [0, u32::MAX] {
@@ -63,6 +105,16 @@ fn pids_outside_the_kernel_range_are_refused() {
         );
         assert_eq!(error.kind(), MacsysErrorKind::Process);
         assert_eq!(error.to_string(), "kill failed with errno 22");
+    }
+    // 0 is the caller's own group to `killpg`, and 1 is launchd's.
+    for group in [0, 1, u32::MAX] {
+        assert_eq!(
+            kill_group(group).unwrap_err(),
+            MacsysError::Process {
+                call: ProcessCall::KillGroup,
+                errno: libc::EINVAL
+            }
+        );
     }
     assert_eq!(
         process_path(u32::MAX).unwrap_err(),

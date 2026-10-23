@@ -177,7 +177,7 @@ fn measure(
     };
     let engines = Engines::open(args.engines, env.engine_pins)?;
     let xray = engines.catalog().for_arch(arch).xray;
-    let mut session = ops_session(env, node, args.interface)?;
+    let mut session = ops_session(env, node, args.interface, None)?;
     upload_missing(session.as_mut(), BTreeSet::from([xray]), |sha256| {
         engines
             .blob(sha256)?
