@@ -747,10 +747,12 @@ fn watch_config() -> impl Strategy<Value = WatchConfig> {
         1_u16..=u16::MAX,
         target_host(),
         any::<u32>().prop_map(Ipv4Addr::from),
+        btree_set(stats_email(), 0..4),
     )
-        .prop_map(|(keepalive, host, ipv4)| WatchConfig {
+        .prop_map(|(keepalive, host, ipv4, emails)| WatchConfig {
             keepalive_secs: NonZeroU16::new(keepalive).unwrap(),
             target: WatchTarget { host, ipv4 },
+            emails,
         })
 }
 

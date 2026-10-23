@@ -5,11 +5,16 @@
 //! change in flight (`txn/pending.json`) with its phase, which makes every
 //! other change `Busy`.
 
-use mooring_agent_proto::{AgentError, BundleHeader, Generation, Sha256Hex, TxnState};
+use std::fs;
+use std::io;
+
+use mooring_agent_proto::{
+    AgentError, AppliedGeneration, BundleHeader, Generation, IoOp, Sha256Hex, TxnState,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::paths::Paths;
-use crate::store::{read_json, write_json};
+use crate::paths::{Paths, generation_name};
+use crate::store::{io_error, read_json, write_json};
 
 /// Records are read by the `mooring` group as well: the watch journals a
 /// commit from the current generation's record. They hold digests, host
@@ -96,6 +101,46 @@ pub(crate) fn clear_pending(paths: &Paths) -> Result<(), AgentError> {
 /// The record of the transaction for `generation`.
 pub(crate) fn record(paths: &Paths, generation: Generation) -> Result<TxnRecord, AgentError> {
     read_json(&paths.txn_record(generation))?.ok_or(AgentError::UnknownTransaction { generation })
+}
+
+/// The newest generation whose transaction committed, with the digest it
+/// was applied with (`StatusV1::applied`); `None` before the first commit.
+/// Only the generations the node keeps have records.
+pub(crate) fn last_committed(paths: &Paths) -> Result<Option<AppliedGeneration>, AgentError> {
+    let entries = match fs::read_dir(paths.txn_dir()) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_error(IoOp::ReadState, &error)),
+    };
+    let mut newest: Option<AppliedGeneration> = None;
+    for entry in entries {
+        let entry = entry.map_err(|error| io_error(IoOp::ReadState, &error))?;
+        let name = entry.file_name();
+        // A record is `gen-<N>.json` exactly; `pending.json` and temporary
+        // files are not records.
+        let Some(generation) = name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(|stem| Some((stem, stem.strip_prefix("gen-")?.parse::<u64>().ok()?)))
+            .and_then(|(stem, number)| {
+                let generation = Generation::new(number);
+                (generation_name(generation) == stem).then_some(generation)
+            })
+        else {
+            continue;
+        };
+        if newest.is_some_and(|newest| newest.generation >= generation) {
+            continue;
+        }
+        let record = record(paths, generation)?;
+        if record.state == TxnState::Committed {
+            newest = Some(AppliedGeneration {
+                generation,
+                digest: record.header.digest,
+            });
+        }
+    }
+    Ok(newest)
 }
 
 /// Writes the record for `generation`.

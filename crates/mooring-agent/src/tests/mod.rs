@@ -4,6 +4,7 @@
 //! runs, the clock and sleeping) and a scratch root holding the same file
 //! layout as a node. The real tools run only on a node (M4's VM lane).
 
+mod accounting;
 mod blobs;
 mod cli;
 mod gate;

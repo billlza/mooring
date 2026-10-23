@@ -467,6 +467,10 @@ pub(crate) fn watch_config() -> WatchConfig {
             host: TargetHost::new("www.example.com").unwrap(),
             ipv4: Ipv4Addr::new(198, 51, 100, 7),
         },
+        emails: ["u01@reality", "u01@hy2", "probe@reality", "probe@hy2"]
+            .into_iter()
+            .map(|email| email.parse().unwrap())
+            .collect(),
     }
 }
 

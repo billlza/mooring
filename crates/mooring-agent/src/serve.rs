@@ -15,7 +15,7 @@ use mooring_agent_proto::{
 use crate::host::Node;
 use crate::paths::Paths;
 use crate::store::{read_json, write_json};
-use crate::{blobs, gate, hello, journal, txn};
+use crate::{accounting, blobs, gate, hello, journal, status, txn};
 
 /// Who sent the request: the role its key's forced command names, and
 /// `SSH_CONNECTION` as sshd set it.
@@ -126,11 +126,17 @@ fn line_reply(paths: &Paths, node: &dyn Node, session: Session<'_>, line: LineRe
         LineRequest::Events { since } => {
             Ok(Response::Events(Box::new(journal::page(paths, since)?)))
         }
+        LineRequest::Status => Ok(Response::Status(Box::new(status::status(paths, node)?))),
+        LineRequest::Usage { month } => Ok(Response::Usage(Box::new(accounting::usage(
+            paths,
+            node.now(),
+            month,
+        )?))),
+        LineRequest::UsageSeries(range) => Ok(Response::UsageSeries(Box::new(
+            accounting::usage_series(paths, node.now(), range)?,
+        ))),
         LineRequest::Bootstrap { .. }
         | LineRequest::RevokeBootstrap
-        | LineRequest::Status
-        | LineRequest::Usage { .. }
-        | LineRequest::UsageSeries(_)
         | LineRequest::TargetCheck { .. } => Err(AgentError::NotServedYet {
             request: line.kind(),
         }),

@@ -7,5 +7,15 @@ description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render watch.js
   "target": {
     "host": "www.harbour-target.test",
     "ipv4": "45.67.89.200"
-  }
+  },
+  "emails": [
+    "probe@reality",
+    "probe@hy2",
+    "fxuseraaab@reality",
+    "fxuseraaab@hy2",
+    "fxuseraaac@reality",
+    "fxuseraaac@hy2",
+    "fxuseraaad@reality",
+    "fxuseraaad@hy2"
+  ]
 }

@@ -263,7 +263,7 @@ fn files(
         hy2: RenderedFile::new(encode::json(&hy2)?),
         wg: RenderedFile::new(encode::text(|sink| wg::write(&wg, sink))),
         nftables: RenderedFile::new(encode::text(|sink| nft::write(&nft, sink))),
-        watch: RenderedFile::new(encode::json(&watch::config(node, target)?)?),
+        watch: RenderedFile::new(encode::json(&watch::config(node, target, &served)?)?),
         viewer_keys: RenderedFile::new(viewers::file(deployment.viewers())?),
     })
 }

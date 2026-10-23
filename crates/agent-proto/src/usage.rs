@@ -39,6 +39,77 @@ impl UsageMonth {
     pub const fn month(self) -> u8 {
         self.month
     }
+
+    /// The UTC month holding `at`; [`ValueError::UsageMonth`] after
+    /// 9999-12.
+    pub const fn containing(at: UnixTime) -> Result<Self, ValueError> {
+        let (year, month) = civil_from_days(at.as_secs() / SECS_PER_DAY);
+        if year > 9999 {
+            return Err(ValueError::UsageMonth);
+        }
+        // `civil_from_days` gives a month in 1..=12 and, from day 0, a year
+        // from 1970.
+        Self::new(year as u16, month as u8)
+    }
+
+    /// The month's first second, 00:00 UTC on its first day.
+    pub const fn start(self) -> UnixTime {
+        UnixTime::from_secs(days_from_civil(self.year as u64, self.month as u64) * SECS_PER_DAY)
+    }
+
+    /// The month after this one; `None` after 9999-12.
+    pub const fn next(self) -> Option<Self> {
+        let (year, month) = if self.month == 12 {
+            (self.year + 1, 1)
+        } else {
+            (self.year, self.month + 1)
+        };
+        match Self::new(year, month) {
+            Ok(next) => Some(next),
+            Err(_) => None,
+        }
+    }
+}
+
+const SECS_PER_DAY: u64 = 86_400;
+/// Days in one 400-year era of the Gregorian calendar.
+const DAYS_PER_ERA: u64 = 146_097;
+/// Days from 0000-03-01 to 1970-01-01.
+const EPOCH_SHIFT_DAYS: u64 = 719_468;
+
+/// The days from 1970-01-01 to the first of `month` in `year` (from 1970),
+/// by Howard Hinnant's `days_from_civil`
+/// (<https://howardhinnant.github.io/date_algorithms.html>), which counts
+/// years from March so that the leap day ends its year. `mooring-model`'s
+/// `CalendarDate` uses the same arithmetic; agent-proto depends on no
+/// model crate (design §6.1), so it carries its own copy.
+const fn days_from_civil(year: u64, month: u64) -> u64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year / 400;
+    let year_of_era = year - era * 400;
+    let month_from_march = (month + 9) % 12;
+    let day_of_year = (153 * month_from_march + 2) / 5;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * DAYS_PER_ERA + day_of_era - EPOCH_SHIFT_DAYS
+}
+
+/// The year and month of the day `days` after 1970-01-01 (Hinnant's
+/// `civil_from_days`, the inverse of [`days_from_civil`]).
+const fn civil_from_days(days: u64) -> (u64, u64) {
+    let shifted = days + EPOCH_SHIFT_DAYS;
+    let era = shifted / DAYS_PER_ERA;
+    let day_of_era = shifted - era * DAYS_PER_ERA;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_from_march = (5 * day_of_year + 2) / 153;
+    let month = if month_from_march < 10 {
+        month_from_march + 3
+    } else {
+        month_from_march - 9
+    };
+    let year = year_of_era + era * 400 + if month <= 2 { 1 } else { 0 };
+    (year, month)
 }
 
 impl fmt::Display for UsageMonth {
@@ -281,6 +352,55 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_time_lies_in_the_utc_month_that_starts_at_or_before_it() {
+        // Month starts from Python's `calendar.timegm`.
+        for (year, month, start) in [
+            (1970, 1, 0),
+            (2000, 2, 949_363_200),
+            (2000, 3, 951_868_800),
+            (2024, 2, 1_706_745_600),
+            (2024, 3, 1_709_251_200),
+            (2026, 10, 1_790_812_800),
+            (2026, 11, 1_793_491_200),
+            (2100, 2, 4_105_123_200),
+            (2100, 3, 4_107_542_400),
+            (9999, 12, 253_399_622_400),
+        ] {
+            let at = UnixTime::from_secs(start);
+            let expected = UsageMonth::new(year, month).unwrap();
+            assert_eq!(expected.start(), at, "{expected}");
+            assert_eq!(UsageMonth::containing(at), Ok(expected), "{expected}");
+            if start > 0 {
+                let before = UsageMonth::containing(UnixTime::from_secs(start - 1)).unwrap();
+                assert_eq!(before.next(), Some(expected), "{expected}");
+            }
+        }
+        // 2000 and 2024 are leap years; 2100 is not.
+        let days = |year, month| {
+            let month = UsageMonth::new(year, month).unwrap();
+            (month.next().unwrap().start().as_secs() - month.start().as_secs()) / 86_400
+        };
+        assert_eq!((days(2000, 2), days(2024, 2), days(2100, 2)), (29, 29, 28));
+        assert_eq!(
+            (days(2026, 10), days(2026, 11), days(2026, 12)),
+            (31, 30, 31)
+        );
+        assert_eq!(UsageMonth::new(9999, 12).unwrap().next(), None);
+        assert_eq!(
+            UsageMonth::containing(UnixTime::from_secs(253_402_300_799)),
+            Ok(UsageMonth::new(9999, 12).unwrap())
+        );
+        assert_eq!(
+            UsageMonth::containing(UnixTime::from_secs(253_402_300_800)),
+            Err(ValueError::UsageMonth)
+        );
+        assert_eq!(
+            UsageMonth::containing(UnixTime::from_secs(u64::MAX)),
+            Err(ValueError::UsageMonth)
+        );
     }
 
     #[test]

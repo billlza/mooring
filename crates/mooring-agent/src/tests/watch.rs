@@ -1,23 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The watch loop (design §11.3) against a stand-in node whose WireGuard
-//! peer, gate set, flow-cap counter, filesystem and chrony a test sets, and
-//! the event journal it keeps (design §15.7).
+//! peer, gate set, counters, filesystem, chrony, engine units and Xray API
+//! a test sets, and the event journal it keeps (design §15.7).
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::fs;
 use std::num::NonZeroU16;
 use std::rc::Rc;
 use std::time::Duration;
 
 use mooring_agent_proto::{
-    AgentError, AgentEvent, AgentEventKind, BundleFiles, BundleHeader, EngineSet, EventSeq,
-    GateReason, GateState, Generation, Halt, Holds, HostProfile, IoOp, MacDrainHold, OperatorHold,
-    Sha256Hex, ShutdownReason, TargetHost, TxnState, UnixTime, WatchConfig, WatchError,
+    AgentError, AgentEvent, AgentEventKind, AppliedGeneration, BundleFiles, BundleHeader,
+    EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq, GateReason, GateState,
+    Generation, Halt, Holds, HostProfile, Inbound, InboundSet, IoOp, LineRequest, MacDrainHold,
+    OperatorHold, Response, Role, Sha256Hex, ShutdownReason, StatsEmail, TargetHost, Traffic,
+    TxnState, UnixTime, UplinkTransfer, UsageMonth, WATCH_TICK_SECS, WatchConfig, WatchError,
     WatchErrorKind, WatchTarget,
 };
 
+use super::serve::{ask, frame};
 use super::{FakeNode, failed, nft_set, ok, scratch};
+use crate::accounting;
 use crate::gate::{StopRequest, holds, set_by_viewer, write_holds};
 use crate::host::{Node, Tool};
 use crate::journal::{self, Journal, MAX_KEPT, RETENTION_SECS};
@@ -43,7 +48,36 @@ struct Net {
     stat: RefCell<String>,
     /// `chronyc tracking`; `None` when chrony does not answer.
     chrony: RefCell<Option<String>>,
+    /// The `probe_flows` counter.
+    probe_flows: Cell<u64>,
+    /// `mooring-xray.service` and its API.
+    xray: RefCell<Xray>,
+    /// `mooring-hy2.service`'s `NRestarts`.
+    hy2_restarts: Cell<u32>,
 }
+
+/// Xray as the stand-in node runs it.
+struct Xray {
+    /// The unit is active, since this second after boot.
+    active_since: Option<u64>,
+    restarts: u32,
+    /// The API fails while set.
+    api_fails: bool,
+    /// When the stats service started, in seconds since boot (the node's
+    /// boot is `BOOT_SECS` old); `statssys` reports the difference.
+    started: u64,
+    counters: XrayCounters,
+    alloc: u64,
+    /// Restarts the stats service at this second since boot right after
+    /// the next `statsquery`, with its counters as given.
+    restart_after_query: Option<(u64, XrayCounters)>,
+}
+
+/// Xray's counters per email: uplink and downlink.
+type XrayCounters = BTreeMap<&'static str, (u64, u64)>;
+
+/// The seconds since boot that `/proc/uptime` says.
+const BOOT_SECS: u64 = 350_735;
 
 struct World {
     _dir: tempfile::TempDir,
@@ -69,8 +103,25 @@ impl World {
                     "Reference ID    : C0A80001 (192.168.0.1)\nLeap status     : Normal\n"
                         .to_owned(),
                 )),
+                probe_flows: Cell::new(0),
+                xray: RefCell::new(Xray {
+                    active_since: Some(100),
+                    restarts: 0,
+                    api_fails: false,
+                    started: 100,
+                    counters: BTreeMap::new(),
+                    alloc: 52_000_000,
+                    restart_after_query: None,
+                }),
+                hy2_restarts: Cell::new(0),
             }),
         };
+        world.write(
+            "/proc/net/route",
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+             eth0\t00000000\t01F67EB0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n",
+        );
+        world.uplink(1_000, 2_000);
         world.write("/proc/uptime", "350735.47 234388.90\n");
         world.write("/proc/loadavg", "0.52 0.58 0.59 1/123 4567\n");
         world.write(
@@ -98,6 +149,10 @@ impl World {
                 host: TargetHost::new("www.example.com").unwrap(),
                 ipv4: "198.51.100.7".parse().unwrap(),
             },
+            emails: ["u01@reality", "u01@hy2", "probe@reality", "probe@hy2"]
+                .into_iter()
+                .map(|email| email.parse().unwrap())
+                .collect(),
         };
         write_json(&dir.join("watch.json"), &config, 0o640).unwrap();
         let _replaced = fs::remove_file(self.paths.current());
@@ -127,18 +182,61 @@ impl World {
         .unwrap();
     }
 
+    /// The stand-in Xray.
+    fn xray(&self) -> std::cell::RefMut<'_, Xray> {
+        self.net.xray.borrow_mut()
+    }
+
+    /// Generation `generation`'s accounting emails, in its `watch.json`.
+    fn applied(&self, generation: u64, emails: &[&str]) {
+        let path = self
+            .paths
+            .generation(Generation::new(generation))
+            .join("watch.json");
+        let mut config: WatchConfig = read_json(&path).unwrap().unwrap();
+        config.emails = emails.iter().map(|email| email.parse().unwrap()).collect();
+        write_json(&path, &config, 0o640).unwrap();
+    }
+
+    /// This month's usage at `node`'s time.
+    fn usage(&self, node: &FakeNode) -> BTreeMap<StatsEmail, Traffic> {
+        let month = UsageMonth::containing(node.now()).unwrap();
+        accounting::usage(&self.paths, node.now(), month)
+            .unwrap()
+            .traffic
+    }
+
+    /// The uplink's kernel counters.
+    fn uplink(&self, rx: u64, tx: u64) {
+        self.write(
+            "/sys/class/net/eth0/statistics/rx_bytes",
+            &format!("{rx}\n"),
+        );
+        self.write(
+            "/sys/class/net/eth0/statistics/tx_bytes",
+            &format!("{tx}\n"),
+        );
+    }
+
     fn node(&self, now: u64) -> FakeNode {
         let net = Rc::clone(&self.net);
+        let api = Rc::clone(&self.net);
         FakeNode::answering(
             now,
             Box::new(move |tool, args| {
                 Ok(match (tool, args) {
                     (Tool::Nft, _) if net.nft_fails.get() => failed(b"netlink: Error: Operation not permitted\n"),
                     (Tool::Nft, ["-j", "list", "set", ..]) => ok(&nft_set(net.closed.get())),
-                    (Tool::Nft, ["-j", "list", "counter", ..]) => ok(format!(
-                        r#"{{"nftables":[{{"metainfo":{{"version":"1.1.3"}}}},{{"counter":{{"family":"inet","name":"flow_cap","table":"mooring","handle":4,"packets":{},"bytes":0}}}}]}}"#,
-                        net.flow_cap.get()
-                    ).as_bytes()),
+                    (Tool::Nft, ["-j", "list", "counter", "inet", "mooring", name]) => {
+                        let packets = match *name {
+                            "flow_cap" => net.flow_cap.get(),
+                            "probe_flows" => net.probe_flows.get(),
+                            _ => return Ok(failed(b"Error: No such file or directory\n")),
+                        };
+                        ok(format!(
+                            r#"{{"nftables":[{{"metainfo":{{"version":"1.1.3"}}}},{{"counter":{{"family":"inet","name":"{name}","table":"mooring","handle":4,"packets":{packets},"bytes":0}}}}]}}"#,
+                        ).as_bytes())
+                    }
                     (Tool::Nft, ["add", "element", ..]) => {
                         net.closed.set(true);
                         ok(b"")
@@ -154,6 +252,19 @@ impl World {
                         net.rx.get()
                     ).as_bytes()),
                     (Tool::Stat, _) => ok(net.stat.borrow().as_bytes()),
+                    (Tool::Systemctl, ["show", "-p", "ActiveState,NRestarts,ActiveEnterTimestampMonotonic", unit]) => {
+                        let xray = net.xray.borrow();
+                        let (since, restarts) = match *unit {
+                            "mooring-xray.service" => (xray.active_since, xray.restarts),
+                            "mooring-hy2.service" => (Some(90), net.hy2_restarts.get()),
+                            _ => return Ok(failed(b"")),
+                        };
+                        ok(format!(
+                            "NRestarts={restarts}\nActiveState={}\nActiveEnterTimestampMonotonic={}\n",
+                            if since.is_some() { "active" } else { "inactive" },
+                            since.map_or(0, |since| since * 1_000_000 + 250_000),
+                        ).as_bytes())
+                    }
                     (Tool::Chronyc, _) => match net.chrony.borrow().as_deref() {
                         Some(report) => ok(report.as_bytes()),
                         None => failed(b"506 Cannot talk to daemon\n"),
@@ -162,6 +273,47 @@ impl World {
                 })
             }),
         )
+        .programs(Box::new(move |program, args| {
+            let mut xray = api.xray.borrow_mut();
+            Ok(match args {
+                _ if !program.ends_with("engines/xray") => failed(b""),
+                _ if xray.api_fails => failed(b"failed to dial 127.0.0.1:10085\n"),
+                ["api", "statssys", "--server=127.0.0.1:10085"] => ok(format!(
+                    "{{\n    \"Alloc\": {},\n    \"NumGoroutine\": 40,\n    \"Uptime\": {}\n}}\n\n",
+                    xray.alloc,
+                    BOOT_SECS - xray.started
+                )
+                .as_bytes()),
+                ["api", "statsquery", "--server=127.0.0.1:10085", "-pattern=user>>>"] => {
+                    let stats: Vec<serde_json::Value> = xray
+                        .counters
+                        .iter()
+                        .flat_map(|(email, (up, down))| {
+                            [("uplink", *up), ("downlink", *down)].map(|(direction, value)| {
+                                let name = format!("user>>>{email}>>>traffic>>>{direction}");
+                                // Xray leaves a zero out.
+                                if value == 0 {
+                                    serde_json::json!({ "name": name })
+                                } else {
+                                    serde_json::json!({ "name": name, "value": value })
+                                }
+                            })
+                        })
+                        .collect();
+                    let reply = if stats.is_empty() {
+                        serde_json::json!({})
+                    } else {
+                        serde_json::json!({ "stat": stats })
+                    };
+                    if let Some((started, counters)) = xray.restart_after_query.take() {
+                        xray.started = started;
+                        xray.counters = counters;
+                    }
+                    ok(format!("{reply:#}\n\n").as_bytes())
+                }
+                _ => failed(b""),
+            })
+        }))
     }
 
     fn status(&self) -> WatchStatus {
@@ -196,6 +348,17 @@ impl World {
 fn tick(watch: &mut Watch, world: &World, node: &FakeNode) {
     watch.tick(&world.paths, node).unwrap();
     node.sleep(Duration::from_secs(5));
+}
+
+/// A minute of ticks, beginning with one that takes a reading.
+fn minute(watch: &mut Watch, world: &World, node: &FakeNode) {
+    for _ in 0..HOST_READING_SECS / WATCH_TICK_SECS {
+        tick(watch, world, node);
+    }
+}
+
+fn email(text: &str) -> StatsEmail {
+    text.parse().unwrap()
 }
 
 fn halt(paths: &Paths, at: u64) {
@@ -1369,5 +1532,593 @@ fn a_viewer_stop_is_unconfirmed_while_the_view_shows_the_gate_open() {
         Err(AgentError::GateStopUnconfirmed {
             waited_secs: mooring_agent_proto::VIEWER_STOP_WAIT_SECS
         })
+    );
+}
+
+/// 2026-10-08T00:00:00Z, and 2026-11-01T00:00:00Z.
+const OCT_8: u64 = 1_791_417_600;
+const NOV: u64 = 1_793_491_200;
+
+#[test]
+fn accounting_polls_at_each_reading_and_dates_growth_for_applied_emails() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    world.traffic(&node, 1);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    world.xray().counters = BTreeMap::from([("u01@reality", (1, 1))]);
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        world.status().accounting.at,
+        Some(UnixTime::from_secs(OCT_8))
+    );
+    assert!(
+        world.status().accounting.last_active.is_empty(),
+        "a baseline"
+    );
+    let polled = node.now();
+    world.xray().counters = BTreeMap::from([
+        ("u01@reality", (5, 50)),
+        ("u02@reality", (2, 2)),
+        ("probe@hy2", (0, 15)),
+    ]);
+    minute(&mut watch, &world, &node);
+    let view = world.status();
+    assert_eq!(view.accounting.at, Some(polled));
+    assert_eq!(
+        view.accounting.last_active,
+        BTreeMap::from([(email("probe@hy2"), polled), (email("u01@reality"), polled)]),
+        "u02 is not in the applied configuration"
+    );
+    let traffic = |up, down| Traffic {
+        uplink: up,
+        downlink: down,
+    };
+    assert_eq!(
+        world.usage(&node),
+        BTreeMap::from([
+            (email("probe@hy2"), traffic(0, 15)),
+            (email("u01@reality"), traffic(4, 49)),
+            (email("u02@reality"), traffic(2, 2)),
+        ]),
+        "the month counts whatever Xray counted"
+    );
+    assert_eq!(
+        view.engines,
+        EngineHealth {
+            xray: EngineState {
+                restarts: 0,
+                run: EngineRun::Active {
+                    uptime_secs: BOOT_SECS - 100,
+                    go_heap_bytes: Some(52_000_000),
+                },
+            },
+            hy2: EngineState {
+                restarts: 0,
+                run: EngineRun::Active {
+                    uptime_secs: BOOT_SECS - 90,
+                    go_heap_bytes: None,
+                },
+            },
+        }
+    );
+    // A revoked user leaves the configuration, and its time goes with it.
+    world.applied(1, &["probe@reality", "probe@hy2"]);
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        world.status().accounting.last_active,
+        BTreeMap::from([(email("probe@hy2"), polled)])
+    );
+    assert!(world.events().is_empty(), "{:?}", world.events());
+}
+
+#[test]
+fn xray_api_failures_raise_stats_query_failed_until_a_poll_succeeds() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    world.traffic(&node, 1);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    minute(&mut watch, &world, &node);
+    world.xray().api_fails = true;
+    minute(&mut watch, &world, &node);
+    assert_eq!(world.conditions(), vec![WatchErrorKind::StatsQueryFailed]);
+    assert_eq!(
+        world.status().engines.xray.run,
+        EngineRun::Active {
+            uptime_secs: BOOT_SECS - 100,
+            go_heap_bytes: None
+        }
+    );
+    assert_eq!(
+        world.status().accounting.at,
+        Some(UnixTime::from_secs(OCT_8)),
+        "the latest poll that recorded"
+    );
+    // A stopped Xray is not asked (a halted node stops it on purpose).
+    world.xray().active_since = None;
+    minute(&mut watch, &world, &node);
+    assert!(world.conditions().is_empty());
+    assert_eq!(world.status().engines.xray.run, EngineRun::Inactive);
+    world.xray().active_since = Some(400);
+    minute(&mut watch, &world, &node);
+    assert_eq!(world.conditions(), vec![WatchErrorKind::StatsQueryFailed]);
+    world.xray().api_fails = false;
+    minute(&mut watch, &world, &node);
+    assert!(world.conditions().is_empty());
+    let raised = AgentEventKind::ConditionRaised {
+        condition: WatchError::StatsQueryFailed,
+    };
+    let cleared = AgentEventKind::ConditionCleared {
+        condition: WatchErrorKind::StatsQueryFailed,
+    };
+    assert_eq!(world.events(), vec![raised, cleared, raised, cleared]);
+}
+
+#[test]
+fn uncounted_probe_flows_raise_the_canary_until_a_probe_counter_exists() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    world.traffic(&node, 1);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    world.xray().counters = BTreeMap::from([("u01@reality", (1, 1))]);
+    minute(&mut watch, &world, &node);
+    world.net.probe_flows.set(3);
+    minute(&mut watch, &world, &node);
+    let both = InboundSet::of(Inbound::Reality).with(Inbound::Hy2);
+    assert_eq!(
+        world
+            .status()
+            .observed
+            .conditions
+            .get(WatchErrorKind::AccountingCanaryMissing),
+        Some(&WatchError::AccountingCanaryMissing { inbounds: both })
+    );
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        world.conditions(),
+        vec![WatchErrorKind::AccountingCanaryMissing],
+        "kept without new evidence"
+    );
+    world.xray().counters.insert("probe@reality", (0, 15));
+    minute(&mut watch, &world, &node);
+    assert!(world.conditions().is_empty());
+    assert_eq!(
+        world.events(),
+        vec![
+            AgentEventKind::ConditionRaised {
+                condition: WatchError::AccountingCanaryMissing { inbounds: both }
+            },
+            AgentEventKind::ConditionCleared {
+                condition: WatchErrorKind::AccountingCanaryMissing
+            },
+        ]
+    );
+}
+
+#[test]
+fn engine_restarts_are_journaled_when_systemd_counts_more() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    world.traffic(&node, 1);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    minute(&mut watch, &world, &node);
+    world.xray().restarts = 2;
+    world.net.hy2_restarts.set(1);
+    minute(&mut watch, &world, &node);
+    assert_eq!(world.status().engines.xray.restarts, 2);
+    // An explicit restart sets `NRestarts` back to zero.
+    world.xray().restarts = 0;
+    minute(&mut watch, &world, &node);
+    world.xray().restarts = 1;
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        world.events(),
+        vec![
+            AgentEventKind::EngineRestarted {
+                engine: EngineUser::Xray
+            },
+            AgentEventKind::EngineRestarted {
+                engine: EngineUser::Hy2
+            },
+            AgentEventKind::EngineRestarted {
+                engine: EngineUser::Xray
+            },
+        ]
+    );
+}
+
+#[test]
+fn the_uplink_transfer_counts_its_month_across_resets() {
+    let world = World::new();
+    let node = world.node(NOV - 180);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    let transfer = |world: &World| world.status().transfer.reported;
+    let october = UsageMonth::new(2026, 10).unwrap();
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        transfer(&world),
+        UplinkTransfer {
+            month: october,
+            counted_from: UnixTime::from_secs(NOV - 180),
+            rx_bytes: 0,
+            tx_bytes: 0,
+            counter_resets: 0,
+        }
+    );
+    world.uplink(1_500, 2_100);
+    minute(&mut watch, &world, &node);
+    // A reboot whose counters already passed the last reading.
+    world.write("/proc/sys/kernel/random/boot_id", "a-new-boot\n");
+    world.uplink(1_600, 2_200);
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        transfer(&world),
+        UplinkTransfer {
+            month: october,
+            counted_from: UnixTime::from_secs(NOV - 180),
+            rx_bytes: 500 + 1_600,
+            tx_bytes: 100 + 2_200,
+            counter_resets: 1,
+        }
+    );
+    minute(&mut watch, &world, &node);
+    let november = UplinkTransfer {
+        month: UsageMonth::new(2026, 11).unwrap(),
+        counted_from: UnixTime::from_secs(NOV),
+        rx_bytes: 0,
+        tx_bytes: 0,
+        counter_resets: 0,
+    };
+    assert_eq!(
+        transfer(&world),
+        november,
+        "a month counts from its first reading"
+    );
+    world.uplink(1_700, 2_300);
+    minute(&mut watch, &world, &node);
+    // Only rx below the last reading: a reset all the same.
+    world.uplink(50, 2_400);
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        transfer(&world),
+        UplinkTransfer {
+            rx_bytes: 100 + 50,
+            tx_bytes: 100 + 2_400,
+            counter_resets: 1,
+            ..november
+        }
+    );
+}
+
+#[test]
+fn a_poll_xray_restarted_during_is_taken_again_at_the_next_reading() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    world.traffic(&node, 1);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    world.xray().counters = BTreeMap::from([("u01@reality", (10, 10))]);
+    minute(&mut watch, &world, &node);
+    // The counters come from the run before; the second `statssys` from
+    // the new one.
+    world.xray().counters = BTreeMap::from([("u01@reality", (20, 20))]);
+    world.xray().restart_after_query = Some((5_000, BTreeMap::from([("u01@reality", (3, 3))])));
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        world.status().accounting.at,
+        Some(UnixTime::from_secs(OCT_8))
+    );
+    assert!(world.conditions().is_empty());
+    world.xray().counters = BTreeMap::from([("u01@reality", (7, 7))]);
+    minute(&mut watch, &world, &node);
+    assert_eq!(
+        world.usage(&node),
+        BTreeMap::from([(
+            email("u01@reality"),
+            Traffic {
+                uplink: 7,
+                downlink: 7
+            }
+        )]),
+        "only the new run's counters"
+    );
+}
+
+#[test]
+fn a_usage_file_that_cannot_be_written_is_state_write_until_a_reading_writes_it() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    world.traffic(&node, 1);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    minute(&mut watch, &world, &node);
+    let blocker = world
+        .paths
+        .usage_dir()
+        .join(format!(".accounting.json.{}.tmp", std::process::id()));
+    fs::create_dir_all(&blocker).unwrap();
+    world.xray().counters = BTreeMap::from([("u01@reality", (5, 5))]);
+    minute(&mut watch, &world, &node);
+    assert_eq!(world.conditions(), vec![WatchErrorKind::StateWrite]);
+    assert_eq!(
+        world.status().accounting.at,
+        Some(UnixTime::from_secs(OCT_8))
+    );
+    fs::remove_dir(&blocker).unwrap();
+    minute(&mut watch, &world, &node);
+    assert!(world.conditions().is_empty());
+    assert_eq!(
+        world.usage(&node),
+        BTreeMap::from([(
+            email("u01@reality"),
+            Traffic {
+                uplink: 5,
+                downlink: 5
+            }
+        )]),
+        "nothing lost: the poll counts from the last one written"
+    );
+    assert_eq!(
+        world.events(),
+        vec![
+            AgentEventKind::ConditionRaised {
+                condition: WatchError::StateWrite { errno: Some(17) }
+            },
+            AgentEventKind::ConditionCleared {
+                condition: WatchErrorKind::StateWrite
+            },
+        ],
+        "raised for the whole minute, once"
+    );
+}
+
+#[test]
+fn retention_runs_even_while_xray_is_stopped() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    world.xray().active_since = None;
+    let august = world.paths.usage_month(UsageMonth::new(2026, 8).unwrap());
+    let september = world.paths.usage_month(UsageMonth::new(2026, 9).unwrap());
+    for (file, month) in [(&august, "2026-08"), (&september, "2026-09")] {
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(
+            file,
+            format!(
+                r#"{{"usage":{{"month":"{month}","updated_at":1,"traffic":{{}}}},"poll":{{"at":1,"seq":1}}}}"#
+            ),
+        )
+        .unwrap();
+    }
+    // A second before September's seven days end.
+    let node = world.node(OCT_8 - 1);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    minute(&mut watch, &world, &node);
+    assert!(!august.exists(), "seven days after August ended");
+    assert!(september.exists(), "kept until its seven days end");
+}
+
+#[test]
+fn status_is_the_watch_view_with_live_holds_halt_and_last_commit() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    world.traffic(&node, 1);
+    assert_eq!(
+        ask(&world.paths, &node, Role::Ops, frame(&LineRequest::Status)),
+        Err(AgentError::Io {
+            op: IoOp::ReadState,
+            errno: Some(2)
+        }),
+        "no view before the watch's first tick"
+    );
+    let mut watch = Watch::start(&world.paths).unwrap();
+    world.xray().counters = BTreeMap::from([("u01@reality", (1, 1))]);
+    minute(&mut watch, &world, &node);
+    world.xray().counters = BTreeMap::from([("u01@reality", (2, 2))]);
+    minute(&mut watch, &world, &node);
+    world.install(2, TxnState::AwaitingConfirm);
+    let held = Holds {
+        operator: Some(OperatorHold { at: node.now() }),
+        ..Holds::NONE
+    };
+    write_holds(&world.paths, &held).unwrap();
+    halt(&world.paths, node.now().as_secs());
+    let view = world.status();
+    for role in [Role::Ops, Role::Viewer] {
+        let Ok(Response::Status(status)) =
+            ask(&world.paths, &node, role, frame(&LineRequest::Status))
+        else {
+            panic!("{role:?}");
+        };
+        assert_eq!(status.now, node.now());
+        assert_eq!(status.watch_at, view.at);
+        assert_eq!(status.gate, view.observed.gate);
+        assert_eq!(status.holds, held, "read live, not from the view");
+        assert_eq!(status.halted.map(|halt| halt.at), Some(node.now()));
+        assert_eq!(status.latest_handshake, view.latest_handshake);
+        assert_eq!(
+            status.applied,
+            Some(AppliedGeneration {
+                generation: Generation::new(1),
+                digest: Sha256Hex::from_bytes([9; 32]),
+            }),
+            "generation 2 awaits its confirmation"
+        );
+        assert_eq!(status.conditions, view.observed.conditions);
+        assert_eq!(status.accounting_at, view.accounting.at);
+        assert_eq!(
+            status.last_active,
+            BTreeMap::from([(email("u01@reality"), view.accounting.at.unwrap())])
+        );
+        assert_eq!(status.engines, view.engines);
+        assert_eq!(status.host, view.host.health);
+        assert_eq!(status.transfer, view.transfer.reported);
+    }
+}
+
+#[test]
+fn systemctl_show_and_nft_counters_are_parsed_exactly() {
+    use crate::watch::counter_packets;
+    use crate::watch::engines::{Unit, parse_show};
+    // As systemd 257 printed it on the London VPS, in its own order.
+    let active = b"NRestarts=3\nActiveState=active\nActiveEnterTimestampMonotonic=15699978\n";
+    let unit = parse_show(active).unwrap();
+    assert_eq!(
+        unit,
+        Unit {
+            active_since: Some(15),
+            restarts: 3
+        }
+    );
+    assert_eq!(
+        unit.state(100, Some(7)),
+        EngineState {
+            restarts: 3,
+            run: EngineRun::Active {
+                uptime_secs: 85,
+                go_heap_bytes: Some(7)
+            }
+        }
+    );
+    assert_eq!(
+        Unit {
+            active_since: Some(101),
+            restarts: 0
+        }
+        .state(100, None)
+        .run,
+        EngineRun::Active {
+            uptime_secs: 0,
+            go_heap_bytes: None
+        },
+        "rounding can put the activation a second ahead"
+    );
+    let never = b"NRestarts=0\nActiveState=inactive\nActiveEnterTimestampMonotonic=0\n";
+    assert_eq!(
+        parse_show(never).unwrap().state(100, None),
+        EngineState {
+            restarts: 0,
+            run: EngineRun::Inactive
+        }
+    );
+    for state in ["failed", "activating", "deactivating", "maintenance"] {
+        let text = format!("NRestarts=0\nActiveState={state}\nActiveEnterTimestampMonotonic=5\n");
+        assert_eq!(
+            parse_show(text.as_bytes()).unwrap().active_since,
+            None,
+            "{state}"
+        );
+    }
+    for state in ["reloading", "refreshing"] {
+        let text =
+            format!("NRestarts=0\nActiveState={state}\nActiveEnterTimestampMonotonic=5000000\n");
+        assert_eq!(
+            parse_show(text.as_bytes()).unwrap().active_since,
+            Some(5),
+            "{state}"
+        );
+    }
+    let refused = AgentError::Io {
+        op: IoOp::ReadState,
+        errno: None,
+    };
+    for bad in [
+        "NRestarts=0\nActiveState=active\n",
+        "NRestarts=0\nNRestarts=0\nActiveState=active\nActiveEnterTimestampMonotonic=1\n",
+        "NRestarts=0\nActiveState=active\nActiveEnterTimestampMonotonic=1\nSubState=running\n",
+        "NRestarts=0\nActiveState=sleeping\nActiveEnterTimestampMonotonic=1\n",
+        "NRestarts=4294967296\nActiveState=active\nActiveEnterTimestampMonotonic=1\n",
+        "NRestarts=-1\nActiveState=active\nActiveEnterTimestampMonotonic=1\n",
+        "NRestarts=0\nActiveState=active\nActiveEnterTimestampMonotonic=@1\n",
+        "NRestarts 0\nActiveState=active\nActiveEnterTimestampMonotonic=1\n",
+    ] {
+        assert_eq!(parse_show(bad.as_bytes()), Err(refused.clone()), "{bad:?}");
+    }
+    let listing = br#"{"nftables":[{"metainfo":{"version":"1.1.3"}},{"counter":{"family":"inet","name":"probe_flows","table":"mooring","handle":5,"packets":12,"bytes":720}}]}"#;
+    assert_eq!(counter_packets(listing), Ok(12));
+    for bad in [
+        r#"{"nftables":[{"metainfo":{"version":"1.1.3"}}]}"#,
+        r#"{"nftables":[{"counter":{"packets":1}},{"counter":{"packets":2}}]}"#,
+        r#"{"nftables":[{"counter":{"packets":-1}}]}"#,
+        "Error",
+    ] {
+        assert_eq!(
+            counter_packets(bad.as_bytes()),
+            Err(refused.clone()),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn another_uplink_interface_is_a_counter_reset() {
+    use crate::watch::transfer::{Counters, Transfer};
+    let reading = |interface: &str, rx: u64| Counters {
+        boot_id: BOOT.to_owned(),
+        interface: mooring_agent_proto::IfName::new(interface).unwrap(),
+        rx_bytes: rx,
+        tx_bytes: rx,
+    };
+    let now = UnixTime::from_secs(OCT_8);
+    let first = Transfer::next(None, now, reading("eth0", 1_000)).unwrap();
+    let grown = Transfer::next(Some(&first), now, reading("eth0", 1_200)).unwrap();
+    assert_eq!(
+        (grown.reported.rx_bytes, grown.reported.counter_resets),
+        (200, 0)
+    );
+    let moved = Transfer::next(Some(&grown), now, reading("ens3", 5_000)).unwrap();
+    assert_eq!(
+        (moved.reported.rx_bytes, moved.reported.counter_resets),
+        (5_200, 1)
+    );
+    // Only tx below the last reading.
+    let tx_reset = Counters {
+        tx_bytes: 10,
+        ..reading("ens3", 6_000)
+    };
+    let after = Transfer::next(Some(&moved), now, tx_reset).unwrap();
+    assert_eq!(
+        (
+            after.reported.rx_bytes,
+            after.reported.tx_bytes,
+            after.reported.counter_resets
+        ),
+        (5_200 + 6_000, 5_200 + 10, 2)
+    );
+}
+
+#[test]
+fn the_last_commit_is_the_newest_committed_record() {
+    use crate::txn::record::last_committed;
+    let world = World::new();
+    assert_eq!(last_committed(&world.paths), Ok(None), "no records yet");
+    world.record(1, TxnState::Committed);
+    world.record(3, TxnState::Committed);
+    world.record(4, TxnState::AwaitingConfirm);
+    world.record(5, TxnState::Reverted);
+    let txn = world.paths.txn_dir();
+    // Not records: a name that is not canonical, the change in flight, a
+    // temporary file.
+    fs::write(txn.join("gen-07.json"), "{}").unwrap();
+    fs::write(txn.join("pending.json"), "{}").unwrap();
+    fs::write(txn.join(".gen-6.json.4242.tmp"), "{}").unwrap();
+    assert_eq!(
+        last_committed(&world.paths),
+        Ok(Some(AppliedGeneration {
+            generation: Generation::new(3),
+            digest: Sha256Hex::from_bytes([9; 32]),
+        }))
+    );
+    fs::write(world.paths.txn_record(Generation::new(9)), "not a record").unwrap();
+    assert_eq!(
+        last_committed(&world.paths),
+        Err(AgentError::Io {
+            op: IoOp::ReadState,
+            errno: None
+        }),
+        "a damaged record is an error, never skipped"
     );
 }

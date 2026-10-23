@@ -3,43 +3,53 @@
 //! `watch`, the `mooring-watch` unit (design §11.3), the only process that
 //! opens the gate. Every [`WATCH_TICK_SECS`] it reads the Mac peer, carries
 //! out a viewer's stop, clears a drain hold the Mac has come back from,
-//! opens or closes the gate, reads the host every [`HOST_READING_SECS`],
-//! evaluates its conditions, journals what changed since the journal last
-//! recorded, and writes its view.
+//! opens or closes the gate, takes a reading every [`HOST_READING_SECS`]
+//! (the host, the engine units, the uplink's transfer, and accounting,
+//! design §11.5), evaluates its conditions, journals what changed since the
+//! journal last recorded, and writes its view.
 //!
 //! What ends it: an `nft` failure (`NftFailed`, design §11.3 step 3), and
 //! any reading it needs but cannot take (the installed generation, its
-//! `watch.json`, its record, the holds, the halt marker, the host's
-//! figures). Its unit restarts it without limit, and `ExecStopPost` closes
-//! the gate meanwhile. A WireGuard reading that fails closes the gate
-//! (`WgReadFailed`). A state write or journal append that fails is reported
-//! (`StateWrite`) and retried at the next tick; until the journal records
-//! them, changes stay in the view's difference from what it last recorded.
+//! `watch.json`, `xray.json` and record, the holds, the halt marker, the
+//! host's figures, the engine units, the uplink's counters). Its unit
+//! restarts it without limit, and `ExecStopPost` closes the gate meanwhile.
+//! A WireGuard reading that fails closes the gate (`WgReadFailed`); Xray's
+//! API failing is `StatsQueryFailed`. A state write, journal append or
+//! usage file that fails is reported (`StateWrite`) and retried at the next
+//! tick or reading; until the journal records them, changes stay in the
+//! view's difference from what it last recorded.
 
+pub(crate) mod engines;
 pub(crate) mod host;
 pub(crate) mod status;
+pub(crate) mod transfer;
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use mooring_agent_proto::{
-    AgentError, AgentEventKind, GATE_SET_REREAD_SECS, GateReason, GateState, Generation,
-    HANDSHAKE_MAX_AGE_SECS, Halt, Holds, IoOp, MAC_SILENT_SECS, MacDrainHold, NFT_GATE_SET,
-    NFT_TABLE, NftCounter, OperatorHold, TxnState, UnixTime, WATCH_TICK_SECS, WG_INTERFACE,
-    WatchConditions, WatchConfig, WatchError, WatchErrorKind,
+    ACCOUNTING_INTERVAL_SECS, AgentError, AgentEventKind, EngineHealth, EngineUser,
+    GATE_SET_REREAD_SECS, GateReason, GateState, Generation, HANDSHAKE_MAX_AGE_SECS, Halt, Holds,
+    Inbound, InboundSet, IoOp, MAC_SILENT_SECS, MacDrainHold, NFT_GATE_SET, NFT_TABLE, NftCounter,
+    OperatorHold, StatsEmail, TxnState, UnixTime, WATCH_TICK_SECS, WG_INTERFACE, WatchConditions,
+    WatchConfig, WatchError, WatchErrorKind,
 };
 
+use crate::accounting::{self, Canary, Readings, XrayRun, stats};
 use crate::gate::{self, StopRequest};
 use crate::host::{Node, Tool, run_ok};
 use crate::journal::Journal;
 use crate::paths::Paths;
 use crate::store::{Lock, malformed, read_json};
 use crate::wg::{self, Peer};
-use status::{HostReading, Observed, WatchStatus};
+use status::{AccountingView, EngineRestarts, Failure, HostReading, Observed, WatchStatus};
+use transfer::Transfer;
 
-/// Seconds between host readings.
-pub(crate) const HOST_READING_SECS: u64 = 60;
+/// Seconds between readings: the accounting interval (design §11.3 step
+/// 4), at which the host is read too.
+pub(crate) const HOST_READING_SECS: u64 = ACCOUNTING_INTERVAL_SECS;
 
 /// What ends the watch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +73,26 @@ struct Rx {
     /// When it last grew; `None` until it has grown since the watch
     /// started (or since the counter restarted).
     grew_at: Option<UnixTime>,
+}
+
+/// The latest reading: taken every [`HOST_READING_SECS`], else the view's.
+#[derive(Debug, Clone)]
+struct Reading {
+    host: HostReading,
+    engines: EngineHealth,
+    transfer: Transfer,
+    accounting: AccountingView,
+}
+
+/// One accounting poll of Xray's API.
+enum XrayPoll {
+    /// It read the counters, and Xray's Go heap.
+    Read(Readings, u64),
+    /// The API failed (`StatsQueryFailed`).
+    Failed,
+    /// Xray restarted during the poll, so the counters may be of either
+    /// run: the poll is taken again at the next reading.
+    Torn,
 }
 
 /// What the gate's part of a tick found and did.
@@ -156,8 +186,11 @@ impl Watch {
             self.observe_rx(now, peer.rx_bytes);
         }
         let gated = self.gate_tick(paths, node, now, config.as_ref(), peer.as_ref())?;
-        let failed = gated.failed.or(self.write_failed.take());
-        let host = self.host_reading(paths, node, now)?;
+        let reading = self.reading(paths, node, now, &boot_id, config.as_ref())?;
+        let failed = gated
+            .failed
+            .or(reading.accounting.failed.map(|failure| failure.errno))
+            .or(self.write_failed.take());
         let previous_committed = self.view.as_ref().and_then(|view| view.observed.committed);
         let committed = if generation != Generation::ZERO
             && crate::txn::record::record(paths, generation)?.state == TxnState::Committed
@@ -173,7 +206,7 @@ impl Watch {
             peer.as_ref(),
             &gated.holds,
             failed,
-            &host,
+            &reading,
         )?;
         let observed = Observed {
             boot_id,
@@ -182,6 +215,7 @@ impl Watch {
             holds: gated.holds,
             halted: gated.halted,
             committed,
+            restarts: EngineRestarts::of(&reading.engines),
             conditions,
         };
         let journaled = match &self.view {
@@ -209,7 +243,10 @@ impl Watch {
                 Some(Ok(peer)) => peer.latest_handshake,
                 None | Some(Err(_)) => None,
             },
-            host,
+            host: reading.host,
+            engines: reading.engines,
+            transfer: reading.transfer,
+            accounting: reading.accounting,
             journaled,
         };
         if let Err(error) = status::write(paths, &view) {
@@ -308,11 +345,24 @@ impl Watch {
         peer: Option<&Result<Peer, AgentError>>,
         holds: &Holds,
         failed: Option<Option<i32>>,
-        host: &HostReading,
+        reading: &Reading,
     ) -> Result<WatchConditions, AgentError> {
         let mut conditions = Vec::new();
         if let Some(Err(_)) = peer {
             conditions.push(WatchError::WgReadFailed);
+        }
+        if installed && reading.accounting.query_failed {
+            conditions.push(WatchError::StatsQueryFailed);
+        }
+        if installed && reading.accounting.canary_missing {
+            // The evidence, a probe flow, does not say which inbound it
+            // came through (design §11.5).
+            let inbounds = Inbound::ALL
+                .iter()
+                .fold(InboundSet::of(Inbound::ALL[0]), |set, inbound| {
+                    set.with(*inbound)
+                });
+            conditions.push(WatchError::AccountingCanaryMissing { inbounds });
         }
         if installed && self.flow_cap > 0 {
             conditions.push(WatchError::ExitFlowCapHit {
@@ -325,7 +375,7 @@ impl Watch {
         if let Some(silent) = self.mac_silent(now, peer, holds) {
             conditions.push(silent);
         }
-        conditions.extend(host::conditions(host));
+        conditions.extend(host::conditions(&reading.host));
         WatchConditions::new(conditions).map_err(|_| malformed(IoOp::WriteState))
     }
 
@@ -453,19 +503,7 @@ impl Watch {
                     &["-j", "list", "set", "inet", NFT_TABLE, NFT_GATE_SET],
                 )?;
                 let read = gate::parse_set(&set).map_err(|error| Fatal::Nft(error.to_string()))?;
-                let counter = nft(
-                    node,
-                    &[
-                        "-j",
-                        "list",
-                        "counter",
-                        "inet",
-                        NFT_TABLE,
-                        NftCounter::FlowCap.name(),
-                    ],
-                )?;
-                self.flow_cap =
-                    flow_cap(&counter).map_err(|error| Fatal::Nft(error.to_string()))?;
+                self.flow_cap = counter(node, NftCounter::FlowCap)?;
                 self.set_read_at = Some(now);
                 read
             }
@@ -487,24 +525,126 @@ impl Watch {
         Ok(known)
     }
 
-    /// The host, read anew every [`HOST_READING_SECS`] (and at the first
-    /// tick, or after the clock stepped back).
-    fn host_reading(
+    /// The reading, taken anew every [`HOST_READING_SECS`] (and at the
+    /// first tick, or after the clock stepped back): the host, the engine
+    /// units, the uplink's transfer, and accounting.
+    fn reading(
         &self,
         paths: &Paths,
         node: &dyn Node,
         now: UnixTime,
-    ) -> Result<HostReading, Fatal> {
-        match &self.view {
-            Some(view)
-                if now
-                    .secs_since(view.host.at)
-                    .is_some_and(|age| age < HOST_READING_SECS) =>
-            {
-                Ok(view.host)
-            }
-            _ => Ok(host::read(paths, node, now)?),
+        boot_id: &str,
+        config: Option<&WatchConfig>,
+    ) -> Result<Reading, Fatal> {
+        if let Some(view) = &self.view
+            && now
+                .secs_since(view.host.at)
+                .is_some_and(|age| age < HOST_READING_SECS)
+        {
+            return Ok(Reading {
+                host: view.host,
+                engines: view.engines,
+                transfer: view.transfer.clone(),
+                accounting: view.accounting.clone(),
+            });
         }
+        let host = host::read(paths, node, now)?;
+        let xray = engines::read(node, EngineUser::Xray)?;
+        let hy2 = engines::read(node, EngineUser::Hy2)?;
+        let transfer = Transfer::next(
+            self.view.as_ref().map(|view| &view.transfer),
+            now,
+            transfer::read(paths, boot_id)?,
+        )?;
+        let boot_secs = host.health.uptime_secs;
+        let (accounting, go_heap) = self.account(
+            paths,
+            node,
+            now,
+            (boot_id, boot_secs),
+            config.filter(|_| xray.active_since.is_some()).is_some(),
+            config.map(|config| &config.emails),
+        )?;
+        Ok(Reading {
+            host,
+            engines: EngineHealth {
+                xray: xray.state(boot_secs, go_heap),
+                hy2: hy2.state(boot_secs, None),
+            },
+            transfer,
+            accounting,
+        })
+    }
+
+    /// Accounting at a reading: retention first, whatever else happens;
+    /// then, with Xray running, a poll. `last_active` keeps only the
+    /// `applied` configuration's emails (none without a generation).
+    /// Returns the view and Xray's Go heap.
+    fn account(
+        &self,
+        paths: &Paths,
+        node: &dyn Node,
+        now: UnixTime,
+        (boot_id, boot_secs): (&str, u64),
+        running: bool,
+        applied: Option<&BTreeSet<StatsEmail>>,
+    ) -> Result<(AccountingView, Option<u64>), Fatal> {
+        let failed = accounting::prune(paths, now).err().map(|error| Failure {
+            errno: errno(&error),
+        });
+        let is_applied =
+            |email: &StatsEmail| applied.is_some_and(|applied| applied.contains(email));
+        let previous = self
+            .view
+            .as_ref()
+            .map(|view| view.accounting.clone())
+            .unwrap_or_default();
+        let mut view = AccountingView {
+            last_active: previous
+                .last_active
+                .into_iter()
+                .filter(|(email, _)| is_applied(email))
+                .collect(),
+            failed,
+            ..previous
+        };
+        if !running {
+            // Nothing to ask: no generation, or Xray stopped (halted).
+            view.query_failed = false;
+            return Ok((view, None));
+        }
+        let (readings, go_heap) = match poll_xray(paths, node, boot_id, boot_secs)? {
+            XrayPoll::Read(readings, go_heap) => (readings, go_heap),
+            XrayPoll::Failed => {
+                view.query_failed = true;
+                return Ok((view, None));
+            }
+            XrayPoll::Torn => return Ok((view, None)),
+        };
+        view.query_failed = false;
+        match accounting::load(paths)
+            .and_then(|stored| accounting::poll(paths, stored, now, readings))
+        {
+            Ok(polled) => {
+                view.at = Some(now);
+                for email in polled.grew {
+                    if is_applied(&email) {
+                        view.last_active.insert(email, now);
+                    }
+                }
+                match polled.canary {
+                    Canary::Counted => view.canary_missing = false,
+                    Canary::Missing => view.canary_missing = true,
+                    Canary::Unknown => {}
+                }
+            }
+            Err(error) => {
+                view.failed = Some(Failure {
+                    errno: errno(&error),
+                });
+            }
+        }
+        Ok((view, Some(go_heap)))
     }
 
     /// `MacSilent` with a generation installed and no operator hold, once
@@ -542,9 +682,40 @@ impl Watch {
     }
 }
 
+/// Polls Xray's API: `statssys` around the counters and the probe-flow
+/// counter, so that a restart between them shows.
+fn poll_xray(
+    paths: &Paths,
+    node: &dyn Node,
+    boot_id: &str,
+    boot_secs: u64,
+) -> Result<XrayPoll, Fatal> {
+    let Ok(before) = stats::sys(paths, node) else {
+        return Ok(XrayPoll::Failed);
+    };
+    let probe_flows = counter(node, NftCounter::ProbeFlows)?;
+    let (Ok(counters), Ok(after)) = (stats::query(paths, node), stats::sys(paths, node)) else {
+        return Ok(XrayPoll::Failed);
+    };
+    if after.uptime_secs < before.uptime_secs {
+        return Ok(XrayPoll::Torn);
+    }
+    Ok(XrayPoll::Read(
+        Readings {
+            run: XrayRun {
+                boot_id: boot_id.to_owned(),
+                started_secs: boot_secs.saturating_sub(after.uptime_secs),
+            },
+            counters,
+            probe_flows,
+        },
+        after.alloc_bytes,
+    ))
+}
+
 /// What changed from `before` to `after`, as journal events, causes before
-/// effects: a boot; a halt; holds recorded; a commit; a resume; holds
-/// cleared; conditions raised, then cleared; the gate.
+/// effects: a boot; a halt; holds recorded; a commit; a resume; engine
+/// restarts; holds cleared; conditions raised, then cleared; the gate.
 pub(crate) fn changes(before: &Observed, after: &Observed) -> Vec<AgentEventKind> {
     let mut events = Vec::new();
     if before.boot_id != after.boot_id {
@@ -572,6 +743,11 @@ pub(crate) fn changes(before: &Observed, after: &Observed) -> Vec<AgentEventKind
         events.push(AgentEventKind::Resumed {
             generation: after.generation,
         });
+    }
+    for &engine in EngineUser::ALL {
+        if after.restarts.get(engine) > before.restarts.get(engine) {
+            events.push(AgentEventKind::EngineRestarted { engine });
+        }
     }
     for change in &holds {
         if change.cleared() {
@@ -659,9 +835,17 @@ fn nft(node: &dyn Node, args: &[&str]) -> Result<Vec<u8>, Fatal> {
     }
 }
 
-/// The packets the flow cap has rejected, from `nft -j list counter`'s
-/// output for its named counter.
-fn flow_cap(stdout: &[u8]) -> Result<u64, AgentError> {
+/// A named counter's packets.
+fn counter(node: &dyn Node, counter: NftCounter) -> Result<u64, Fatal> {
+    let stdout = nft(
+        node,
+        &["-j", "list", "counter", "inet", NFT_TABLE, counter.name()],
+    )?;
+    counter_packets(&stdout).map_err(|error| Fatal::Nft(error.to_string()))
+}
+
+/// The packets in `nft -j list counter`'s output for one named counter.
+pub(crate) fn counter_packets(stdout: &[u8]) -> Result<u64, AgentError> {
     let listing: serde_json::Value =
         serde_json::from_slice(stdout).map_err(|_| malformed(IoOp::ReadState))?;
     let counters: Vec<u64> = listing["nftables"]
