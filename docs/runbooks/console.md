@@ -119,6 +119,8 @@ The same status is available in Terminal:
 
 **The daemon stops at its start with "the power helper … could not be started" or "did not report the power source":** the app lacks the helper, or it failed. Rebuild the app (section 1).
 
+**"The daemon did not name its control protocol" or "the daemon speaks control protocol N and this mooringctl speaks M":** the daemon runs another build than the app, as after the app was rebuilt or updated while the daemon kept running. **Stop the Daemon**, then **Start the Daemon at Login**, in the app's menu. In Terminal, use the `mooringctl` inside the app (section 3).
+
 **"The router adapter is not set up":** the M7 is not pinned, its password is not stored, or the pin records no interface (one made before 2026-10-23). The daemon's log names which; run section 0's command for it.
 
 **The router screen says "The Mac could not poll the M7":** the keychain or the kernel's tables failed. The daemon's log names which.

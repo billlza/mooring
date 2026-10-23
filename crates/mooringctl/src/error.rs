@@ -444,6 +444,23 @@ pub(crate) enum LocalError {
     /// The daemon closed the status stream.
     #[error("the daemon closed the status stream")]
     DaemonClosed,
+    /// The daemon's first line did not name its control protocol (design
+    /// §15.1): a daemon built before the protocol line, or something else
+    /// on the socket.
+    #[error(
+        "the daemon did not name its control protocol on its first line, as a daemon built before this mooringctl may not: restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)"
+    )]
+    DaemonProtocolMissing,
+    /// The daemon speaks another control protocol than this mooringctl.
+    #[error(
+        "the daemon speaks control protocol {daemon} and this mooringctl speaks {client}: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)"
+    )]
+    DaemonProtocolOther {
+        /// The daemon's.
+        daemon: u32,
+        /// This mooringctl's.
+        client: u32,
+    },
     /// No adopted node's reflector answered `exit observe`.
     #[error("no node's reflector answered; adopt a node first, and check the line")]
     NothingObserved,

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The control socket's connections (design §10.1): each client sends one
-//! request line and gets its replies; a client beyond [`MAX_CLIENTS`] is
+//! The control socket's connections (design §10.1): each client gets the
+//! protocol line first (design §15.1), sends one request line and gets its
+//! replies; a client beyond [`MAX_CLIENTS`] gets the protocol line and is
 //! told the daemon is busy. A `retry` is handed to the daemon's loop for
-//! its next tick, and refused while there is no deployment. The request line and each reply line have a
-//! deadline, however slowly their bytes go, so a stalled or dripping client
-//! holds a thread for a bounded while only.
+//! its next tick, and refused while there is no deployment. The request
+//! line and each line written have a deadline, however slowly their bytes
+//! go, so a stalled or dripping client holds a thread for a bounded while
+//! only.
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -15,8 +17,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use mooring_daemon_core::control::{
-    DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, Refusal,
-    decode_request, encode_line,
+    DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, ProtocolLine,
+    Refusal, decode_request, encode_line,
 };
 
 use super::Control;
@@ -67,8 +69,12 @@ pub(crate) fn accept(
         };
         if active.load(Ordering::SeqCst) >= max_clients {
             let mut stream = stream;
-            if stream.set_write_timeout(Some(limits.write)).is_ok() {
-                // The client may already be gone; the connection ends either way.
+            // The client may already be gone; the connection ends either way.
+            if protocol_line()
+                .and_then(|line| write_line(&mut stream, &line, limits))
+                .is_ok()
+                && stream.set_write_timeout(Some(limits.write)).is_ok()
+            {
                 refused(&mut stream, Refusal::Busy);
             }
             continue;
@@ -128,8 +134,18 @@ impl From<HubPoisoned> for End {
     }
 }
 
-/// Serves one connection to its end.
+/// The protocol line, the first line of every connection.
+fn protocol_line() -> Result<Vec<u8>, End> {
+    encode_line(&ProtocolLine::CURRENT, MAX_REPLY_LINE_BYTES)
+        .map_err(|_| End::Io(ErrorKind::InvalidData))
+}
+
+/// Serves one connection to its end: the protocol line, then the request
+/// and its answer.
 pub(crate) fn serve(mut stream: UnixStream, control: &Control, limits: Limits) -> End {
+    if let Err(end) = protocol_line().and_then(|line| write_line(&mut stream, &line, limits)) {
+        return end;
+    }
     let request = match read_request(&mut stream, limits) {
         Ok(request) => request,
         Err(end) => return end,

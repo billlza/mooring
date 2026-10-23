@@ -7,7 +7,7 @@
 //! `exit enable` and `exit disable`, the operator's runtime intent; and
 //! `exit retry`, which asks the daemon to clear a latched violation.
 
-use std::io::{BufReader, Write};
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Instant;
 
@@ -307,7 +307,7 @@ pub(crate) fn set_enabled(
 /// its next tick; `mooringctl status` then shows what it found.
 pub(crate) fn retry(env: &mut Env<'_>, out: &mut dyn Write) -> Result<(), CommandError> {
     let socket = RunPaths::under(&support_dir(env)?).socket;
-    let mut reader = BufReader::new(connect(&socket, DaemonRequest::Retry, ANSWER_TIMEOUT)?);
+    let mut reader = connect(&socket, DaemonRequest::Retry, ANSWER_TIMEOUT)?;
     let line = match read_reply_line(
         &mut reader,
         &socket,

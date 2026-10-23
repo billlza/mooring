@@ -571,7 +571,9 @@ fn retry_asks_the_daemon_and_reports_its_answer() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
 
-    use mooring_daemon_core::control::{DaemonReply, MAX_REPLY_LINE_BYTES, Refusal, encode_line};
+    use mooring_daemon_core::control::{
+        DaemonReply, MAX_REPLY_LINE_BYTES, ProtocolLine, Refusal, encode_line,
+    };
 
     for (reply, code, stdout, stderr) in [
         (
@@ -598,9 +600,11 @@ fn retry_asks_the_daemon_and_reports_its_answer() {
         let paths = crate::daemon::RunPaths::under(&harness.support_dir());
         fs::create_dir_all(&paths.dir).unwrap();
         let listener = UnixListener::bind(&paths.socket).unwrap();
+        let protocol = encode_line(&ProtocolLine::CURRENT, MAX_REPLY_LINE_BYTES).unwrap();
         let line = encode_line(&reply, MAX_REPLY_LINE_BYTES).unwrap();
         let daemon = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(&protocol).unwrap();
             let mut request = Vec::new();
             BufReader::new(stream.try_clone().unwrap())
                 .read_until(b'\n', &mut request)

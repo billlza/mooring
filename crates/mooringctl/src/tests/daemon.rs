@@ -20,7 +20,8 @@ use std::time::Duration;
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::console::{ConsoleStatus, UndeployedStatus};
 use mooring_daemon_core::control::{
-    DaemonReply, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, Refusal, decode_reply, encode_line,
+    DaemonReply, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, ProtocolLine, Refusal, decode_reply,
+    encode_line,
 };
 use mooring_daemon_core::router::netgear::parse_netgear_model_json;
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
@@ -123,6 +124,19 @@ fn unavailable(at: u64) -> Arc<[u8]> {
             last_polled_at: None,
         },
     )
+}
+
+/// The line every connection begins with.
+fn protocol_line() -> Vec<u8> {
+    encode_line(&ProtocolLine::CURRENT, MAX_REPLY_LINE_BYTES).unwrap()
+}
+
+/// Reads the protocol line a connection begins with, exactly, and checks
+/// it.
+fn read_protocol_line(client: &mut UnixStream) {
+    let mut line = vec![0; protocol_line().len()];
+    client.read_exact(&mut line).unwrap();
+    assert_eq!(line, protocol_line());
 }
 
 fn read_reply(reader: &mut impl BufRead) -> DaemonReply {
@@ -545,15 +559,16 @@ fn failures_map_to_panel_reasons() {
 
 /// Serves one connection on a socket pair whose client has already sent
 /// `request` (the pair buffers it, so a slow test thread cannot make it
-/// late): the client end, and how the connection ended.
+/// late): the client end, past the protocol line the connection begins
+/// with, and how the connection ended.
 fn serve_pair(control: &Arc<Control>, request: &[u8]) -> (UnixStream, Running<End>) {
     let (mut client, server) = UnixStream::pair().unwrap();
     client.write_all(request).unwrap();
     let control = Arc::clone(control);
-    (
-        bounded(client),
-        Running::start(move || serve(server, &control, QUICK)),
-    )
+    let served = Running::start(move || serve(server, &control, QUICK));
+    let mut client = bounded(client);
+    read_protocol_line(&mut client);
+    (client, served)
 }
 
 /// What the connections share, with a fresh hub, and the receiving end of
@@ -802,8 +817,13 @@ fn clients_beyond_the_limit_are_told_busy() {
     let mut first_reader = BufReader::new(first.try_clone().unwrap());
     let mut line = Vec::new();
     first_reader.read_until(b'\n', &mut line).unwrap();
+    assert_eq!(line, protocol_line());
+    line.clear();
+    first_reader.read_until(b'\n', &mut line).unwrap();
     assert_eq!(line, &*unavailable(1));
-    let second = bounded(UnixStream::connect(&path).unwrap());
+    // A busy daemon names its protocol too, then refuses.
+    let mut second = bounded(UnixStream::connect(&path).unwrap());
+    read_protocol_line(&mut second);
     let mut second_reader = BufReader::new(second);
     assert_eq!(
         read_reply(&mut second_reader),
@@ -829,8 +849,9 @@ fn clients_beyond_the_limit_are_told_busy() {
         let _ = third.write_all(b"\"status\"\n");
         let mut all = Vec::new();
         third.read_to_end(&mut all).unwrap();
-        if all != busy {
-            assert_eq!(all, &*unavailable(1));
+        let answer = all.strip_prefix(protocol_line().as_slice()).unwrap();
+        if answer != busy {
+            assert_eq!(answer, &*unavailable(1));
             break;
         }
         assert!(started.elapsed() < DEADLINE, "the slot was never freed");
@@ -841,9 +862,17 @@ fn clients_beyond_the_limit_are_told_busy() {
 // --- The client ---------------------------------------------------------
 
 /// A fake daemon on the harness's control socket that answers one
-/// connection with `replies`, then closes it, and returns the request it
-/// read.
+/// connection as the daemon does, with the protocol line and then
+/// `replies`, then closes it, and returns the request it read.
 fn fake_daemon(harness: &Harness, replies: Vec<Vec<u8>>) -> Running<Vec<u8>> {
+    let mut lines = vec![protocol_line()];
+    lines.extend(replies);
+    raw_daemon(harness, lines)
+}
+
+/// [`fake_daemon`] with exactly `lines`, and no protocol line unless one of
+/// them is.
+fn raw_daemon(harness: &Harness, lines: Vec<Vec<u8>>) -> Running<Vec<u8>> {
     let paths = RunPaths::under(&harness.support_dir());
     fs::create_dir_all(&paths.dir).unwrap();
     let listener = UnixListener::bind(&paths.socket).unwrap();
@@ -853,8 +882,8 @@ fn fake_daemon(harness: &Harness, replies: Vec<Vec<u8>>) -> Running<Vec<u8>> {
         let mut request = Vec::new();
         reader.read_until(b'\n', &mut request).unwrap();
         let mut stream = stream;
-        for reply in replies {
-            stream.write_all(&reply).unwrap();
+        for line in lines {
+            stream.write_all(&line).unwrap();
         }
         request
     })
@@ -989,6 +1018,7 @@ fn lingering_daemon(
         reader.read_until(b'\n', &mut request).unwrap();
         assert_eq!(request, b"\"subscribe\"\n");
         let mut stream = stream;
+        stream.write_all(&protocol_line()).unwrap();
         stream.write_all(&first).unwrap();
         thread::sleep(pause);
         stream.write_all(&then).unwrap();
@@ -1312,6 +1342,42 @@ fn a_busy_daemon_is_reported_as_busy() {
             outcome.stderr,
             "mooringctl: the daemon refused the request: it already serves as many clients as it accepts; try again\n"
         );
+    }
+}
+
+/// A daemon whose first line names no protocol, as one built before the
+/// line does, or names another protocol, is refused before any reply is
+/// read, saying what to do; one that closes first is closed.
+#[test]
+fn a_daemon_of_no_or_another_protocol_is_refused_before_its_replies() {
+    let mut harness = harness();
+    for (lines, stderr) in [
+        (
+            vec![available_line(NOW)],
+            "mooringctl: the daemon did not name its control protocol on its first line, as a daemon built before this mooringctl may not: restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+        ),
+        (
+            vec![b"{\"control_protocol\":2}\n".to_vec(), available_line(NOW)],
+            "mooringctl: the daemon speaks control protocol 2 and this mooringctl speaks 1: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+        ),
+        (
+            vec![
+                b"{\"control_protocol\":1,\"build\":7}\n".to_vec(),
+                available_line(NOW),
+            ],
+            "mooringctl: the daemon did not name its control protocol on its first line, as a daemon built before this mooringctl may not: restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+        ),
+        (vec![], "mooringctl: the daemon closed the status stream\n"),
+    ] {
+        for args in [&["status", "--json"][..], &["status", "--follow", "--json"]] {
+            let daemon = raw_daemon(&harness, lines.clone());
+            let outcome = harness.run(args);
+            daemon.result();
+            assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
+            assert_eq!(outcome.stdout, "", "{args:?}");
+            assert_eq!(outcome.stderr, stderr, "{args:?}");
+            fs::remove_file(RunPaths::under(&harness.support_dir()).socket).unwrap();
+        }
     }
 }
 
