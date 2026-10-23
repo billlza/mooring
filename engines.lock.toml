@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Pinned inputs for the Go engines (design §4). Integrity values here are
+# Pinned inputs for the Go engines (design §4) and the operator's REALITY
+# target scanner (§11.7). Integrity values here are
 # Level 1: they detect an accidental wrong or corrupted artifact, not a
 # malicious one. The engines are built on a hosted runner
 # (.github/workflows/engines.yml), never on the exit Mac (design D-7). While
@@ -139,3 +140,27 @@ files = ["geoip.dat", "geosite.dat"]
 [geodata.outputs]
 "geoip.dat" = "3cf2236c19063c1c80803368cca5ff589c5033129fdf9ba154230c689b81fc2a"
 "geosite.dat" = "51211fde21696bbde05d1102f47f586261e98987a3cae23f7dd1cd742c62c2d2"
+
+[realitlscanner]
+# The operator's REALITY target scanner (design §11.7): run from the Mac,
+# never shipped to a node. v0.2.3 (2026-05-30) is upstream's latest
+# release; its go.mod requires geoip2-golang v1.13.0, maxminddb-golang
+# v1.13.1 and golang.org/x/sys v0.45.0 (read 2026-10-23 at the commit).
+# It has no version variable, so its ldflags stamp nothing.
+module = "github.com/xtls/RealiTLScanner"
+tag = "v0.2.3"
+commit = "e5e114747aa8c6dfa4b394a0782f241bf72bdce6"
+prerelease = false
+ldflags = "-s -w -buildid="
+targets = ["darwin-arm64"]
+security-bumps = []
+# Empty, with its digest, while there are no security bumps.
+patch = ""
+patch-sha256 = ""
+
+# "<target>" = "<sha256 of the unsigned binary>". From hosted run
+# 39938908454 (2026-10-23): two clean builds byte for byte the same, its
+# build information as its recipe says, govulncheck found nothing; the
+# engines' outputs of that run equal their pins above.
+[realitlscanner.outputs]
+"darwin-arm64" = "ced247fe7b3976ddb1d60cb48483d22009d41ce405da6d756e9a7ce4fbb7a8bc"
