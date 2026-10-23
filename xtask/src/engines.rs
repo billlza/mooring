@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The Go engines (design §4): the pins of `engines.lock.toml`, read as a
-//! typed lock, and the commands of the hosted engine build (D-7: Go builds
-//! never run on the exit Mac).
+//! The Go engines (design §4) and the operator's REALITY target scanner,
+//! RealiTLScanner (§11.7): the pins of `engines.lock.toml`, read as a typed
+//! lock, and the commands of the hosted engine build (D-7: Go builds never
+//! run on the exit Mac).
 //!
 //! - `engines-pins` prints the pins as `KEY=value` lines for the workflow,
 //!   which downloads the pinned Go and checks out the pinned sources;
@@ -10,10 +11,10 @@
 //!   (Xray's REALITY replace, and either engine's reviewed security bumps)
 //!   into its tree: a pinned patch is checked and applied, an unpinned one
 //!   is made from the lock and written out for review and pinning;
-//! - `engines-build <dir>` builds every engine from the sources checked
-//!   out in `<dir>` (`xray/`, `sing-box/`, `Xray-linux-64.zip`) into
-//!   `<dir>/out`, after checking the Go version, the commits and the
-//!   pinned patches;
+//! - `engines-build <dir>` builds every engine and the scanner from the
+//!   sources checked out in `<dir>` (`xray/`, `sing-box/`,
+//!   `realitlscanner/`, `Xray-linux-64.zip`) into `<dir>/out`, after
+//!   checking the Go version, the commits and the pinned patches;
 //! - `engines-govulncheck <dir>` runs govulncheck on every output's
 //!   package with its own tags and target, and reports every scan that
 //!   finds a reachable vulnerability;
@@ -21,7 +22,7 @@
 //!   the lock records, and prints them while none are recorded;
 //! - `engines-metadata <dir>` checks each binary against its recipe: its
 //!   build information (`go version -m`), its empty build ID and, for the
-//!   binaries built for this computer, the version stamp it prints.
+//!   stamped binaries built for this computer, the version stamp it prints.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -48,6 +49,13 @@ const XRAY_PACKAGE: &str = "./main";
 
 /// sing-box's main package, inside its source directory.
 const SING_BOX_PACKAGE: &str = "./cmd/sing-box";
+
+/// RealiTLScanner's main package: its module's root.
+const SCANNER_PACKAGE: &str = ".";
+
+/// The ldflags of a build that stamps no version: stripped, with an empty
+/// build ID, as every engine's.
+const UNSTAMPED_LDFLAGS: &str = "-s -w -buildid=";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EnginesError {
@@ -166,6 +174,7 @@ pub(crate) struct Lock {
     pub(crate) xray: Xray,
     pub(crate) sing_box: SingBox,
     pub(crate) geodata: Geodata,
+    pub(crate) realitlscanner: Scanner,
 }
 
 #[derive(Debug, Deserialize)]
@@ -238,6 +247,24 @@ pub(crate) struct Geodata {
     pub(crate) outputs: BTreeMap<String, String>,
 }
 
+/// RealiTLScanner, which the operator runs on the Mac to find REALITY
+/// targets (design §11.7); no node runs it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct Scanner {
+    pub(crate) module: String,
+    pub(crate) tag: String,
+    pub(crate) commit: String,
+    pub(crate) prerelease: bool,
+    pub(crate) ldflags: String,
+    pub(crate) targets: Vec<Target>,
+    pub(crate) security_bumps: Vec<String>,
+    /// Empty, with its digest, while there are no security bumps.
+    pub(crate) patch: String,
+    pub(crate) patch_sha256: String,
+    pub(crate) outputs: BTreeMap<String, String>,
+}
+
 /// A recorded digest: 64 lowercase hex characters, or empty while none is
 /// recorded.
 fn pinned(text: &str) -> Result<Option<Sha256Digest>, String> {
@@ -274,6 +301,7 @@ impl Lock {
             &lock.xray.patch_sha256,
             &lock.sing_box.patch_sha256,
             &lock.geodata.zip_sha256,
+            &lock.realitlscanner.patch_sha256,
         ] {
             pinned(digest)?;
         }
@@ -299,9 +327,10 @@ impl Lock {
     }
 
     /// The recipes agree with the pins they restate: each engine's version
-    /// is stamped from its own module and tag, the REALITY replace is the
-    /// pinned commit, govulncheck's sum is a module sum, and the geodata
-    /// come from the pinned Xray release.
+    /// is stamped from its own module and tag, the scanner, which has no
+    /// version variable, stamps nothing, the REALITY replace is the pinned
+    /// commit, govulncheck's sum is a module sum, and the geodata come from
+    /// the pinned Xray release.
     fn check_recipes(&self) -> Result<(), String> {
         let xray = &self.xray;
         let stamped = format!("-X {}/core.build={} -s -w -buildid=", xray.module, xray.tag);
@@ -341,9 +370,23 @@ impl Lock {
         if sing_box.prerelease {
             return Err("sing-box is pinned to a prerelease".to_owned());
         }
+        let scanner = &self.realitlscanner;
+        if scanner.ldflags != UNSTAMPED_LDFLAGS {
+            return Err(format!(
+                "realitlscanner ldflags {:?} are not {UNSTAMPED_LDFLAGS:?}",
+                scanner.ldflags
+            ));
+        }
+        if scanner.prerelease || !is_release(&scanner.tag) {
+            return Err(format!(
+                "realitlscanner tag {:?} is not a release `v<major>.<minor>.<patch>`",
+                scanner.tag
+            ));
+        }
         for (engine, bumps) in [
             ("xray", &xray.security_bumps),
             ("sing-box", &sing_box.security_bumps),
+            ("realitlscanner", &scanner.security_bumps),
         ] {
             let mut modules = Vec::new();
             for bump in bumps {
@@ -361,16 +404,32 @@ impl Lock {
         if xray.patch.is_empty() {
             return Err("xray has no patch for its REALITY replace".to_owned());
         }
-        if sing_box.security_bumps.is_empty()
-            != (sing_box.patch.is_empty() && sing_box.patch_sha256.is_empty())
-        {
-            return Err("sing-box has a patch exactly when it has security bumps".to_owned());
+        for (engine, bumps, patch, patch_sha256) in [
+            (
+                "sing-box",
+                &sing_box.security_bumps,
+                &sing_box.patch,
+                &sing_box.patch_sha256,
+            ),
+            (
+                "realitlscanner",
+                &scanner.security_bumps,
+                &scanner.patch,
+                &scanner.patch_sha256,
+            ),
+        ] {
+            if bumps.is_empty() != (patch.is_empty() && patch_sha256.is_empty()) {
+                return Err(format!(
+                    "{engine} has a patch exactly when it has security bumps"
+                ));
+            }
         }
         Ok(())
     }
 
     /// The engines that carry a `go.mod` and `go.sum` patch: Xray always,
-    /// for its REALITY replace, and sing-box while it has security bumps.
+    /// for its REALITY replace, and sing-box and the scanner while they have
+    /// security bumps.
     pub(crate) fn patches(&self) -> Vec<EnginePatch> {
         let mut patches = vec![EnginePatch {
             source: "xray",
@@ -392,6 +451,15 @@ impl Lock {
                 sha256: self.sing_box.patch_sha256.clone(),
             });
         }
+        if !self.realitlscanner.security_bumps.is_empty() {
+            patches.push(EnginePatch {
+                source: "realitlscanner",
+                replace: None,
+                bumps: self.realitlscanner.security_bumps.clone(),
+                path: self.realitlscanner.patch.clone(),
+                sha256: self.realitlscanner.patch_sha256.clone(),
+            });
+        }
         patches
     }
 
@@ -408,6 +476,9 @@ impl Lock {
         for (file, digest) in &self.geodata.outputs {
             outputs.push((format!("geodata/{file}"), digest));
         }
+        for (target, digest) in &self.realitlscanner.outputs {
+            outputs.push((format!("{target}/realitlscanner"), digest));
+        }
         outputs
     }
 
@@ -418,6 +489,7 @@ impl Lock {
             ("GO_LINUX_AMD64_SHA256", self.go.linux_amd64_sha256.clone()),
             ("XRAY_COMMIT", self.xray.commit.clone()),
             ("SING_BOX_COMMIT", self.sing_box.commit.clone()),
+            ("REALITLSCANNER_COMMIT", self.realitlscanner.commit.clone()),
             ("XRAY_TAG", self.xray.tag.clone()),
             ("SING_BOX_TAG", self.sing_box.tag.clone()),
             ("GEODATA_URL", self.geodata.zip_url.clone()),
@@ -432,7 +504,8 @@ impl Lock {
         ]
     }
 
-    /// Every engine build the lock describes, Xray's first.
+    /// Every build the lock describes: Xray's first, then sing-box's, then
+    /// the scanner's.
     pub(crate) fn builds(&self) -> Vec<Build> {
         let mut builds: Vec<Build> = self
             .xray
@@ -440,19 +513,20 @@ impl Lock {
             .iter()
             .map(|&target| Build {
                 source: "xray",
+                module: self.xray.module.clone(),
                 target,
                 output: format!("{}/xray", target.name()),
                 package: XRAY_PACKAGE,
                 tags: Vec::new(),
                 gcflags: Some(self.xray.gcflags.clone()),
-                version_line: format!(
+                version_line: Some(format!(
                     "Xray {} ({XRAY_CODENAME}) {} ({} {}/{})",
                     self.xray.tag.trim_start_matches('v'),
                     self.xray.tag,
                     self.go.version,
                     target.goos(),
                     target.goarch(),
-                ),
+                )),
                 args: vec![
                     "build".to_owned(),
                     "-trimpath".to_owned(),
@@ -471,15 +545,16 @@ impl Lock {
             for &target in &role.targets {
                 builds.push(Build {
                     source: "sing-box",
+                    module: self.sing_box.module.clone(),
                     target,
                     output: format!("{}/{name}", target.name()),
                     package: SING_BOX_PACKAGE,
                     tags: tags.clone(),
                     gcflags: None,
-                    version_line: format!(
+                    version_line: Some(format!(
                         "sing-box version {}",
                         self.sing_box.tag.trim_start_matches('v')
-                    ),
+                    )),
                     args: vec![
                         "build".to_owned(),
                         "-trimpath".to_owned(),
@@ -493,6 +568,25 @@ impl Lock {
                 });
             }
         }
+        builds.extend(self.realitlscanner.targets.iter().map(|&target| Build {
+            source: "realitlscanner",
+            module: self.realitlscanner.module.clone(),
+            target,
+            output: format!("{}/realitlscanner", target.name()),
+            package: SCANNER_PACKAGE,
+            tags: Vec::new(),
+            gcflags: None,
+            version_line: None,
+            args: vec![
+                "build".to_owned(),
+                "-trimpath".to_owned(),
+                "-buildvcs=false".to_owned(),
+                format!("-ldflags={}", self.realitlscanner.ldflags),
+                "-o".to_owned(),
+                String::new(),
+                SCANNER_PACKAGE.to_owned(),
+            ],
+        }));
         builds
     }
 
@@ -516,6 +610,8 @@ impl Lock {
 pub(crate) struct Build {
     /// The source directory inside the build directory.
     pub(crate) source: &'static str,
+    /// The main module, as the binary's build information names it.
+    pub(crate) module: String,
     pub(crate) target: Target,
     /// Its path inside `out`.
     pub(crate) output: String,
@@ -524,8 +620,9 @@ pub(crate) struct Build {
     /// The build tags, in recipe order.
     pub(crate) tags: Vec<String>,
     pub(crate) gcflags: Option<String>,
-    /// The first line `<binary> version` prints: the recipe's `-X` stamp.
-    pub(crate) version_line: String,
+    /// The first line `<binary> version` prints: the recipe's `-X` stamp;
+    /// `None` for a binary the recipe stamps no version into.
+    pub(crate) version_line: Option<String>,
     /// `go` arguments; the empty one after `-o` is the output path.
     pub(crate) args: Vec<String>,
 }
@@ -546,8 +643,8 @@ impl Build {
     }
 
     /// Checks `go version -m`'s report on the built binary against the
-    /// recipe: the pinned Go, `-trimpath`, `CGO_ENABLED=0`, the target, the
-    /// gcflags and the exact tag set.
+    /// recipe: the pinned Go, the main module, `-trimpath`, `CGO_ENABLED=0`,
+    /// the target, the gcflags and the exact tag set.
     ///
     /// The report cannot show the ldflags: under `-trimpath` cmd/go records
     /// none (go1.27.3 `src/cmd/go/internal/load/pkg.go:2469-2481`,
@@ -558,6 +655,16 @@ impl Build {
         let first = lines.next().ok_or("an empty report")?;
         if !first.trim_end().ends_with(&format!(": {go_version}")) {
             return Err(format!("built with another Go: {first}"));
+        }
+        let module = report
+            .lines()
+            .find_map(|line| line.trim_start().strip_prefix("mod\t"))
+            .and_then(|rest| rest.split('\t').next());
+        if module != Some(self.module.as_str()) {
+            return Err(format!(
+                "its main module is {module:?}, the recipe builds {:?}",
+                self.module
+            ));
         }
         let settings: BTreeMap<&str, String> = report
             .lines()
@@ -599,14 +706,37 @@ impl Build {
     /// Checks what the built binary printed for `version` against the
     /// recipe's `-X` stamp.
     pub(crate) fn check_version(&self, printed: &str) -> Result<(), String> {
+        let Some(stamp) = &self.version_line else {
+            return Err("the recipe stamps no version, so there is none to check".to_owned());
+        };
         match printed.lines().next() {
-            Some(line) if line == self.version_line => Ok(()),
+            Some(line) if line == stamp => Ok(()),
             line => Err(format!(
-                "`version` prints {line:?}, the recipe stamps {:?}",
-                self.version_line
+                "`version` prints {line:?}, the recipe stamps {stamp:?}"
             )),
         }
     }
+
+    /// How `engines-metadata` checks this binary's version stamp on a
+    /// computer whose target is `host`.
+    pub(crate) fn stamp_check(&self, host: Option<Target>) -> StampCheck {
+        match &self.version_line {
+            None => StampCheck::Unstamped,
+            Some(_) if Some(self.target) == host => StampCheck::Run,
+            Some(_) => StampCheck::OtherComputer,
+        }
+    }
+}
+
+/// How a binary's version stamp is checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StampCheck {
+    /// It is built for this computer: run its `version` and compare.
+    Run,
+    /// It is built for another computer, so it is not run here.
+    OtherComputer,
+    /// The recipe stamps no version: nothing to check.
+    Unstamped,
 }
 
 /// One engine's `go.mod` and `go.sum` patch (design §4.2, §4.4).
@@ -628,16 +758,24 @@ pub(crate) struct EnginePatch {
 /// released version, never a prerelease or a pseudo-version.
 fn bump_module(bump: &str) -> Option<&str> {
     let (module, version) = bump.split_once('@')?;
-    let numbers: Vec<&str> = version.strip_prefix('v')?.split('.').collect();
-    let released = numbers.len() == 3
-        && numbers
-            .iter()
-            .all(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()));
     let path = module.contains('/')
         && module
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"./-_~".contains(&byte));
-    (released && path).then_some(module)
+    (is_release(version) && path).then_some(module)
+}
+
+/// Whether `version` is a released version, `v<major>.<minor>.<patch>`:
+/// never a prerelease or a pseudo-version.
+fn is_release(version: &str) -> bool {
+    let Some(numbers) = version.strip_prefix('v') else {
+        return false;
+    };
+    let numbers: Vec<&str> = numbers.split('.').collect();
+    numbers.len() == 3
+        && numbers
+            .iter()
+            .all(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Checks `go tool buildid`'s report on a built binary: the ID is empty, as
@@ -739,6 +877,13 @@ fn check_commit(dir: &Path, source: &str, pinned: &str) -> Result<(), EnginesErr
     }
 }
 
+/// Checks that every source in `dir` is its pinned commit.
+fn check_commits(dir: &Path, lock: &Lock) -> Result<(), EnginesError> {
+    check_commit(dir, "xray", &lock.xray.commit)?;
+    check_commit(dir, "sing-box", &lock.sing_box.commit)?;
+    check_commit(dir, "realitlscanner", &lock.realitlscanner.commit)
+}
+
 fn check_go(lock: &Lock) -> Result<(), EnginesError> {
     let found = run(Command::new("go").args(["env", "GOVERSION"]))?;
     let found = found.trim().to_owned();
@@ -764,8 +909,7 @@ pub(crate) fn prepare(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(
     let dir = &absolute(dir)?;
     let lock = Lock::read(&root.join(LOCK))?;
     check_go(&lock)?;
-    check_commit(dir, "xray", &lock.xray.commit)?;
-    check_commit(dir, "sing-box", &lock.sing_box.commit)?;
+    check_commits(dir, &lock)?;
     let mut prepared = false;
     for patch in lock.patches() {
         let tree = dir.join(patch.source);
@@ -890,8 +1034,7 @@ pub(crate) fn build(root: &Path, dir: &Path, out: &mut impl Write) -> Result<(),
     let dir = &absolute(dir)?;
     let lock = Lock::read(&root.join(LOCK))?;
     check_go(&lock)?;
-    check_commit(dir, "xray", &lock.xray.commit)?;
-    check_commit(dir, "sing-box", &lock.sing_box.commit)?;
+    check_commits(dir, &lock)?;
     for patch in lock.patches() {
         apply_patch(root, &patch, &dir.join(patch.source))?;
     }
@@ -983,6 +1126,7 @@ pub(crate) fn outputs_toml(manifest: &BTreeMap<String, Sha256Digest>) -> String 
     let mut xray = String::from("[xray.outputs]\n");
     let mut sing_box = String::from("[sing-box.outputs]\n");
     let mut geodata = String::from("[geodata.outputs]\n");
+    let mut scanner = String::from("[realitlscanner.outputs]\n");
     for (output, digest) in manifest {
         let Some((first, second)) = output.split_once('/') else {
             continue;
@@ -990,10 +1134,13 @@ pub(crate) fn outputs_toml(manifest: &BTreeMap<String, Sha256Digest>) -> String 
         match (first, second) {
             ("geodata", file) => geodata.push_str(&format!("\"{file}\" = \"{digest}\"\n")),
             (target, "xray") => xray.push_str(&format!("\"{target}\" = \"{digest}\"\n")),
+            (target, "realitlscanner") => {
+                scanner.push_str(&format!("\"{target}\" = \"{digest}\"\n"));
+            }
             (target, role) => sing_box.push_str(&format!("\"{role}/{target}\" = \"{digest}\"\n")),
         }
     }
-    format!("{xray}\n{sing_box}\n{geodata}")
+    format!("{xray}\n{sing_box}\n{geodata}\n{scanner}")
 }
 
 /// Compares a build's manifest with the outputs the lock records.
@@ -1139,12 +1286,16 @@ pub(crate) fn metadata(root: &Path, dir: &Path, out: &mut impl Write) -> Result<
             binary.as_os_str(),
         ]))?;
         check_build_id(&build_id).map_err(not_as_recipe)?;
-        let stamp = if Some(build.target) == host {
-            let printed = run(Command::new(&binary).arg("version"))?;
-            build.check_version(&printed).map_err(not_as_recipe)?;
-            format!("prints {:?}", build.version_line)
-        } else {
-            "built for another computer, so its version stamp is not run here".to_owned()
+        let stamp = match build.stamp_check(host) {
+            StampCheck::Run => {
+                let printed = run(Command::new(&binary).arg("version"))?;
+                build.check_version(&printed).map_err(not_as_recipe)?;
+                format!("prints {:?}", printed.lines().next().unwrap_or_default())
+            }
+            StampCheck::OtherComputer => {
+                "built for another computer, so its version stamp is not run here".to_owned()
+            }
+            StampCheck::Unstamped => "its recipe stamps no version".to_owned(),
         };
         writeln!(out, "{}: built as its recipe says; {stamp}", build.output)
             .map_err(stdout_error)?;

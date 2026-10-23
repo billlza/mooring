@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The Go engines (design §4), built on a hosted runner: D-7 keeps Go builds
-# off the exit Mac. Every input is a pin of engines.lock.toml, which
+# The Go engines (design §4) and the operator's REALITY target scanner,
+# RealiTLScanner (§11.7), built on a hosted runner: D-7 keeps Go builds off
+# the exit Mac. Every input is a pin of engines.lock.toml, which
 # `cargo xtask engines-pins` prints: the Go tarball and its sha256, the
-# Xray and sing-box commits, the geodata archive and its sha256, and
-# govulncheck. The gates are design §4.1's: two clean builds, byte for
+# Xray, sing-box and RealiTLScanner commits, the geodata archive and its
+# sha256, and govulncheck. The gates are design §4.1's: two clean builds, byte for
 # byte the same and the same as the digests the lock records; each
 # binary's build information as its recipe says; upstream's package tests;
 # govulncheck on every output with its own tags and target. While an
@@ -70,6 +71,13 @@ jobs:
           ref: ${{ env.SING_BOX_COMMIT }}
           path: build/sing-box
           persist-credentials: false
+      - name: RealiTLScanner at its pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: XTLS/RealiTLScanner
+          ref: ${{ env.REALITLSCANNER_COMMIT }}
+          path: build/realitlscanner
+          persist-credentials: false
       - name: Geodata archive
         run: |
           curl -fsSLo build/Xray-linux-64.zip "$GEODATA_URL"
@@ -113,6 +121,7 @@ jobs:
           cat build/out/MANIFEST.json
       - name: Build information
         run: cargo xtask engines-metadata build
+      # RealiTLScanner has no tests at its pinned commit.
       - name: Upstream package tests
         env:
           GOCACHE: ${{ runner.temp }}/second/cache
