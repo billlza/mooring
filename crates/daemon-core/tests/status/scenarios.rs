@@ -170,7 +170,7 @@ fn assemble(inputs: Inputs) -> MacStatusV1 {
         at: inputs.at,
         exit: inputs.exit,
         sim: SimMeterStatus {
-            cycle: BillingCycle::of_instant(sim.bill_day(), inputs.at).unwrap(),
+            cycle: BillingCycle::of_instant(sim.cycle(), inputs.at).unwrap(),
             // The SIM is near-symmetric: what users download arrives and
             // leaves again through the tunnel.
             rx_bytes: used - used * 47 / 100,

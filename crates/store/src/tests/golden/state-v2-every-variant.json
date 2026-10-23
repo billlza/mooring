@@ -24,20 +24,34 @@
         "pairing": "unpaired"
       },
       "sim": {
-        "bill_day": 31,
-        "plan": {
-          "carrier": "smarty",
-          "kind": "unlimited",
-          "speed_cap_mbps": null,
-          "terms": {
-            "url": "https://sundaecdn.blob.core.windows.net/files/SMARTY-Price-Guide.pdf",
-            "dated": "2026-08-25"
+        "cycle": {
+          "fixed_days": {
+            "days": 30,
+            "anchor": "2026-10-28"
           }
         },
-        "warn_bytes": 240000000000,
+        "plan": {
+          "carrier": "1pmobile",
+          "kind": {
+            "unlimited_fair_use": {
+              "fair_use_bytes": 500000000000,
+              "window": {
+                "rolling": {
+                  "days": 30
+                }
+              }
+            }
+          },
+          "speed_cap_mbps": null,
+          "terms": {
+            "url": "https://www.1pmobile.com/terms-and-conditions",
+            "dated": "2026-07-24"
+          }
+        },
+        "warn_bytes": 200000000000,
         "stop": {
           "hard_stop": {
-            "bytes": 300000000000
+            "bytes": 240000000000
           }
         }
       },

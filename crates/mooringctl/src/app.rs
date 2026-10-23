@@ -25,7 +25,7 @@ use mooring_model::time::UnixTime;
 use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, write_router_pin};
 
 use crate::backup::BackupCheck;
-use crate::cli::{Command, RouterCommand, UserCommand};
+use crate::cli::{Command, ExitCommand, RouterCommand, SimCommand, UserCommand};
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::paths;
 use crate::prompt::{self, Answer, Console};
@@ -93,6 +93,20 @@ pub(crate) fn run(
             format,
             out: path,
         }) => crate::user::export(env, out, err, &user, format.into(), &path),
+        Command::Exit(ExitCommand::Init {
+            interface,
+            cycle_anchor,
+            flow_cap,
+            yes,
+        }) => crate::exit::init(env, out, &interface, cycle_anchor, flow_cap, yes),
+        Command::Exit(ExitCommand::RecordCarrier {
+            prefixes,
+            pairing,
+            yes,
+        }) => crate::exit::record_carrier(env, out, prefixes, pairing.into(), yes),
+        Command::Sim(SimCommand::SetAnchor { anchor, yes }) => {
+            crate::sim::set_anchor(env, out, anchor, yes)
+        }
         Command::Status {
             follow,
             json,

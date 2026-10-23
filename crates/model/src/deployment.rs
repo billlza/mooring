@@ -12,14 +12,20 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::alerting::AlertSettings;
 use crate::counters::ConfigGeneration;
+use crate::date::CalendarDate;
 use crate::error::{EntityId, ModelError};
-use crate::exit::{ExitSite, TrafficPolicy};
+use crate::exit::{EgressCheck, ExitSite, FlowCap, ProbePolicy, TrafficPolicy, Uplink};
 use crate::ids::{NodeId, PublicAlias, ShortId, UserId};
+use crate::iface::InterfaceSelector;
 use crate::keys::Ed25519Pub;
 use crate::node::{AppliedConfig, Node, NodeAddress, NodeLifecycle};
 use crate::ports::PortConflict;
 use crate::quota::AutoQuotaPolicy;
 use crate::secret::SecretRef;
+use crate::sim::{
+    CycleRule, ONE_P_MOBILE_PERIOD_DAYS, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES,
+    PeriodDays, SimPlan, SimPolicy, StopPolicy,
+};
 use crate::user::{AgreementRecord, User, UserNodePublic, UserStatus};
 use crate::viewer::Viewer;
 use crate::wg::WgIndex;
@@ -61,9 +67,8 @@ impl CapacityPolicy {
 }
 
 /// Everything a fresh deployment records. `exit init` fills every field,
-/// so nothing has a hidden default: the pilot records the SMARTY plan with
-/// the F2 thresholds, [`CapacityPolicy::PILOT`],
-/// `Some(AutoQuotaPolicy::PILOT)` and `Some(AlertSettings::pilot())`.
+/// so nothing has a hidden default: [`DeploymentInit::pilot`] is what it
+/// records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentInit {
     /// The Mac exit site; its SIM plan must be recorded.
@@ -77,6 +82,49 @@ pub struct DeploymentInit {
     /// The alert channels, if set up; a fresh deployment has no node, so no
     /// channel node.
     pub alerting: Option<AlertSettings>,
+}
+
+impl DeploymentInit {
+    /// The pilot as decided (design §7, "What `exit init` records"):
+    /// 1pMobile's Unlimited Data Boost on 30-day cycles from
+    /// `cycle_anchor`, the day the Boost was bought, at the pilot's SIM
+    /// thresholds (F1, F2); the default traffic and probe policies;
+    /// [`CapacityPolicy::PILOT`], `Some(AutoQuotaPolicy::PILOT)` and
+    /// `Some(AlertSettings::pilot())`. The tunnel leaves through the egress
+    /// (`SameAsExit`). The values measured on the line are the caller's:
+    /// `egress` and `flow_cap`; the carrier check and the uplink baseline
+    /// are not recorded yet.
+    pub fn pilot(
+        egress: InterfaceSelector,
+        cycle_anchor: CalendarDate,
+        flow_cap: FlowCap,
+    ) -> Result<Self, ModelError> {
+        Ok(Self {
+            exit: ExitSite {
+                egress,
+                uplink: Uplink::SameAsExit,
+                egress_check: None,
+                sim: SimPolicy::new(
+                    CycleRule::FixedDays {
+                        days: PeriodDays::new(ONE_P_MOBILE_PERIOD_DAYS)?,
+                        anchor: cycle_anchor,
+                    },
+                    SimPlan::one_p_mobile_unlimited()?,
+                    PILOT_SIM_WARN_BYTES,
+                    StopPolicy::HardStop {
+                        bytes: PILOT_SIM_HARD_STOP_BYTES,
+                    },
+                )?,
+                probe: ProbePolicy::default(),
+                flow_cap,
+                uplink_baseline: None,
+            },
+            policy: TrafficPolicy::default(),
+            capacity: CapacityPolicy::PILOT,
+            auto_quota: Some(AutoQuotaPolicy::PILOT),
+            alerting: Some(AlertSettings::pilot()),
+        })
+    }
 }
 
 /// A deployment's fields without its invariants: the shape to build or edit
@@ -616,6 +664,15 @@ pub enum Bookkeeping {
         /// The revision accepted and the day.
         record: AgreementRecord,
     },
+    /// The line's carrier check, observed on the line and recorded for the
+    /// first time (design §10.2). The check is Mac-only, so no bundle or
+    /// export changes. A check recorded already is refused
+    /// (`CarrierAlreadyRecorded`): replacing one weakens the exit's guard
+    /// against a foreign egress (P0-2), so it is not bookkeeping.
+    CarrierRecorded {
+        /// The carrier prefixes and pairing mode.
+        check: EgressCheck,
+    },
 }
 
 impl Deployment {
@@ -710,6 +767,12 @@ impl Deployment {
                     Some(recorded) if record.version == recorded.version => {}
                     Some(_) | None => user.agreement = Some(record),
                 }
+            }
+            Bookkeeping::CarrierRecorded { check } => {
+                if parts.exit.egress_check.is_some() {
+                    return Err(ModelError::CarrierAlreadyRecorded);
+                }
+                parts.exit.egress_check = Some(check);
             }
         }
         Self::try_from(parts)
@@ -911,7 +974,7 @@ mod tests {
     #[test]
     fn a_fresh_deployment_needs_a_recorded_plan() {
         let lifted: SimPolicy = serde_json::from_str(
-            r#"{"bill_day":1,"plan":null,"warn_bytes":240000000000,"stop":{"hard_stop":{"bytes":300000000000}}}"#,
+            r#"{"cycle":{"monthly":{"bill_day":1}},"plan":null,"warn_bytes":240000000000,"stop":{"hard_stop":{"bytes":300000000000}}}"#,
         )
         .unwrap();
         assert_eq!(lifted.plan(), None);
@@ -1712,6 +1775,74 @@ mod tests {
                 node: node_id("lon1"),
             }),
             Err(ModelError::NotRevoking { user: user_id(2) })
+        );
+    }
+
+    /// The pilot as decided: 1pMobile on 30-day cycles from the anchor at
+    /// the pilot's thresholds, the pilot's cap, quotas and alert settings,
+    /// and nothing measured on the line yet but the caller's values. It is
+    /// a valid fresh deployment.
+    #[test]
+    fn the_pilot_init_records_the_decided_values() {
+        let egress = exit_site().egress;
+        let anchor = CalendarDate::parse("2026-10-28").unwrap();
+        let init = DeploymentInit::pilot(egress, anchor, FlowCap::new(1024).unwrap()).unwrap();
+        let exit = &init.exit;
+        assert_eq!(exit.egress, egress);
+        assert_eq!(exit.uplink, Uplink::SameAsExit);
+        assert_eq!(exit.egress_check, None);
+        assert_eq!(exit.uplink_baseline, None);
+        assert_eq!(exit.flow_cap, FlowCap::new(1024).unwrap());
+        assert_eq!(exit.probe, ProbePolicy::default());
+        assert_eq!(
+            exit.sim.cycle(),
+            CycleRule::FixedDays {
+                days: PeriodDays::new(30).unwrap(),
+                anchor
+            }
+        );
+        assert_eq!(
+            exit.sim.plan(),
+            Some(&SimPlan::one_p_mobile_unlimited().unwrap())
+        );
+        assert_eq!(exit.sim.warn_bytes(), PILOT_SIM_WARN_BYTES);
+        assert_eq!(
+            exit.sim.stop(),
+            StopPolicy::HardStop {
+                bytes: PILOT_SIM_HARD_STOP_BYTES
+            }
+        );
+        assert_eq!(init.policy, TrafficPolicy::default());
+        assert_eq!(init.capacity, CapacityPolicy::PILOT);
+        assert_eq!(init.auto_quota, Some(AutoQuotaPolicy::PILOT));
+        assert_eq!(init.alerting, Some(AlertSettings::pilot()));
+        let deployment = Deployment::new(init).unwrap();
+        assert_eq!(deployment.config_generation().get(), 1);
+        assert!(deployment.nodes().is_empty() && deployment.users().is_empty());
+    }
+
+    /// The carrier check is recorded once, as bookkeeping: before it the
+    /// site has none, and a second record is refused, because replacing a
+    /// check is a configuration change (design §10.2, P0-2).
+    #[test]
+    fn the_carrier_check_is_recorded_once_and_keeps_the_generation() {
+        let check = exit_site().egress_check.unwrap();
+        let mut parts = two_node_parts();
+        parts.exit.egress_check = None;
+        let unobserved = build(parts).unwrap();
+        let generation = unobserved.config_generation();
+        let recorded = unobserved
+            .record(Bookkeeping::CarrierRecorded {
+                check: check.clone(),
+            })
+            .unwrap();
+        assert_eq!(recorded.exit().egress_check, Some(check.clone()));
+        assert_eq!(recorded.config_generation(), generation);
+        let mut other = check.clone();
+        other.pairing = crate::exit::Pairing::Unpaired;
+        assert_eq!(
+            recorded.record(Bookkeeping::CarrierRecorded { check: other }),
+            Err(ModelError::CarrierAlreadyRecorded)
         );
     }
 

@@ -49,7 +49,7 @@ use crate::exit::{EgressCheck, ExitSite, FlowCap, ProbePolicy, TrafficPolicy, Up
 use crate::ids::{LocalLabel, NodeId, UserId};
 use crate::iface::InterfaceSelector;
 use crate::node::Node;
-use crate::sim::{BillDay, SimPolicy, StopPolicy};
+use crate::sim::{BillDay, CycleRule, SimPolicy, StopPolicy};
 use crate::state::{RuntimeIntent, StateV2};
 use crate::user::{ClientProfile, User, UserNodePublic, UserPolicy, UserStatus};
 use crate::wg::WgIndex;
@@ -384,7 +384,9 @@ impl TryFrom<SimPolicyV1> for SimPolicy {
             .hard_stop_bytes
             .ok_or(ModelError::StopPolicyUnchosen)?;
         Self::unrecorded(
-            BillDay::new(policy.cycle_day.get())?,
+            CycleRule::Monthly {
+                bill_day: BillDay::new(policy.cycle_day.get())?,
+            },
             policy.warn_bytes,
             StopPolicy::HardStop { bytes },
         )
@@ -398,7 +400,7 @@ impl TryFrom<ExitSiteV1> for ExitSite {
         Ok(Self {
             egress: site.egress,
             uplink: site.uplink,
-            egress_check: site.egress_check,
+            egress_check: Some(site.egress_check),
             sim: site.sim.try_into()?,
             probe: site.probe,
             flow_cap: site.flow_cap,
@@ -461,7 +463,7 @@ mod tests {
             exit: ExitSiteV1 {
                 egress: site.egress,
                 uplink: site.uplink,
-                egress_check: site.egress_check,
+                egress_check: site.egress_check.unwrap(),
                 sim: SimPolicyV1::new(
                     CycleDay::new(1).unwrap(),
                     V1_GOLDEN_WARN_BYTES,
@@ -610,11 +612,16 @@ mod tests {
         let exit = deployment.exit();
         assert_eq!(exit.egress, parts.exit.egress);
         assert_eq!(exit.uplink, parts.exit.uplink);
-        assert_eq!(exit.egress_check, parts.exit.egress_check);
+        assert_eq!(exit.egress_check, Some(parts.exit.egress_check));
         assert_eq!(exit.probe, parts.exit.probe);
         assert_eq!(exit.flow_cap, parts.exit.flow_cap);
         assert_eq!(exit.uplink_baseline, None);
-        assert_eq!(exit.sim.bill_day(), BillDay::new(1).unwrap());
+        assert_eq!(
+            exit.sim.cycle(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap()
+            }
+        );
         assert_eq!(exit.sim.plan(), None);
         assert_eq!(exit.sim.warn_bytes(), V1_GOLDEN_WARN_BYTES);
         assert_eq!(
@@ -651,7 +658,9 @@ mod tests {
         let mut v2 = two_node_parts();
         v2.exit = exit_site();
         v2.exit.sim = SimPolicy::unrecorded(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             V1_GOLDEN_WARN_BYTES,
             StopPolicy::HardStop {
                 bytes: V1_GOLDEN_HARD_STOP_BYTES,
@@ -685,7 +694,12 @@ mod tests {
         let with_stop =
             SimPolicyV1::new(CycleDay::new(15).unwrap(), 1_000_000, Some(2_000_000)).unwrap();
         let lifted = SimPolicy::try_from(with_stop).unwrap();
-        assert_eq!(lifted.bill_day().get(), 15);
+        assert_eq!(
+            lifted.cycle(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(15).unwrap()
+            }
+        );
         assert_eq!(lifted.stop(), StopPolicy::HardStop { bytes: 2_000_000 });
     }
 
@@ -703,7 +717,12 @@ mod tests {
         ] {
             let v1 = SimPolicyV1::new(CycleDay::new(28).unwrap(), warn, Some(stop)).unwrap();
             let lifted = SimPolicy::try_from(v1).unwrap();
-            assert_eq!(lifted.bill_day(), BillDay::new(28).unwrap());
+            assert_eq!(
+                lifted.cycle(),
+                CycleRule::Monthly {
+                    bill_day: BillDay::new(28).unwrap()
+                }
+            );
             assert_eq!(lifted.plan(), None);
             assert_eq!(lifted.warn_bytes(), warn);
             assert_eq!(lifted.stop(), StopPolicy::HardStop { bytes: stop });
@@ -734,7 +753,12 @@ mod tests {
             let stop = warn.saturating_add(gap);
             let v1 = SimPolicyV1::new(CycleDay::new(day).unwrap(), warn, Some(stop)).unwrap();
             let lifted = SimPolicy::try_from(v1).unwrap();
-            prop_assert_eq!(lifted.bill_day().get(), day);
+            prop_assert_eq!(
+                lifted.cycle(),
+                CycleRule::Monthly {
+                    bill_day: BillDay::new(day).unwrap()
+                }
+            );
             prop_assert_eq!(lifted.warn_bytes(), warn);
             prop_assert_eq!(lifted.stop(), StopPolicy::HardStop { bytes: stop });
             prop_assert_eq!(lifted.plan(), None);

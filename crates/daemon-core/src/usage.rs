@@ -606,7 +606,7 @@ pub fn aggregate(
     through: UnixTime,
 ) -> Result<UsageReport, UsageError> {
     let users = deployment.users();
-    let periods = UsagePeriods::ending(deployment.exit().sim.bill_day(), through)?;
+    let periods = UsagePeriods::ending(deployment.exit().sim.cycle(), through)?;
     let earliest = periods.earliest_start();
     let mut seen: BTreeSet<&NodeId> = BTreeSet::new();
     for ledger in ledgers {

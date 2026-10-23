@@ -7,8 +7,10 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use mooring_export::ExportFormat;
+use mooring_model::exit::{FlowCap, Pairing};
 use mooring_model::iface::BsdName;
-use mooring_model::{ClientLine, UserId};
+use mooring_model::ipv4::CarrierPrefix;
+use mooring_model::{CalendarDate, ClientLine, UserId};
 
 /// Mooring's command-line tool. Revision 7 builds the M7 router commands,
 /// which only read from the M7; M5 adds the user commands.
@@ -30,6 +32,12 @@ pub(crate) enum Command {
     /// Users: what the operator records about them.
     #[command(subcommand)]
     User(UserCommand),
+    /// The exit: the deployment's creation and its carrier check.
+    #[command(subcommand)]
+    Exit(ExitCommand),
+    /// The SIM line's billing cycles.
+    #[command(subcommand)]
+    Sim(SimCommand),
     /// The console's status, from the daemon.
     Status {
         /// Keep printing each new status while it is fresh, until the
@@ -136,6 +144,84 @@ impl From<FormatArg> for ExportFormat {
             FormatArg::Clash => Self::ClashYaml,
         }
     }
+}
+
+/// An exit command.
+#[derive(Debug, Subcommand)]
+pub(crate) enum ExitCommand {
+    /// Create the deployment with the pilot's decided values: 1pMobile's
+    /// Unlimited Data Boost on 30-day cycles, the pilot's SIM thresholds,
+    /// cap, quotas and alert settings, and the M7 as the egress.
+    Init {
+        /// The Mac's interface to the M7 (a BSD name, for example en9); its
+        /// gateway must be the pinned M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// The first day of one billing cycle: the day the Boost was
+        /// bought (YYYY-MM-DD).
+        #[arg(long, value_name = "DATE")]
+        cycle_anchor: CalendarDate,
+        /// The node-wide cap on new flows into the tunnel (1..=65535), until
+        /// M2 sizes it from the line's port ceiling.
+        #[arg(long, value_name = "FLOWS", value_parser = parse_flow_cap)]
+        flow_cap: FlowCap,
+        /// Create without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Record the line's carrier check, observed on the line: its public
+    /// pool prefixes (RIPE inetnum evidence) and the pairing mode.
+    RecordCarrier {
+        /// A carrier prefix (CIDR); give one --prefix per prefix.
+        #[arg(long = "prefix", value_name = "CIDR", required = true)]
+        prefixes: Vec<CarrierPrefix>,
+        /// Whether an in-chain egress address must equal a bracketing
+        /// direct probe's.
+        #[arg(long, value_enum)]
+        pairing: PairingArg,
+        /// Record without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// A flow cap, as the model accepts it.
+fn parse_flow_cap(text: &str) -> Result<FlowCap, String> {
+    let value: u32 = text.parse().map_err(|error| format!("{error}"))?;
+    FlowCap::new(value).map_err(|error| error.to_string())
+}
+
+/// How in-chain egress addresses are bracketed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum PairingArg {
+    /// The in-chain address must equal a bracketing direct probe's.
+    Paired,
+    /// Only the carrier prefixes are checked (a line that pools addresses).
+    Unpaired,
+}
+
+impl From<PairingArg> for Pairing {
+    fn from(arg: PairingArg) -> Self {
+        match arg {
+            PairingArg::Paired => Self::Paired,
+            PairingArg::Unpaired => Self::Unpaired,
+        }
+    }
+}
+
+/// A SIM command.
+#[derive(Debug, Subcommand)]
+pub(crate) enum SimCommand {
+    /// Move the fixed-length billing cycles so that one starts on the given
+    /// day, as when the Boost was bought on another day.
+    SetAnchor {
+        /// The first day of one billing cycle (YYYY-MM-DD).
+        #[arg(value_name = "DATE")]
+        anchor: CalendarDate,
+        /// Move without asking.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// A router command.

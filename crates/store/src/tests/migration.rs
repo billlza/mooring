@@ -33,7 +33,8 @@ use mooring_model::ports::{
 use mooring_model::quota::AutoQuotaPolicy;
 use mooring_model::secret::SecretRef;
 use mooring_model::sim::{
-    BillDay, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES, SimPolicy, StopPolicy,
+    BillDay, CycleRule, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES, PeriodDays, SimPlan,
+    SimPolicy, StopPolicy,
 };
 use mooring_model::state::{StateFile, StateV2};
 use mooring_model::time::UnixTime;
@@ -140,7 +141,7 @@ fn with_plan_recorded(state: StateV2) -> StateV2 {
     let sim = &parts.exit.sim;
     assert_eq!(sim.plan(), None, "the plan was already recorded");
     parts.exit.sim =
-        SimPolicy::new(sim.bill_day(), smarty_plan(), sim.warn_bytes(), sim.stop()).unwrap();
+        SimPolicy::new(sim.cycle(), smarty_plan(), sim.warn_bytes(), sim.stop()).unwrap();
     StateV2 {
         deployment: Deployment::try_from(parts).unwrap(),
         runtime: state.runtime,
@@ -206,10 +207,11 @@ fn init_refuses_an_unrecorded_plan() {
 }
 
 /// A plan-less SIM policy, as only decoding (or the version-1 lift) builds
-/// one: bill day 1, warning at `warn` and a hard stop at `stop` bytes.
+/// one: monthly on bill day 1, warning at `warn` and a hard stop at
+/// `stop` bytes.
 fn unrecorded_sim(warn: u64, stop: u64) -> SimPolicy {
     let policy: SimPolicy = serde_json::from_str(&format!(
-        r#"{{"bill_day":1,"plan":null,"warn_bytes":{warn},"stop":{{"hard_stop":{{"bytes":{stop}}}}}}}"#
+        r#"{{"cycle":{{"monthly":{{"bill_day":1}}}},"plan":null,"warn_bytes":{warn},"stop":{{"hard_stop":{{"bytes":{stop}}}}}}}"#
     ))
     .unwrap();
     assert_eq!(policy.plan(), None);
@@ -285,8 +287,7 @@ fn an_edited_sim_policy_keeps_its_plan_recorded() {
         .update_config(other.deployment.config_generation(), |mut parts| {
             let sim = &parts.exit.sim;
             parts.exit.sim =
-                SimPolicy::new(sim.bill_day(), smarty_plan(), sim.warn_bytes(), sim.stop())
-                    .unwrap();
+                SimPolicy::new(sim.cycle(), smarty_plan(), sim.warn_bytes(), sim.stop()).unwrap();
             Ok::<_, Infallible>(parts)
         })
         .unwrap();
@@ -634,7 +635,7 @@ fn v1_variants(parts: DeploymentParts, sim: SimPolicy) -> DeploymentParts {
         gw_lladdr: MacAddr::parse("02:68:6f:6d:65:01").unwrap(),
         subnet: "10.0.0.0/24".parse().unwrap(),
     });
-    exit.egress_check.pairing = Pairing::Unpaired;
+    exit.egress_check.as_mut().unwrap().pairing = Pairing::Unpaired;
     exit.sim = sim;
     let mut policy = parts.policy;
     policy.block_quic = false;
@@ -709,7 +710,9 @@ fn the_version_one_every_variant_golden_decodes_but_needs_a_stop_policy() {
 
     let with_stop = v1_every_variant_with_stop();
     let sim = SimPolicy::new(
-        BillDay::new(15).unwrap(),
+        CycleRule::Monthly {
+            bill_day: BillDay::new(15).unwrap(),
+        },
         smarty_plan(),
         1_000_000,
         StopPolicy::HardStop { bytes: 2_000_000 },
@@ -732,8 +735,8 @@ fn suspended(n: u8, reason: SuspendReason) -> User {
 }
 
 /// Every version-2 variant one document can hold, on top of the version-1
-/// variants: the decided SMARTY plan with no line, bill day 31 and the
-/// pilot's hard stop; an uplink baseline; the pilot's cap on active users,
+/// variants: the decided 1pMobile plan with its rolling fair-use line,
+/// 30-day cycles and the pilot's hard stop; an uplink baseline; the pilot's cap on active users,
 /// its automatic quotas and its alert channels, set up for lon1; a viewer;
 /// a user with every policy, an alias and an agreement; users suspended for
 /// every reason, with and without a policy, alias or agreement. (The
@@ -743,8 +746,11 @@ fn suspended(n: u8, reason: SuspendReason) -> User {
 fn v2_variants(parts: DeploymentParts) -> DeploymentParts {
     let date = |text: &str| CalendarDate::parse(text).unwrap();
     let sim = SimPolicy::new(
-        BillDay::new(31).unwrap(),
-        smarty_plan(),
+        CycleRule::FixedDays {
+            days: PeriodDays::new(30).unwrap(),
+            anchor: date("2026-10-28"),
+        },
+        SimPlan::one_p_mobile_unlimited().unwrap(),
         PILOT_SIM_WARN_BYTES,
         StopPolicy::HardStop {
             bytes: PILOT_SIM_HARD_STOP_BYTES,

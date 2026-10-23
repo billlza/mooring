@@ -179,6 +179,23 @@ fn recording_an_agreement_changes_no_bundle_and_no_export() {
     assert_eq!(exports, (4, 6));
 }
 
+/// Recording the carrier check changes only the Mac's guard: no bundle and
+/// no export carries it.
+#[test]
+fn recording_the_carrier_changes_no_bundle_and_no_export() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let check = fixture.deployment.exit().egress_check.clone().unwrap();
+    let unobserved = edit(&fixture.deployment, |parts| {
+        parts.exit.egress_check = None;
+    });
+    let exports = assert_neutral(
+        &fixture,
+        &unobserved,
+        Bookkeeping::CarrierRecorded { check },
+    );
+    assert_eq!(exports, (6, 6));
+}
+
 /// Suspending a user is not bookkeeping: every bundle the user was served
 /// in changes, exactly as if the user were gone, so it bumps the
 /// generation. The user's credentials stay referenced, so resuming renders

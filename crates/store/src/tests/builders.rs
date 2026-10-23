@@ -31,7 +31,9 @@ use mooring_model::secret::{
     Ed25519Seed, Hy2KeyPem, Password, RealityPrivateKey, RouterAdminPassword, Secret, SecretEntry,
     SecretKind, SecretMaterial, SecretRef, WgPrivateKey,
 };
-use mooring_model::sim::{BillDay, Carrier, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy};
+use mooring_model::sim::{
+    BillDay, Carrier, CycleRule, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy,
+};
 use mooring_model::state::StateV2;
 use mooring_model::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
@@ -80,12 +82,14 @@ pub(crate) fn exit_site() -> ExitSite {
             subnet: "192.168.1.0/24".parse::<LanSubnet>().unwrap(),
         },
         uplink: Uplink::SameAsExit,
-        egress_check: EgressCheck {
+        egress_check: Some(EgressCheck {
             carrier_prefixes: NonEmpty::new("31.120.0.0/14".parse::<CarrierPrefix>().unwrap()),
             pairing: Pairing::Paired,
-        },
+        }),
         sim: SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             smarty_plan(),
             V1_GOLDEN_WARN_BYTES,
             StopPolicy::HardStop {

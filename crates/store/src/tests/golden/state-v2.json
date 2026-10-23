@@ -17,7 +17,11 @@
         "pairing": "paired"
       },
       "sim": {
-        "bill_day": 1,
+        "cycle": {
+          "monthly": {
+            "bill_day": 1
+          }
+        },
         "plan": null,
         "warn_bytes": 450000000000,
         "stop": {

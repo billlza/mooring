@@ -129,7 +129,7 @@ impl SimForecast {
         as_of: UnixTime,
         daily: &[DailySimBytes],
     ) -> Result<Self, ForecastError> {
-        let cycle = BillingCycle::of_instant(policy.bill_day(), as_of)?;
+        let cycle = BillingCycle::of_instant(policy.cycle(), as_of)?;
         let start = cycle.starts_at().as_secs();
         let elapsed = as_of.as_secs() - start;
         if elapsed == 0 {
@@ -243,9 +243,7 @@ mod tests {
 
     use mooring_model::sim::{AfterAllowance, Carrier, EvidenceRef, PlanKind, SimPlan};
     use mooring_model::target::EvidenceUrl;
-    use mooring_model::{
-        BillDay, ModelError, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES, StopPolicy,
-    };
+    use mooring_model::{BillDay, CycleRule, FairUseWindow, ModelError, StopPolicy};
     use proptest::prelude::*;
 
     use super::*;
@@ -279,6 +277,7 @@ mod tests {
     fn fair_use() -> PlanKind {
         PlanKind::UnlimitedFairUse {
             fair_use_bytes: TEST_FAIR_USE_BYTES,
+            window: FairUseWindow::BillingCycle,
         }
     }
 
@@ -286,7 +285,9 @@ mod tests {
     /// line.
     fn policy() -> SimPolicy {
         SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             plan(fair_use()),
             450 * GB,
             StopPolicy::HardStop { bytes: 560 * GB },
@@ -355,17 +356,19 @@ mod tests {
         );
     }
 
-    /// SMARTY's Unlimited plan has no line (decision F1), so the pilot's
-    /// policy (decision F2) has exactly two thresholds: the warning and the
-    /// hard stop, and no line row.
+    /// SMARTY's Unlimited plan has no line, so its pilot policy (decision F2
+    /// as first made, 240e9 and 300e9) has exactly two thresholds: the
+    /// warning and the hard stop, and no line row.
     #[test]
     fn a_lineless_plan_projects_warn_and_hard_stop_only() {
         let pilot = SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             plan(PlanKind::Unlimited),
-            PILOT_SIM_WARN_BYTES,
+            240_000_000_000,
             StopPolicy::HardStop {
-                bytes: PILOT_SIM_HARD_STOP_BYTES,
+                bytes: 300_000_000_000,
             },
         )
         .unwrap();
@@ -458,7 +461,9 @@ mod tests {
         // second of 6 October.
         let warn = 431_999_500_000;
         let policy = SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             plan(PlanKind::Unlimited),
             warn,
             StopPolicy::HardStop { bytes: warn + GB },
@@ -484,7 +489,9 @@ mod tests {
     fn a_crossing_at_the_cycle_end_is_not_this_cycle() {
         // 10 GB on 1 October; 310 GB is reached after exactly 31 days.
         let policy = SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             plan(fair_use()),
             310 * GB,
             StopPolicy::HardStop { bytes: 400 * GB },
@@ -501,7 +508,9 @@ mod tests {
         // 200 kB less is reached 1.728 s earlier: in the cycle's last
         // second.
         let earlier = SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             plan(fair_use()),
             310 * GB - 200_000,
             StopPolicy::HardStop { bytes: 400 * GB },
@@ -528,7 +537,9 @@ mod tests {
             after: AfterAllowance::Blocked,
         };
         let policy = SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             plan(capped),
             50 * GB,
             StopPolicy::HardStop { bytes: 90 * GB },
@@ -545,7 +556,7 @@ mod tests {
         // No plan recorded (a policy lifted from version 1): only the
         // warning and the hard stop.
         let unrecorded: SimPolicy = serde_json::from_str(
-            r#"{"bill_day":1,"plan":null,"warn_bytes":50000000000,"stop":{"hard_stop":{"bytes":90000000000}}}"#,
+            r#"{"cycle":{"monthly":{"bill_day":1}},"plan":null,"warn_bytes":50000000000,"stop":{"hard_stop":{"bytes":90000000000}}}"#,
         )
         .unwrap();
         assert_eq!(unrecorded.plan(), None);
@@ -559,7 +570,9 @@ mod tests {
         );
         // Accepting deprioritisation: no hard stop.
         let accepting = SimPolicy::new(
-            BillDay::new(1).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
             plan(fair_use()),
             50 * GB,
             StopPolicy::AcceptDeprioritisation,
@@ -648,7 +661,9 @@ mod tests {
         );
         // A cycle before 1970 does not exist.
         let early = SimPolicy::new(
-            BillDay::new(20).unwrap(),
+            CycleRule::Monthly {
+                bill_day: BillDay::new(20).unwrap(),
+            },
             plan(PlanKind::Unlimited),
             1,
             StopPolicy::HardStop { bytes: 2 },
@@ -726,7 +741,9 @@ mod tests {
                 fair_use()
             };
             SimPolicy::new(
-                BillDay::new(day).unwrap(),
+                CycleRule::Monthly {
+                    bill_day: BillDay::new(day).unwrap(),
+                },
                 plan(kind),
                 warn,
                 StopPolicy::HardStop { bytes: stop },
@@ -748,7 +765,7 @@ mod tests {
             per_day in proptest::collection::vec(0_u64..60 * GB, 31),
         ) {
             let as_of = UnixTime::from_secs(as_of);
-            let cycle = BillingCycle::of_instant(policy.bill_day(), as_of).unwrap();
+            let cycle = BillingCycle::of_instant(policy.cycle(), as_of).unwrap();
             prop_assume!(as_of > cycle.starts_at());
             let last = CalendarDate::utc_of(UnixTime::from_secs(as_of.as_secs() - 1)).unwrap();
             let count = (last.days_since_epoch() - cycle.start().days_since_epoch() + 1) as usize;

@@ -27,6 +27,16 @@
 //!   user's file for CFM with mode 0600, never overwriting one, reading
 //!   only that user's secrets and only once every check has passed.
 //!
+//! M5a adds the deployment's creation and the SIM line's records (design
+//! §7, §10.2):
+//!
+//! - `exit init --interface <bsd> --cycle-anchor <date> --flow-cap <n>
+//!   [--yes]` creates the deployment with the pilot's decided values and
+//!   the pinned M7 as the egress;
+//! - `exit record-carrier --prefix <cidr>... --pairing paired|unpaired
+//!   [--yes]` records the line's carrier check, once, as bookkeeping;
+//! - `sim set-anchor <date> [--yes]` moves fixed-length billing cycles.
+//!
 //! The console's first slice adds the daemon and its client (design §10.1,
 //! §15):
 //!
@@ -55,6 +65,8 @@ mod daemon;
 #[cfg(target_os = "macos")]
 mod error;
 #[cfg(target_os = "macos")]
+mod exit;
+#[cfg(target_os = "macos")]
 mod keychain;
 #[cfg(target_os = "macos")]
 mod paths;
@@ -62,6 +74,10 @@ mod paths;
 mod prompt;
 #[cfg(target_os = "macos")]
 mod router;
+#[cfg(target_os = "macos")]
+mod sim;
+#[cfg(target_os = "macos")]
+mod state;
 #[cfg(target_os = "macos")]
 mod status;
 #[cfg(target_os = "macos")]
