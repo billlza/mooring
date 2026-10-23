@@ -10,6 +10,9 @@ use super::{
     unquote,
 };
 
+/// sing-box's security bumps, as the lock writes them.
+const SING_BOX_BUMPS: &str = "security-bumps = [\n    \"golang.org/x/crypto@v0.58.0\",\n    \"golang.org/x/net@v0.61.0\",\n    \"google.golang.org/grpc@v1.84.0\",\n]";
+
 fn repository_lock() -> Lock {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -167,15 +170,11 @@ fn a_lock_that_contradicts_itself_is_refused() {
             "security bump",
         ),
         (
-            r#"security-bumps = ["golang.org/x/crypto@v0.58.0", "golang.org/x/net@v0.61.0"]"#,
-            r#"security-bumps = ["golang.org/x/net@v0.58.0", "golang.org/x/net@v0.61.0"]"#,
+            r#""golang.org/x/crypto@v0.58.0","#,
+            r#""golang.org/x/net@v0.58.0","#,
             "twice",
         ),
-        (
-            r#"security-bumps = ["golang.org/x/crypto@v0.58.0", "golang.org/x/net@v0.61.0"]"#,
-            "security-bumps = []",
-            "exactly when",
-        ),
+        (SING_BOX_BUMPS, "security-bumps = []", "exactly when"),
         (
             r#"patch = "engines/patches/xray-v26.9.30.patch""#,
             r#"patch = """#,
@@ -399,7 +398,8 @@ fn the_patches_follow_the_lock() {
                 replace: None,
                 bumps: vec![
                     "golang.org/x/crypto@v0.58.0".to_owned(),
-                    "golang.org/x/net@v0.61.0".to_owned()
+                    "golang.org/x/net@v0.61.0".to_owned(),
+                    "google.golang.org/grpc@v1.84.0".to_owned()
                 ],
                 path: "engines/patches/sing-box-v1.14.2.patch".to_owned(),
                 sha256: lock.sing_box.patch_sha256.clone(),
@@ -407,11 +407,7 @@ fn the_patches_follow_the_lock() {
         ]
     );
     let unbumped = text()
-        .replacen(
-            r#"security-bumps = ["golang.org/x/crypto@v0.58.0", "golang.org/x/net@v0.61.0"]"#,
-            "security-bumps = []",
-            1,
-        )
+        .replacen(SING_BOX_BUMPS, "security-bumps = []", 1)
         .replacen(
             r#"patch = "engines/patches/sing-box-v1.14.2.patch""#,
             r#"patch = """#,

@@ -53,12 +53,14 @@ security-bumps = ["golang.org/x/net@v0.61.0"]
 # The go.mod and go.sum change of the replace and the bumps, so that the
 # build runs with -mod=readonly (design §4.4). `cargo xtask engines-prepare`
 # writes it on the hosted runner; it is reviewed, committed here and pinned.
-# The replace alone was reviewed on 2026-10-23 (hosted run 39906955840): one
-# replace line and the two go.sum lines of the replacement, equal to
-# sum.golang.org's; the pseudo-version is commit e1986a4d31ca33c0
-# (proxy.golang.org .info), 8cdf7bf9's parent.
+# Reviewed 2026-10-23 (hosted run 39913131364): the replace line; x/net
+# v0.61.0 with what its go.mod requires (x/crypto v0.58.0, x/sync v0.24.0,
+# x/sys v0.49.0, x/text v0.43.0, x/tools v0.51.0); and 14 go.sum lines, all
+# equal to sum.golang.org's. The replacement's pseudo-version is commit
+# e1986a4d31ca33c0 (proxy.golang.org .info), 8cdf7bf9's parent. govulncheck
+# found nothing reachable in either Xray output of the patched tree.
 patch = "engines/patches/xray-v26.9.30.patch"
-patch-sha256 = ""
+patch-sha256 = "c028be2535f0eb40ecbf2fdcfc2a34c88ff402f52d26a0afffcc0ae19f5822b2"
 
 # "<target>" = "<sha256 of the unsigned binary>", filled from the first
 # reproducible hosted build and checked by `cargo xtask engines-verify`.
@@ -79,9 +81,16 @@ common-tags = ["badlinkname", "tfogo_checklinkname0"]
 # channel deadlocks, fixed in v0.56.0) and GO-2026-6303 (fixed in v0.55.0)
 # affect. sing-box links both: its HTTP/2 transports and its SSH outbound
 # (inference: govulncheck has not scanned the unbumped tree; CFM's v1.14.2
-# patch makes the same two bumps for the same advisories). The scans of the
-# patched tree run before the patch is pinned.
-security-bumps = ["golang.org/x/crypto@v0.58.0", "golang.org/x/net@v0.61.0"]
+# patch makes the same two bumps for the same advisories). With those two,
+# govulncheck found GO-2026-6348, -6061 and -4762 (google.golang.org/grpc
+# v1.79.1, fixed in v1.83.1, v1.82.1 and v1.79.3) reachable in all four
+# sing-box outputs, through its API commands and daemon (hosted run
+# 39913131364); v1.84.0 (2026-09-17) is grpc's latest stable release.
+security-bumps = [
+    "golang.org/x/crypto@v0.58.0",
+    "golang.org/x/net@v0.61.0",
+    "google.golang.org/grpc@v1.84.0",
+]
 # The go.mod and go.sum change of the bumps, as Xray's patch.
 patch = "engines/patches/sing-box-v1.14.2.patch"
 patch-sha256 = ""
