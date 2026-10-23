@@ -5,9 +5,9 @@
 //! already): installs the agent with the operator's own root key, then
 //! hands the VPS to Mooring's keys.
 //!
-//! 1. The agent is uploaded over SSH with the operator's root key, the
-//!    connection bound to the M7 (`dial-bound`) and checked against the
-//!    host key `node new` pinned.
+//! 1. The agent is uploaded over SSH with the operator's root key, over a
+//!    connection this process opens bound to the M7 (`node::dial`), checked
+//!    against the host key `node new` pinned.
 //! 2. `Bootstrap` runs with that key. It replaces root's `authorized_keys`
 //!    with the bootstrap and operations lines, so the operator's own key
 //!    stops working, and it generates a new host key, which the Mac pins at
@@ -90,7 +90,7 @@ pub(crate) fn adopt(
         .into());
     }
     let address = PublicIpv4::new(args.address).map_err(LocalError::NodeAddress)?;
-    facing_the_m7(env, args.interface)?;
+    let egress = facing_the_m7(env, args.interface)?;
     let agent = read_agent(args.agent)?;
     let agent_sha = Sha256Hex::from_bytes(*Sha256Digest::of(&agent).as_bytes());
     let files = NodeFiles::of(&support, args.node);
@@ -118,7 +118,8 @@ pub(crate) fn adopt(
             address,
             identity: identity.to_path_buf(),
             known_hosts: files.known_hosts(),
-            interface: args.interface.clone(),
+            egress,
+            relay_dir: files.dir().to_path_buf(),
             mooringctl: mooringctl.clone(),
             remote,
             deadline: None,

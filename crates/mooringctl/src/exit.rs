@@ -349,7 +349,7 @@ pub(crate) fn observe(
 ) -> Result<(), CommandError> {
     let store = Store::new(support_dir(env)?);
     let state = load(&store)?;
-    let index = facing_the_m7(env, interface)?;
+    let index = facing_the_m7(env, interface)?.index();
     let check = state.deployment.exit().egress_check.as_ref();
     let mut observed = 0_usize;
     for node in state.deployment.nodes().values() {

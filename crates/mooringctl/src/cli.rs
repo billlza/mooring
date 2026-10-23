@@ -60,17 +60,13 @@ pub(crate) enum Command {
         #[arg(long, requires = "follow")]
         until_parent_exits: bool,
     },
-    /// Connect to a node through the interface that faces the M7 and relay
-    /// standard input and output: management SSH's ProxyCommand.
+    /// Relay standard input and output over the one-time socket of the
+    /// mooringctl that started ssh, which opened the connection to the node
+    /// through the M7: management SSH's ProxyCommand.
     #[command(hide = true)]
-    DialBound {
-        /// The Mac's interface to the M7; its gateway must be the pinned M7.
-        #[arg(long, value_name = "BSD_NAME")]
-        interface: BsdName,
-        /// The node's address.
-        address: Ipv4Addr,
-        /// The node's SSH port.
-        port: u16,
+    SshRelay {
+        /// The socket, in the node's private directory.
+        socket: PathBuf,
     },
     /// Run the daemon (launchd starts it): poll the M7 on the interface
     /// the router pin records, and serve the console's status on the

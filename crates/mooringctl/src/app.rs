@@ -224,11 +224,7 @@ pub(crate) fn run(
             },
             json,
         ),
-        Command::DialBound {
-            interface,
-            address,
-            port,
-        } => crate::node::dial::dial_bound(env, &interface, address, port),
+        Command::SshRelay { socket } => crate::node::dial::ssh_relay(&socket),
         Command::Daemon => daemon(env),
     };
     let Err(error) = result else {

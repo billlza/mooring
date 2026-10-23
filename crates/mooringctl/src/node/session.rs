@@ -35,16 +35,17 @@ pub(crate) fn deployed_node<'d>(
 }
 
 /// The operations key's sessions to `node`, after checking that
-/// `interface` faces the M7, each ending by `deadline` if there is one
-/// ([`SshTarget::deadline`]). The node's `known_hosts` is rewritten from
-/// the state's pin, so the pin in the state is the one ssh checks.
+/// `interface` faces the M7 (each session's connection is bound to it),
+/// each ending by `deadline` if there is one ([`SshTarget::deadline`]). The
+/// node's `known_hosts` is rewritten from the state's pin, so the pin in
+/// the state is the one ssh checks.
 pub(crate) fn ops_session<'a>(
     env: &Env<'a>,
     node: &Node,
     interface: &BsdName,
     deadline: Option<Instant>,
 ) -> Result<Box<dyn NodeSession + 'a>, CommandError> {
-    facing_the_m7(env, interface)?;
+    let egress = facing_the_m7(env, interface)?;
     let site = match &node.lifecycle {
         NodeLifecycle::Adopted { site } | NodeLifecycle::Applied { site, .. } => site,
         other => {
@@ -64,7 +65,8 @@ pub(crate) fn ops_session<'a>(
         address,
         identity: files.ops_key(),
         known_hosts: files.known_hosts(),
-        interface: interface.clone(),
+        egress,
+        relay_dir: files.dir().to_path_buf(),
         mooringctl: std::env::current_exe().map_err(LocalError::CurrentExe)?,
         remote: Remote::ForcedCommand,
         deadline,
