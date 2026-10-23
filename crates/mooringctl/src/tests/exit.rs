@@ -249,10 +249,72 @@ fn record_carrier_records_the_check_once_as_bookkeeping() {
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert_eq!(
         outcome.stderr,
-        "mooringctl: the carrier check is recorded already; replacing it is a configuration change, which this build does not make\n"
+        "mooringctl: the carrier check is recorded already; give --replace to replace it (a configuration change)\n"
     );
     assert_eq!(state_bytes(&harness), before);
     assert_eq!(harness.console.asked.len(), 1);
+}
+
+/// A new SIM's carrier check replaces the old one with `--replace`, as a
+/// configuration change; without a check recorded there is nothing to
+/// replace, and a declined replacement changes nothing.
+#[test]
+fn record_carrier_replaces_the_check_as_a_configuration_change() {
+    let deployment = fixture(|_| {});
+    let old = deployment.exit().egress_check.clone().unwrap();
+    let mut harness = harness_with(deployment.clone());
+    let replace = [
+        "exit",
+        "record-carrier",
+        "--prefix",
+        "31.94.0.0/16",
+        "--pairing",
+        "unpaired",
+        "--replace",
+    ];
+    harness.console.answers.push_back(Answer::No);
+    let before = state_bytes(&harness);
+    let outcome = harness.run(&replace);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(state_bytes(&harness), before);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&replace);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "carrier check: every egress address in 31.94.0.0/16; pairing unpaired\n\
+             it replaces: every egress address in 31.120.0.0/14; pairing paired; every node then needs `node apply`\n\
+             replaced the carrier check; the deployment is at generation {}, and every node needs `node apply`\n",
+            deployment.config_generation().get() + 1
+        )
+    );
+    assert_eq!(
+        harness.console.asked,
+        ["Replace the carrier check?", "Replace the carrier check?"]
+    );
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(
+        after.exit().egress_check,
+        Some(EgressCheck {
+            carrier_prefixes: NonEmpty::new(prefix("31.94.0.0/16")),
+            pairing: Pairing::Unpaired,
+        })
+    );
+    assert_ne!(after.exit().egress_check, Some(old));
+    assert_eq!(
+        after.config_generation().get(),
+        deployment.config_generation().get() + 1
+    );
+    // Without a check recorded, `--replace` is refused before asking.
+    let mut harness = harness_with(fixture(|parts| parts.exit.egress_check = None));
+    let outcome = harness.run(&replace);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: no carrier check is recorded, so there is none to replace; record it without --replace\n"
+    );
+    assert!(harness.console.asked.is_empty());
 }
 
 #[test]

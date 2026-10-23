@@ -213,6 +213,11 @@ pub(crate) enum ExitCommand {
         /// direct probe's.
         #[arg(long, value_enum)]
         pairing: PairingArg,
+        /// Replace the carrier check recorded already, as when the SIM
+        /// changes: a configuration change, so every node then needs
+        /// `node apply`.
+        #[arg(long)]
+        replace: bool,
         /// Record without asking.
         #[arg(long)]
         yes: bool,

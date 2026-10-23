@@ -463,11 +463,16 @@ pub(crate) enum LocalError {
     /// The pilot's values were refused by the model.
     #[error("the pilot's values were not accepted")]
     Pilot(#[source] ModelError),
-    /// The carrier check is recorded already.
+    /// The carrier check is recorded already, and `--replace` was not given.
     #[error(
-        "the carrier check is recorded already; replacing it is a configuration change, which this build does not make"
+        "the carrier check is recorded already; give --replace to replace it (a configuration change)"
     )]
     CarrierRecorded,
+    /// `--replace` was given, and no carrier check is recorded.
+    #[error(
+        "no carrier check is recorded, so there is none to replace; record it without --replace"
+    )]
+    CarrierNotRecorded,
     /// The carrier prefixes given were not accepted.
     #[error("the carrier prefixes were not accepted")]
     CarrierCheck(#[source] ModelError),

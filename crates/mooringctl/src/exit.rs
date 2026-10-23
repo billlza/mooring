@@ -27,7 +27,7 @@ use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::node::dial::facing_the_m7;
 use crate::prompt::Answer;
 use crate::router;
-use crate::state::{load, output};
+use crate::state::{load, output, state_change};
 use crate::status::{ANSWER_TIMEOUT, Next, connect, read_reply_line};
 
 /// `exit init --interface <bsd> --cycle-anchor <date> --flow-cap <n>
@@ -191,53 +191,84 @@ pub(crate) fn confirm(env: &mut Env<'_>, yes: bool, question: &str) -> Result<()
 }
 
 /// `exit record-carrier --prefix <cidr>... --pairing paired|unpaired
-/// [--yes]` (design §7, §10.2): records the line's carrier check, the
-/// public pool prefixes observed on the line (RIPE inetnum evidence, never
-/// a whole ASN) and the pairing mode, as the bookkeeping record
-/// `CarrierRecorded`. It keeps the configuration generation, so no node
-/// needs `node apply`. A check recorded already is refused before anything
-/// is asked: replacing one is a configuration change.
+/// [--replace] [--yes]` (design §7, §10.2): records the line's carrier
+/// check, the public pool prefixes observed on the line (RIPE inetnum
+/// evidence, never a whole ASN) and the pairing mode, as the bookkeeping
+/// record `CarrierRecorded`. It keeps the configuration generation, so no
+/// node needs `node apply`. A check recorded already is refused before
+/// anything is asked unless `--replace` is given, as when the SIM changes;
+/// replacing it is a configuration change, after which every node needs
+/// `node apply` (the daemon also clears a latch then, design §10.2).
 pub(crate) fn record_carrier(
     env: &mut Env<'_>,
     out: &mut dyn Write,
     prefixes: Vec<CarrierPrefix>,
     pairing: Pairing,
+    replace: bool,
     yes: bool,
 ) -> Result<(), CommandError> {
     let store = Store::new(support_dir(env)?);
     let state = load(&store)?;
-    if state.deployment.exit().egress_check.is_some() {
-        return Err(LocalError::CarrierRecorded.into());
+    let recorded = state.deployment.exit().egress_check.clone();
+    match (&recorded, replace) {
+        (Some(_), false) => return Err(LocalError::CarrierRecorded.into()),
+        (None, true) => return Err(LocalError::CarrierNotRecorded.into()),
+        (Some(_), true) | (None, false) => {}
     }
     let carrier_prefixes = NonEmpty::try_from(prefixes).map_err(LocalError::CarrierCheck)?;
     let check = EgressCheck {
         carrier_prefixes,
         pairing,
     };
+    writeln!(out, "carrier check: {}", describe_check(&check)).map_err(output)?;
+    let Some(old) = recorded else {
+        confirm(env, yes, "Record this carrier check?")?;
+        store
+            .record(
+                state.deployment.config_generation(),
+                Bookkeeping::CarrierRecorded { check },
+            )
+            .map_err(|error| LocalError::StateChange(Box::new(error)))?;
+        writeln!(out, "recorded the carrier check; no node apply is needed").map_err(output)?;
+        return Ok(());
+    };
+    writeln!(
+        out,
+        "it replaces: {}; every node then needs `node apply`",
+        describe_check(&old)
+    )
+    .map_err(output)?;
+    confirm(env, yes, "Replace the carrier check?")?;
+    let state = store
+        .update_config(state.deployment.config_generation(), |mut parts| {
+            parts.exit.egress_check = Some(check);
+            Ok::<_, std::convert::Infallible>(parts)
+        })
+        .map_err(state_change)?;
+    writeln!(
+        out,
+        "replaced the carrier check; the deployment is at generation {}, and every node needs `node apply`",
+        state.deployment.config_generation()
+    )
+    .map_err(output)?;
+    Ok(())
+}
+
+/// A carrier check, as the operator reads it.
+fn describe_check(check: &EgressCheck) -> String {
     let shown: Vec<String> = check
         .carrier_prefixes
         .iter()
         .map(ToString::to_string)
         .collect();
-    writeln!(
-        out,
-        "carrier check: every egress address in {}; pairing {}",
+    format!(
+        "every egress address in {}; pairing {}",
         shown.join(", "),
-        match pairing {
+        match check.pairing {
             Pairing::Paired => "paired",
             Pairing::Unpaired => "unpaired",
         }
     )
-    .map_err(output)?;
-    confirm(env, yes, "Record this carrier check?")?;
-    store
-        .record(
-            state.deployment.config_generation(),
-            Bookkeeping::CarrierRecorded { check },
-        )
-        .map_err(|error| LocalError::StateChange(Box::new(error)))?;
-    writeln!(out, "recorded the carrier check; no node apply is needed").map_err(output)?;
-    Ok(())
 }
 
 /// `exit enable` and `exit disable` (design §13): the operator's runtime
