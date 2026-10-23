@@ -24,18 +24,20 @@ pub(crate) mod resume;
 pub(crate) mod stage;
 pub(crate) mod validate;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use mooring_agent_proto::{
-    AgentError, ApplyStep, BundleHeader, EngineUser, Generation, IoOp, ManagedFile, RollbackCause,
-    StderrTail, SystemdOp, TxnStage, TxnState, UnitName, WG_INTERFACE,
+    AgentError, ApplyStep, BundleHeader, EngineUser, Generation, HostFile, HostProfile, IoOp,
+    ManagedFile, RollbackCause, StderrTail, SystemdOp, TxnStage, TxnState, UnitName, WG_INTERFACE,
 };
 
 use crate::gate::{self, engine_unit};
 use crate::host::{Node, Tool, run_ok};
+use crate::hostfiles;
 use crate::paths::{Paths, generation_name};
 use crate::store::{Lock, io_error};
 use record::{
@@ -285,9 +287,13 @@ fn attempt(
             },
         ));
     }
+    let host = match install_host(paths, &dir) {
+        Ok(host) => host,
+        Err(cause) => return Err(roll_back(paths, node, generation, previous, cause)),
+    };
     running(paths, generation, TxnStage::Apply)?;
     let before = stage::installed_header(paths, previous)?;
-    if let Err(cause) = apply_changes(paths, node, before.as_ref(), header, &dir) {
+    if let Err(cause) = apply_changes(paths, node, before.as_ref(), header, &dir, &host) {
         return Err(roll_back(paths, node, generation, previous, cause));
     }
     running(paths, generation, TxnStage::HealthGate)?;
@@ -303,16 +309,24 @@ fn attempt(
     Ok(())
 }
 
-/// Preconditions (design §11.2 step 1): not halted, the live host facts
-/// and port range those of the bundle, and every blob stored and intact.
+/// Preconditions (design §11.2 step 1): not halted, a host profile this
+/// agent has, the live host facts and port range those of the bundle, and
+/// every blob stored and intact.
 fn preconditions(paths: &Paths, node: &dyn Node, header: &BundleHeader) -> Result<(), AgentError> {
     if gate::halted(paths)?.is_some() {
         return Err(AgentError::NodeHalted);
     }
+    let supported = HostProfile::CURRENT.version;
+    if header.host_profile_version > supported {
+        return Err(AgentError::HostProfileUnsupported {
+            required: header.host_profile_version,
+            supported,
+        });
+    }
     header
         .host_facts
         .check_live(&crate::hello::host_facts(paths, node)?)?;
-    let wanted: std::collections::BTreeSet<_> = header
+    let wanted: BTreeSet<_> = header
         .files
         .iter()
         .map(|(_, sha256)| *sha256)
@@ -417,18 +431,36 @@ fn wg_value(conf: &str, key: &str) -> Option<String> {
     })
 }
 
+/// Installs the host profile's files staged with the generation in `dir`
+/// (the swap's last part, design §11.2 step 4) and returns those that
+/// changed. A generation an older agent staged has none, and changes none.
+fn install_host(paths: &Paths, dir: &Path) -> Result<BTreeSet<HostFile>, RollbackCause> {
+    let staged = dir.join(hostfiles::HOST_DIR);
+    if !staged.is_dir() {
+        return Ok(BTreeSet::new());
+    }
+    hostfiles::install(paths, &staged).map_err(|error| RollbackCause::Swap {
+        errno: match error {
+            AgentError::Io { errno, .. } => errno,
+            _ => None,
+        },
+    })
+}
+
 /// Applies only what changed (design §11.2 step 5) from `before` to the
 /// generation now current, in `dir`: the ruleset, the tunnel (a restart if
-/// its address or MTU changed, else `wg syncconf`), and the engines whose
-/// configuration or artifacts changed. Nothing is restarted while the node
-/// is halted. Tool output is scrubbed of the generation's secrets; if they
-/// cannot be read, nothing is run.
+/// its address or MTU changed, else `wg syncconf`), what the host profile
+/// files in `host` need, and the engines whose configuration, artifacts or
+/// unit changed. Nothing is restarted while the node is halted. Tool
+/// output is scrubbed of the generation's secrets; if they cannot be read,
+/// nothing is run.
 pub(crate) fn apply_changes(
     paths: &Paths,
     node: &dyn Node,
     before: Option<&BundleHeader>,
     next: &BundleHeader,
     dir: &Path,
+    host: &BTreeSet<HostFile>,
 ) -> Result<(), RollbackCause> {
     let secrets = validate::secrets(dir).map_err(|error| RollbackCause::Apply {
         step: ApplyStep::Nftables,
@@ -448,6 +480,10 @@ pub(crate) fn apply_changes(
     if changed(ManagedFile::WgConf) {
         apply_wireguard(paths, &step, before, dir)?;
     }
+    for command in hostfiles::commands(host) {
+        let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
+        step.run(command.step.apply_step(), command.tool, &args)?;
+    }
     if gate::halted(paths)
         .map_err(|error| step.failed(ApplyStep::EngineRestart, &error))?
         .is_some()
@@ -455,11 +491,15 @@ pub(crate) fn apply_changes(
         return Ok(());
     }
     let engines_changed = before.is_none_or(|before| before.engines != next.engines);
-    for (engine, file) in [
-        (EngineUser::Xray, ManagedFile::XrayConfig),
-        (EngineUser::Hy2, ManagedFile::Hy2Config),
+    for (engine, file, unit) in [
+        (
+            EngineUser::Xray,
+            ManagedFile::XrayConfig,
+            HostFile::XrayUnit,
+        ),
+        (EngineUser::Hy2, ManagedFile::Hy2Config, HostFile::Hy2Unit),
     ] {
-        if changed(file) || engines_changed {
+        if changed(file) || engines_changed || host.contains(&unit) {
             let unit = engine_unit(engine)
                 .map_err(|error| step.failed(ApplyStep::EngineRestart, &error))?;
             step.run(
@@ -615,7 +655,8 @@ fn to_previous(
         Err(AgentError::Io { errno, .. }) => return Err(RollbackCause::Swap { errno }),
         Err(_) => return Err(RollbackCause::Swap { errno: None }),
     };
-    apply_changes(paths, node, failed, &header, &dir)?;
+    let host = install_host(paths, &dir)?;
+    apply_changes(paths, node, failed, &header, &dir, &host)?;
     health::wait(paths, node, &dir, health::BUDGET)
         .map_err(|failed| RollbackCause::HealthGate { failed })
 }
@@ -707,7 +748,7 @@ fn prune(paths: &Paths, current: Generation) -> Result<(), AgentError> {
             .take(KEPT_PREVIOUS)
             .map(|&generation| Generation::new(generation)),
     );
-    let mut used = std::collections::BTreeSet::new();
+    let mut used = BTreeSet::new();
     for generation in kept {
         if let Some(header) = stage::installed_header(paths, generation)? {
             used.extend(

@@ -47,6 +47,14 @@ fn a_blob_that_hashes_to_its_name_is_stored_and_present() {
     )
     .unwrap();
     assert_eq!(std::fs::read(paths.blob(&sha(payload))).unwrap(), payload);
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(paths.blob(&sha(payload)))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "a blob may hold the bundle's secrets");
+    }
     assert_eq!(files_in(&paths.blobs()), vec![sha(payload).to_string()]);
     let wanted: BTreeSet<Sha256Hex> = [sha(payload), sha(b"other")].into();
     assert_eq!(present(&paths, &wanted).unwrap(), [sha(payload)].into());

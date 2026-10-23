@@ -43,7 +43,7 @@ pub(crate) fn activate(
             errno: None,
         })?
         .to_owned();
-    let installed = install(paths, &sha)?;
+    let installed = install(paths, &sha, &paths.blob(&sha))?;
     let output = node
         .run_program(&installed, &["self-test"], &[])
         .map_err(|error| io_error(IoOp::SpawnProcess, &error))?;
@@ -80,9 +80,15 @@ fn production_path(paths: &Paths, path: &Path) -> std::path::PathBuf {
     Path::new("/").join(path.strip_prefix(&root).unwrap_or(path))
 }
 
-/// Copies the stored blob `sha` to `/usr/local/lib/mooring/agent/<sha>`
-/// (0755), unless an intact copy is there already.
-fn install(paths: &Paths, sha: &Sha256Hex) -> Result<std::path::PathBuf, AgentError> {
+/// Copies the agent `sha` from `source` (its stored blob, or for
+/// `Bootstrap` the running executable) to
+/// `/usr/local/lib/mooring/agent/<sha>` (0755), unless an intact copy is
+/// there already.
+pub(crate) fn install(
+    paths: &Paths,
+    sha: &Sha256Hex,
+    source: &Path,
+) -> Result<std::path::PathBuf, AgentError> {
     let dir = paths.agent_dir();
     let target = dir.join(sha.to_string());
     let intact = match fs::File::open(&target) {
@@ -92,7 +98,7 @@ fn install(paths: &Paths, sha: &Sha256Hex) -> Result<std::path::PathBuf, AgentEr
     };
     if !intact {
         ensure_dir(&dir).map_err(|error| io_error(IoOp::WriteBlob, &error))?;
-        let bytes = fs::read(paths.blob(sha)).map_err(|error| io_error(IoOp::ReadBlob, &error))?;
+        let bytes = fs::read(source).map_err(|error| io_error(IoOp::ReadBlob, &error))?;
         crate::store::write_atomic(&target, &bytes, 0o755)
             .map_err(|error| io_error(IoOp::WriteBlob, &error))?;
     }

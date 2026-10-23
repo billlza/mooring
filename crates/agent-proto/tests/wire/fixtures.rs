@@ -10,21 +10,21 @@ use std::num::NonZeroU16;
 
 use mooring_agent_proto::{
     AcceptLocal, AgentError, AgentErrorKind, AgentEvent, AgentEventKind, AppliedGeneration,
-    ApplyStep, Arch, BlobLen, BundleFiles, BundleHeader, ClearableHold, EgressViolationHold,
-    EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq, EventsV1, ExitPhase,
-    GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostFact, HostFacts,
-    HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion, IfName, Inbound,
-    InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MacAlertKind, MacDrainHold,
-    MacReportParts, MacReportV1, NodeName, OperatorHold, PROTOCOL, PortRange, ReportAccuracy,
-    ReportAlert, ReportBand, ReportBandNumber, ReportCapacity, ReportDataService, ReportExit,
-    ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine, ReportRadio,
-    ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim, ReportUsage,
-    ReportUser, ReportUserId, ReportUserStatus, Request, RequestKind, Resolution, Response,
-    ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason,
-    SshEd25519Key, SshdDirective, StatusV1, StderrTail, StoredMacReport, SystemdOp, TargetFacts,
-    TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage,
-    TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1,
-    VIEWER_STOP_WAIT_SECS, ValidationTool, WatchConditions, WatchConfig, WatchError,
+    ApplyStep, Arch, BlobLen, BootstrapStep, BundleFiles, BundleHeader, ClearableHold,
+    EgressViolationHold, EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq,
+    EventsV1, ExitPhase, GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds,
+    HostAccount, HostFact, HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus,
+    HttpVersion, IfName, Inbound, InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest,
+    MacAlertKind, MacDrainHold, MacReportParts, MacReportV1, NodeName, OperatorHold, PROTOCOL,
+    PortRange, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber, ReportCapacity,
+    ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine,
+    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim,
+    ReportUsage, ReportUser, ReportUserId, ReportUserStatus, Request, RequestKind, Resolution,
+    Response, ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex,
+    ShutdownReason, SshEd25519Key, SshdDirective, StatusV1, StderrTail, StoredMacReport, SystemdOp,
+    TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic,
+    TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1,
+    UsageV1, VIEWER_STOP_WAIT_SECS, ValidationTool, WatchConditions, WatchConfig, WatchError,
     WatchErrorKind, WatchTarget,
 };
 
@@ -35,6 +35,13 @@ pub(crate) fn digest(byte: u8) -> Sha256Hex {
 pub(crate) fn ops_key() -> SshEd25519Key {
     SshEd25519Key::new(
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJorFvPKBM2nffKXhBXe6XwDnyADfmqoqwkc/+lowutH",
+    )
+    .unwrap()
+}
+
+pub(crate) fn bootstrap_key() -> SshEd25519Key {
+    SshEd25519Key::new(
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDovDYBFQ/EJvmYfk0of5lLLTslEzJnEr8ZzZjVXapq4",
     )
     .unwrap()
 }
@@ -499,6 +506,7 @@ pub(crate) fn line_request(kind: RequestKind) -> LineRequest {
         },
         RequestKind::Bootstrap => LineRequest::Bootstrap {
             expected_agent_sha: digest(4),
+            bootstrap_pubkey: bootstrap_key(),
             ops_pubkey: ops_key(),
         },
         RequestKind::RevokeBootstrap => LineRequest::RevokeBootstrap,
@@ -621,6 +629,13 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         AgentErrorKind::Apt => AgentError::Apt {
             stderr_tail: tail("E: Unable to locate package"),
         },
+        AgentErrorKind::Bootstrap => AgentError::Bootstrap {
+            step: BootstrapStep::Accounts,
+            stderr_tail: tail("useradd: group 'mooring' does not exist"),
+        },
+        AgentErrorKind::AccountMissing => AgentError::AccountMissing {
+            account: HostAccount::Xray,
+        },
         AgentErrorKind::Systemd => AgentError::Systemd {
             unit: UnitName::new("mooring-xray.service").unwrap(),
             op: SystemdOp::Restart,
@@ -675,6 +690,10 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         AgentErrorKind::PortPlanConflict => AgentError::PortPlanConflict {
             recorded: PortRange::new(32768, 60999).unwrap(),
             live: PortRange::new(1024, 65535).unwrap(),
+        },
+        AgentErrorKind::HostProfileUnsupported => AgentError::HostProfileUnsupported {
+            required: HostProfileVersion::new(3),
+            supported: HostProfileVersion::new(2),
         },
         AgentErrorKind::TargetFactsUnavailable => AgentError::TargetFactsUnavailable {
             tool: TargetTool::Curl,

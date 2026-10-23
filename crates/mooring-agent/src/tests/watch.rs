@@ -247,7 +247,7 @@ impl World {
                     }
                     (Tool::Wg, _) if net.wg_fails.get() => failed(b"Unable to access interface: No such device\n"),
                     (Tool::Wg, ["show", "wgexit", "dump"]) => ok(format!(
-                        "SECRETPRIVATEKEY=\tPUBLICKEY=\t27820\toff\nMACKEY=\t(none)\t92.40.201.7:4500\t10.66.0.2/32\t{}\t{}\t900\t10\n",
+                        "SECRETPRIVATEKEY=\tPUBLICKEY=\t27820\toff\nMACKEY=\t(none)\t198.51.100.7:4500\t10.66.0.2/32\t{}\t{}\t900\t10\n",
                         net.handshake.get(),
                         net.rx.get()
                     ).as_bytes()),
@@ -1382,7 +1382,7 @@ fn the_changes_of_an_observation_come_causes_first() {
 fn the_readings_are_parsed_exactly() {
     use crate::watch::host::{load_milli, mem_available, synchronised, uptime};
     use crate::wg::parse_dump;
-    let dump = "PRIVATE=\tPUBLIC=\t27820\toff\nMAC=\t(none)\t92.40.201.7:4500\t10.66.0.2/32\t1790000000\t123\t456\t10\n";
+    let dump = "PRIVATE=\tPUBLIC=\t27820\toff\nMAC=\t(none)\t198.51.100.7:4500\t10.66.0.2/32\t1790000000\t123\t456\t10\n";
     let peer = parse_dump(dump.as_bytes()).unwrap();
     assert_eq!(
         peer.latest_handshake,

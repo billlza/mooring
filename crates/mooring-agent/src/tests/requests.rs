@@ -18,7 +18,7 @@ fn header() -> BundleHeader {
         digest: sha(1),
         host_facts: HostFacts {
             uplink: IfName::new("eth0").unwrap(),
-            vps4: "176.126.246.203".parse().unwrap(),
+            vps4: "203.0.113.203".parse().unwrap(),
             arch: Arch::Amd64,
             ip_local_port_range: PortRange::new(32768, 60999).unwrap(),
             debian_major: 13,
@@ -47,6 +47,10 @@ pub(crate) fn of(kind: RequestKind) -> LineRequest {
         },
         RequestKind::Bootstrap => LineRequest::Bootstrap {
             expected_agent_sha: sha(9),
+            bootstrap_pubkey: SshEd25519Key::new(
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDovDYBFQ/EJvmYfk0of5lLLTslEzJnEr8ZzZjVXapq4",
+            )
+            .unwrap(),
             ops_pubkey: SshEd25519Key::new(
                 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJorFvPKBM2nffKXhBXe6XwDnyADfmqoqwkc/+lowutH",
             )

@@ -13,7 +13,7 @@ use std::fmt;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use mooring_agent_proto::SshEd25519Key;
+use mooring_agent_proto::{PACKAGES, SshEd25519Key};
 use mooring_model::exact::TextSink;
 use mooring_model::node::NodeLifecycle;
 use mooring_model::{Deployment, Ed25519Pub, NodeId};
@@ -36,15 +36,6 @@ const HEADER: &[u8] = b"openssh-key-v1\0\0\0\0\x04none\0\0\0\x04none\0\0\0\0\0\0
 const BLOCK_SIZE: usize = 8;
 /// An OpenSSH Ed25519 private key: the seed, then the public key.
 const PRIVATE_KEY_LEN: usize = 64;
-
-/// Packages installed at first boot.
-const PACKAGES: [&str; 5] = [
-    "wireguard-tools",
-    "nftables",
-    "chrony",
-    "unattended-upgrades",
-    "curl",
-];
 
 /// The one-time host private key in OpenSSH's `openssh-key-v1` armor, as
 /// `mooring-keys` writes it: one unencrypted Ed25519 key. Parsing reads the

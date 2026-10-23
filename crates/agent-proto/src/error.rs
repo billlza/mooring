@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
 use crate::{
-    GateReason, Generation, HostFact, MAX_EVENTS, MAX_SERIES_ENTRIES, MacReportRule, ManagedFile,
-    PortRange, RequestKind, Resolution, Role, SeriesSpan, Sha256Hex, StderrTail, UnitName,
-    UsageMonth, WatchErrorKind,
+    GateReason, Generation, HostAccount, HostFact, HostProfileVersion, MAX_EVENTS,
+    MAX_SERIES_ENTRIES, MacReportRule, ManagedFile, PortRange, RequestKind, Resolution, Role,
+    SeriesSpan, Sha256Hex, StderrTail, UnitName, UsageMonth, WatchErrorKind,
 };
 
 /// A wire value that does not satisfy its type's rule. Deserialisation
@@ -303,6 +303,21 @@ pub enum AgentError {
         /// Its scrubbed stderr.
         stderr_tail: StderrTail,
     },
+    /// A tool another step of `Bootstrap` runs failed (design §13.2).
+    #[error("bootstrap failed at {step:?}")]
+    Bootstrap {
+        /// The step.
+        step: BootstrapStep,
+        /// The tool's scrubbed stderr.
+        stderr_tail: StderrTail,
+    },
+    /// An account of the host profile is missing: the node was never
+    /// bootstrapped, or the account was removed since.
+    #[error("the host has no account {account:?}")]
+    AccountMissing {
+        /// The account (or its primary group).
+        account: HostAccount,
+    },
     /// A systemd operation on one unit failed.
     #[error("systemd could not {op:?} {unit}")]
     Systemd {
@@ -420,6 +435,15 @@ pub enum AgentError {
         recorded: PortRange,
         /// The node's live range.
         live: PortRange,
+    },
+    /// The bundle requires a newer host profile than this agent converges
+    /// hosts to: activate the agent that carries it first.
+    #[error("the bundle requires host profile {required}; this agent has {supported}")]
+    HostProfileUnsupported {
+        /// The bundle's `host_profile_version`.
+        required: HostProfileVersion,
+        /// [`crate::HostProfile::CURRENT`]'s version.
+        supported: HostProfileVersion,
     },
     /// `TargetCheck` could not collect its facts.
     #[error("target facts could not be collected ({tool:?})")]
@@ -540,6 +564,10 @@ closed_enum! {
         StageValidation,
         /// [`AgentError::Apt`].
         Apt,
+        /// [`AgentError::Bootstrap`].
+        Bootstrap,
+        /// [`AgentError::AccountMissing`].
+        AccountMissing,
         /// [`AgentError::Systemd`].
         Systemd,
         /// [`AgentError::HealthGate`].
@@ -574,6 +602,8 @@ closed_enum! {
         HostFactUnavailable,
         /// [`AgentError::PortPlanConflict`].
         PortPlanConflict,
+        /// [`AgentError::HostProfileUnsupported`].
+        HostProfileUnsupported,
         /// [`AgentError::TargetFactsUnavailable`].
         TargetFactsUnavailable,
         /// [`AgentError::NoUsageRecorded`].
@@ -613,6 +643,8 @@ impl AgentError {
             Self::TrailingInput => AgentErrorKind::TrailingInput,
             Self::StageValidation { .. } => AgentErrorKind::StageValidation,
             Self::Apt { .. } => AgentErrorKind::Apt,
+            Self::Bootstrap { .. } => AgentErrorKind::Bootstrap,
+            Self::AccountMissing { .. } => AgentErrorKind::AccountMissing,
             Self::Systemd { .. } => AgentErrorKind::Systemd,
             Self::HealthGate { .. } => AgentErrorKind::HealthGate,
             Self::RolledBack { .. } => AgentErrorKind::RolledBack,
@@ -630,6 +662,7 @@ impl AgentError {
             Self::HostFactsChanged { .. } => AgentErrorKind::HostFactsChanged,
             Self::HostFactUnavailable { .. } => AgentErrorKind::HostFactUnavailable,
             Self::PortPlanConflict { .. } => AgentErrorKind::PortPlanConflict,
+            Self::HostProfileUnsupported { .. } => AgentErrorKind::HostProfileUnsupported,
             Self::TargetFactsUnavailable { .. } => AgentErrorKind::TargetFactsUnavailable,
             Self::NoUsageRecorded { .. } => AgentErrorKind::NoUsageRecorded,
             Self::SeriesTooLarge { .. } => AgentErrorKind::SeriesTooLarge,
@@ -677,14 +710,42 @@ closed_enum! {
         /// `wg syncconf`, or a restart of `wg-quick@wgexit` when the address
         /// or MTU changed.
         WireGuard,
-        /// `systemctl daemon-reload`.
+        /// `systemctl daemon-reload` and enabling the profile's units, and
+        /// restarting the watch or the reflector if its unit changed.
         DaemonReload,
         /// `sysctl --system`.
         Sysctl,
+        /// `systemd-tmpfiles --create` on the profile's entries.
+        Tmpfiles,
+        /// Restarting journald, which reads its drop-in only at start.
+        Journald,
         /// Reloading sshd.
         SshdReload,
         /// Restarting `mooring-xray` and `mooring-hy2`.
         EngineRestart,
+    }
+}
+
+closed_enum! {
+    /// A step of `Bootstrap` that runs a tool (design §13.2), in the order
+    /// it runs them.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub enum BootstrapStep {
+        /// `groupadd`, `useradd` and `usermod` for the profile's accounts.
+        Accounts,
+        /// `systemd-tmpfiles --create` on the profile's entries.
+        Tmpfiles,
+        /// `sysctl --system`.
+        Sysctl,
+        /// Restarting journald on its drop-in.
+        Journald,
+        /// `systemctl daemon-reload`, enabling the profile's units and
+        /// starting the watch and the reflector.
+        Units,
+        /// Reloading sshd on the profile's drop-in and the new host key.
+        SshdReload,
+        /// `ssh-keygen` for the new ed25519 host key.
+        HostKey,
     }
 }
 

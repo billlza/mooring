@@ -6,8 +6,9 @@
 //! scrubbed [`StderrTail`]: the bundle's secrets are replaced before it
 //! leaves the node.
 //!
-//! Host-profile validators (`sshd -t`, `systemd-analyze verify`, the sysctl
-//! keys) join with host-profile convergence in M4e.
+//! The host profile's validators (the sysctl keys, `sshd -t`,
+//! `systemd-analyze verify`) follow the bundle's, on the generation's
+//! staged `host/` files.
 
 use std::fs;
 use std::path::Path;
@@ -167,7 +168,13 @@ pub(crate) fn validate(paths: &Paths, node: &dyn Node, dir: &Path) -> Result<(),
     for copy in [&xray_copy, &hy2_copy] {
         let _absent = fs::remove_file(copy);
     }
-    outcome
+    outcome?;
+    crate::hostfiles::validate(
+        paths,
+        node,
+        &dir.join(crate::hostfiles::HOST_DIR),
+        Some(dir),
+    )
 }
 
 /// A copy of a staged JSON configuration in `scratch` with the log level

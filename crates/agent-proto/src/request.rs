@@ -77,6 +77,10 @@ pub enum LineRequest {
     Bootstrap {
         /// The digest the running agent binary must have.
         expected_agent_sha: Sha256Hex,
+        /// The bootstrap key itself, which keeps a line restricted to the
+        /// bootstrap role until `RevokeBootstrap`: sshd does not tell the
+        /// agent which key logged in, and every other line goes.
+        bootstrap_pubkey: SshEd25519Key,
         /// The operations key to authorise.
         ops_pubkey: SshEd25519Key,
     },

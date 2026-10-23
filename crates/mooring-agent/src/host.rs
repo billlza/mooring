@@ -38,12 +38,31 @@ pub(crate) enum Tool {
     Stat,
     /// `chronyc` (whether the clock is synchronised).
     Chronyc,
+    /// `dpkg-query` (which of `Bootstrap`'s packages are installed).
+    DpkgQuery,
+    /// `apt-get` (`Bootstrap`'s packages).
+    AptGet,
+    /// `groupadd` (the state group).
+    Groupadd,
+    /// `useradd` (the profile's accounts).
+    Useradd,
+    /// `usermod` (an account that differs from the profile).
+    Usermod,
+    /// `ssh-keygen` (the new host key).
+    SshKeygen,
+    /// `sysctl --system`.
+    Sysctl,
+    /// `systemd-tmpfiles --create`.
+    SystemdTmpfiles,
+    /// `systemd-analyze verify` (the staged units).
+    SystemdAnalyze,
 }
 
 impl Tool {
     /// The tool's absolute path on Debian 13 (checked on the London VPS on
     /// 2026-10-22, except `wg` and `wg-quick`, which `wireguard-tools`
-    /// installs there).
+    /// installs there, and the tools added for `Bootstrap` in M4e, checked
+    /// in a Debian 13 VM).
     pub(crate) const fn path(self) -> &'static str {
         match self {
             Self::Nft => "/usr/sbin/nft",
@@ -56,6 +75,15 @@ impl Tool {
             Self::Ss => "/usr/bin/ss",
             Self::Stat => "/usr/bin/stat",
             Self::Chronyc => "/usr/bin/chronyc",
+            Self::DpkgQuery => "/usr/bin/dpkg-query",
+            Self::AptGet => "/usr/bin/apt-get",
+            Self::Groupadd => "/usr/sbin/groupadd",
+            Self::Useradd => "/usr/sbin/useradd",
+            Self::Usermod => "/usr/sbin/usermod",
+            Self::SshKeygen => "/usr/bin/ssh-keygen",
+            Self::Sysctl => "/usr/sbin/sysctl",
+            Self::SystemdTmpfiles => "/usr/bin/systemd-tmpfiles",
+            Self::SystemdAnalyze => "/usr/bin/systemd-analyze",
         }
     }
 }

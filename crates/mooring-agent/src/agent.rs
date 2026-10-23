@@ -3,7 +3,7 @@
 //! The command line and what each command does.
 
 use std::io::{self, Write};
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+use std::net::{SocketAddrV4, TcpListener};
 use std::process::ExitCode;
 
 use mooring_agent_proto::{AgentError, Generation, HostProfile, PROTOCOL, Role};
@@ -21,8 +21,8 @@ const REFLECTOR_PORT: u16 = 27900;
 pub(crate) enum Invocation {
     /// `serve-ssh --role <role>`.
     ServeSsh(Role),
-    /// `reflect --listen <vps4> [--port <port>]`.
-    Reflect(SocketAddrV4),
+    /// `reflect [--port <port>]`, on the uplink's address.
+    Reflect(u16),
     /// `halted-check`.
     HaltedCheck,
     /// `gate-close`.
@@ -47,8 +47,11 @@ pub(crate) fn parse(args: &[String]) -> Result<Invocation, String> {
             .parse::<Role>()
             .map(Invocation::ServeSsh)
             .map_err(|_| format!("unknown role {role:?}")),
-        ["reflect", "--listen", address] => listen(address, None),
-        ["reflect", "--listen", address, "--port", port] => listen(address, Some(port)),
+        ["reflect"] => Ok(Invocation::Reflect(REFLECTOR_PORT)),
+        ["reflect", "--port", port] => port
+            .parse()
+            .map(Invocation::Reflect)
+            .map_err(|_| format!("{port:?} is not a port")),
         ["halted-check"] => Ok(Invocation::HaltedCheck),
         ["gate-close"] => Ok(Invocation::GateClose),
         ["self-test"] => Ok(Invocation::SelfTest),
@@ -56,7 +59,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Invocation, String> {
         ["txn-revert", generation] => generation_arg(generation).map(Invocation::TxnRevert),
         ["txn-recover"] => Ok(Invocation::TxnRecover),
         ["watch"] => Ok(Invocation::Watch),
-        _ => Err("usage: mooring-agent serve-ssh --role <bootstrap|ops|viewer> | reflect --listen <ipv4> [--port <port>] | halted-check | gate-close | self-test | txn <N> | txn-revert <N> | txn-recover | watch".to_owned()),
+        _ => Err("usage: mooring-agent serve-ssh --role <bootstrap|ops|viewer> | reflect [--port <port>] | halted-check | gate-close | self-test | txn <N> | txn-revert <N> | txn-recover | watch".to_owned()),
     }
 }
 
@@ -69,19 +72,6 @@ fn generation_arg(text: &str) -> Result<Generation, String> {
         .filter(|&generation| generation > 0)
         .map(Generation::new)
         .ok_or_else(|| format!("{text:?} is not a generation"))
-}
-
-fn listen(address: &str, port: Option<&str>) -> Result<Invocation, String> {
-    let ip: Ipv4Addr = address
-        .parse()
-        .map_err(|_| format!("{address:?} is not an IPv4 address"))?;
-    let port = match port {
-        None => REFLECTOR_PORT,
-        Some(port) => port
-            .parse()
-            .map_err(|_| format!("{port:?} is not a port"))?,
-    };
-    Ok(Invocation::Reflect(SocketAddrV4::new(ip, port)))
 }
 
 /// Runs one invocation against `paths` and `node`.
@@ -105,7 +95,17 @@ pub(crate) fn run(
                 Err(error) => fail(stderr, &format!("writing the reply failed: {error}")),
             }
         }
-        Invocation::Reflect(address) => {
+        Invocation::Reflect(port) => {
+            // The address is read when the unit starts, as `Hello` reads
+            // it, so the unit is the same on every node.
+            let address = match crate::hello::uplink(paths)
+                .and_then(|uplink| crate::hello::vps4(node, &uplink))
+            {
+                Ok(address) => SocketAddrV4::new(address, port),
+                Err(error) => {
+                    return fail(stderr, &format!("the uplink's address is unknown: {error}"));
+                }
+            };
             match TcpListener::bind(address).and_then(|listener| reflect::serve(&listener)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => fail(stderr, &format!("the reflector stopped: {error}")),

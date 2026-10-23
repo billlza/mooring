@@ -13,9 +13,9 @@ use std::rc::Rc;
 
 use mooring_agent_proto::{
     AgentError, ApplyStep, Arch, BlobLen, BundleFiles, BundleHeader, EngineSet, Generation, Halt,
-    HealthCheck, HostFact, HostFacts, HostProfile, IfName, IoOp, KernelIdent, KernelRelease,
-    ManagedFile, PortRange, RollbackCause, Sha256Hex, ShutdownReason, TxnStage, TxnState, UnixTime,
-    ValidationTool,
+    HealthCheck, HostFact, HostFacts, HostFile, HostProfile, IfName, IoOp, KernelIdent,
+    KernelRelease, ManagedFile, PortRange, RollbackCause, Sha256Hex, ShutdownReason, TxnStage,
+    TxnState, UnixTime, ValidationTool,
 };
 
 use super::{FakeNode, failed, nft_set, ok, scratch};
@@ -79,6 +79,16 @@ struct Faults {
     /// `systemctl is-active` reports one unit failed, with a zero exit, so
     /// that only its lines can tell.
     unit_failed: bool,
+    /// `sshd -t` warns about the staged configuration.
+    sshd_warns: bool,
+    /// `sshd -t` fails without a word.
+    sshd_fails_silently: bool,
+    /// `systemd-analyze verify` reports an error.
+    analyze_errors: bool,
+    /// The configuration `sshd -t` was given, as it read it.
+    sshd_config: RefCell<Option<String>>,
+    /// The unit files `systemd-analyze verify` was given, as it read them.
+    verified: RefCell<Vec<String>>,
 }
 
 struct World {
@@ -107,6 +117,7 @@ impl World {
         write("/proc/sys/net/ipv4/conf/wgexit/accept_local", "1\n");
         write("/etc/os-release", "ID=debian\nVERSION_ID=\"13\"\n");
         write("/etc/nftables.conf", "#!/usr/sbin/nft -f\nflush ruleset\n");
+        super::bootstrapped(&paths);
         Self {
             _dir: dir,
             paths,
@@ -122,7 +133,7 @@ impl World {
             Box::new(move |tool, args| {
                 let faults = faults.borrow();
                 Ok(match (tool, args) {
-                    (Tool::Ip, _) => ok(br#"[{"addr_info":[{"family":"inet","local":"176.126.246.203","scope":"global"}]}]"#),
+                    (Tool::Ip, _) => ok(br#"[{"addr_info":[{"family":"inet","local":"203.0.113.203","scope":"global"}]}]"#),
                     (Tool::Nft, ["-f", ..]) if faults.nft_load => failed(b"Error: syntax error\n"),
                     (Tool::Nft, ["-j", "list", "set", ..]) => ok(&nft_set(true)),
                     (Tool::Nft, ["-j", "list", "chain", ..]) => ok(OWNER_GUARDS.as_bytes()),
@@ -140,6 +151,24 @@ impl World {
                         }
                     }
                     (Tool::WgQuick, ["strip", ..]) => ok(format!("[Interface]\nPrivateKey = {WG_PRIVATE_KEY}\n").as_bytes()),
+                    (Tool::Sshd, ["-t", "-f", config]) => {
+                        *faults.sshd_config.borrow_mut() = Some(fs::read_to_string(config).unwrap());
+                        if faults.sshd_fails_silently {
+                            failed(b"")
+                        } else if faults.sshd_warns {
+                            failed(b"/etc/ssh/sshd_config.d/50-cloud-init.conf line 1: Deprecated option UsePrivilegeSeparation\n")
+                        } else {
+                            ok(b"")
+                        }
+                    }
+                    (Tool::SystemdAnalyze, ["verify", units @ ..]) => {
+                        faults.verified.borrow_mut().extend(units.iter().map(|unit| fs::read_to_string(unit).unwrap()));
+                        if faults.analyze_errors {
+                            ok(b"mooring-watch.service:9: Unknown key name 'ReadWritePath' in section 'Service', ignoring.\nmooring-xray.service: Command /etc/mooring/gen-1/engines/xray is not executable: Permission denied\n")
+                        } else {
+                            ok(b"")
+                        }
+                    }
                     _ => ok(b""),
                 })
             }),
@@ -262,7 +291,7 @@ impl World {
 pub(super) fn facts() -> HostFacts {
     HostFacts {
         uplink: IfName::new("eth0").unwrap(),
-        vps4: "176.126.246.203".parse().unwrap(),
+        vps4: "203.0.113.203".parse().unwrap(),
         arch: crate::hello::arch(std::env::consts::ARCH).unwrap_or(Arch::Arm64),
         ip_local_port_range: PortRange::new(32768, 60999).unwrap(),
         debian_major: 13,
@@ -1406,4 +1435,354 @@ fn an_activation_that_cannot_switch_stops_its_timer() {
         fs::read_link(world.paths.agent_current()).unwrap(),
         Path::new("old-agent")
     );
+}
+
+/// Overwrites the installed copy of `file` with `text`.
+fn drift(world: &World, file: HostFile, text: &str) {
+    fs::write(world.paths.host_file(file), text).unwrap();
+}
+
+#[test]
+fn a_transaction_converges_the_host_profile_and_applies_what_it_needs() {
+    let world = World::new();
+    let node = world.node(1000);
+    // A node bootstrapped to the profile: nothing of it to do.
+    world.commit(&node, world.bundle(1, same));
+    for absent in [
+        "daemon-reload",
+        "sysctl",
+        "reload ssh",
+        "journald",
+        "tmpfiles",
+    ] {
+        assert!(
+            node.calls().iter().all(|call| !call.contains(absent)),
+            "{absent}"
+        );
+    }
+    // Local changes since, and an older recorded version.
+    drift(&world, HostFile::Sysctl, "net.ipv4.ip_forward = 1\n");
+    drift(
+        &world,
+        HostFile::WatchUnit,
+        "[Service]\nExecStart=/bin/true\n",
+    );
+    drift(&world, HostFile::SshdDropIn, "PasswordAuthentication yes\n");
+    write_json(
+        &world.paths.host_profile(),
+        &mooring_agent_proto::HostProfileVersion::new(1),
+        0o640,
+    )
+    .unwrap();
+    let node = world.node(2000);
+    world.commit(&node, world.bundle(2, idle(100)));
+    for (file, text) in HostProfile::CURRENT.files() {
+        assert_eq!(
+            fs::read_to_string(world.paths.host_file(file)).unwrap(),
+            text,
+            "{file:?}"
+        );
+    }
+    assert_eq!(
+        crate::store::read_json(&world.paths.host_profile()).unwrap(),
+        Some(HostProfile::CURRENT.version)
+    );
+    let calls = node.calls();
+    let order = [
+        "txn-revert 2",
+        "/usr/sbin/sysctl --system",
+        "/usr/bin/systemctl daemon-reload",
+        "/usr/bin/systemctl enable nftables.service wg-quick@wgexit.service mooring-xray.service mooring-hy2.service mooring-watch.service mooring-reflect.service mooring-txn-recover.service",
+        "/usr/bin/systemctl restart mooring-watch.service",
+        "/usr/bin/systemctl reload ssh.service",
+        "/usr/bin/systemctl restart mooring-xray.service",
+    ];
+    let positions: Vec<usize> = order
+        .iter()
+        .map(|fragment| index_of(&calls, fragment))
+        .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{calls:#?}"
+    );
+    for absent in [
+        "restart mooring-reflect",
+        "systemd-tmpfiles",
+        "systemd-journald",
+    ] {
+        assert!(calls.iter().all(|call| !call.contains(absent)), "{absent}");
+    }
+    // The generation keeps what it staged.
+    let staged = world
+        .paths
+        .generation(Generation::new(2))
+        .join(crate::hostfiles::HOST_DIR);
+    for (file, text) in HostProfile::CURRENT.files() {
+        assert_eq!(
+            fs::read_to_string(staged.join(file.staged_name())).unwrap(),
+            text
+        );
+    }
+}
+
+#[test]
+fn a_changed_engine_unit_restarts_its_engine_alone() {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    drift(&world, HostFile::Hy2Unit, "[Service]\nMemoryMax=1G\n");
+    let node = world.node(2000);
+    // A bundle that changes neither engine's configuration.
+    world.commit(
+        &node,
+        world.bundle(2, |file, text| {
+            if file == ManagedFile::WatchConfig {
+                text.replace("\"keepalive_secs\": 10", "\"keepalive_secs\": 11")
+            } else {
+                text
+            }
+        }),
+    );
+    let calls = node.calls();
+    index_of(&calls, "/usr/bin/systemctl restart mooring-hy2.service");
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("restart mooring-xray.service")),
+        "{calls:#?}"
+    );
+}
+
+#[test]
+fn a_rollback_puts_the_previous_generations_profile_files_back() {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    // Generation 1 installed an older profile's kernel parameters.
+    let older = "# an older profile\nnet.ipv4.ip_forward = 0\n";
+    let staged = world
+        .paths
+        .generation(Generation::new(1))
+        .join(crate::hostfiles::HOST_DIR);
+    fs::write(staged.join(HostFile::Sysctl.staged_name()), older).unwrap();
+    drift(&world, HostFile::Sysctl, older);
+    world.faults.borrow().missing_listeners.set(21);
+    let node = world.node(2000);
+    assert!(matches!(
+        world.apply_and_run(&node, world.bundle(2, idle(100))),
+        TxnState::Failed {
+            error: AgentError::RolledBack {
+                cause: RollbackCause::HealthGate { .. },
+                ..
+            }
+        }
+    ));
+    assert_eq!(
+        fs::read_to_string(world.paths.host_file(HostFile::Sysctl)).unwrap(),
+        older
+    );
+    let applied = node
+        .calls()
+        .iter()
+        .filter(|call| call.as_str() == "/usr/sbin/sysctl --system")
+        .count();
+    assert_eq!(applied, 2, "once forward, once back");
+}
+
+#[test]
+fn the_host_validators_check_the_staged_generation() {
+    let world = World::new();
+    let node = world.node(1000);
+    world.commit(&node, world.bundle(1, same));
+    let generation = world.paths.generation(Generation::new(1));
+    let staged_dir = generation.display().to_string();
+    let faults = world.faults.borrow();
+    assert_eq!(
+        faults.sshd_config.borrow().as_deref(),
+        Some(
+            format!("Include {staged_dir}/host/sshd.conf\nInclude /etc/ssh/sshd_config\n").as_str()
+        )
+    );
+    let verified = faults.verified.borrow();
+    assert_eq!(verified.len(), 5);
+    let xray = verified
+        .iter()
+        .find(|text| text.contains("Description=Mooring Xray"))
+        .unwrap();
+    assert!(xray.contains(&format!(
+        "ExecStart={staged_dir}/engines/xray run -c {staged_dir}/xray.json"
+    )));
+    assert!(!xray.contains("/etc/mooring/current"), "{xray}");
+    assert!(
+        verified
+            .iter()
+            .all(|text| !text.contains("/etc/mooring/current"))
+    );
+    let calls = node.calls();
+    let order = [
+        "/usr/bin/wg-quick strip ",
+        "/usr/sbin/sshd -t -f ",
+        "/usr/bin/systemd-analyze verify ",
+        "txn-revert 1",
+    ];
+    let positions: Vec<usize> = order
+        .iter()
+        .map(|fragment| index_of(&calls, fragment))
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    // The scratch copies are gone.
+    assert!(!world.paths.validate_dir().join("sshd_config").exists());
+    assert!(!world.paths.validate_dir().join("units").exists());
+}
+
+/// A host validator's rejection, before anything is switched: the staged
+/// generation goes and no timer is armed.
+fn rejected(world: &World, node: &FakeNode) -> (ValidationTool, String) {
+    let state = world.apply_and_run(node, world.bundle(1, same));
+    let TxnState::Failed {
+        error: AgentError::StageValidation { tool, stderr_tail },
+    } = state
+    else {
+        panic!("not a validation failure: {state:?}");
+    };
+    assert_eq!(world.current(), None);
+    assert!(!world.paths.generation(Generation::new(1)).exists());
+    assert!(node.calls().iter().all(|call| !call.contains("txn-revert")));
+    (tool, stderr_tail.as_str().to_owned())
+}
+
+#[test]
+fn a_missing_kernel_parameter_is_rejected_by_name() {
+    let world = World::new();
+    fs::remove_file(world.paths.at("/proc/sys/net/ipv4/tcp_notsent_lowat")).unwrap();
+    let (tool, tail) = rejected(&world, &world.node(1000));
+    assert_eq!(tool, ValidationTool::SysctlKeys);
+    assert!(
+        tail.contains("/proc/sys/net/ipv4/tcp_notsent_lowat"),
+        "{tail}"
+    );
+}
+
+#[test]
+fn an_sshd_warning_is_rejected() {
+    let world = World::new();
+    world.faults.borrow_mut().sshd_warns = true;
+    let (tool, tail) = rejected(&world, &world.node(1000));
+    assert_eq!(tool, ValidationTool::Sshd);
+    assert!(tail.contains("Deprecated option"), "{tail}");
+}
+
+#[test]
+fn a_unit_systemd_complains_about_is_rejected_even_with_a_zero_exit() {
+    let world = World::new();
+    world.faults.borrow_mut().analyze_errors = true;
+    let (tool, tail) = rejected(&world, &world.node(1000));
+    assert_eq!(tool, ValidationTool::SystemdAnalyze);
+    assert!(tail.contains("Unknown key name"), "{tail}");
+}
+
+#[test]
+fn a_bundle_that_needs_a_newer_host_profile_is_refused() {
+    let world = World::new();
+    let node = world.node(1000);
+    let mut header = world.bundle(1, same);
+    let supported = HostProfile::CURRENT.version;
+    header.host_profile_version = mooring_agent_proto::HostProfileVersion::new(supported.get() + 1);
+    assert_eq!(
+        world.apply_and_run(&node, header),
+        TxnState::Failed {
+            error: AgentError::HostProfileUnsupported {
+                required: mooring_agent_proto::HostProfileVersion::new(supported.get() + 1),
+                supported,
+            }
+        }
+    );
+    assert!(!world.paths.generation(Generation::new(1)).exists());
+}
+
+#[test]
+fn a_missing_engine_group_fails_the_stage_with_its_account() {
+    let world = World::new();
+    let group = fs::read_to_string(world.paths.group()).unwrap();
+    let kept: String = group
+        .lines()
+        .filter(|line| !line.starts_with("mooring-xray:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(world.paths.group(), kept).unwrap();
+    assert_eq!(
+        world.apply_and_run(&world.node(1000), world.bundle(1, same)),
+        TxnState::Failed {
+            error: AgentError::AccountMissing {
+                account: mooring_agent_proto::HostAccount::Xray,
+            }
+        }
+    );
+}
+
+/// The groups the tests' user is in besides its primary one.
+fn other_groups(primary: u32) -> Vec<u32> {
+    let output = std::process::Command::new("id").arg("-G").output().unwrap();
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .split_whitespace()
+        .map(|gid| gid.parse().unwrap())
+        .filter(|gid| *gid != primary)
+        .collect()
+}
+
+#[test]
+fn each_configuration_belongs_to_its_readers_group_and_no_one_elses() {
+    use std::os::unix::fs::MetadataExt;
+    let world = World::new();
+    let (_, primary) = super::own_ids(&world.paths);
+    let others = other_groups(primary);
+    let [xray, hy2, state, ..] = others.as_slice() else {
+        panic!("this test needs a user in three groups besides its own: {others:?}");
+    };
+    fs::write(
+        world.paths.group(),
+        format!(
+            "root:x:{primary}:\nmooring:x:{state}:\nmooring-xray:x:{xray}:\nmooring-hy2:x:{hy2}:\n"
+        ),
+    )
+    .unwrap();
+    let dir = txn::stage::stage(&world.paths, Generation::new(1), &world.bundle(1, same)).unwrap();
+    let owner = |file: ManagedFile| {
+        let meta = fs::metadata(dir.join(file.file_name())).unwrap();
+        (meta.gid(), meta.mode() & 0o777)
+    };
+    assert_eq!(owner(ManagedFile::XrayConfig), (*xray, 0o640));
+    assert_eq!(owner(ManagedFile::Hy2Config), (*hy2, 0o640));
+    assert_eq!(owner(ManagedFile::WatchConfig), (*state, 0o640));
+    assert_eq!(owner(ManagedFile::WgConf), (primary, 0o600));
+    assert_eq!(owner(ManagedFile::Nftables), (primary, 0o640));
+    assert_eq!(owner(ManagedFile::ViewerKeys), (primary, 0o644));
+}
+
+#[test]
+fn a_validator_that_fails_without_a_word_is_still_a_rejection() {
+    let world = World::new();
+    world.faults.borrow_mut().sshd_fails_silently = true;
+    let (tool, tail) = rejected(&world, &world.node(1000));
+    assert_eq!(tool, ValidationTool::Sshd);
+    assert_eq!(tail, "");
+}
+
+#[test]
+fn a_changed_tunnel_drop_in_reloads_systemd_alone() {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    drift(&world, HostFile::TunnelDropIn, "[Unit]\n");
+    let node = world.node(2000);
+    world.commit(&node, world.bundle(2, idle(100)));
+    let calls = node.calls();
+    index_of(&calls, "/usr/bin/systemctl daemon-reload");
+    index_of(&calls, "/usr/bin/systemctl enable ");
+    for absent in [
+        "restart mooring-watch",
+        "restart mooring-reflect",
+        "sysctl",
+        "reload ssh",
+    ] {
+        assert!(calls.iter().all(|call| !call.contains(absent)), "{absent}");
+    }
 }

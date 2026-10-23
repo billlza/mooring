@@ -6,6 +6,7 @@
 
 mod accounting;
 mod blobs;
+mod bootstrap;
 mod cli;
 mod gate;
 mod health;
@@ -148,6 +149,54 @@ pub(crate) fn scratch() -> (tempfile::TempDir, Paths) {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::under(dir.path());
     (dir, paths)
+}
+
+/// The user and group ids the tests run as, which own the scratch root.
+pub(crate) fn own_ids(paths: &Paths) -> (u32, u32) {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(paths.at("/")).unwrap();
+    (meta.uid(), meta.gid())
+}
+
+/// A host that was bootstrapped: `/etc/passwd` and `/etc/group` with root
+/// and every profile account, all mapped to the ids the tests run as (so
+/// the agent may give them its files), every kernel parameter of the
+/// profile under `/proc/sys`, and the profile's files installed with its
+/// version recorded, as `Bootstrap` leaves them.
+pub(crate) fn bootstrapped(paths: &Paths) {
+    use mooring_agent_proto::{HostAccount, HostProfile};
+    let (uid, gid) = own_ids(paths);
+    let mut passwd = format!("root:x:{uid}:{gid}:root:/root:/bin/bash\n");
+    let mut group = format!("root:x:{gid}:\n");
+    let mut groups = std::collections::BTreeSet::new();
+    for account in HostAccount::ALL {
+        passwd.push_str(&format!(
+            "{}:x:{uid}:{gid}::{}:{}\n",
+            account.name(),
+            account.home(),
+            account.shell()
+        ));
+        if groups.insert(account.group()) {
+            group.push_str(&format!("{}:x:{gid}:\n", account.group()));
+        }
+    }
+    for (path, text) in [(paths.passwd(), passwd), (paths.group(), group)] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    for sysctl in HostProfile::CURRENT.sysctls {
+        let path = paths.at(&sysctl.proc_path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        if !path.exists() {
+            std::fs::write(path, format!("{}\n", sysctl.value)).unwrap();
+        }
+    }
+    for (file, text) in HostProfile::CURRENT.files() {
+        let path = paths.host_file(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    crate::store::write_json(&paths.host_profile(), &HostProfile::CURRENT.version, 0o640).unwrap();
 }
 
 /// `nft -j list set inet mooring exit_closed` with the gate closed or open.

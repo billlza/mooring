@@ -11,19 +11,19 @@ use std::num::NonZeroU16;
 
 use mooring_agent_proto::{
     AcceptLocal, AgentError, AgentErrorKind, AgentEvent, AgentEventKind, AppliedGeneration,
-    ApplyStep, Arch, BlobLen, BundleFiles, BundleHeader, CertName, ClearableHold,
+    ApplyStep, Arch, BlobLen, BootstrapStep, BundleFiles, BundleHeader, CertName, ClearableHold,
     EgressViolationHold, EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq,
-    EventsV1, GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostFact,
-    HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion, IfName, Inbound,
-    InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MAX_BLOB_BYTES, MacDrainHold,
-    OpaqueUserId, OperatorHold, PortRange, Principal, ReadError, RedirectUrl, Reply, Request,
-    RequestKind, Resolution, Response, ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan,
-    Sha256Hex, ShutdownReason, SshEd25519Key, SshdDirective, StatsEmail, StatusV1, StderrTail,
-    StoredMacReport, SystemdOp, TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe,
-    TlsSession, TlsVersion, Traffic, TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer,
-    UsageBin, UsageMonth, UsageSeriesV1, UsageV1, ValidationTool, WatchConditions, WatchConfig,
-    WatchError, WatchErrorKind, WatchTarget, expect_end_of_input, read_blob, read_reply,
-    read_request, write_put_blob, write_reply, write_request,
+    EventsV1, GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostAccount,
+    HostFact, HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion,
+    IfName, Inbound, InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MAX_BLOB_BYTES,
+    MacDrainHold, OpaqueUserId, OperatorHold, PortRange, Principal, ReadError, RedirectUrl, Reply,
+    Request, RequestKind, Resolution, Response, ResponseKind, Role, RollbackCause, SeriesRange,
+    SeriesSpan, Sha256Hex, ShutdownReason, SshEd25519Key, SshdDirective, StatsEmail, StatusV1,
+    StderrTail, StoredMacReport, SystemdOp, TargetFacts, TargetHost, TargetTool, TlsGroup,
+    TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage, TxnState, UnitName, UnixTime,
+    UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1, ValidationTool, WatchConditions,
+    WatchConfig, WatchError, WatchErrorKind, WatchTarget, expect_end_of_input, read_blob,
+    read_reply, read_request, write_put_blob, write_reply, write_request,
 };
 use proptest::collection::{btree_map, btree_set, vec};
 use proptest::option;
@@ -611,6 +611,9 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
         (select(ValidationTool::ALL), stderr_tail())
             .prop_map(|(tool, stderr_tail)| AgentError::StageValidation { tool, stderr_tail }),
         stderr_tail().prop_map(|stderr_tail| AgentError::Apt { stderr_tail }),
+        (select(BootstrapStep::ALL), stderr_tail())
+            .prop_map(|(step, stderr_tail)| AgentError::Bootstrap { step, stderr_tail }),
+        select(HostAccount::ALL).prop_map(|account| AgentError::AccountMissing { account }),
         (unit_name(), select(SystemdOp::ALL))
             .prop_map(|(unit, op)| AgentError::Systemd { unit, op }),
         select(HealthCheck::ALL).prop_map(|failed| AgentError::HealthGate { failed }),
@@ -633,6 +636,12 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
         select(HostFact::ALL).prop_map(|field| AgentError::HostFactUnavailable { field }),
         (port_range(), port_range())
             .prop_map(|(recorded, live)| AgentError::PortPlanConflict { recorded, live }),
+        (any::<u32>(), any::<u32>()).prop_map(|(required, supported)| {
+            AgentError::HostProfileUnsupported {
+                required: HostProfileVersion::new(required),
+                supported: HostProfileVersion::new(supported),
+            }
+        }),
         (select(TargetTool::ALL), stderr_tail()).prop_map(|(tool, stderr_tail)| {
             AgentError::TargetFactsUnavailable { tool, stderr_tail }
         }),
@@ -669,12 +678,13 @@ fn line_request() -> impl Strategy<Value = LineRequest> {
         btree_set(digest(), 0..8).prop_map(|blobs| LineRequest::HaveBlobs { blobs }),
         digest().prop_map(|sha| LineRequest::ActivateAgent { sha }),
         generation().prop_map(|generation| LineRequest::Confirm { generation }),
-        (digest(), ssh_key()).prop_map(|(expected_agent_sha, ops_pubkey)| {
-            LineRequest::Bootstrap {
+        (digest(), ssh_key(), ssh_key()).prop_map(
+            |(expected_agent_sha, bootstrap_pubkey, ops_pubkey)| LineRequest::Bootstrap {
                 expected_agent_sha,
+                bootstrap_pubkey,
                 ops_pubkey,
             }
-        }),
+        ),
         Just(LineRequest::RevokeBootstrap),
         bundle_header().prop_map(|header| LineRequest::Apply(Box::new(header))),
         generation().prop_map(|generation| LineRequest::TxnStatus { generation }),

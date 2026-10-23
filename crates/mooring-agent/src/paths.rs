@@ -9,8 +9,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use mooring_agent_proto::{
-    AGENT_CURRENT_PATH, CURRENT_DIR, ETC_DIR, Generation, IfName, ManagedFile, Sha256Hex,
-    UsageMonth, WG_INTERFACE,
+    AGENT_CURRENT_PATH, CURRENT_DIR, ETC_DIR, Generation, HostFile, IfName, ManagedFile, Sha256Hex,
+    UsageMonth, WG_INTERFACE, XRAY_ASSET_DIR,
 };
 
 /// The agent's state directory.
@@ -78,10 +78,16 @@ impl Paths {
         self.gate_dir().join("holds.json")
     }
 
+    /// The directory the viewer may write, `/var/lib/mooring/stop`: its
+    /// emergency stop alone, so it never reaches the holds (design §11.3).
+    pub(crate) fn stop_dir(&self) -> PathBuf {
+        self.var_lib().join("stop")
+    }
+
     /// A viewer's emergency stop, handed to the watch:
-    /// `/var/lib/mooring/gate/stop-request.json` (design §11.3).
+    /// `/var/lib/mooring/stop/request.json` (design §11.3).
     pub(crate) fn stop_request(&self) -> PathBuf {
-        self.gate_dir().join("stop-request.json")
+        self.stop_dir().join("request.json")
     }
 
     /// The halt marker, `/var/lib/mooring/halted.json`.
@@ -156,7 +162,7 @@ impl Paths {
     /// The fixed link Xray's `XRAY_LOCATION_ASSET` names,
     /// `/opt/mooring/engines/geodata/current`.
     pub(crate) fn geodata_link(&self) -> PathBuf {
-        self.at("/opt/mooring/engines/geodata/current")
+        self.at(XRAY_ASSET_DIR)
     }
 
     /// `/etc/wireguard/wgexit.conf`, a link into the current generation.
@@ -260,6 +266,44 @@ impl Paths {
     /// `/etc/os-release`.
     pub(crate) fn os_release(&self) -> PathBuf {
         self.at("/etc/os-release")
+    }
+
+    /// `/etc/passwd`.
+    pub(crate) fn passwd(&self) -> PathBuf {
+        self.at("/etc/passwd")
+    }
+
+    /// `/etc/group`.
+    pub(crate) fn group(&self) -> PathBuf {
+        self.at("/etc/group")
+    }
+
+    /// Root's `authorized_keys`, which holds the bootstrap and ops lines
+    /// (design §8.6).
+    pub(crate) fn root_authorized_keys(&self) -> PathBuf {
+        self.at("/root/.ssh/authorized_keys")
+    }
+
+    /// sshd's host keys, `/etc/ssh`.
+    pub(crate) fn ssh_dir(&self) -> PathBuf {
+        self.at("/etc/ssh")
+    }
+
+    /// The ed25519 host key, `/etc/ssh/ssh_host_ed25519_key` (its public
+    /// half beside it, `.pub`).
+    pub(crate) fn ssh_host_key(&self) -> PathBuf {
+        self.ssh_dir().join("ssh_host_ed25519_key")
+    }
+
+    /// The host key `Bootstrap` made, `/var/lib/mooring/host-key.json`:
+    /// once it is recorded, a second `Bootstrap` keeps the key.
+    pub(crate) fn host_key_record(&self) -> PathBuf {
+        self.var_lib().join("host-key.json")
+    }
+
+    /// Where a host-profile file is installed.
+    pub(crate) fn host_file(&self, file: HostFile) -> PathBuf {
+        self.at(file.path())
     }
 
     /// The running agent's own executable, `/proc/self/exe`.
