@@ -59,17 +59,18 @@ mkdir -p ops-local/scan
 (cd ops-local/scan && ~/mooring-engines/out/darwin-arm64/realitlscanner -addr <lon1's IPv4 ending in .0>/24 -thread 2 -timeout 5 -out lon1-neighbours.csv)
 ```
 
-Each row of `lon1-neighbours.csv` is an address that completed TLS 1.3 with h2, and the name on its certificate. Take a name that resolves to exactly that address (`dig +short A <name>`). `--same-asn` and `--not-cdn` hold when the address is in lon1's network, AS44684 (Mythic Beasts), which `--evidence` shows, for example `https://bgp.he.net/ip/<address>`. Check it from lon1, set it with that attestation, and apply the first configuration:
+Each row of `lon1-neighbours.csv` is an address that completed TLS 1.3 with h2, and the name on its certificate. Take a name that resolves to exactly that address (`dig +short A <name>`). `--same-asn` and `--not-cdn` hold when the address is in lon1's network, AS44684 (Mythic Beasts), which `--evidence` shows, for example `https://bgp.he.net/ip/<address>`. Check it from lon1 and set it with that attestation:
 
 ```
 mooringctl node target check lon1 <candidate host> --interface en9 --engines ~/mooring-engines/out
 mooringctl node target set lon1 <host> --interface en9 --engines ~/mooring-engines/out --same-asn --not-cdn --evidence <url>
-mooringctl node apply lon1 --interface en9 --engines ~/mooring-engines/out
 ```
+
+lon1's first configuration is applied with its first users, in section 0.5: a configuration that serves only the probe has nothing to carry.
 
 ### 0.5 The users
 
-For each user (at most 5 active):
+Your own test user first (section 0.7 connects with it), then each pilot user (at most 5 active in all):
 
 ```
 mooringctl user add --client cfm05
@@ -78,7 +79,7 @@ mooringctl user agree <user id>
 mooringctl user export <user id> --format singbox --out <file>
 ```
 
-`user add` asks for the label at the terminal. Every `user add` is a configuration change, so `node apply` follows it; add every user first and apply once. The export's `--out` must be in a folder Time Machine excludes, outside iCloud Drive, the Desktop and Documents (`delivery.md`). Deliver each file by the channels of `delivery.md`; the user imports it into CFM.
+`user add` asks for the label at the terminal, so run it in Terminal.app. Every `user add` is a configuration change, so `node apply` follows it; add every user first and apply once. The first apply is lon1's first configuration: it installs the engines, the tunnel and the firewall, and the node's gate stays closed until the Mac's WireGuard handshake is live. The export's `--out` must be in a folder Time Machine excludes, outside iCloud Drive, the Desktop and Documents (`delivery.md`). Deliver each file by the channels of `delivery.md`; the user imports it into CFM.
 
 ### 0.6 The Mac and the M7
 
