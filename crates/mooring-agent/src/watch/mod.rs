@@ -84,6 +84,14 @@ struct Reading {
     accounting: AccountingView,
 }
 
+/// What a tick knows of the installed generation.
+#[derive(Debug, Clone, Copy)]
+struct Installed {
+    /// The hourly target check's latest result about the configured target
+    /// was a failure (design §11.3).
+    target_degraded: bool,
+}
+
 /// One accounting poll of Xray's API.
 enum XrayPoll {
     /// It read the counters, and Xray's Go heap.
@@ -200,9 +208,15 @@ impl Watch {
         } else {
             previous_committed
         };
+        let installed = match &config {
+            Some(config) => Some(Installed {
+                target_degraded: crate::target::degraded(paths, &config.target)?,
+            }),
+            None => None,
+        };
         let conditions = self.conditions(
             now,
-            config.is_some(),
+            installed,
             peer.as_ref(),
             &gated.holds,
             failed,
@@ -337,11 +351,12 @@ impl Watch {
         })
     }
 
-    /// The conditions of a tick, at most one of each kind.
+    /// The conditions of a tick, at most one of each kind; `installed` is
+    /// `None` before the first `Apply`.
     fn conditions(
         &self,
         now: UnixTime,
-        installed: bool,
+        installed: Option<Installed>,
         peer: Option<&Result<Peer, AgentError>>,
         holds: &Holds,
         failed: Option<Option<i32>>,
@@ -351,6 +366,10 @@ impl Watch {
         if let Some(Err(_)) = peer {
             conditions.push(WatchError::WgReadFailed);
         }
+        if installed.is_some_and(|installed| installed.target_degraded) {
+            conditions.push(WatchError::TargetDegraded);
+        }
+        let installed = installed.is_some();
         if installed && reading.accounting.query_failed {
             conditions.push(WatchError::StatsQueryFailed);
         }

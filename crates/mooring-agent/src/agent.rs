@@ -11,7 +11,7 @@ use mooring_agent_proto::{AgentError, Generation, HostProfile, PROTOCOL, Role};
 use crate::host::Node;
 use crate::paths::Paths;
 use crate::serve::Session;
-use crate::{fail, gate, reflect, serve, store, txn, watch};
+use crate::{fail, gate, reflect, serve, store, target, txn, watch};
 
 /// The reflector's port (design §5.3).
 const REFLECTOR_PORT: u16 = 27900;
@@ -37,6 +37,8 @@ pub(crate) enum Invocation {
     TxnRecover,
     /// `watch`, the `mooring-watch` unit.
     Watch,
+    /// `target-watch`, the hourly target check's unit.
+    TargetWatch,
 }
 
 /// Parses the arguments after the program name.
@@ -59,7 +61,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Invocation, String> {
         ["txn-revert", generation] => generation_arg(generation).map(Invocation::TxnRevert),
         ["txn-recover"] => Ok(Invocation::TxnRecover),
         ["watch"] => Ok(Invocation::Watch),
-        _ => Err("usage: mooring-agent serve-ssh --role <bootstrap|ops|viewer> | reflect [--port <port>] | halted-check | gate-close | self-test | txn <N> | txn-revert <N> | txn-recover | watch".to_owned()),
+        ["target-watch"] => Ok(Invocation::TargetWatch),
+        _ => Err("usage: mooring-agent serve-ssh --role <bootstrap|ops|viewer> | reflect [--port <port>] | halted-check | gate-close | self-test | txn <N> | txn-revert <N> | txn-recover | watch | target-watch".to_owned()),
     }
 }
 
@@ -144,6 +147,10 @@ pub(crate) fn run(
             }
         }
         Invocation::Watch => watch::run(paths, node, stderr),
+        Invocation::TargetWatch => match target::watch(paths, node) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(error) => fail(stderr, &format!("the target check failed: {error}")),
+        },
         Invocation::TxnRecover => match txn::revert_pending(paths, node, txn::Why::Rebooted) {
             // Nothing was pending.
             Ok(_) | Err(AgentError::NotAwaitingConfirm) => ExitCode::SUCCESS,

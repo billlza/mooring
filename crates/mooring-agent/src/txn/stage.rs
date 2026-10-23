@@ -175,7 +175,7 @@ pub(crate) fn stage(
 }
 
 /// Whether the store already holds an intact copy of `sha256` at `path`.
-fn stored_intact(path: &Path, sha256: &Sha256Hex) -> Result<bool, AgentError> {
+pub(crate) fn stored_intact(path: &Path, sha256: &Sha256Hex) -> Result<bool, AgentError> {
     match File::open(path) {
         Ok(file) => {
             Ok(digest_of(file).map_err(|error| io_error(IoOp::ReadBlob, &error))? == *sha256)
@@ -187,7 +187,7 @@ fn stored_intact(path: &Path, sha256: &Sha256Hex) -> Result<bool, AgentError> {
 
 /// Copies a verified blob to `target` with `mode`, through a temporary
 /// file renamed into place.
-fn copy_blob(blob: &Path, target: &Path, mode: u32) -> Result<(), AgentError> {
+pub(crate) fn copy_blob(blob: &Path, target: &Path, mode: u32) -> Result<(), AgentError> {
     let temporary = target.with_extension("staging");
     let copied = (|| {
         let mut source = File::open(blob)?;

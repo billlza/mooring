@@ -56,6 +56,12 @@ pub(crate) enum Tool {
     SystemdTmpfiles,
     /// `systemd-analyze verify` (the staged units).
     SystemdAnalyze,
+    /// `timeout`, which bounds the target check's tools.
+    Timeout,
+    /// `getent ahostsv4` (the target's addresses).
+    Getent,
+    /// `curl --http2` (the target's HTTP answer).
+    Curl,
 }
 
 impl Tool {
@@ -84,6 +90,9 @@ impl Tool {
             Self::Sysctl => "/usr/sbin/sysctl",
             Self::SystemdTmpfiles => "/usr/bin/systemd-tmpfiles",
             Self::SystemdAnalyze => "/usr/bin/systemd-analyze",
+            Self::Timeout => "/usr/bin/timeout",
+            Self::Getent => "/usr/bin/getent",
+            Self::Curl => "/usr/bin/curl",
         }
     }
 }
@@ -93,6 +102,8 @@ impl Tool {
 pub(crate) struct ToolOutput {
     /// Whether it exited 0.
     pub(crate) success: bool,
+    /// Its exit status; `None` when a signal ended it.
+    pub(crate) code: Option<i32>,
     /// Its standard output.
     pub(crate) stdout: Vec<u8>,
     /// Its standard error.
@@ -145,6 +156,7 @@ impl Node for RealNode {
             .output()?;
         Ok(ToolOutput {
             success: output.status.success(),
+            code: output.status.code(),
             stdout: output.stdout,
             stderr: output.stderr,
         })

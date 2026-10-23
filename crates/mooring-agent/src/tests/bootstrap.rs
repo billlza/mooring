@@ -358,6 +358,7 @@ fn bootstrap_sets_the_host_up_and_returns_its_new_key() {
             "/usr/bin/systemctl",
             "/usr/bin/systemctl",
             "/usr/bin/systemctl",
+            "/usr/bin/systemctl",
             "/usr/bin/ssh-keygen",
             "/usr/bin/systemctl",
         ]
@@ -378,17 +379,22 @@ fn bootstrap_sets_the_host_up_and_returns_its_new_key() {
         "mooring-watch.service",
         "mooring-reflect.service",
         "mooring-txn-recover.service",
+        "mooring-target-check.service",
+        "mooring-target-check.timer",
     ] {
         assert!(verify.contains(unit), "{verify}");
     }
     assert!(!verify.contains("mooring-xray.service"), "{verify}");
     assert!(!verify.contains("mooring-hy2.service"), "{verify}");
     assert_eq!(
-        &calls[16..19],
+        &calls[14..20],
         [
+            "/usr/bin/systemctl restart mooring-watch.service",
+            "/usr/bin/systemctl restart mooring-reflect.service",
+            "/usr/bin/systemctl restart mooring-target-check.timer",
             "/usr/bin/systemctl restart systemd-journald.service",
-            "/usr/bin/systemctl enable nftables.service wg-quick@wgexit.service mooring-xray.service mooring-hy2.service mooring-watch.service mooring-reflect.service mooring-txn-recover.service",
-            "/usr/bin/systemctl start mooring-watch.service mooring-reflect.service",
+            "/usr/bin/systemctl enable nftables.service wg-quick@wgexit.service mooring-xray.service mooring-hy2.service mooring-watch.service mooring-reflect.service mooring-txn-recover.service mooring-target-check.timer",
+            "/usr/bin/systemctl start mooring-watch.service mooring-reflect.service mooring-target-check.timer",
         ]
     );
     // Nothing of the scratch staging is left.
