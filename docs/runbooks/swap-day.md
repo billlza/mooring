@@ -44,12 +44,13 @@ The cycle anchor is the day you will buy the Unlimited Data Boost (cycles are 30
 ### 0.4 lon1
 
 ```
-mooringctl node new lon1 --role primary --host-key <lon1's ssh_host_ed25519_key.pub>
+awk '$2 == "ssh-ed25519" {print $2, $3}' ops-local/known_hosts > ops-local/lon1-host-ed25519.pub
+mooringctl node new lon1 --role primary --host-key ops-local/lon1-host-ed25519.pub
 cargo build -p mooring-agent --release --target x86_64-unknown-linux-musl
 mooringctl node adopt lon1 --address <lon1's IPv4> --interface en9 --root-identity ~/.ssh/mooring_m2b_ed25519 --agent target/x86_64-unknown-linux-musl/release/mooring-agent
 ```
 
-The host key and the address are in `mooring/ops-local`. **`node adopt` removes your own root key from lon1**: afterwards only Mooring's bootstrap and operations keys log in, and the provider's console is the way in if they are lost. After `Bootstrap`, reboot lon1 from DigitalOcean's console when it asks; if it stops after `Bootstrap`, run it again with `--resume`.
+`ops-local/known_hosts` holds lon1's host key, checked against the fingerprint Mythic Beasts' control panel shows; `node new` takes it as a `.pub` line. The address is in `ops-local/vps-lon1.md`. **`node adopt` removes your own root key from lon1**: afterwards only Mooring's operations key logs in, forced to the agent, and the Mythic Beasts control panel is the way in if it is lost (its web console, or a reinstall). It runs `Bootstrap`, then checks the running system (`Hello`: Debian 13, a 6.12 kernel, bbr and fq) and records lon1 `Adopted`; no reboot is needed. If it stops after `Bootstrap` (it names the step), fix the cause, for example by rebooting lon1 from the control panel, and run it again with `--resume` in place of `--root-identity`.
 
 Then the REALITY target, and the first configuration:
 
@@ -77,6 +78,8 @@ mooringctl user export <user id> --format singbox --out <file>
 - The Mac is on no other network: Wi-Fi off, no campus Ethernet, no VPN, Tailscale quit, no virtual machine (its `bridge100`), CFM's TUN mode off. The daemon checks this (design §10.2, P0-2) and keeps the exit down, naming the interface, while any of them has an address.
 - The M7's Wi-Fi radio and its Wi-Fi and Ethernet offloads are off, so the SIM meter counts every byte (`router status` shows them; the status marks the meter a lower bound otherwise).
 - The Mac stays on mains power and does not sleep (`pmset -g` shows `sleep 0`).
+- The Mac does not restart or log out by itself: automatic installation of macOS updates is off (System Settings, General, Software Update). The daemon is a LaunchAgent of your session, so after a restart or a logout it is not running until `cargo xtask agent-install en9` again (section 3).
+- Whatever the Mac itself downloads also goes over the SIM and counts against its cycle: keep iCloud Drive and Photos sync and large downloads off this Mac.
 
 ### 0.7 Test the whole chain on the current SIM
 
@@ -89,7 +92,7 @@ mooringctl exit enable
 mooringctl status --json
 ```
 
-Look the observed address up as in section 2, step 4, in the current carrier's pool. Within a minute the exit is `serving`. If `mooringctl` was rebuilt after `node new`, macOS asks once for each of the node's keys when the engines first start (the dialog `console.md` shows for the M7's password); choose **Always Allow**. Import your own test user's file into CFM on your phone, connect over mobile data, and browse: the traffic leaves by the M7's line. Then:
+Look the observed address up as in section 2, step 4, in the current carrier's pool. Within a minute the exit is `serving`. If `mooringctl` was rebuilt after `node new`, macOS asks once for each of the node's keys when the engines first start (the dialog `console.md` shows for the M7's password); choose **Always Allow**. Import your own test user's file into CFM 0.5.0 on another Mac (this one stays on the M7 alone), on any network, turn on 中国大陆直连 as `user-onboarding.md` says, connect, and browse: a page that shows your address shows the one `exit observe` printed, because the traffic leaves by the M7's line. Then:
 
 ```
 mooringctl exit disable
@@ -109,7 +112,7 @@ The exit is `disabled` (it starts so, and section 0.7 ends so), which is right b
 
 0. **Keep the exit disabled** (section 1; if it is not, `mooringctl exit disable`): with the old carrier check recorded, the new SIM's address would be latched as a violation and every gate closed with a hold (a retry would undo it, but there is no need).
 1. **Buy the Boost** in the 1pMobile app. Note the UTC date: it is the cycle anchor.
-2. **Swap the SIM.** Power the M7 off, put the 1pMobile SIM in, power it on. Wait until `mooringctl router status --interface en9` shows a data service.
+2. **Swap the SIM.** Power the M7 off, put the 1pMobile SIM in, power it on. Wait until `mooringctl router status --interface en9` shows a data service. If none comes within a few minutes, check that mobile data is on in the 1pMobile account (its network settings can turn data off), then give the M7 1pMobile's APN in its web page: APN `data.uk`, user name `user`, password `one2one`, authentication CHAP (1pMobile's own help pages, read 2026-10-23).
 3. **Observe the carrier address:**
    ```
    mooringctl exit observe --interface en9
@@ -145,4 +148,5 @@ The exit is `disabled` (it starts so, and section 0.7 ends so), which is right b
   ```
   The daemon clears the latch, probes afresh, asks the nodes to clear their holds, and starts the engine if the address passes. A node halted because the egress showed its own address stays halted; resume it only after finding out why.
 - **SIM hard stop** (`down` with `sim_cap_reached`): the cycle's bytes reached 240 GB. The exit stays down until the next cycle starts; nothing is to be done.
+- **`the Mooring daemon is not running`** (from any `mooringctl` command that asks it): the Mac restarted or you logged out. Log in and run `cargo xtask agent-install en9`; the daemon resumes the exit as it was, enabled or not.
 - **Stop the exit** at any time: `mooringctl exit disable` (the daemon stops the engine within 2 s), or stop the daemon: `cargo xtask agent-uninstall`.
