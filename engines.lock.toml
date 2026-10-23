@@ -91,9 +91,17 @@ security-bumps = [
     "golang.org/x/net@v0.61.0",
     "google.golang.org/grpc@v1.84.0",
 ]
-# The go.mod and go.sum change of the bumps, as Xray's patch.
+# The go.mod and go.sum change of the bumps, as Xray's patch. Reviewed
+# 2026-10-23 (hosted run 39914300688): the three bumps with what their
+# go.mod files require (x/mod v0.41.0, x/sync v0.24.0, x/sys v0.49.0,
+# x/term v0.47.0, x/text v0.43.0; indirect go-jose v4.1.4, x/tools v0.51.0
+# and genproto/googleapis/rpc 20260706); the go directive from 1.25.5 to
+# 1.26.0, which grpc v1.84.0 requires (the runtime's GODEBUG defaults stay
+# the ldflags' -X runtime.godebugDefault, which replaces the computed
+# ones); and 28 go.sum lines, all of them sum.golang.org's. govulncheck
+# found nothing reachable in the four sing-box outputs of the patched tree.
 patch = "engines/patches/sing-box-v1.14.2.patch"
-patch-sha256 = ""
+patch-sha256 = "d41f4092a6caf53138c45e6e167801f4d6533e3a50f61443378770f5764f5ee1"
 
 [sing-box.roles.mooring-exit]
 targets = ["darwin-arm64"]
