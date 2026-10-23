@@ -412,6 +412,11 @@ fn the_patches_follow_the_lock() {
             r#"patch = "engines/patches/sing-box-v1.14.2.patch""#,
             r#"patch = """#,
             1,
+        )
+        .replacen(
+            &format!(r#"patch-sha256 = "{}""#, lock.sing_box.patch_sha256),
+            r#"patch-sha256 = """#,
+            1,
         );
     let unbumped = Lock::parse(&unbumped).unwrap();
     assert_eq!(
