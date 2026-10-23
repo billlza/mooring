@@ -3,6 +3,7 @@
 //! The command line (clap derive). No argument carries a secret: the M7's
 //! admin password is read from the terminal or stdin only.
 
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -10,7 +11,8 @@ use mooring_export::ExportFormat;
 use mooring_model::exit::{FlowCap, Pairing};
 use mooring_model::iface::BsdName;
 use mooring_model::ipv4::CarrierPrefix;
-use mooring_model::{CalendarDate, ClientLine, UserId};
+use mooring_model::node::NodeRole;
+use mooring_model::{CalendarDate, ClientLine, NodeId, UserId};
 
 /// Mooring's command-line tool. Revision 7 builds the M7 router commands,
 /// which only read from the M7; M5 adds the user commands.
@@ -38,6 +40,9 @@ pub(crate) enum Command {
     /// The SIM line's billing cycles.
     #[command(subcommand)]
     Sim(SimCommand),
+    /// The VPS nodes.
+    #[command(subcommand)]
+    Node(NodeCommand),
     /// The console's status, from the daemon.
     Status {
         /// Keep printing each new status while it is fresh, until the
@@ -53,6 +58,18 @@ pub(crate) enum Command {
         /// follower never outlives it).
         #[arg(long, requires = "follow")]
         until_parent_exits: bool,
+    },
+    /// Connect to a node through the interface that faces the M7 and relay
+    /// standard input and output: management SSH's ProxyCommand.
+    #[command(hide = true)]
+    DialBound {
+        /// The Mac's interface to the M7; its gateway must be the pinned M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// The node's address.
+        address: Ipv4Addr,
+        /// The node's SSH port.
+        port: u16,
     },
     /// Run the daemon (launchd starts it): poll the M7 and serve the
     /// console's status on the control socket.
@@ -205,6 +222,69 @@ impl From<PairingArg> for Pairing {
         match arg {
             PairingArg::Paired => Self::Paired,
             PairingArg::Unpaired => Self::Unpaired,
+        }
+    }
+}
+
+/// A node command.
+#[derive(Debug, Subcommand)]
+pub(crate) enum NodeCommand {
+    /// Plan a node for a VPS that exists already, pinning its host key.
+    New {
+        /// The node's id, for example lon1.
+        node: NodeId,
+        /// Primary or standby.
+        #[arg(long, value_enum)]
+        role: RoleArg,
+        /// The VPS's Ed25519 host key, as OpenSSH writes it
+        /// (/etc/ssh/ssh_host_ed25519_key.pub).
+        #[arg(long, value_name = "PATH")]
+        host_key: PathBuf,
+        /// Plan without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Install the agent on a planned node's VPS with the operator's root
+    /// key, then hand the VPS to Mooring's keys (the operator's key stops
+    /// working there).
+    Adopt {
+        /// The node's id.
+        node: NodeId,
+        /// The VPS's public IPv4 address.
+        #[arg(long)]
+        address: Ipv4Addr,
+        /// The Mac's interface to the M7; the connection leaves through it.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// The private key that logs in as root on the VPS now.
+        #[arg(long, value_name = "PATH", required_unless_present = "resume")]
+        root_identity: Option<PathBuf>,
+        /// The mooring-agent release binary for the VPS's architecture.
+        #[arg(long, value_name = "PATH")]
+        agent: PathBuf,
+        /// Resume after Bootstrap: start at the operations key's check.
+        #[arg(long, conflicts_with = "root_identity")]
+        resume: bool,
+        /// Adopt without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// A node's role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum RoleArg {
+    /// The node users are told to prefer.
+    Primary,
+    /// The standby, on a different ASN.
+    Standby,
+}
+
+impl From<RoleArg> for NodeRole {
+    fn from(arg: RoleArg) -> Self {
+        match arg {
+            RoleArg::Primary => Self::Primary,
+            RoleArg::Standby => Self::Standby,
         }
     }
 }

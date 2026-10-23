@@ -14,6 +14,7 @@ mod export;
 mod flow;
 mod form;
 mod http;
+mod node;
 mod output;
 mod password;
 mod pin;

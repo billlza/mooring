@@ -25,7 +25,7 @@ use mooring_model::time::UnixTime;
 use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, write_router_pin};
 
 use crate::backup::BackupCheck;
-use crate::cli::{Command, ExitCommand, RouterCommand, SimCommand, UserCommand};
+use crate::cli::{Command, ExitCommand, NodeCommand, RouterCommand, SimCommand, UserCommand};
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::paths;
 use crate::prompt::{self, Answer, Console};
@@ -51,6 +51,8 @@ pub(crate) struct Env<'a> {
     /// The id of this process's parent (`getppid` in the binary): when the
     /// parent exits, launchd adopts the process and the id changes.
     pub(crate) parent: &'a dyn Fn() -> u32,
+    /// How nodes are reached (`/usr/bin/ssh` in the binary).
+    pub(crate) nodes: &'a dyn crate::node::NodeLinks,
 }
 
 /// The system clock, in whole seconds since the epoch.
@@ -104,6 +106,33 @@ pub(crate) fn run(
             pairing,
             yes,
         }) => crate::exit::record_carrier(env, out, prefixes, pairing.into(), yes),
+        Command::Node(NodeCommand::New {
+            node,
+            role,
+            host_key,
+            yes,
+        }) => crate::node::new::new(env, out, node, role.into(), &host_key, yes),
+        Command::Node(NodeCommand::Adopt {
+            node,
+            address,
+            interface,
+            root_identity,
+            agent,
+            resume,
+            yes,
+        }) => crate::node::adopt::adopt(
+            env,
+            out,
+            &crate::node::adopt::AdoptArgs {
+                node: &node,
+                address,
+                interface: &interface,
+                root_identity: root_identity.as_deref(),
+                agent: &agent,
+                resume,
+                yes,
+            },
+        ),
         Command::Sim(SimCommand::SetAnchor { anchor, yes }) => {
             crate::sim::set_anchor(env, out, anchor, yes)
         }
@@ -121,6 +150,11 @@ pub(crate) fn run(
             },
             json,
         ),
+        Command::DialBound {
+            interface,
+            address,
+            port,
+        } => crate::node::dial::dial_bound(env, &interface, address, port),
         Command::Daemon { router_interface } => {
             crate::daemon::run(env, err, router_interface.as_ref())
         }
