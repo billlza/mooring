@@ -17,10 +17,11 @@
 //! itself, ssh and a ProxyCommand under a shell's ssh all read it; so the
 //! check and the connection moved to the process that starts ssh.
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{Shutdown, SocketAddr, SocketAddrV4, TcpStream};
 use std::num::NonZeroU32;
+use std::os::fd::AsFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -101,7 +102,19 @@ pub(crate) fn connect(
 /// input and output over it until both directions end.
 pub(crate) fn ssh_relay(socket: &Path) -> Result<(), CommandError> {
     let stream = UnixStream::connect(socket).map_err(NodeError::Relay)?;
-    relay(stream, io::stdin(), io::stdout()).map_err(|error| NodeError::Relay(error).into())
+    let (input, output) = standard_streams().map_err(NodeError::Relay)?;
+    relay(stream, input, output).map_err(|error| NodeError::Relay(error).into())
+}
+
+/// Standard input and output as files of their own (duplicated
+/// descriptors), which the relay's two threads use without a lock or a
+/// buffer: `main` holds the process's `Stdin` and `Stdout` locks for the
+/// whole command, so another thread reading or writing through them would
+/// wait for ever, and `Stdout` is line-buffered.
+fn standard_streams() -> io::Result<(File, File)> {
+    let input = io::stdin().as_fd().try_clone_to_owned()?;
+    let output = io::stdout().as_fd().try_clone_to_owned()?;
+    Ok((File::from(input), File::from(output)))
 }
 
 /// A stream whose two halves are used from two threads.
