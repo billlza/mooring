@@ -128,6 +128,6 @@ The same status is available in Terminal:
 
 **The router screen says "The Mac could not poll the M7":** the keychain or the kernel's tables failed. The daemon's log names which.
 
-**"The M7 is unreachable":** check the adapter and `ifconfig en9`. If the M7 answers `ping 192.168.1.1` from Terminal but the daemon cannot reach it, local network access was refused. Allow it under System Settings › Privacy & Security › Local Network, then wait for the next poll.
+**"The M7 is unreachable":** the daemon's log names why ("router poll failed: the M7 is unreachable: …"). Check the adapter and `ifconfig en9`. With a deployment, "the exit's interfaces do not resolve: no interface matches the egress selector" means the Mac does not see the adapter at all. If the M7 answers `ping 192.168.1.1` from Terminal but the daemon cannot reach it, local network access was refused. Allow it under System Settings › Privacy & Security › Local Network, then wait for the next poll. "router poll succeeded" marks when the M7 answers again.
 
 **"The M7 refused the login":** store the password again with `router set-password`, as in section 0.

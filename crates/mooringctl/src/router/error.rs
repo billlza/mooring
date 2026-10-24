@@ -19,6 +19,7 @@ use std::fmt;
 use std::io;
 
 use mooring_daemon_core::RouterParseError;
+use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_daemon_core::router::netgear::LOGIN_FIELDS;
 use mooring_model::iface::MacAddr;
@@ -166,8 +167,14 @@ impl fmt::Display for Phase {
 }
 
 /// Why the M7 could not be reached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UnreachableCause {
+    /// The exit's interfaces do not resolve, so there is no egress to poll
+    /// the M7 on (with a deployment, design §10.1 step 2).
+    ExitInterfacesUnresolved {
+        /// Why.
+        fault: EgressFault,
+    },
     /// The interface does not exist.
     InterfaceAbsent,
     /// The interface has no IPv4 default route through a gateway.
@@ -213,6 +220,9 @@ pub(crate) enum UnreachableCause {
 impl fmt::Display for UnreachableCause {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ExitInterfacesUnresolved { fault } => {
+                write!(f, "the exit's interfaces do not resolve: {fault}")
+            }
             Self::InterfaceAbsent => f.write_str("the interface does not exist"),
             Self::NoDefaultRoute => {
                 f.write_str("the interface has no IPv4 default route through a gateway")

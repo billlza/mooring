@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use mooring_agent_proto::{AgentError, Sha256Hex};
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::control::Refusal;
+use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::MeterError;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_daemon_core::snapshot::SnapshotError;
@@ -343,10 +344,13 @@ pub(crate) enum LocalError {
     /// The power helper's first report was not the power source.
     #[error("the power helper's first report was {0:?}, not the power source")]
     PowerHelperFirstReport(mooring_daemon_core::power::HelperEvent),
-    /// A node cannot be reached: the egress, which faces the M7, does not
-    /// resolve.
-    #[error("the node cannot be reached: the egress does not resolve")]
-    NodeUnreachableWithoutEgress,
+    /// A node cannot be reached: the exit's interfaces, the egress that
+    /// faces the M7 among them, do not resolve.
+    #[error("the node cannot be reached: the exit's interfaces do not resolve: {fault}")]
+    NodeUnreachableWithoutEgress {
+        /// Why.
+        fault: EgressFault,
+    },
     /// The prober's config serves a node without a site, which only an
     /// applied node can be rendered for.
     #[error("the prober's config serves {node}, which has no site")]
