@@ -136,6 +136,7 @@ impl Duplex for UnixStream {
 /// Copies `input` to the connection and the connection to `output`, each
 /// in its own thread, until both directions end: the end of `input` shuts
 /// the connection's sending half, and the peer's end finishes `output`.
+/// Bytes are passed on as they arrive ([`pass_on`]).
 pub(crate) fn relay(
     stream: impl Duplex,
     mut input: impl Read + Send,
@@ -145,15 +146,32 @@ pub(crate) fn relay(
     let mut receiving = stream;
     thread::scope(|scope| {
         let sender = scope.spawn(move || -> io::Result<()> {
-            io::copy(&mut input, &mut sending)?;
+            pass_on(&mut input, &mut sending)?;
             shut_sending(&sending)
         });
-        let received = io::copy(&mut receiving, &mut output).and_then(|_| output.flush());
+        let received = pass_on(&mut receiving, &mut output);
         let sent = sender
             .join()
             .unwrap_or_else(|_| Err(io::Error::other("the sending thread panicked")));
         received.and(sent)
     })
+}
+
+/// Copies `from` to `to` until `from` ends, flushing `to` after each read:
+/// a relay's peer waits for every byte it is sent, and `to` may buffer
+/// (standard output is line-buffered, and ssh's packets are binary).
+fn pass_on(from: &mut impl Read, to: &mut impl Write) -> io::Result<()> {
+    let mut chunk = [0_u8; 16 * 1024];
+    loop {
+        let read = match from.read(&mut chunk) {
+            Ok(0) => return Ok(()),
+            Ok(read) => read,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        to.write_all(&chunk[..read])?;
+        to.flush()?;
+    }
 }
 
 /// Joins `helper` (the ProxyCommand's end) and `node` (the connection to

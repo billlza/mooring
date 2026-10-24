@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{LineWriter, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -1297,6 +1297,50 @@ fn the_relay_copies_both_ways_over_a_unix_socket_too() {
     .unwrap();
     server.join().unwrap();
     assert_eq!(output, b"reply:request bytes");
+}
+
+/// A writer that hands each write to a channel, so a test sees when bytes
+/// leave a buffer in front of it.
+struct Sink(mpsc::Sender<Vec<u8>>);
+
+impl Write for Sink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .send(bytes.to_vec())
+            .map_err(|_| std::io::Error::other("the test stopped listening"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The relay passes the node's bytes on as they arrive, though its output
+/// buffers. Standard output is line-buffered, and after the identification
+/// line ssh's packets are binary: a tail without a newline must not wait in
+/// the buffer while ssh waits for it. The first live adopt over the relay
+/// timed out in the key exchange so (2026-10-24).
+#[test]
+fn the_relay_passes_bytes_on_as_they_arrive_though_its_output_buffers() {
+    let sent = b"SSH-2.0-node\r\n\x00\x00\x01\x0ckexinit";
+    let (mut node, stream) = UnixStream::pair().unwrap();
+    let (ssh, input) = UnixStream::pair().unwrap();
+    let (passed, arrived) = mpsc::channel();
+    let relaying = std::thread::spawn(move || relay(stream, input, LineWriter::new(Sink(passed))));
+    node.write_all(sent).unwrap();
+    let mut seen = Vec::new();
+    while seen.len() < sent.len() {
+        let bytes = arrived
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the relay held the node's bytes back");
+        seen.extend(bytes);
+    }
+    assert_eq!(seen, sent);
+    // The node's end and the end of ssh's input end the relay.
+    drop(node);
+    ssh.shutdown(Shutdown::Write).unwrap();
+    within(Duration::from_secs(10), move || relaying.join().unwrap()).unwrap();
 }
 
 /// Each fact adoption asserts refuses on its own.
