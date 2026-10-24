@@ -593,6 +593,38 @@ fn every_egress_fault_is_its_down_reason() {
     }
 }
 
+/// The daemon's log names each fault, for a poll it could not make.
+#[test]
+fn every_egress_fault_names_itself() {
+    for (fault, text) in [
+        (
+            EgressFault::Absent,
+            "no interface matches the egress selector",
+        ),
+        (
+            EgressFault::Ambiguous { matches: 3 },
+            "3 interfaces match the egress selector",
+        ),
+        (
+            EgressFault::NoIpv4 {
+                interface: BsdName::parse("en8").unwrap(),
+            },
+            "en8, which the egress selector names, has no IPv4 address",
+        ),
+        (
+            EgressFault::SubnetMismatch,
+            "the egress's IPv4 address is outside the selector's subnet",
+        ),
+        (EgressFault::UplinkAbsent, "the separate uplink is absent"),
+        (
+            EgressFault::UplinkEqualsEgress,
+            "the separate uplink is the egress",
+        ),
+    ] {
+        assert_eq!(fault.to_string(), text);
+    }
+}
+
 #[test]
 fn a_disabled_exit_runs_nothing_and_disabling_stops_the_engine() {
     let mut world = World::new();

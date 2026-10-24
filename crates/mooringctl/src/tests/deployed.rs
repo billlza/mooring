@@ -23,7 +23,10 @@ use mooring_agent_proto::{AgentError, Holds, RequestKind, Response};
 use mooring_daemon_core::alert::MacEngine;
 use mooring_daemon_core::console::ConsoleStatus;
 use mooring_daemon_core::control::{DaemonReply, decode_reply};
+use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::power::HelperEvent;
+use mooring_daemon_core::router::netgear::parse_netgear_model_json;
+use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
 use mooring_daemon_core::snapshot::NodePoll;
 use mooring_daemon_core::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, NodeAgentState,
@@ -39,11 +42,13 @@ use mooring_store::{
 };
 
 use super::runtime::STAND_IN;
-use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent, lo0};
+use super::support::{
+    Answered, Expected, ExpectedRemote, FIXTURE, Harness, NOW, PINNED, Sent, lo0, lo0_name,
+};
 use super::user::{fixture, harness_with, store};
 use crate::daemon::deployed::{
-    DRAIN_BUDGET, Deployed, ENGINES_DIRECTORY, budget_left, first_power_source, stale_watches,
-    unreachable_cause,
+    DRAIN_BUDGET, Deployed, ENGINES_DIRECTORY, budget_left, first_power_source, poll_m7,
+    stale_watches, unreachable_cause,
 };
 use crate::daemon::hub::Hub;
 use crate::daemon::{Control, RunPaths};
@@ -651,6 +656,112 @@ fn every_node_is_polled_and_one_that_does_not_answer_is_unreachable() {
     assert!(harness.nodes.script.borrow().is_empty());
 }
 
+/// Without an egress the M7 is not polled: the panel is unreachable, and
+/// the log says why, as it does for every changed outcome of a poll, also
+/// while the exit is disabled and its state names no fault; so does a
+/// node's first failed poll.
+#[test]
+fn an_egress_that_does_not_resolve_is_the_m7_poll_s_logged_failure() {
+    let mut harness = deployed();
+    harness.link.listed = Ok(Vec::new());
+    let state = store(&harness).load().unwrap();
+    store(&harness)
+        .set_exit_enabled(state.runtime.revision, false)
+        .unwrap();
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Disabled
+        );
+        String::from_utf8(log.clone()).unwrap()
+    });
+    let fault = "the exit's interfaces do not resolve: no interface matches the egress selector";
+    let failures: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("router poll failed"))
+        .collect();
+    assert_eq!(failures.len(), 1, "{log}");
+    assert!(
+        failures[0].ends_with(&format!(
+            "router poll failed: the M7 is unreachable: {fault}"
+        )),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "lon1: poll failed: the node cannot be reached: {fault}"
+        )),
+        "{log}"
+    );
+    assert_eq!(
+        published(&control).parts().router,
+        RouterReading::Unavailable {
+            reason: RouterUnavailableReason::Unreachable,
+            last_polled_at: None,
+        }
+    );
+}
+
+/// An egress fault is a failed poll of the M7 like any other: logged once
+/// while it lasts and again when it changes, and the last good poll stays
+/// on the panel.
+#[test]
+fn an_egress_fault_is_logged_once_while_it_lasts_and_again_when_it_changes() {
+    let mut harness = deployed();
+    let support = harness.support_dir();
+    let good = RouterReading::Available {
+        polled_at: mooring_model::UnixTime::from_secs(NOW - 60),
+        status: Box::new(parse_netgear_model_json(FIXTURE).unwrap()),
+    };
+    let (log, reading) = harness.with_env(|env| {
+        let mut log = Vec::new();
+        let mut failure = None;
+        let mut reading = good;
+        for fault in [
+            EgressFault::Absent,
+            EgressFault::Absent,
+            EgressFault::NoIpv4 {
+                interface: lo0_name(),
+            },
+        ] {
+            reading = poll_m7(
+                env,
+                &support,
+                &mut log,
+                Some(&reading),
+                &mut failure,
+                Err(&fault),
+            )
+            .unwrap();
+        }
+        (String::from_utf8(log).unwrap(), reading)
+    });
+    let failures: Vec<_> = log.lines().collect();
+    assert_eq!(failures.len(), 2, "{log}");
+    assert!(
+        failures[0].ends_with(
+            "router poll failed: the M7 is unreachable: the exit's interfaces do not \
+             resolve: no interface matches the egress selector"
+        ),
+        "{log}"
+    );
+    assert!(
+        failures[1].ends_with(
+            "router poll failed: the M7 is unreachable: the exit's interfaces do not \
+             resolve: lo0, which the egress selector names, has no IPv4 address"
+        ),
+        "{log}"
+    );
+    assert_eq!(
+        reading,
+        RouterReading::Unavailable {
+            reason: RouterUnavailableReason::Unreachable,
+            last_polled_at: Some(mooring_model::UnixTime::from_secs(NOW - 60)),
+        }
+    );
+}
+
 /// A node whose watch has not written for longer than the bound when it
 /// answered is stale, by its own clock: the Mac's does not enter.
 #[test]
@@ -728,7 +839,12 @@ fn every_failure_of_a_poll_has_its_cause() {
         );
     }
     assert_eq!(
-        unreachable_cause(&LocalError::NodeUnreachableWithoutEgress.into()),
+        unreachable_cause(
+            &LocalError::NodeUnreachableWithoutEgress {
+                fault: EgressFault::Absent,
+            }
+            .into()
+        ),
         AgentUnreachable::Transport
     );
 }

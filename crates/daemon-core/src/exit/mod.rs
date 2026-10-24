@@ -71,6 +71,7 @@
 mod in_chain;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
@@ -147,6 +148,29 @@ impl EgressFault {
             Self::SubnetMismatch => DownReason::EgressSubnetMismatch,
             Self::UplinkAbsent => DownReason::UplinkAbsent,
             Self::UplinkEqualsEgress => DownReason::UplinkEqualsEgress,
+        }
+    }
+}
+
+/// The fault as the daemon's log names it, when a poll of the M7 or of a
+/// node could not be made for it.
+impl fmt::Display for EgressFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Absent => f.write_str("no interface matches the egress selector"),
+            Self::Ambiguous { matches } => {
+                write!(f, "{matches} interfaces match the egress selector")
+            }
+            Self::NoIpv4 { interface } => write!(
+                f,
+                "{}, which the egress selector names, has no IPv4 address",
+                interface.as_str()
+            ),
+            Self::SubnetMismatch => {
+                f.write_str("the egress's IPv4 address is outside the selector's subnet")
+            }
+            Self::UplinkAbsent => f.write_str("the separate uplink is absent"),
+            Self::UplinkEqualsEgress => f.write_str("the separate uplink is the egress"),
         }
     }
 }

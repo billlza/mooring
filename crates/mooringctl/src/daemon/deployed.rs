@@ -26,11 +26,11 @@ use std::time::{Duration, Instant};
 
 use mooring_agent_proto::{LineRequest, ReadError, Response, WATCH_STALE_SECS};
 use mooring_daemon_core::console::ConsoleStatus;
-use mooring_daemon_core::exit::{ExitMachine, SimUse, TickInputs};
+use mooring_daemon_core::exit::{EgressFault, ExitMachine, SimUse, TickInputs};
 use mooring_daemon_core::meter::{MAX_SIM_METER_BYTES, SimMeter, accuracy};
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::power::{HelperCommand, HelperEvent};
-use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
+use mooring_daemon_core::router::RouterReading;
 use mooring_daemon_core::snapshot::{NodePoll, SimTotals, StatusInputs, assemble};
 use mooring_daemon_core::status::{
     AgentUnreachable, DegradedReason, DrainRecord, ExitState, NodeAgentState, PowerSource,
@@ -49,6 +49,7 @@ use crate::app::Env;
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::node::session::ops_session;
+use crate::router::error::{RouterError, UnreachableCause};
 use crate::runtime::meter::{METER_TICK, MeterThread, PERSIST_EVERY, Watched};
 use crate::runtime::network::foreign;
 use crate::runtime::ports::{
@@ -211,7 +212,6 @@ impl<'e, 'a> Deployed<'e, 'a> {
             &mut router_failure,
             egress
                 .as_ref()
-                .ok()
                 .map(|egress| &egress.interfaces.egress().bsd_name),
         )?;
         Ok(Self {
@@ -259,10 +259,11 @@ impl<'e, 'a> Deployed<'e, 'a> {
         let deployment = &state.deployment;
         let now = (env.clock)()?;
         let egress = exit_interfaces(env.router.link, deployment.exit())?;
+        // The polls' interface, or the fault a poll then fails with.
         let egress_name = egress
             .as_ref()
-            .ok()
-            .map(|egress| egress.interfaces.egress().bsd_name.clone());
+            .map(|egress| egress.interfaces.egress().bsd_name.clone())
+            .map_err(EgressFault::clone);
         self.meter
             .watch(egress.as_ref().ok().map(|egress| Watched {
                 index: egress.interfaces.egress().index,
@@ -271,17 +272,17 @@ impl<'e, 'a> Deployed<'e, 'a> {
         // The check runs while the egress resolves: without it the exit is
         // down already, for that.
         let foreign = match &egress_name {
-            Some(name) => foreign(
+            Ok(name) => foreign(
                 &env.router.link.interfaces().map_err(LocalError::Kernel)?,
                 name,
             )?,
-            None => BTreeSet::new(),
+            Err(_) => BTreeSet::new(),
         };
         let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), now)
             .map_err(LocalError::Cycle)?;
         let counted = self.meter.meter()?;
         let bytes = counted.cycle_bytes(cycle);
-        self.ports.set_egress(egress_name.clone());
+        self.ports.set_egress(egress_name.as_ref().ok().cloned());
         self.service_helper(log, now, deployment)?;
         let previous = self.published.as_ref().map(|(_, state)| state.clone());
         let section = self.machine.tick(
@@ -543,12 +544,11 @@ impl<'e, 'a> Deployed<'e, 'a> {
         Ok(())
     }
 
-    /// Polls the M7 through the egress; without one it cannot be reached,
-    /// which the panel says rather than show an old reading.
+    /// Polls the M7 through the egress ([`poll_m7`]).
     fn poll_router(
         &mut self,
         log: &mut dyn Write,
-        egress: Option<&BsdName>,
+        egress: Result<&BsdName, &EgressFault>,
     ) -> Result<(), CommandError> {
         self.router_polled = Some(Instant::now());
         self.router = poll_m7(
@@ -569,7 +569,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
         &mut self,
         log: &mut dyn Write,
         deployment: &Deployment,
-        egress: Option<&BsdName>,
+        egress: Result<&BsdName, &EgressFault>,
     ) -> Result<(), CommandError> {
         self.nodes_polled = Some(Instant::now());
         let sited: Vec<_> = deployment
@@ -584,9 +584,12 @@ impl<'e, 'a> Deployed<'e, 'a> {
         for node in sited {
             let now = (self.env.clock)()?;
             let outcome = match egress {
-                Some(egress) => ops_session(self.env, node, egress, None)
+                Ok(egress) => ops_session(self.env, node, egress, None)
                     .and_then(|mut session| Ok(session.request(&LineRequest::Status)?)),
-                None => Err(LocalError::NodeUnreachableWithoutEgress.into()),
+                Err(fault) => Err(LocalError::NodeUnreachableWithoutEgress {
+                    fault: fault.clone(),
+                }
+                .into()),
             };
             match outcome {
                 Ok(Response::Status(status)) => {
@@ -713,30 +716,29 @@ pub(crate) fn unreachable_cause(error: &CommandError) -> AgentUnreachable {
     }
 }
 
-/// One poll of the M7 through `egress`, after `previous`; without an
-/// egress the M7 cannot be reached, which the panel says rather than show
-/// an older reading.
-fn poll_m7(
+/// One poll of the M7 through `egress`, after `previous`. Without an
+/// egress the M7 cannot be reached: that is the poll's failure, so the
+/// panel says so rather than show an older reading, and the log names the
+/// fault when the outcome changes, as for any other failure.
+pub(crate) fn poll_m7(
     env: &Env<'_>,
     support_dir: &Path,
     log: &mut dyn Write,
     previous: Option<&RouterReading>,
     failure: &mut Option<String>,
-    egress: Option<&BsdName>,
+    egress: Result<&BsdName, &EgressFault>,
 ) -> Result<RouterReading, CommandError> {
     let polled_at = (env.clock)()?;
-    match egress {
-        Some(egress) => {
-            let outcome = poll_router_on(env, support_dir, egress);
-            let now = (env.clock)()?;
-            router_after_poll(log, previous, failure, polled_at, &outcome, now)
-        }
-        None => Ok(RouterReading::after_poll(
-            previous,
-            polled_at,
-            Err(RouterUnavailableReason::Unreachable),
-        )),
-    }
+    let outcome = match egress {
+        Ok(egress) => poll_router_on(env, support_dir, egress),
+        Err(fault) => Err(CommandError::Router(RouterError::unreachable(
+            UnreachableCause::ExitInterfacesUnresolved {
+                fault: fault.clone(),
+            },
+        ))),
+    };
+    let now = (env.clock)()?;
+    router_after_poll(log, previous, failure, polled_at, &outcome, now)
 }
 
 /// Serves the exit until the acceptor ends or the daemon fails. `state` is
