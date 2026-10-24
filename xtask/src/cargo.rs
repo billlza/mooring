@@ -56,6 +56,16 @@ impl Cargo {
         &self.workspace_root
     }
 
+    /// A cargo at `program` for `workspace_root`, for a test that must not
+    /// reach the real one.
+    #[cfg(test)]
+    pub(crate) const fn stand_in(program: PathBuf, workspace_root: PathBuf) -> Self {
+        Self {
+            program,
+            workspace_root,
+        }
+    }
+
     /// Runs `cargo <args>` with inherited standard output and error.
     pub(crate) fn run(&self, args: &[&str]) -> Result<(), CommandError> {
         let status = self

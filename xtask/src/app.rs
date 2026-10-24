@@ -15,12 +15,15 @@
 //! signatures.
 //!
 //! The daemon is registered from the app itself, with `SMAppService`
-//! (design §5.1, M7): launchd runs the `mooringctl` inside the bundle, so
-//! a build replaces the executable a registered daemon runs, and `app`
-//! restarts it on the new build (`launchctl kickstart -k`). Measured
-//! 2026-10-23 on macOS 27.0 with a test agent: an ad-hoc-signed app's
-//! registration is enabled at once, it lasts when the bundle is rebuilt and
-//! signed again in place, and `kickstart -k` starts the new executable.
+//! (design §5.1, M7): launchd runs the `mooringctl` inside the bundle, and
+//! only the one it was registered with. The registration pins that
+//! executable's code signature, an ad-hoc one by its cdhash (launchd's
+//! `LWCR`), so after a rebuild launchd refuses to start the new executable
+//! (job state "spawn failed", last exit code 78) until the app registers
+//! the daemon again (measured 2026-10-23 on macOS 27.0). `app` is
+//! therefore refused while launchd lists the daemon, before anything is
+//! built: the operator stops it from the app's menu, builds, and starts it
+//! again from the new build.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -122,6 +125,10 @@ pub(crate) enum AppError {
         "{service} is loaded and runs from the target directory; stop it first (Mooring.app's menu: Stop the Daemon)"
     )]
     AgentLoaded { service: String },
+    #[error(
+        "{service} is registered, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start: choose Stop the Daemon in Mooring.app's menu, run `cargo xtask app` again, then open the new build and choose Start the Daemon at Login"
+    )]
+    DaemonRegistered { service: String },
     #[error(
         "the built app's {} is not the daemon's plist {}",
         embedded.display(),
@@ -534,46 +541,26 @@ fn remove_tree(path: &Path) -> Result<(), AppError> {
 /// `cargo xtask app`.
 pub(crate) fn build(cargo: &Cargo, out: &mut impl Write) -> Result<(), AppError> {
     require_macos("app", std::env::consts::OS)?;
-    mooringctl::run(cargo, mooringctl::MOORINGCTL, out)?;
-    let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
-    let root = cargo.workspace_root().to_path_buf();
-    let paths = AppPaths::new(&root, &target);
-    let xcodegen = find_xcodegen(std::env::var_os("PATH"))?;
-    assemble(&mut System, &root, &paths, &xcodegen, out)?;
-    restart_loaded_agent(&mut System, &root, out)
+    build_with(&mut System, cargo, out)
 }
 
-/// After a build, restarts the daemon if it is loaded: it runs the
-/// `mooringctl` inside the app, which the build has replaced, and a daemon
-/// left on the old build answers the new CLI in its old shape. macOS asks
-/// again for the keychain item, as the ad-hoc signature changed.
-pub(crate) fn restart_loaded_agent(
+/// [`build`] past the host check, with `programs` running every step but
+/// cargo's. A registered daemon refuses the build before anything is built
+/// or signed, so the CLI's copy, the app and the daemon stay one build.
+fn build_with(
     programs: &mut impl Programs,
-    root: &Path,
+    cargo: &Cargo,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
-    let domain = gui_domain(programs, root)?;
-    let service = format!("{domain}/{AGENT_LABEL}");
-    if !agent_loaded(programs, root, &service)? {
-        return Ok(());
+    let root = cargo.workspace_root().to_path_buf();
+    if let Some(service) = loaded_agent(programs, &root)? {
+        return Err(AppError::DaemonRegistered { service });
     }
-    programs.run(
-        &step(
-            LAUNCHCTL,
-            &[
-                OsStr::new("kickstart"),
-                OsStr::new("-k"),
-                OsStr::new(&service),
-            ],
-            root,
-        ),
-        Capture::Inherit,
-    )?;
-    say!(
-        out,
-        "app: {AGENT_LABEL} restarted on this build; macOS asks again to let mooringctl use the keychain item"
-    )?;
-    Ok(())
+    mooringctl::run(cargo, mooringctl::MOORINGCTL, out)?;
+    let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
+    let paths = AppPaths::new(&root, &target);
+    let xcodegen = find_xcodegen(std::env::var_os("PATH"))?;
+    assemble(programs, &root, &paths, &xcodegen, out)
 }
 
 /// `AgentLoaded` while the daemon is loaded: removing the target directory
@@ -582,12 +569,10 @@ pub(crate) fn refuse_while_agent_loaded(
     programs: &mut impl Programs,
     root: &Path,
 ) -> Result<(), AppError> {
-    let domain = gui_domain(programs, root)?;
-    let service = format!("{domain}/{AGENT_LABEL}");
-    if agent_loaded(programs, root, &service)? {
-        return Err(AppError::AgentLoaded { service });
+    match loaded_agent(programs, root)? {
+        Some(service) => Err(AppError::AgentLoaded { service }),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// [`refuse_while_agent_loaded`] against the real `launchctl`, from
@@ -707,7 +692,7 @@ pub(crate) fn assemble(
     }
     say!(
         out,
-        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} and {} inside",
+        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} and {} inside; open it and choose Start the Daemon at Login to run its daemon",
         paths.app.display(),
         paths.embedded.display(),
         paths.power.display()
@@ -951,6 +936,14 @@ fn gui_domain(programs: &mut impl Programs, root: &Path) -> Result<String, AppEr
     }
 }
 
+/// The daemon's service, `gui/<uid>/com.bill.mooring.daemon`, if launchd
+/// lists it.
+fn loaded_agent(programs: &mut impl Programs, root: &Path) -> Result<Option<String>, AppError> {
+    let domain = gui_domain(programs, root)?;
+    let service = format!("{domain}/{AGENT_LABEL}");
+    Ok(agent_loaded(programs, root, &service)?.then_some(service))
+}
+
 /// Whether launchd lists `service`, by `launchctl print`'s exit status.
 fn agent_loaded(
     programs: &mut impl Programs,
@@ -977,9 +970,10 @@ mod tests {
 
     use super::{
         AGENT_LABEL, AppError, AppPaths, Capture, Programs, Step, assemble, build_steps,
-        check_build_results, find_xcodegen, refuse_while_agent_loaded, require_macos,
-        restart_loaded_agent, tail,
+        build_with, check_build_results, find_xcodegen, refuse_while_agent_loaded, require_macos,
+        tail,
     };
+    use crate::cargo::Cargo;
     use crate::mooringctl::SignatureFault;
     use crate::testing::Scratch;
 
@@ -1212,7 +1206,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).unwrap(),
             format!(
-                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} and {power} inside\n"
+                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} and {power} inside; open it and choose Start the Daemon at Login to run its daemon\n"
             )
         );
     }
@@ -1383,60 +1377,6 @@ mod tests {
         .into_bytes()
     }
 
-    /// After a build a loaded daemon is restarted on the new executable;
-    /// one that is not loaded is left alone.
-    #[test]
-    fn a_build_restarts_a_loaded_agent() {
-        let scratch = Scratch::new("app-restart");
-        let (root, _) = paths(&scratch);
-        let print = format!("/bin/launchctl print gui/501/{AGENT_LABEL}");
-        let mut fake = Fake::default();
-        fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.push_back(Some(113));
-        let mut out = Vec::new();
-        restart_loaded_agent(&mut fake, &root, &mut out).unwrap();
-        let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
-        assert_eq!(steps, ["/usr/bin/id -u", print.as_str()]);
-        assert!(out.is_empty());
-
-        let mut fake = Fake::default();
-        fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.push_back(Some(0));
-        let mut out = Vec::new();
-        restart_loaded_agent(&mut fake, &root, &mut out).unwrap();
-        let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
-        assert_eq!(
-            steps,
-            [
-                "/usr/bin/id -u",
-                print.as_str(),
-                &format!("/bin/launchctl kickstart -k gui/501/{AGENT_LABEL}"),
-            ]
-        );
-        assert!(fake.statuses.is_empty());
-        assert!(
-            String::from_utf8(out)
-                .unwrap()
-                .starts_with(&format!("app: {AGENT_LABEL} restarted on this build"))
-        );
-
-        // launchd answering neither found nor not found is an error, and
-        // nothing is restarted.
-        let mut fake = Fake::default();
-        fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.push_back(Some(5));
-        let error = restart_loaded_agent(&mut fake, &root, &mut Vec::new()).unwrap_err();
-        assert!(
-            matches!(&error, AppError::AgentState { code: Some(5), .. }),
-            "{error:?}"
-        );
-        assert!(
-            fake.steps
-                .iter()
-                .all(|(line, _)| !line.contains(" kickstart "))
-        );
-    }
-
     /// An app without the daemon's plist fails the assembly before the
     /// bundle is signed, and one whose plist differs from the repository's
     /// (as if Xcode had processed it) is refused.
@@ -1521,6 +1461,51 @@ mod tests {
             );
             assert_eq!(result.is_ok(), !refused);
         }
+    }
+
+    /// `app` refuses before it builds anything while launchd lists the
+    /// daemon: launchd starts only the `mooringctl` the daemon was
+    /// registered with, so a rebuilt one would not start (design §5.1).
+    /// Not listed, the build goes on to cargo, here one that is missing.
+    #[test]
+    fn a_build_is_refused_while_the_daemon_is_registered() {
+        let scratch = Scratch::new("app-registered");
+        let (root, _) = paths(&scratch);
+        fs::create_dir_all(&root).unwrap();
+        let cargo = Cargo::stand_in(scratch.0.join("no-cargo"), root);
+        let service = format!("gui/501/{AGENT_LABEL}");
+        let print = format!("/bin/launchctl print {service}");
+        for (status, refused) in [(0, true), (113, false)] {
+            let mut fake = Fake::default();
+            fake.outputs.push_back(Ok(b"501\n".to_vec()));
+            fake.statuses.push_back(Some(status));
+            let mut out = Vec::new();
+            let error = build_with(&mut fake, &cargo, &mut out).unwrap_err();
+            assert_eq!(
+                matches!(&error, AppError::DaemonRegistered { service: named } if *named == service),
+                refused,
+                "{error:?}"
+            );
+            assert_eq!(
+                matches!(&error, AppError::Mooringctl(_)),
+                !refused,
+                "{error:?}"
+            );
+            // Only `id` and `launchctl print` ran: nothing was built,
+            // copied, signed or restarted.
+            let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
+            assert_eq!(steps, ["/usr/bin/id -u", print.as_str()]);
+            assert!(out.is_empty());
+        }
+        // launchd answering neither found nor not found stops the build too.
+        let mut fake = Fake::default();
+        fake.outputs.push_back(Ok(b"501\n".to_vec()));
+        fake.statuses.push_back(Some(5));
+        let error = build_with(&mut fake, &cargo, &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(&error, AppError::AgentState { code: Some(5), .. }),
+            "{error:?}"
+        );
     }
 
     #[test]

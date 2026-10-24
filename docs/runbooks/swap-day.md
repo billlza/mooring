@@ -31,7 +31,7 @@ cargo xtask app
 open target/app/Mooring.app
 ```
 
-Then **Start the Daemon at Login** from Mooring.app's menu, as in `console.md`, section 2 (on a Mac that ran the development agent before, stop that first, as that section says). `cargo xtask app` also builds `./target/signed/mooringctl`, the same bytes as the app's copy: use that one for every command below, so that the keys it makes in the keychain are the daemon's to read without asking. Until a deployment exists the daemon serves the router console; at its first poll after `exit init` it serves the exit instead. Install this build before `exit init`: a daemon built before the exit runtime stops when it finds a deployment.
+Then **Start the Daemon at Login** from Mooring.app's menu, as in `console.md`, section 2 (on a Mac that ran the development agent before, stop that first, as that section says). While a daemon from an earlier build is registered, `cargo xtask app` refuses: choose **Stop the Daemon** first, and start it again from the new build (`console.md`, section 1). `cargo xtask app` also builds `./target/signed/mooringctl`, the same bytes as the app's copy: use that one for every command below, so that the keys it makes in the keychain are the daemon's to read without asking. Until a deployment exists the daemon serves the router console; at its first poll after `exit init` it serves the exit instead. Install this build before `exit init`: a daemon built before the exit runtime stops when it finds a deployment.
 
 ### 0.3 The deployment
 
