@@ -86,6 +86,15 @@ impl Bind {
     }
 
     /// A TCP connection from the interface to `peer`, within `timeout`.
+    ///
+    /// A peer that answers and closes at once, as the reflector does, can
+    /// hang up before `connect_timeout`'s poll looks, and socket2 then
+    /// reports the hang-up with no error set (`ErrorKind::Other`, "no error
+    /// set after POLLHUP", socket2 0.6.5 `sys/unix.rs`) although the
+    /// connection was made and the answer waits to be read: about 1 connect
+    /// in 170 on loopback on this Mac. A socket that has a peer is
+    /// connected, so that report, and only it, is the connection it is, as
+    /// in `mooringctl`'s probe (`runtime/probe.rs`).
     pub(crate) fn connect(
         &self,
         peer: SocketAddrV4,
@@ -94,9 +103,13 @@ impl Bind {
         let socket = self
             .socket(Type::STREAM, Protocol::TCP)
             .map_err(Connect::Setup)?;
-        socket
-            .connect_timeout(&SocketAddr::V4(peer).into(), timeout)
-            .map_err(Connect::Failed)?;
+        match socket.connect_timeout(&SocketAddr::V4(peer).into(), timeout) {
+            Err(error)
+                if error.kind() == io::ErrorKind::Other
+                    && error.raw_os_error().is_none()
+                    && socket.peer_addr().is_ok() => {}
+            connected => connected.map_err(Connect::Failed)?,
+        }
         Ok(socket.into())
     }
 }

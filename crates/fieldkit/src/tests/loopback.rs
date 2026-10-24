@@ -300,6 +300,33 @@ fn public_ips_records_each_sample_and_the_distinct_addresses() {
     server.stop().unwrap();
 }
 
+/// A peer that answers and closes at once, as the reflector does, can hang
+/// up before the connect's poll looks, which socket2 reports as a failed
+/// connect with no error set (about 1 connect in 170 on this Mac). Every
+/// one of those connects was made, and its answer is read.
+#[test]
+fn a_peer_that_closes_before_the_connect_is_polled_is_still_connected() {
+    const CONNECTS: usize = 1000;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let peer = at(listener.local_addr().unwrap().port());
+    let answering = thread::spawn(move || {
+        for stream in listener.incoming().take(CONNECTS) {
+            stream.unwrap().write_all(b"x").unwrap();
+        }
+    });
+    let bind = bind();
+    for attempt in 0..CONNECTS {
+        let mut stream = match bind.connect(peer, Duration::from_secs(2)) {
+            Ok(stream) => stream,
+            Err(error) => panic!("connect {attempt}: {error:?}"),
+        };
+        let mut answer = [0_u8; 1];
+        stream.read_exact(&mut answer).unwrap();
+        assert_eq!(&answer, b"x");
+    }
+    answering.join().unwrap();
+}
+
 #[test]
 fn public_ips_stops_when_its_first_sample_fails() {
     let closed = TcpListener::bind("127.0.0.1:0").unwrap();

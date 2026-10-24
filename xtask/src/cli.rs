@@ -118,7 +118,7 @@ impl Command {
                 "build fieldkit and sign a copy, <target>/signed/fieldkit, with its reverse-DNS identifier (macOS only)"
             }
             Self::App => {
-                "build Mooring.app at <target>/app with the signed mooringctl, the power helper and the daemon's plist inside, Swift tests and warnings gated, and restart a registered daemon on it (macOS only)"
+                "build Mooring.app at <target>/app with the signed mooringctl, the power helper and the daemon's plist inside, Swift tests and warnings gated; refused while the daemon is registered (stop it from the app's menu first) (macOS only)"
             }
             Self::EnginesPins => {
                 "print engines.lock.toml's pins as KEY=value lines for the hosted build"

@@ -35,7 +35,9 @@ It builds `target/app/Mooring.app` with `mooringctl` inside it, the power helper
 - a check that every string on screen has a Simplified Chinese translation, and so does the local network alert's text;
 - a check that the daemon's plist in the app is `apple/App/LaunchAgents`' own.
 
-The app, `mooringctl` and the helper are each signed ad hoc with the hardened runtime, and the build checks each one's identifier. If the daemon is running (section 2), the build restarts it on the new `mooringctl` (`launchctl kickstart -k`), and macOS asks again for the keychain (section 2, question 1).
+The app, `mooringctl` and the helper are each signed ad hoc with the hardened runtime, and the build checks each one's identifier.
+
+While the daemon is registered (section 2), the build is refused before it builds anything. launchd starts only the `mooringctl` the daemon was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start. To rebuild, choose **Stop the Daemon**, run `cargo xtask app`, then open the new build and choose **Start the Daemon at Login**; macOS asks again for the keychain (section 2, question 1).
 
 The app's language follows macOS.
 
@@ -53,7 +55,7 @@ On the first poll, macOS asks two questions. Allow both:
 1. **The keychain:** "mooringctl wants to use your confidential information stored in "com.bill.mooring.dev"". Choose **Always Allow**; it asks for the Mac's login password. This is the M7's admin password, which only `mooringctl` reads.
 2. **Local network:** "Mooring would like to find and connect to devices on your local network". Choose **Allow**. Without it the daemon's connection to the M7 fails with "host unreachable": macOS applies local network privacy to a LaunchAgent (design §5.1).
 
-Rebuilding `mooringctl` changes its signature (it is signed ad hoc), and macOS asks again for the keychain. Rebuilding the app may ask again for local network access.
+Rebuilding `mooringctl` changes its signature (it is signed ad hoc), so the app is rebuilt with the daemon stopped (section 1), and macOS asks again for the keychain. Rebuilding the app may ask again for local network access.
 
 **Open Mooring at Login** in the menu makes the console open at login too.
 
@@ -107,13 +109,14 @@ The same status is available in Terminal:
 
 **Stop the Daemon** in the app's menu: launchd stops it and no longer starts it at login. Quitting the app does not stop the daemon.
 
-`cargo xtask clean` is refused while the daemon is loaded: it runs from the target directory that `clean` removes.
+`cargo xtask clean` and `cargo xtask app` are refused while the daemon is loaded: it runs from the target directory that `clean` removes, and launchd would not start the `mooringctl` that `app` rebuilds (section 1).
 
 ## Troubleshooting
 
 **`the Mooring daemon is not running`:** the daemon is not started, or it stopped.
 - Start it from the app's menu (section 2).
 - Run `launchctl print gui/$(id -u)/com.bill.mooring.daemon` to see its state and last exit, and read the last lines of `~/Library/Logs/Mooring/daemon.log`.
+- `job state = spawn failed` with `last exit code = 78: EX_CONFIG`, and no new line in the log, means launchd refuses the app's `mooringctl` because it is not the one the daemon was registered with (a build from before 2026-10-24 replaced it while the daemon was registered). **Stop the Daemon**, then **Start the Daemon at Login**; macOS asks again for the keychain and may ask for local network access.
 
 **The exit is `Degraded` with `PowerHelperExited`:** the power helper ended, so nothing keeps the Mac awake. The daemon's log says why and how it ended ("the power helper ended: … (exit status …)"), and the daemon starts it again a minute later ("the power helper started again").
 
