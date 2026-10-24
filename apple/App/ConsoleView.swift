@@ -72,6 +72,16 @@ struct ConsoleView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .navigationTitle(Text(screen.title))
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        DaemonControls(daemon: daemon)
+                    } label: {
+                        Label("Daemon", systemImage: "gearshape.2")
+                    }
+                    .help("Start or stop Mooring's daemon")
+                }
+            }
         }
     }
 

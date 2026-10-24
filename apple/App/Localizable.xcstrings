@@ -810,6 +810,16 @@
         }
       }
     },
+    "Daemon": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程"
+          }
+        }
+      }
+    },
     "Daemon: not started": {
       "localizations": {
         "zh-Hans": {
@@ -2372,6 +2382,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "备用节点"
+          }
+        }
+      }
+    },
+    "Start or stop Mooring's daemon": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启动或停止 Mooring 守护进程"
           }
         }
       }

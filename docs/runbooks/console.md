@@ -47,7 +47,7 @@ The app's language follows macOS.
 open target/app/Mooring.app
 ```
 
-The app's menu (the antenna in the menu bar), and the banner above the console while the daemon is not started, offer **Start the Daemon at Login**. The app registers the daemon its bundle carries with macOS (`SMAppService`): launchd starts `mooringctl daemon` from the app at once and at every login, and keeps it running, until **Stop the Daemon** in the menu. macOS notifies that a background item was added; System Settings › General › Login Items lists it under Mooring. If macOS asks for approval first, the banner says so, and **Open Login Items…** opens that page: turn Mooring on there.
+The app's menu (the antenna in the menu bar), the **Daemon** menu in the console window's toolbar, and the banner above the console while the daemon is not started, offer **Start the Daemon at Login**. The two menus hold the same items, so a menu bar manager that hides the antenna hides nothing the console window lacks. The app registers the daemon its bundle carries with macOS (`SMAppService`): launchd starts `mooringctl daemon` from the app at once and at every login, and keeps it running, until **Stop the Daemon** in either menu. macOS notifies that a background item was added; System Settings › General › Login Items lists it under Mooring. If macOS asks for approval first, the banner says so, and **Open Login Items…** opens that page: turn Mooring on there.
 
 The daemon polls the M7 every 60 s on the interface the pin records (section 0). Its log is `~/Library/Logs/Mooring/daemon.log`, one line when it starts and one each time the poll's outcome changes; at 5 MiB it is renamed `daemon.log.1` (replacing the one before) and a new file begun. The daemon's last error, when it stops, is the log's last line.
 
@@ -107,7 +107,7 @@ The same status is available in Terminal:
 
 ## 4. Stop
 
-**Stop the Daemon** in the app's menu: launchd stops it and no longer starts it at login. Quitting the app does not stop the daemon.
+**Stop the Daemon** in the app's menu or the console's **Daemon** menu: launchd stops it and no longer starts it at login. Quitting the app does not stop the daemon.
 
 `cargo xtask clean` and `cargo xtask app` are refused while the daemon is loaded: it runs from the target directory that `clean` removes, and launchd would not start the `mooringctl` that `app` rebuilds (section 1).
 
