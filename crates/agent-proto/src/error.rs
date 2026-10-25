@@ -695,7 +695,8 @@ closed_enum! {
         /// `nft -f`.
         Nftables,
         /// `wg syncconf`, or a restart of `wg-quick@wgexit` when the address
-        /// or MTU changed.
+        /// or MTU changed; in a rollback to nothing, deleting an interface the
+        /// tunnel's stop left.
         WireGuard,
         /// `systemctl daemon-reload` and enabling the profile's units, and
         /// restarting the watch or the reflector if its unit changed.

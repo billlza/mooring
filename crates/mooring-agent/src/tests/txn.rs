@@ -14,8 +14,8 @@ use std::rc::Rc;
 use mooring_agent_proto::{
     AgentError, ApplyStep, Arch, BlobLen, BundleFiles, BundleHeader, EngineSet, Generation, Halt,
     HealthCheck, HostFact, HostFacts, HostFile, HostProfile, IfName, IoOp, KernelIdent,
-    KernelRelease, ManagedFile, PortRange, RollbackCause, Sha256Hex, ShutdownReason, TxnStage,
-    TxnState, UnixTime, ValidationTool,
+    KernelRelease, ManagedFile, PortRange, RollbackCause, Sha256Hex, ShutdownReason, StderrTail,
+    TxnStage, TxnState, UnixTime, ValidationTool,
 };
 
 use super::{FakeNode, failed, nft_set, ok, scratch};
@@ -71,9 +71,33 @@ fn owner_guards(uid: u32) -> String {
     )
 }
 
+/// The tunnel's unit.
+const TUNNEL_UNIT: &str = "wg-quick@wgexit.service";
+
+/// What `systemctl restart` printed on lon1 (2026-10-25) when `wg-quick up`
+/// refused the interface a rolled-back first generation had left.
+const TUNNEL_START_FAILED: &[u8] = b"Job for wg-quick@wgexit.service failed because the control process exited with error code.\n\
+See \"systemctl status wg-quick@wgexit.service\" and \"journalctl -xeu wg-quick@wgexit.service\" for details.\n";
+
+/// The tunnel as systemd and wg-quick run it, for the tests that follow
+/// the interface instead of assuming it: `wgexit` (its `accept_local` file)
+/// exists from a `wg-quick up` until a `wg-quick down`. `up` refuses an
+/// interface that exists; `down` needs `/etc/wireguard/wgexit.conf`; and
+/// `systemctl stop` returns 0 even when its `down` failed, with the unit
+/// failed and the interface left.
+#[derive(Debug, Default)]
+struct Tunnel {
+    /// `wg-quick@wgexit.service` is active.
+    active: Cell<bool>,
+}
+
 /// How the stand-in node misbehaves.
 #[derive(Debug, Default)]
 struct Faults {
+    /// The tunnel followed as systemd and wg-quick run it ([`Tunnel`]).
+    tunnel: Option<Tunnel>,
+    /// `ip link delete` fails.
+    link_delete: bool,
     /// Validator output that fails validation (Xray's `-test`).
     xray_test: Option<String>,
     /// `nft -f` fails.
@@ -138,15 +162,49 @@ impl World {
         }
     }
 
+    /// Follows the tunnel's interface ([`Tunnel`]) instead of assuming it:
+    /// `wgexit` does not exist until its unit starts.
+    fn follow_tunnel(&self) {
+        fs::remove_file(self.paths.wgexit_accept_local()).unwrap();
+        self.faults.borrow_mut().tunnel = Some(Tunnel::default());
+    }
+
     fn node(&self, now: u64) -> FakeNode {
         let faults = Rc::clone(&self.faults);
         let programs = Rc::clone(&self.faults);
         let guards = owner_guards(super::own_ids(&self.paths).0);
+        let interface = self.paths.wgexit_accept_local();
+        let conf = self.paths.wg_conf_link();
         FakeNode::answering(
             now,
             Box::new(move |tool, args| {
                 let faults = faults.borrow();
                 Ok(match (tool, args) {
+                    (Tool::Systemctl, ["restart" | "start", TUNNEL_UNIT]) if faults.tunnel.is_some() => {
+                        if interface.exists() {
+                            failed(TUNNEL_START_FAILED)
+                        } else {
+                            fs::write(&interface, "1\n").unwrap();
+                            faults.tunnel.as_ref().unwrap().active.set(true);
+                            ok(b"")
+                        }
+                    }
+                    (Tool::Systemctl, ["stop", TUNNEL_UNIT]) if faults.tunnel.is_some() => {
+                        // systemd runs `wg-quick down` for an active unit only, and
+                        // `down` needs the configuration; the stop succeeds either way.
+                        let was_active = faults.tunnel.as_ref().unwrap().active.replace(false);
+                        if was_active && fs::read_to_string(&conf).is_ok() {
+                            fs::remove_file(&interface).unwrap();
+                        }
+                        ok(b"")
+                    }
+                    (Tool::Ip, ["link", "delete", "dev", "wgexit"]) if faults.link_delete => {
+                        failed(b"RTNETLINK answers: Operation not permitted\n")
+                    }
+                    (Tool::Ip, ["link", "delete", "dev", "wgexit"]) if faults.tunnel.is_some() => {
+                        fs::remove_file(&interface).unwrap();
+                        ok(b"")
+                    }
                     (Tool::Ip, _) => ok(br#"[{"addr_info":[{"family":"inet","local":"203.0.113.203","scope":"global"}]}]"#),
                     (Tool::Nft, ["-f", ..]) if faults.nft_load => failed(b"Error: syntax error\n"),
                     (Tool::Nft, ["-j", "list", "set", ..]) => ok(&nft_set(true)),
@@ -796,6 +854,108 @@ fn the_first_generation_rolls_back_to_serving_nothing() {
         reloaded > index_of(&calls, "systemctl stop wg-quick@wgexit.service"),
         "reloaded last"
     );
+}
+
+/// The tunnel's stop (`wg-quick down`) reads `/etc/wireguard/wgexit.conf`,
+/// a link through `current`, so the units stop before `current` goes: the
+/// rollback leaves no interface, and the next apply starts the tunnel.
+#[test]
+fn a_rolled_back_first_generation_leaves_no_tunnel_interface() {
+    let world = World::new();
+    world.follow_tunnel();
+    world.faults.borrow().missing_listeners.set(100);
+    let node = world.node(1000);
+    let state = world.apply_and_run(&node, world.bundle(1, same));
+    assert_eq!(
+        state,
+        TxnState::Failed {
+            error: AgentError::RolledBack {
+                generation: Generation::new(1),
+                cause: RollbackCause::HealthGate {
+                    failed: HealthCheck::Listeners
+                },
+            }
+        }
+    );
+    assert!(
+        !world.paths.wgexit_accept_local().exists(),
+        "the rollback took the tunnel down"
+    );
+    let calls = node.calls();
+    assert!(
+        calls.iter().all(|call| !call.contains("ip link delete")),
+        "the unit's own stop took it down: {calls:#?}"
+    );
+    world.faults.borrow().missing_listeners.set(0);
+    assert_eq!(
+        world.apply_and_run(&node, world.bundle(1, same)),
+        TxnState::AwaitingConfirm
+    );
+    assert!(world.paths.wgexit_accept_local().exists());
+}
+
+/// An interface left by an earlier failure (lon1, 2026-10-25: a rollback
+/// whose stop could not read the configuration) makes `wg-quick up` refuse.
+/// The rollback to nothing deletes it, and the next apply works.
+#[test]
+fn a_tunnel_interface_left_over_goes_with_the_rollback_to_nothing() {
+    let world = World::new();
+    world.follow_tunnel();
+    fs::write(world.paths.wgexit_accept_local(), "1\n").unwrap();
+    let node = world.node(1000);
+    let state = world.apply_and_run(&node, world.bundle(1, same));
+    assert_eq!(
+        state,
+        TxnState::Failed {
+            error: AgentError::RolledBack {
+                generation: Generation::new(1),
+                cause: RollbackCause::Apply {
+                    step: ApplyStep::WireGuard,
+                    stderr_tail: StderrTail::scrubbed(TUNNEL_START_FAILED, &[]),
+                },
+            }
+        }
+    );
+    assert_eq!(world.current(), None);
+    assert!(
+        !world.paths.wgexit_accept_local().exists(),
+        "the rollback deleted the interface"
+    );
+    let calls = node.calls();
+    assert!(
+        index_of(&calls, "/usr/bin/ip link delete dev wgexit")
+            > index_of(&calls, "systemctl stop wg-quick@wgexit.service"),
+        "deleted once the unit's stop had left it: {calls:#?}"
+    );
+    assert_eq!(
+        world.apply_and_run(&node, world.bundle(1, same)),
+        TxnState::AwaitingConfirm
+    );
+}
+
+/// An interface the node cannot delete fails the rollback.
+#[test]
+fn a_tunnel_interface_that_cannot_be_deleted_fails_the_rollback() {
+    let world = World::new();
+    world.follow_tunnel();
+    fs::write(world.paths.wgexit_accept_local(), "1\n").unwrap();
+    world.faults.borrow_mut().link_delete = true;
+    let node = world.node(1000);
+    let state = world.apply_and_run(&node, world.bundle(1, same));
+    assert_eq!(
+        state,
+        TxnState::Failed {
+            error: AgentError::RollbackFailed {
+                generation: Generation::new(1),
+                cause: RollbackCause::Apply {
+                    step: ApplyStep::WireGuard,
+                    stderr_tail: StderrTail::scrubbed(TUNNEL_START_FAILED, &[]),
+                },
+            }
+        }
+    );
+    assert_eq!(world.current(), None);
+    assert!(world.paths.wgexit_accept_local().exists());
 }
 
 #[test]
