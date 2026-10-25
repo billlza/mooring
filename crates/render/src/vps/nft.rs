@@ -14,7 +14,8 @@
 //!   counted and rejected.
 //! - `exit_flow` counts the exit flows to `$VPS4`'s reflector, which only
 //!   the Mac's in-chain probes open (the accounting canary's evidence,
-//!   design §11.5), then applies the flow cap.
+//!   design §11.5), then applies the flow cap. The cap is written as the
+//!   number: `ct count over` takes a number token, not a variable.
 //! - `prerouting_nat` folds each Hysteria2 hop range onto its listener,
 //!   only for traffic addressed to `$VPS4`.
 
@@ -55,8 +56,6 @@ pub(crate) struct NftInput {
 pub(crate) fn write(input: &NftInput, sink: &mut dyn TextSink) {
     sink.put("flush ruleset\n\ndefine VPS4 = ");
     sink.show(&input.vps4);
-    sink.put("\ndefine FLOW_CAP = ");
-    sink.show(&input.flow_cap.get());
     sink.put("\n\ntable inet ");
     sink.put(NFT_TABLE);
     sink.put(" {\n");
@@ -77,7 +76,9 @@ pub(crate) fn write(input: &NftInput, sink: &mut dyn TextSink) {
     sink.put(" ct state new counter name ");
     sink.put(NftCounter::ProbeFlows.name());
     sink.put("\n");
-    sink.put("\t\tct state new ct count over $FLOW_CAP counter name ");
+    sink.put("\t\tct state new ct count over ");
+    sink.show(&input.flow_cap.get());
+    sink.put(" counter name ");
     sink.put(NftCounter::FlowCap.name());
     sink.put(" reject\n");
     sink.put("\t\taccept\n\t}\n\n");

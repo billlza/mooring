@@ -393,10 +393,6 @@ fn nftables_guards_the_engines_and_scopes_every_public_rule() {
             let NodeAddress::Public(vps4) = node.lifecycle.address().unwrap();
             assert!(text.starts_with("flush ruleset\n"));
             assert!(text.contains(&format!("define VPS4 = {vps4}\n")));
-            assert!(text.contains(&format!(
-                "define FLOW_CAP = {}\n",
-                fixture.deployment.exit().flow_cap.get()
-            )));
             assert!(text.contains(&format!("elements = {{ {target} }}")));
             assert!(text.contains("elements = { \"wgexit\" }"));
             for line in text.lines().filter(|line| line.contains(" dport ")) {
@@ -639,15 +635,45 @@ fn nftables_drops_by_default_and_gates_exit_traffic_first() {
             let probes = format!(
                 "ip daddr $VPS4 tcp dport {reflector} ct state new counter name probe_flows"
             );
+            let cap = format!(
+                "ct state new ct count over {} counter name flow_cap reject",
+                fixture.deployment.exit().flow_cap.get()
+            );
             let exit_flow = chain(text, "exit_flow");
             assert_eq!(
                 exit_flow,
-                [
-                    probes.as_str(),
-                    "ct state new ct count over $FLOW_CAP counter name flow_cap reject",
-                    "accept"
-                ],
+                [probes.as_str(), cap.as_str(), "accept"],
                 "the in-chain probes are counted, with no verdict, before the flow cap"
+            );
+        }
+    }
+}
+
+/// nft takes a `define`d variable only where its grammar has an expression.
+/// The counts and rates of `ct count`, `limit` and a set's size are number
+/// tokens there, and a variable in their place fails `nft -c` ("syntax
+/// error, unexpected '$', expecting number"), which is how lon1's agent
+/// refused its first configuration on 2026-10-25. So every variable is an
+/// address after `ip daddr` or `ip saddr`, and the flow cap is the number.
+#[test]
+fn nftables_uses_variables_only_where_nft_takes_them() {
+    for fixture in fixtures() {
+        for id in fixture.deployment.nodes().keys() {
+            let bundle = vps(&fixture, id);
+            let text = bundle.file(ManagedFile::Nftables).expose_text();
+            for (at, _) in text.match_indices('$') {
+                let before = &text[..at];
+                assert!(
+                    before.ends_with("ip daddr ") || before.ends_with("ip saddr "),
+                    "a variable outside an address: {:?}",
+                    text[at..].lines().next()
+                );
+            }
+            let cap = fixture.deployment.exit().flow_cap.get();
+            let exit_flow = chain(text, "exit_flow");
+            assert_eq!(
+                exit_flow[1],
+                format!("ct state new ct count over {cap} counter name flow_cap reject")
             );
         }
     }
