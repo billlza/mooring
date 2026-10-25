@@ -20,10 +20,14 @@
 //! executable's code signature, an ad-hoc one by its cdhash (launchd's
 //! `LWCR`), so after a rebuild launchd refuses to start the new executable
 //! (job state "spawn failed", last exit code 78) until the app registers
-//! the daemon again (measured 2026-10-23 on macOS 27.0). `app` is
-//! therefore refused while launchd lists the daemon, before anything is
-//! built: the operator stops it from the app's menu, builds, and starts it
-//! again from the new build.
+//! the daemon again (measured 2026-10-23 on macOS 27.0). The first
+//! registration after a rebuild is refused too: Background Task Management
+//! keeps the stopped daemon's record with the earlier build's constraint,
+//! and replaces it only after launchd's second failed start (measured
+//! 2026-10-24). `app` is therefore refused while launchd lists the daemon,
+//! before anything is built: the operator stops it from the app's menu,
+//! builds, starts it from the new build, and once that start has failed
+//! with 78, stops and starts it once more.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -126,7 +130,7 @@ pub(crate) enum AppError {
     )]
     AgentLoaded { service: String },
     #[error(
-        "{service} is registered, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start: choose Stop the Daemon in Mooring.app's menu, run `cargo xtask app` again, then open the new build and choose Start the Daemon at Login"
+        "{service} is registered, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start: choose Stop the Daemon in Mooring.app's menu, then run `cargo xtask app` again, whose last line says how to start the new build's daemon"
     )]
     DaemonRegistered { service: String },
     #[error(
@@ -692,7 +696,7 @@ pub(crate) fn assemble(
     }
     say!(
         out,
-        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} and {} inside; open it and choose Start the Daemon at Login to run its daemon",
+        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} and {} inside; open it and choose Start the Daemon at Login. If the daemon was registered from an earlier build, macOS refuses that first start under the earlier build's launch constraint: once `launchctl print gui/$(id -u)/{AGENT_LABEL}` shows `last exit code = 78: EX_CONFIG` (about a minute later), choose Stop the Daemon, then Start the Daemon at Login again",
         paths.app.display(),
         paths.embedded.display(),
         paths.power.display()
@@ -1206,7 +1210,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).unwrap(),
             format!(
-                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} and {power} inside; open it and choose Start the Daemon at Login to run its daemon\n"
+                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} and {power} inside; open it and choose Start the Daemon at Login. If the daemon was registered from an earlier build, macOS refuses that first start under the earlier build's launch constraint: once `launchctl print gui/$(id -u)/com.bill.mooring.daemon` shows `last exit code = 78: EX_CONFIG` (about a minute later), choose Stop the Daemon, then Start the Daemon at Login again\n"
             )
         );
     }
@@ -1481,6 +1485,14 @@ mod tests {
             fake.statuses.push_back(Some(status));
             let mut out = Vec::new();
             let error = build_with(&mut fake, &cargo, &mut out).unwrap_err();
+            if refused {
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "{service} is registered, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start: choose Stop the Daemon in Mooring.app's menu, then run `cargo xtask app` again, whose last line says how to start the new build's daemon"
+                    )
+                );
+            }
             assert_eq!(
                 matches!(&error, AppError::DaemonRegistered { service: named } if *named == service),
                 refused,
