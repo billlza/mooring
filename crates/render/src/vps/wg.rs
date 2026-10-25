@@ -8,6 +8,16 @@
 //! with an `oif` rule into table 77, whose only route is the default
 //! route through `wgexit`. The peer has no `Endpoint`: the Mac dials out
 //! and the VPS learns its address by roaming.
+//!
+//! The rule hooks are idempotent: wg-quick runs no `PreDown` for an `up`
+//! that fails after a hook (its exit trap only deletes the interface),
+//! and a rule that names an interface outlives it in the kernel
+//! (detached, and attached again when an interface of that name
+//! appears), so a plain `ip -4 rule add` is refused by every `up` after
+//! such a failure, and a plain `ip -4 rule del` would abort every `down`
+//! once the rule was gone. The rule is therefore added only when
+//! `ip -4 rule list` does not show it, and deleted only when it does
+//! (lon1, 2026-10-25).
 
 use ipnet::Ipv4Net;
 use mooring_agent_proto::{EXIT_ROUTE_TABLE, EXIT_RULE_PRIORITY};
@@ -62,12 +72,18 @@ pub(crate) fn write(input: &WgExitInput<'_>, sink: &mut dyn TextSink) {
     sink.put("\nAllowedIPs = 0.0.0.0/0\n");
 }
 
-/// The routing hooks: add the rule and route on up, remove them on down.
+/// The routing hooks: the rule and the route added on up, removed on down.
+/// The rule's hooks test for it first (the module doc says why); `grep`
+/// reads its input to the end instead of quitting at the match, so `ip`
+/// never gets `SIGPIPE` under wg-quick's `pipefail`.
 fn hook_lines() -> [(&'static str, String); 4] {
+    let listed =
+        format!("^{EXIT_RULE_PRIORITY}:[[:space:]]*from all oif %i lookup {EXIT_ROUTE_TABLE}$");
+    let rule = format!("pref {EXIT_RULE_PRIORITY} oif %i lookup {EXIT_ROUTE_TABLE}");
     [
         (
             "PostUp",
-            format!("ip -4 rule add pref {EXIT_RULE_PRIORITY} oif %i lookup {EXIT_ROUTE_TABLE}"),
+            format!("ip -4 rule list | grep '{listed}' >/dev/null || ip -4 rule add {rule}"),
         ),
         (
             "PostUp",
@@ -75,7 +91,7 @@ fn hook_lines() -> [(&'static str, String); 4] {
         ),
         (
             "PreDown",
-            format!("ip -4 rule del pref {EXIT_RULE_PRIORITY} oif %i lookup {EXIT_ROUTE_TABLE}"),
+            format!("! ip -4 rule list | grep '{listed}' >/dev/null || ip -4 rule del {rule}"),
         ),
         (
             "PreDown",

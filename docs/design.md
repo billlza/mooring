@@ -1002,9 +1002,9 @@ PrivateKey = <vps>
 MTU = 1280
 Table = off
 PostUp = sysctl -qw net.ipv4.conf.%i.accept_local=1
-PostUp = ip -4 rule add pref 10000 oif %i lookup 77
+PostUp = ip -4 rule list | grep '^10000:[[:space:]]*from all oif %i lookup 77$' >/dev/null || ip -4 rule add pref 10000 oif %i lookup 77
 PostUp = ip -4 route replace default dev %i table 77
-PreDown = ip -4 rule del pref 10000 oif %i lookup 77
+PreDown = ! ip -4 rule list | grep '^10000:[[:space:]]*from all oif %i lookup 77$' >/dev/null || ip -4 rule del pref 10000 oif %i lookup 77
 PreDown = ip -4 route flush table 77
 
 [Peer]
@@ -1013,6 +1013,8 @@ AllowedIPs = 0.0.0.0/0          # replies arrive from arbitrary sources; no Endp
 ```
 
 `ListenPort` is the node's `PortPlan` WireGuard port. The interface name, table 77 and rule priority 10000 come from agent-proto's `WG_INTERFACE`, `EXIT_ROUTE_TABLE` and `EXIT_RULE_PRIORITY`. The comment on `AllowedIPs` is not rendered.
+
+**The rule hooks are idempotent.** wg-quick runs no `PreDown` for an `up` that fails after a hook (its exit trap only deletes the interface), and a rule that names an interface outlives it in the kernel (detached, and attached again when an interface of that name appears), so a plain `ip -4 rule add` would be refused (`File exists`) by every `up` after such a failure, and a plain `ip -4 rule del` would abort every `down` once the rule was gone, leaving the interface up. The rule is therefore added only when `ip -4 rule list` does not show it and deleted only when it does; `grep` reads its input to the end instead of quitting at the match, so `ip` never gets `SIGPIPE` under wg-quick's `pipefail`. The route hooks (`replace`, `flush`) are idempotent as they are. *Found 2026-10-25:* lon1's fourth apply of its first generation was rolled back with the left-over interface deleted by `ip link delete` (§11.2 step 8's first remedy), which left the rule; the fifth apply's `wg-quick up` was refused at the rule's `PostUp` and reached the Mac only as systemd's "control process exited with error code".
 
 **Why `accept_local=1` is required.** The in-chain probe dials the VPS's own public IP (VPS4:27900) through `exit`.
 - The SYN leaves on `wgexit`: the device-bound lookup skips the local-table route on `eth0`, because `fib_trie.c:1438` requires the nexthop's oif to match the bound device. Rule 10000 then selects table 77.
