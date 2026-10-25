@@ -1030,12 +1030,13 @@ Threat-model effect: only the authenticated WireGuard peer, the Mac, can deliver
 
 The VPS is dedicated, so the product owns the whole ruleset, and every reload is atomic. The file is checked with `nft -c -f` before loading. Public services match on `ip daddr $VPS4`, not on an interface name, so a renamed NIC cannot silently drop SSH. The rendered syntax is validated by `nft -c` in L2, and its behaviour by L4 *(inference until then for the named-counter declarations, the `ct count` and dynamic-set forms, and `counter name` references)*.
 
+*Found 2026-10-25:* the first `nft -c` of a rendered file, by lon1's agent at its first apply, refused `ct count over $FLOW_CAP` ("syntax error, unexpected '$', expecting number"), and nothing was switched. nft takes a `define`d variable only where its grammar has an expression; the counts and rates of `ct count`, `limit` and a set's size are number tokens. The flow cap is therefore written as the number, and a render test keeps every variable to an address after `ip daddr` or `ip saddr`.
+
 The rendered file puts one statement per line; it is shown compactly here. Every port comes from the node's `PortPlan` (defaults shown), and the table, set, counter and user names from `crates/agent-proto/src/vps.rs`.
 
 ```
 flush ruleset
 define VPS4 = <vps4>
-define FLOW_CAP = <from M2 port-ceiling estimate minus headroom>
 table inet mooring {
   counter xray_guard { packets 0 bytes 0 }                              # named counters are declared before use
   counter hy2_guard  { packets 0 bytes 0 }
@@ -1076,7 +1077,7 @@ table inet mooring {
 
   chain exit_flow {
     ip daddr $VPS4 tcp dport 27900 ct state new counter name probe_flows   # no verdict: only the probe may route to a node address
-    ct state new ct count over $FLOW_CAP counter name flow_cap reject
+    ct state new ct count over <flow cap> counter name flow_cap reject      # the number: ct count takes no variable
     accept }
 
   chain prerouting_nat { type nat hook prerouting priority dstnat; policy accept;
@@ -1103,7 +1104,7 @@ What the guard also does:
 - WireGuard's encrypted packets are unbound and leave via `eth0`, so closing the gate never stops tunnel liveness, which is what reopens it.
 - An nft reject is used instead of a route `unreachable`, because device-bound sockets take the on-link branch past unreachable routes *(inference from `route.c`; L4 tests both)*.
 
-**Flow cap.** `$FLOW_CAP` is sized from the CGNAT port-ceiling estimate made in M2, minus headroom. Its purpose is to keep exit flows from exhausting the carrier's port allocation, which would also break the tunnel's own mappings and the probes. Hits are counted and surface as `ExitFlowCapHit`.
+**Flow cap.** The flow cap (`exit init --flow-cap`, written into the rule as the number) is sized from the CGNAT port-ceiling estimate made in M2, minus headroom. Its purpose is to keep exit flows from exhausting the carrier's port allocation, which would also break the tunnel's own mappings and the probes. Hits are counted and surface as `ExitFlowCapHit`.
 
 ### 8.6 Host profile (versioned, owned by the agent)
 

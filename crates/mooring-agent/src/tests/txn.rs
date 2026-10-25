@@ -709,7 +709,7 @@ fn a_failed_apply_step_rolls_back_with_its_scrubbed_output() {
     let node = world.node(2000);
     let next = world.bundle(2, |file, text| {
         if file == ManagedFile::Nftables {
-            text.replace("FLOW_CAP = 4096", "FLOW_CAP = 4000")
+            text.replace("ct count over 4096", "ct count over 4000")
         } else {
             text
         }

@@ -5,7 +5,6 @@ description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render nftables
 flush ruleset
 
 define VPS4 = 45.67.89.10
-define FLOW_CAP = 4096
 
 table inet mooring {
 	counter xray_guard {
@@ -89,7 +88,7 @@ table inet mooring {
 
 	chain exit_flow {
 		ip daddr $VPS4 tcp dport 27900 ct state new counter name probe_flows
-		ct state new ct count over $FLOW_CAP counter name flow_cap reject
+		ct state new ct count over 4096 counter name flow_cap reject
 		accept
 	}
 
