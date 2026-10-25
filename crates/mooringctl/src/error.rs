@@ -641,6 +641,17 @@ pub(crate) enum LocalError {
         /// The file.
         path: PathBuf,
     },
+    /// After a confirmed activation the node's `Hello` names another agent
+    /// than the one activated.
+    #[error("{node} runs agent {found} after the confirm, not {expected}")]
+    AgentNotSwitched {
+        /// The node.
+        node: NodeId,
+        /// The agent activated and confirmed.
+        expected: Sha256Hex,
+        /// The agent the node's `Hello` names.
+        found: Sha256Hex,
+    },
     /// The node does not run what Mooring supports.
     #[error("the node does not run {wanted}: it reports {found}")]
     HostUnsupported {

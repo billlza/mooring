@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use super::stage::{XRAY, program};
 use crate::accounting::stats::XRAY_API_SERVER;
+use crate::accounts;
 use crate::gate;
 use crate::host::{Node, Tool};
 use crate::paths::Paths;
@@ -147,31 +148,51 @@ pub(crate) fn all_listening(ss: &str, expected: &BTreeSet<Listener>) -> bool {
 }
 
 /// Whether the output chain holds each engine's owner-guard rule: a rule
-/// matching the engine's user that counts into its guard counter and
-/// rejects (design §8.5).
-pub(crate) fn owner_guards_present(chain: &[u8]) -> bool {
+/// matching the uid of the engine's account that counts into its guard
+/// counter and rejects (design §8.5). nft lists a uid as the number unless
+/// it is given `-u` (`--guid`, nft(8)), so a rule is matched by the uid
+/// `uid_of` gives the account, never by its name; an account without one
+/// has no guard.
+pub(crate) fn owner_guards_present(
+    chain: &[u8],
+    uid_of: &dyn Fn(EngineUser) -> Option<u32>,
+) -> bool {
     let Ok(listing) = serde_json::from_slice::<Value>(chain) else {
         return false;
     };
-    let rules: Vec<String> = listing["nftables"]
+    let rules: Vec<&Value> = listing["nftables"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|item| item.get("rule"))
-        .map(Value::to_string)
         .collect();
     [
         (EngineUser::Xray, NftCounter::XrayGuard),
         (EngineUser::Hy2, NftCounter::Hy2Guard),
     ]
     .iter()
-    .all(|(user, counter)| {
-        rules.iter().any(|rule| {
-            rule.contains(&format!("\"{}\"", user.name()))
-                && rule.contains(&format!("\"{}\"", counter.name()))
-                && rule.contains("\"reject\"")
-        })
+    .all(|&(user, counter)| {
+        uid_of(user).is_some_and(|uid| rules.iter().any(|rule| guards(rule, uid, counter)))
     })
+}
+
+/// Whether `rule` matches socket owner `uid`, counts into `counter` and
+/// rejects.
+fn guards(rule: &Value, uid: u32, counter: NftCounter) -> bool {
+    let statements = rule["expr"].as_array().map_or(&[][..], Vec::as_slice);
+    let owner = statements.iter().any(|statement| {
+        let matched = &statement["match"];
+        matched["op"] == "=="
+            && matched["left"]["meta"]["key"] == "skuid"
+            && matched["right"].as_u64() == Some(u64::from(uid))
+    });
+    let counted = statements
+        .iter()
+        .any(|statement| statement["counter"].as_str() == Some(counter.name()));
+    let rejected = statements
+        .iter()
+        .any(|statement| statement.get("reject").is_some());
+    owner && counted && rejected
 }
 
 /// Whether `check` passes now, for the generation in `dir`.
@@ -210,7 +231,15 @@ fn passes(paths: &Paths, node: &dyn Node, dir: &Path, check: HealthCheck) -> boo
                 Tool::Nft,
                 &["-j", "list", "chain", "inet", NFT_TABLE, "output"],
             )
-            .is_ok_and(|output| output.success && owner_guards_present(&output.stdout)),
+            .is_ok_and(|output| {
+                output.success
+                    && owner_guards_present(&output.stdout, &|user| {
+                        accounts::user(paths, user.name())
+                            .ok()
+                            .flatten()
+                            .map(|account| account.uid)
+                    })
+            }),
         HealthCheck::AcceptLocal => {
             fs::read_to_string(paths.wgexit_accept_local()).is_ok_and(|text| text.trim_end() == "1")
         }

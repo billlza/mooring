@@ -207,6 +207,11 @@ pub(crate) fn run(
             interface,
             engines,
         }) => crate::node::apply::apply(env, out, &node, &interface, &engines),
+        Command::Node(NodeCommand::UpgradeAgent {
+            node,
+            interface,
+            agent,
+        }) => crate::node::upgrade::upgrade_agent(env, out, &node, &interface, &agent),
         Command::Sim(SimCommand::SetAnchor { anchor, yes }) => {
             crate::sim::set_anchor(env, out, anchor, yes)
         }

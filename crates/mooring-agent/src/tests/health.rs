@@ -5,6 +5,8 @@
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
+use mooring_agent_proto::EngineUser;
+
 use crate::txn::health::{Listener, all_listening, expected_listeners, owner_guards_present};
 use crate::txn::validate::has_warning;
 
@@ -73,29 +75,83 @@ fn listeners_match_by_protocol_port_and_address_or_wildcard() {
     }
 }
 
+/// The owner-guard rules as `nft -j list chain inet mooring output` lists
+/// them on Debian 13: a match is `{"op": "==", "left", "right"}`, and a uid
+/// is the number, since nft names it only when given `-u` (`--guid`,
+/// nft(8)). Here `mooring-xray` is uid 998 and `mooring-hy2` uid 997.
+const LISTED_GUARDS: &str = r#"{"nftables":[{"chain":{"family":"inet","table":"mooring","name":"output","handle":3,"type":"filter","hook":"output","prio":0,"policy":"accept"}},{"rule":{"family":"inet","table":"mooring","chain":"output","handle":17,"expr":[{"match":{"op":"==","left":{"meta":{"key":"skuid"}},"right":998}},{"match":{"op":"==","left":{"ct":{"key":"direction"}},"right":"original"}},{"counter":"xray_guard"},{"reject":null}]}},{"rule":{"family":"inet","table":"mooring","chain":"output","handle":19,"expr":[{"match":{"op":"==","left":{"meta":{"key":"skuid"}},"right":997}},{"match":{"op":"==","left":{"ct":{"key":"direction"}},"right":"original"}},{"counter":"hy2_guard"},{"reject":null}]}}]}"#;
+
+/// `/etc/passwd` of the listing above.
+fn listed_uid(user: EngineUser) -> Option<u32> {
+    match user {
+        EngineUser::Xray => Some(998),
+        EngineUser::Hy2 => Some(997),
+    }
+}
+
+#[test]
+fn the_guards_are_found_as_nft_lists_them() {
+    assert!(owner_guards_present(LISTED_GUARDS.as_bytes(), &listed_uid));
+}
+
 #[test]
 fn both_owner_guards_must_be_present() {
-    let rule = |user: &str, counter: &str, verdict: &str| {
+    let rule = |owner: &str, counter: &str, verdict: &str| {
         format!(
-            r#"{{"rule":{{"expr":[{{"match":{{"right":"{user}"}}}},{{"counter":"{counter}"}},{{"{verdict}":null}}]}}}}"#
+            r#"{{"rule":{{"expr":[{{"match":{{"op":"==","left":{{"meta":{{"key":"skuid"}}}},"right":{owner}}}}},{{"counter":"{counter}"}},{{"{verdict}":null}}]}}}}"#
         )
     };
     let chain = |rules: &[String]| format!(r#"{{"nftables":[{}]}}"#, rules.join(",")).into_bytes();
     let both = [
-        rule("mooring-xray", "xray_guard", "reject"),
-        rule("mooring-hy2", "hy2_guard", "reject"),
+        rule("998", "xray_guard", "reject"),
+        rule("997", "hy2_guard", "reject"),
     ];
-    assert!(owner_guards_present(&chain(&both)));
-    assert!(!owner_guards_present(&chain(&both[..1])));
-    assert!(!owner_guards_present(&chain(&[
-        rule("mooring-xray", "xray_guard", "accept"),
-        rule("mooring-hy2", "hy2_guard", "reject"),
-    ])));
-    assert!(!owner_guards_present(&chain(&[
-        rule("mooring-hy2", "xray_guard", "reject"),
-        rule("mooring-xray", "hy2_guard", "reject"),
-    ])));
-    assert!(!owner_guards_present(b"not json"));
+    assert!(owner_guards_present(&chain(&both), &listed_uid));
+    assert!(!owner_guards_present(&chain(&both[..1]), &listed_uid));
+    assert!(!owner_guards_present(
+        &chain(&[
+            rule("998", "xray_guard", "accept"),
+            rule("997", "hy2_guard", "reject"),
+        ]),
+        &listed_uid
+    ));
+    assert!(!owner_guards_present(
+        &chain(&[
+            rule("997", "xray_guard", "reject"),
+            rule("998", "hy2_guard", "reject"),
+        ]),
+        &listed_uid
+    ));
+    assert!(
+        !owner_guards_present(
+            &chain(&[
+                rule(r#""mooring-xray""#, "xray_guard", "reject"),
+                rule(r#""mooring-hy2""#, "hy2_guard", "reject"),
+            ]),
+            &listed_uid
+        ),
+        "nft lists the uid, so a name is not taken for it"
+    );
+    let negated = |owner: &str, counter: &str| {
+        format!(
+            r#"{{"rule":{{"expr":[{{"match":{{"op":"!=","left":{{"meta":{{"key":"skuid"}}}},"right":{owner}}}}},{{"counter":"{counter}"}},{{"reject":null}}]}}}}"#
+        )
+    };
+    assert!(
+        !owner_guards_present(
+            &chain(&[negated("998", "xray_guard"), negated("997", "hy2_guard")]),
+            &listed_uid
+        ),
+        "a rule for every other owner is no guard"
+    );
+    assert!(
+        !owner_guards_present(&chain(&both), &|user| match user {
+            EngineUser::Xray => Some(998),
+            EngineUser::Hy2 => None,
+        }),
+        "an account /etc/passwd lacks has no guard"
+    );
+    assert!(!owner_guards_present(b"not json", &listed_uid));
 }
 
 #[test]

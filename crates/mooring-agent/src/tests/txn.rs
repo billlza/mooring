@@ -56,7 +56,20 @@ udp UNCONN 0 0 45.67.89.10:443 0.0.0.0:*\n\
 udp UNCONN 0 0 45.67.89.10:61000 0.0.0.0:*\n\
 udp UNCONN 0 0 0.0.0.0:27820 0.0.0.0:*\n";
 
-const OWNER_GUARDS: &str = r#"{"nftables":[{"rule":{"chain":"output","expr":[{"match":{"left":{"meta":{"key":"skuid"}},"right":"mooring-xray"}},{"counter":"xray_guard"},{"reject":null}]}},{"rule":{"chain":"output","expr":[{"match":{"left":{"meta":{"key":"skuid"}},"right":"mooring-hy2"}},{"counter":"hy2_guard"},{"reject":null}]}}]}"#;
+/// The owner-guard rules as nft lists them (`tests::health`), for engine
+/// accounts that both have `uid`, as `bootstrapped` makes them.
+fn owner_guards(uid: u32) -> String {
+    let rule = |counter: &str| {
+        format!(
+            r#"{{"rule":{{"chain":"output","expr":[{{"match":{{"op":"==","left":{{"meta":{{"key":"skuid"}}}},"right":{uid}}}}},{{"counter":"{counter}"}},{{"reject":null}}]}}}}"#
+        )
+    };
+    format!(
+        r#"{{"nftables":[{},{}]}}"#,
+        rule("xray_guard"),
+        rule("hy2_guard")
+    )
+}
 
 /// How the stand-in node misbehaves.
 #[derive(Debug, Default)]
@@ -128,6 +141,7 @@ impl World {
     fn node(&self, now: u64) -> FakeNode {
         let faults = Rc::clone(&self.faults);
         let programs = Rc::clone(&self.faults);
+        let guards = owner_guards(super::own_ids(&self.paths).0);
         FakeNode::answering(
             now,
             Box::new(move |tool, args| {
@@ -136,7 +150,7 @@ impl World {
                     (Tool::Ip, _) => ok(br#"[{"addr_info":[{"family":"inet","local":"203.0.113.203","scope":"global"}]}]"#),
                     (Tool::Nft, ["-f", ..]) if faults.nft_load => failed(b"Error: syntax error\n"),
                     (Tool::Nft, ["-j", "list", "set", ..]) => ok(&nft_set(true)),
-                    (Tool::Nft, ["-j", "list", "chain", ..]) => ok(OWNER_GUARDS.as_bytes()),
+                    (Tool::Nft, ["-j", "list", "chain", ..]) => ok(guards.as_bytes()),
                     (Tool::Systemctl, ["restart" | "start", ..]) if faults.restart => failed(b"Job failed.\n"),
                     (Tool::SystemdRun, args) if faults.launch && args.contains(&"txn") => failed(b"Failed to start transient service unit.\n"),
                     (Tool::Systemctl, ["is-active", ..]) if faults.unit_failed => ok(b"active\nfailed\nactive\n"),
