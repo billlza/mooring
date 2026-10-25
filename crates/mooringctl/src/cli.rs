@@ -298,6 +298,19 @@ pub(crate) enum NodeCommand {
         #[arg(long, value_name = "DIR")]
         engines: PathBuf,
     },
+    /// Upload a new agent, have the node activate it (its self-test first,
+    /// the previous agent's revert timer armed) and confirm it from the
+    /// new agent.
+    UpgradeAgent {
+        /// The node's id.
+        node: NodeId,
+        /// The Mac's interface to the M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// The mooring-agent release binary for the VPS's architecture.
+        #[arg(long, value_name = "PATH")]
+        agent: PathBuf,
+    },
 }
 
 /// A target command.

@@ -68,6 +68,13 @@ mooringctl node target set lon1 <host> --interface en9 --engines ~/mooring-engin
 
 lon1's first configuration is applied with its first users, in section 0.5: a configuration that serves only the probe has nothing to carry.
 
+A node keeps the agent it was adopted with until it is upgraded. When main carries an agent fix (lon1's adoption agent of 2026-10-24 rolled its first configuration back, design §11.2 step 6), build the agent from main and upgrade the node before `node apply`. The node self-tests the new agent, and if the confirm does not arrive within 120 s the previous agent reverts it:
+
+```
+cargo build -p mooring-agent --release --target x86_64-unknown-linux-musl
+mooringctl node upgrade-agent lon1 --interface en9 --agent target/x86_64-unknown-linux-musl/release/mooring-agent
+```
+
 ### 0.5 The users
 
 Your own test user first (section 0.7 connects with it), then each pilot user (at most 5 active in all):

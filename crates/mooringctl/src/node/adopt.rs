@@ -269,7 +269,7 @@ fn upload_command(staged: &str) -> String {
 }
 
 /// Reads the agent binary, at most [`MAX_AGENT_BYTES`].
-fn read_agent(path: &Path) -> Result<Vec<u8>, LocalError> {
+pub(crate) fn read_agent(path: &Path) -> Result<Vec<u8>, LocalError> {
     let failed = |source| LocalError::AgentFile {
         path: path.to_path_buf(),
         source,

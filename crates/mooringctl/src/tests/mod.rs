@@ -25,4 +25,5 @@ mod runtime;
 mod stub;
 mod support;
 mod units;
+mod upgrade;
 mod user;

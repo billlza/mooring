@@ -13,6 +13,7 @@ pub(crate) mod new;
 pub(crate) mod session;
 pub(crate) mod ssh;
 pub(crate) mod target;
+pub(crate) mod upgrade;
 
 use std::collections::BTreeSet;
 use std::io;
