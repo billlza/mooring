@@ -31,11 +31,13 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use mooring_agent_proto::{
-    AgentError, ApplyStep, BundleHeader, EngineUser, Generation, HostFile, HostProfile, IoOp,
-    ManagedFile, RollbackCause, StderrTail, SystemdOp, TxnStage, TxnState, UnitName, WG_INTERFACE,
+    AcceptLocal, AgentError, ApplyStep, BundleHeader, EngineUser, Generation, HostFile,
+    HostProfile, IoOp, ManagedFile, RollbackCause, StderrTail, SystemdOp, TxnStage, TxnState,
+    UnitName, WG_INTERFACE,
 };
 
 use crate::gate::{self, engine_unit};
+use crate::hello;
 use crate::host::{Node, Tool, run_ok};
 use crate::hostfiles;
 use crate::paths::{Paths, generation_name};
@@ -325,7 +327,7 @@ fn preconditions(paths: &Paths, node: &dyn Node, header: &BundleHeader) -> Resul
     }
     header
         .host_facts
-        .check_live(&crate::hello::host_facts(paths, node)?)?;
+        .check_live(&hello::host_facts(paths, node)?)?;
     let wanted: BTreeSet<_> = header
         .files
         .iter()
@@ -661,27 +663,45 @@ fn to_previous(
         .map_err(|failed| RollbackCause::HealthGate { failed })
 }
 
+/// The node back to serving nothing (design §11.2 step 8): both engines and
+/// the tunnel stopped while `current` still points at the generation, since
+/// the tunnel's stop (`wg-quick down`) reads `/etc/wireguard/wgexit.conf`
+/// through it; then `current` removed, whatever the stops did; an interface
+/// the tunnel's stop left (a `down` that failed) deleted, so that the next
+/// `wg-quick up` is not refused; and the ruleset the node had before
+/// Mooring's first one reloaded, so that a first generation whose ruleset
+/// shut the operator out is undone too.
 fn to_nothing(paths: &Paths, node: &dyn Node) -> Result<(), RollbackCause> {
-    match fs::remove_file(paths.current()) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(RollbackCause::Swap {
-                errno: error.raw_os_error(),
-            });
-        }
-    }
     let step = Step { node, secrets: &[] };
     let tunnel = format!("wg-quick@{WG_INTERFACE}.service");
-    for unit in [
+    let stopped = [
         "mooring-xray.service",
         "mooring-hy2.service",
         tunnel.as_str(),
-    ] {
-        step.run(ApplyStep::EngineRestart, Tool::Systemctl, &["stop", unit])?;
+    ]
+    .iter()
+    .try_for_each(|unit| {
+        step.run(ApplyStep::EngineRestart, Tool::Systemctl, &["stop", unit])
+            .map(drop)
+    });
+    let removed = match fs::remove_file(paths.current()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(RollbackCause::Swap {
+            errno: error.raw_os_error(),
+        }),
+    };
+    stopped?;
+    removed?;
+    let interface =
+        hello::accept_local(paths).map_err(|error| step.failed(ApplyStep::WireGuard, &error))?;
+    if interface != AcceptLocal::NoInterface {
+        step.run(
+            ApplyStep::WireGuard,
+            Tool::Ip,
+            &["link", "delete", "dev", WG_INTERFACE],
+        )?;
     }
-    // The ruleset the node had before Mooring's first one, so that a first
-    // generation whose ruleset shut the operator out is undone too.
     let nft = paths.nft_conf_link();
     let kept = nft.with_extension("conf.pre-mooring");
     if kept.exists() {

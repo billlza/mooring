@@ -210,7 +210,7 @@ pub(crate) fn vps4(node: &dyn Node, uplink: &IfName) -> Result<Ipv4Addr, AgentEr
 }
 
 /// `net.ipv4.conf.wgexit.accept_local`; no such file means no `wgexit`.
-fn accept_local(paths: &Paths) -> Result<AcceptLocal, AgentError> {
+pub(crate) fn accept_local(paths: &Paths) -> Result<AcceptLocal, AgentError> {
     match fs::read_to_string(paths.wgexit_accept_local()) {
         Ok(text) => match text.trim_end_matches('\n') {
             "0" => Ok(AcceptLocal::Disabled),
