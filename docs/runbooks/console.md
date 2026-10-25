@@ -37,7 +37,7 @@ It builds `target/app/Mooring.app` with `mooringctl` inside it, the power helper
 
 The app, `mooringctl` and the helper are each signed ad hoc with the hardened runtime, and the build checks each one's identifier.
 
-While the daemon is registered (section 2), the build is refused before it builds anything. launchd starts only the `mooringctl` the daemon was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start. To rebuild, choose **Stop the Daemon**, run `cargo xtask app`, then open the new build and choose **Start the Daemon at Login**; macOS asks again for the keychain (section 2, question 1).
+While the daemon is registered (section 2), the build is refused before it builds anything. launchd starts only the `mooringctl` the daemon was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start. To rebuild, choose **Stop the Daemon**, run `cargo xtask app`, then open the new build and choose **Start the Daemon at Login**. If the daemon was registered from an earlier build, that first start fails: macOS keeps the stopped daemon's record, with the earlier build's launch constraint, and kills the new `mooringctl`. `launchctl print gui/$(id -u)/com.bill.mooring.daemon` shows `job state = spawn failed`, and about a minute later, once launchd has had the record replaced, `last exit code = 78: EX_CONFIG`. Then choose **Stop the Daemon** and **Start the Daemon at Login** again: the daemon starts, and macOS asks again for the keychain (section 2, question 1) and may ask for local network access.
 
 The app's language follows macOS.
 
@@ -116,7 +116,7 @@ The same status is available in Terminal:
 **`the Mooring daemon is not running`:** the daemon is not started, or it stopped.
 - Start it from the app's menu (section 2).
 - Run `launchctl print gui/$(id -u)/com.bill.mooring.daemon` to see its state and last exit, and read the last lines of `~/Library/Logs/Mooring/daemon.log`.
-- `job state = spawn failed` with `last exit code = 78: EX_CONFIG`, and no new line in the log, means launchd refuses the app's `mooringctl` because it is not the one the daemon was registered with (a build from before 2026-10-24 replaced it while the daemon was registered). **Stop the Daemon**, then **Start the Daemon at Login**; macOS asks again for the keychain and may ask for local network access.
+- `job state = spawn failed` with `last exit code = 78: EX_CONFIG`, and no new line in the log, means launchd refused the app's `mooringctl` under an earlier build's launch constraint, as it does at the first start after every rebuild (section 1). **Stop the Daemon**, then **Start the Daemon at Login**; macOS asks again for the keychain and may ask for local network access. With `job state = spawn failed` but no 78 yet, wait for the 78 first: launchd has the record replaced only after its second failed start.
 
 **The exit is `Degraded` with `PowerHelperExited`:** the power helper ended, so nothing keeps the Mac awake. The daemon's log says why and how it ended ("the power helper ended: … (exit status …)"), and the daemon starts it again a minute later ("the power helper started again").
 
