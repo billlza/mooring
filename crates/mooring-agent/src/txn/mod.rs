@@ -666,11 +666,14 @@ fn to_previous(
 /// The node back to serving nothing (design §11.2 step 8): both engines and
 /// the tunnel stopped while `current` still points at the generation, since
 /// the tunnel's stop (`wg-quick down`) reads `/etc/wireguard/wgexit.conf`
-/// through it; then `current` removed, whatever the stops did; an interface
-/// the tunnel's stop left (a `down` that failed) deleted, so that the next
-/// `wg-quick up` is not refused; and the ruleset the node had before
-/// Mooring's first one reloaded, so that a first generation whose ruleset
-/// shut the operator out is undone too.
+/// through it, and `wg-quick down` run for an interface the stop left (a
+/// `down` that failed), with that configuration still in place for its
+/// `PreDown` hooks; then `current` removed, whatever the stops did; and the
+/// ruleset the node had before Mooring's first one reloaded, so that a first
+/// generation whose ruleset shut the operator out is undone too. A rule the
+/// hooks left behind an interface that is already gone stays: it names no
+/// interface the kernel has, so it matches nothing, and the next `up`
+/// tolerates it (design §8.4).
 fn to_nothing(paths: &Paths, node: &dyn Node) -> Result<(), RollbackCause> {
     let step = Step { node, secrets: &[] };
     let tunnel = format!("wg-quick@{WG_INTERFACE}.service");
@@ -684,6 +687,16 @@ fn to_nothing(paths: &Paths, node: &dyn Node) -> Result<(), RollbackCause> {
         step.run(ApplyStep::EngineRestart, Tool::Systemctl, &["stop", unit])
             .map(drop)
     });
+    let torn_down = stopped.and_then(|()| {
+        let interface = hello::accept_local(paths)
+            .map_err(|error| step.failed(ApplyStep::WireGuard, &error))?;
+        if interface == AcceptLocal::NoInterface {
+            Ok(())
+        } else {
+            step.run(ApplyStep::WireGuard, Tool::WgQuick, &["down", WG_INTERFACE])
+                .map(drop)
+        }
+    });
     let removed = match fs::remove_file(paths.current()) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -691,17 +704,8 @@ fn to_nothing(paths: &Paths, node: &dyn Node) -> Result<(), RollbackCause> {
             errno: error.raw_os_error(),
         }),
     };
-    stopped?;
+    torn_down?;
     removed?;
-    let interface =
-        hello::accept_local(paths).map_err(|error| step.failed(ApplyStep::WireGuard, &error))?;
-    if interface != AcceptLocal::NoInterface {
-        step.run(
-            ApplyStep::WireGuard,
-            Tool::Ip,
-            &["link", "delete", "dev", WG_INTERFACE],
-        )?;
-    }
     let nft = paths.nft_conf_link();
     let kept = nft.with_extension("conf.pre-mooring");
     if kept.exists() {
