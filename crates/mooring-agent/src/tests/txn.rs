@@ -82,9 +82,9 @@ See \"systemctl status wg-quick@wgexit.service\" and \"journalctl -xeu wg-quick@
 /// The tunnel as systemd and wg-quick run it, for the tests that follow
 /// the interface instead of assuming it: `wgexit` (its `accept_local` file)
 /// exists from a `wg-quick up` until a `wg-quick down`. `up` refuses an
-/// interface that exists; `down` needs `/etc/wireguard/wgexit.conf`; and
-/// `systemctl stop` returns 0 even when its `down` failed, with the unit
-/// failed and the interface left.
+/// interface that exists; `down` needs the interface and
+/// `/etc/wireguard/wgexit.conf`; and `systemctl stop` returns 0 even when
+/// its `down` failed, with the unit failed and the interface left.
 #[derive(Debug, Default)]
 struct Tunnel {
     /// `wg-quick@wgexit.service` is active.
@@ -96,8 +96,8 @@ struct Tunnel {
 struct Faults {
     /// The tunnel followed as systemd and wg-quick run it ([`Tunnel`]).
     tunnel: Option<Tunnel>,
-    /// `ip link delete` fails.
-    link_delete: bool,
+    /// A `wg-quick down` of the agent's own fails in a hook.
+    wg_down_fails: bool,
     /// Validator output that fails validation (Xray's `-test`).
     xray_test: Option<String>,
     /// `nft -f` fails.
@@ -198,12 +198,17 @@ impl World {
                         }
                         ok(b"")
                     }
-                    (Tool::Ip, ["link", "delete", "dev", "wgexit"]) if faults.link_delete => {
-                        failed(b"RTNETLINK answers: Operation not permitted\n")
-                    }
-                    (Tool::Ip, ["link", "delete", "dev", "wgexit"]) if faults.tunnel.is_some() => {
-                        fs::remove_file(&interface).unwrap();
-                        ok(b"")
+                    (Tool::WgQuick, ["down", "wgexit"]) if faults.tunnel.is_some() => {
+                        if !interface.exists() {
+                            failed(b"wg-quick: `wgexit' is not a WireGuard interface\n")
+                        } else if fs::read_to_string(&conf).is_err() {
+                            failed(b"wg-quick: `/etc/wireguard/wgexit.conf' does not exist\n")
+                        } else if faults.wg_down_fails {
+                            failed(b"[#] ip -4 route flush table 77\nRTNETLINK answers: Operation not permitted\n")
+                        } else {
+                            fs::remove_file(&interface).unwrap();
+                            ok(b"")
+                        }
                     }
                     (Tool::Ip, _) => ok(br#"[{"addr_info":[{"family":"inet","local":"203.0.113.203","scope":"global"}]}]"#),
                     (Tool::Nft, ["-f", ..]) if faults.nft_load => failed(b"Error: syntax error\n"),
@@ -883,7 +888,7 @@ fn a_rolled_back_first_generation_leaves_no_tunnel_interface() {
     );
     let calls = node.calls();
     assert!(
-        calls.iter().all(|call| !call.contains("ip link delete")),
+        calls.iter().all(|call| !call.contains("wg-quick down")),
         "the unit's own stop took it down: {calls:#?}"
     );
     world.faults.borrow().missing_listeners.set(0);
@@ -896,9 +901,10 @@ fn a_rolled_back_first_generation_leaves_no_tunnel_interface() {
 
 /// An interface left by an earlier failure (lon1, 2026-10-25: a rollback
 /// whose stop could not read the configuration) makes `wg-quick up` refuse.
-/// The rollback to nothing deletes it, and the next apply works.
+/// The rollback to nothing takes it down with `wg-quick down` while the
+/// configuration is still in place, and the next apply works.
 #[test]
-fn a_tunnel_interface_left_over_goes_with_the_rollback_to_nothing() {
+fn a_tunnel_interface_left_over_is_taken_down_by_the_rollback_to_nothing() {
     let world = World::new();
     world.follow_tunnel();
     fs::write(world.paths.wgexit_accept_local(), "1\n").unwrap();
@@ -919,13 +925,13 @@ fn a_tunnel_interface_left_over_goes_with_the_rollback_to_nothing() {
     assert_eq!(world.current(), None);
     assert!(
         !world.paths.wgexit_accept_local().exists(),
-        "the rollback deleted the interface"
+        "the rollback took the interface down"
     );
     let calls = node.calls();
     assert!(
-        index_of(&calls, "/usr/bin/ip link delete dev wgexit")
+        index_of(&calls, "/usr/bin/wg-quick down wgexit")
             > index_of(&calls, "systemctl stop wg-quick@wgexit.service"),
-        "deleted once the unit's stop had left it: {calls:#?}"
+        "taken down once the unit's stop had left it: {calls:#?}"
     );
     assert_eq!(
         world.apply_and_run(&node, world.bundle(1, same)),
@@ -933,13 +939,13 @@ fn a_tunnel_interface_left_over_goes_with_the_rollback_to_nothing() {
     );
 }
 
-/// An interface the node cannot delete fails the rollback.
+/// An interface whose `wg-quick down` fails fails the rollback.
 #[test]
-fn a_tunnel_interface_that_cannot_be_deleted_fails_the_rollback() {
+fn a_tunnel_interface_whose_down_fails_fails_the_rollback() {
     let world = World::new();
     world.follow_tunnel();
     fs::write(world.paths.wgexit_accept_local(), "1\n").unwrap();
-    world.faults.borrow_mut().link_delete = true;
+    world.faults.borrow_mut().wg_down_fails = true;
     let node = world.node(1000);
     let state = world.apply_and_run(&node, world.bundle(1, same));
     assert_eq!(

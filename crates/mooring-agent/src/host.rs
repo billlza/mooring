@@ -28,7 +28,7 @@ pub(crate) enum Tool {
     Sshd,
     /// `wg` (the Mac peer's handshake, `syncconf`).
     Wg,
-    /// `wg-quick` (`strip`).
+    /// `wg-quick` (`strip`; `down` for an interface a stop left).
     WgQuick,
     /// `systemd-run` (transaction units and timers).
     SystemdRun,

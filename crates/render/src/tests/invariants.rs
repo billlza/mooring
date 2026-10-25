@@ -372,8 +372,10 @@ fn wgexit_steers_device_bound_sockets_and_accepts_local_replies() {
                 "Table = off\n",
                 "MTU = 1280\n",
                 "PostUp = sysctl -qw net.ipv4.conf.%i.accept_local=1\n",
-                "PostUp = ip -4 rule add pref 10000 oif %i lookup 77\n",
+                "PostUp = ip -4 rule list | grep '^10000:[[:space:]]*from all oif %i lookup 77$' >/dev/null || ip -4 rule add pref 10000 oif %i lookup 77\n",
                 "PostUp = ip -4 route replace default dev %i table 77\n",
+                "PreDown = ! ip -4 rule list | grep '^10000:[[:space:]]*from all oif %i lookup 77$' >/dev/null || ip -4 rule del pref 10000 oif %i lookup 77\n",
+                "PreDown = ip -4 route flush table 77\n",
                 "AllowedIPs = 0.0.0.0/0\n",
             ] {
                 assert!(text.contains(line), "{line}");
