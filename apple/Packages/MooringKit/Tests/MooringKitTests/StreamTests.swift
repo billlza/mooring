@@ -17,7 +17,11 @@ private struct StandIn {
     /// A `mooringctl` that records its arguments and its process id (each
     /// run appends them), prints `stdout`, writes `stderr` to stderr, then
     /// exits with `code`, or with `waits` sleeps in its own process instead.
-    init(stdout: Data, stderr: Data = Data(), code: Int32 = 0, waits: Bool = false) throws {
+    /// With `laterRunsWait`, every run after the first sleeps at once and
+    /// prints nothing, as a follower waiting for a daemon's first status.
+    init(
+        stdout: Data, stderr: Data = Data(), code: Int32 = 0, waits: Bool = false, laterRunsWait: Bool = false
+    ) throws {
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("mooringkit-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -25,10 +29,12 @@ private struct StandIn {
         try stderr.write(to: directory.appendingPathComponent("stderr"))
         executable = directory.appendingPathComponent("mooringctl")
         let end = waits ? "exec sleep 60" : "exit \(code)"
+        let later = laterRunsWait ? "[ \"$(grep -c '' '\(directory.path)/runs')\" -gt 1 ] && exec sleep 60" : ""
         let script = """
             #!/bin/sh
             printf '%s ' "$@" > '\(directory.path)/arguments'
             echo $$ >> '\(directory.path)/runs'
+            \(later)
             cat '\(directory.path)/stdout'
             cat '\(directory.path)/stderr' >&2
             \(end)
@@ -40,13 +46,16 @@ private struct StandIn {
 
     /// A stand-in printing `lines`, each re-encoded compactly as the CLI
     /// prints them and ended with a newline.
-    init(lines: [Data], stderr: String = "", code: Int32 = 0, waits: Bool = false) throws {
+    init(lines: [Data], stderr: String = "", code: Int32 = 0, waits: Bool = false, laterRunsWait: Bool = false)
+        throws
+    {
         var output = Data()
         for line in lines {
             output.append(try Fixtures.encode(try Fixtures.json(line)))
             output.append(0x0A)
         }
-        try self.init(stdout: output, stderr: Data(stderr.utf8), code: code, waits: waits)
+        try self.init(
+            stdout: output, stderr: Data(stderr.utf8), code: code, waits: waits, laterRunsWait: laterRunsWait)
     }
 
     var arguments: String {
@@ -300,6 +309,94 @@ private func running(_ pid: pid_t) -> Bool {
         let met2 = try await eventually { standIn.runs.count >= 3 }
         #expect(met2)
         model.stop()
+    }
+
+    /// While the command is started again after it ended, the screen keeps
+    /// how it ended rather than flash back to connecting at every retry.
+    @Test func aRetryDoesNotFlashBackToConnecting() async throws {
+        let standIn = try StandIn(
+            lines: [], stderr: "mooringctl: the Mooring daemon is not running\n", code: 1, laterRunsWait: true)
+        defer { try? standIn.remove() }
+        let model = ConsoleModel(
+            command: StatusCommand(executable: standIn.executable), retryDelay: .milliseconds(100),
+            settleDelay: .seconds(600))
+        model.start()
+        let restarted = try await eventually { standIn.runs.count >= 2 }
+        #expect(restarted)
+        #expect(
+            model.state
+                == .retrying(StreamEnd(reason: .exited(1), message: "mooringctl: the Mooring daemon is not running")))
+        model.stop()
+    }
+
+    /// A run started again that lasts is waiting for the daemon's first
+    /// status, and says so once it has lasted the settle delay.
+    @Test func aRetryThatLastsSaysItIsConnecting() async throws {
+        let standIn = try StandIn(
+            lines: [], stderr: "mooringctl: the Mooring daemon is not running\n", code: 1, laterRunsWait: true)
+        defer { try? standIn.remove() }
+        let model = ConsoleModel(
+            command: StatusCommand(executable: standIn.executable), retryDelay: .milliseconds(100),
+            settleDelay: .milliseconds(300))
+        model.start()
+        let restarted = try await eventually { standIn.runs.count >= 2 }
+        #expect(restarted)
+        let settled = try await eventually { model.state == .connecting }
+        #expect(settled)
+        #expect(standIn.runs.count == 2)
+        model.stop()
+    }
+
+    /// A run's settle timer ends with the run: while every run fails at once,
+    /// the screen never says connecting, even with a settle delay longer than
+    /// the retry delay.
+    @Test func aRunsSettleTimerEndsWithTheRun() async throws {
+        let standIn = try StandIn(lines: [], stderr: "mooringctl: the Mooring daemon is not running\n", code: 1)
+        defer { try? standIn.remove() }
+        let model = ConsoleModel(
+            command: StatusCommand(executable: standIn.executable), retryDelay: .milliseconds(50),
+            settleDelay: .seconds(2))
+        model.start()
+        let ended = try await eventually {
+            if case .ended = model.state { true } else { false }
+        }
+        #expect(ended)
+        let deadline = Date().addingTimeInterval(3)
+        var connecting = false
+        while Date() < deadline, !connecting {
+            connecting = model.state == .connecting
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(!connecting)
+        #expect(standIn.runs.count > 5)
+        model.stop()
+    }
+
+    /// The settle delay turns a retry into connecting only while nothing
+    /// newer has arrived: a document or another end stays on screen.
+    @Test func aRetrySettlesOnlyWhileNothingNewerArrived() throws {
+        let model = ConsoleModel(command: nil, settleDelay: .seconds(600))
+        let end = StreamEnd(reason: .exited(1), message: "mooringctl: the Mooring daemon is not running")
+        model.apply(.ended(end))
+        model.retry(after: end).cancel()
+        #expect(model.state == .retrying(end))
+        model.settle(after: end)
+        #expect(model.state == .connecting)
+
+        let status = try ConsoleStatus.decode(line: try Fixtures.console("no-deployment"))
+        model.retry(after: end).cancel()
+        model.apply(.status(status))
+        model.settle(after: end)
+        #expect(model.state == .live)
+
+        let again = StreamEnd(reason: .exited(1), message: "mooringctl: the daemon closed the status stream")
+        model.retry(after: end).cancel()
+        model.apply(.ended(again))
+        model.settle(after: end)
+        guard case .ended(again, _) = model.state else {
+            Issue.record("a later end was replaced: \(model.state)")
+            return
+        }
     }
 
     /// Stopping the model, or releasing it, terminates the command, even

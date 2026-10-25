@@ -2176,6 +2176,16 @@
         }
       }
     },
+    "Retrying…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在重试…"
+          }
+        }
+      }
+    },
     "Revocation pending": {
       "localizations": {
         "zh-Hans": {

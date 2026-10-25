@@ -127,7 +127,7 @@ struct StreamBanner: View {
         switch model.state {
         case .live: "dot.radiowaves.left.and.right"
         case .connecting, .stopped: "hourglass"
-        case .refusing, .ended, .noCommand: "exclamationmark.triangle.fill"
+        case .refusing, .ended, .retrying, .noCommand: "exclamationmark.triangle.fill"
         }
     }
 
@@ -135,7 +135,7 @@ struct StreamBanner: View {
         switch model.state {
         case .live: .green
         case .connecting, .stopped: .secondary
-        case .refusing, .ended, .noCommand: .orange
+        case .refusing, .ended, .retrying, .noCommand: .orange
         }
     }
 
@@ -144,7 +144,7 @@ struct StreamBanner: View {
         case .live: "Live from the Mooring daemon"
         case .connecting: "Waiting for the Mooring daemon…"
         case .refusing: "Not live: the latest status cannot be shown"
-        case .ended: "Not live: mooringctl stopped"
+        case .ended, .retrying: "Not live: mooringctl stopped"
         case .stopped: "Not reading the daemon's status"
         case .noCommand: "This app carries no mooringctl"
         }
@@ -160,6 +160,9 @@ struct StreamBanner: View {
             let seconds = max(0, Int(retryAt.timeIntervalSince(now).rounded(.up)))
             parts.append(end.text)
             parts.append(String(localized: "Retrying in \(seconds) s."))
+        case .retrying(let end):
+            parts.append(end.text)
+            parts.append(String(localized: "Retrying…"))
         case .refusing(let refusal):
             parts.append(refusal.text)
         case .noCommand(let path):

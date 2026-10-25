@@ -50,7 +50,7 @@ struct MenuView: View {
             return Text("Waiting for the Mooring daemon…")
         case (.refusing, _):
             return Text("Not live: the latest status cannot be shown")
-        case (.ended, _):
+        case (.ended, _), (.retrying, _):
             return Text("Not live: mooringctl stopped")
         case (.stopped, _):
             return Text("Not reading the daemon's status")
