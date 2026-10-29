@@ -94,10 +94,10 @@ import Testing
     func everyObjectRefusesAnUnknownKey(_ name: String) throws {
         let json = try Fixtures.json(try Fixtures.console(name))
         _ = try ConsoleStatus.decode(line: try Fixtures.encode(json))
-        let paths = objectPaths(json)
+        let paths = JsonEdits.objectPaths(json)
         #expect(paths.count >= (name == "no-deployment" ? 15 : 3))
         for path in paths {
-            let edited = inserting(into: json, at: path)
+            let edited = JsonEdits.inserting(into: json, at: path)
             #expect(throws: (any Error).self, "accepted an unknown key at \(path)") {
                 try ConsoleStatus.decode(line: try Fixtures.encode(edited))
             }
@@ -143,37 +143,5 @@ import Testing
         #expect(throws: (any Error).self) {
             try JSONDecoder().decode(RadioState.self, from: Data("{\"no_service\":null}".utf8))
         }
-    }
-
-    // MARK: - Helpers
-
-    /// The path (keys and indices) of every object in `value`.
-    private func objectPaths(_ value: Any, _ path: [Any] = []) -> [[Any]] {
-        if let object = value as? [String: Any] {
-            return [path] + object.keys.sorted().flatMap { objectPaths(object[$0] as Any, path + [$0]) }
-        }
-        if let array = value as? [Any] {
-            return array.indices.flatMap { objectPaths(array[$0], path + [$0]) }
-        }
-        return []
-    }
-
-    /// `value` with `"zz_unknown": true` added to the object at `path`.
-    private func inserting(into value: Any, at path: [Any]) -> Any {
-        guard let head = path.first else {
-            var object = value as? [String: Any] ?? [:]
-            object["zz_unknown"] = true
-            return object
-        }
-        let rest = Array(path.dropFirst())
-        if let key = head as? String, var object = value as? [String: Any] {
-            object[key] = inserting(into: object[key] as Any, at: rest)
-            return object
-        }
-        if let index = head as? Int, var array = value as? [Any] {
-            array[index] = inserting(into: array[index], at: rest)
-            return array
-        }
-        return value
     }
 }

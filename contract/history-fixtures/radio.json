@@ -1,0 +1,339 @@
+{
+  "version": 1,
+  "since": "2026-10-12",
+  "until": "2026-10-13",
+  "samples": [
+    {
+      "at": 1791918000,
+      "poll": {
+        "read": {
+          "uptime_secs": 523014,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "radio": {
+            "attached": {
+              "network_service": "nr5g",
+              "data_service": "nr_sub6",
+              "band": "B3",
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1000,
+                "rsrq": -120,
+                "sinr": 20,
+                "rssi": -690
+              },
+              "nr": {
+                "rsrp": -905,
+                "rsrq": -105,
+                "sinr": 155
+              },
+              "plmn": {
+                "mcc": "234",
+                "mnc": "30"
+              },
+              "session_secs": 86400
+            }
+          }
+        }
+      }
+    },
+    {
+      "at": 1791918060,
+      "poll": {
+        "failed": {
+          "reason": "unreachable"
+        }
+      }
+    },
+    {
+      "at": 1791918120,
+      "poll": {
+        "read": {
+          "uptime_secs": 523134,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "radio": {
+            "attached": {
+              "network_service": "lte",
+              "data_service": "lte_plus",
+              "band": "B3",
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1000,
+                "rsrq": -120,
+                "sinr": 20,
+                "rssi": -690
+              },
+              "nr": {
+                "rsrp": null,
+                "rsrq": null,
+                "sinr": null
+              },
+              "plmn": {
+                "mcc": "234",
+                "mnc": "30"
+              },
+              "session_secs": 86520
+            }
+          }
+        }
+      }
+    },
+    {
+      "at": 1791918180,
+      "poll": {
+        "read": {
+          "uptime_secs": 523194,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "radio": {
+            "attached": {
+              "network_service": "lte",
+              "data_service": "lte_plus",
+              "band": "B20",
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1000,
+                "rsrq": -120,
+                "sinr": 20,
+                "rssi": -690
+              },
+              "nr": {
+                "rsrp": null,
+                "rsrq": null,
+                "sinr": null
+              },
+              "plmn": {
+                "mcc": "234",
+                "mnc": "30"
+              },
+              "session_secs": 86580
+            }
+          }
+        }
+      }
+    },
+    {
+      "at": 1791918240,
+      "poll": {
+        "read": {
+          "uptime_secs": 523254,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "radio": "no_service"
+        }
+      }
+    },
+    {
+      "at": 1791918300,
+      "poll": {
+        "read": {
+          "uptime_secs": 523314,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "radio": {
+            "attached": {
+              "network_service": "lte",
+              "data_service": "lte_plus",
+              "band": "B20",
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1000,
+                "rsrq": -120,
+                "sinr": 20,
+                "rssi": -690
+              },
+              "nr": {
+                "rsrp": null,
+                "rsrq": null,
+                "sinr": null
+              },
+              "plmn": {
+                "mcc": "234",
+                "mnc": "30"
+              },
+              "session_secs": 30
+            }
+          }
+        }
+      }
+    },
+    {
+      "at": 1791918360,
+      "poll": {
+        "read": {
+          "uptime_secs": 523374,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "radio": {
+            "attached": {
+              "network_service": "lte",
+              "data_service": "lte_plus",
+              "band": "B20",
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1000,
+                "rsrq": -120,
+                "sinr": 20,
+                "rssi": -690
+              },
+              "nr": {
+                "rsrp": null,
+                "rsrq": null,
+                "sinr": null
+              },
+              "plmn": {
+                "mcc": "234",
+                "mnc": "30"
+              },
+              "session_secs": 20
+            }
+          }
+        }
+      }
+    },
+    {
+      "at": 1791918420,
+      "poll": {
+        "read": {
+          "uptime_secs": 523434,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "radio": {
+            "attached": {
+              "network_service": "lte",
+              "data_service": "lte_plus",
+              "band": "B20",
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1000,
+                "rsrq": -120,
+                "sinr": 20,
+                "rssi": -690
+              },
+              "nr": {
+                "rsrp": null,
+                "rsrq": null,
+                "sinr": null
+              },
+              "plmn": {
+                "mcc": "234",
+                "mnc": "20"
+              },
+              "session_secs": 80
+            }
+          }
+        }
+      }
+    },
+    {
+      "at": 1791918480,
+      "poll": {
+        "read": {
+          "uptime_secs": 40,
+          "temperature_c": 44,
+          "thermal": "normal",
+          "radio": {
+            "attached": {
+              "network_service": "lte",
+              "data_service": "lte_plus",
+              "band": "B20",
+              "ca_secondary_count": 0,
+              "lte": {
+                "rsrp": -1000,
+                "rsrq": -120,
+                "sinr": 20,
+                "rssi": -690
+              },
+              "nr": {
+                "rsrp": null,
+                "rsrq": null,
+                "sinr": null
+              },
+              "plmn": {
+                "mcc": "234",
+                "mnc": "20"
+              },
+              "session_secs": 20
+            }
+          }
+        }
+      }
+    }
+  ],
+  "events": [
+    {
+      "at": 1791918060,
+      "kind": {
+        "poll_failed": {
+          "reason": "unreachable"
+        }
+      }
+    },
+    {
+      "at": 1791918120,
+      "kind": "poll_recovered"
+    },
+    {
+      "at": 1791918120,
+      "kind": {
+        "network_service_changed": {
+          "from": "nr5g",
+          "to": "lte"
+        }
+      }
+    },
+    {
+      "at": 1791918120,
+      "kind": {
+        "data_service_changed": {
+          "from": "nr_sub6",
+          "to": "lte_plus"
+        }
+      }
+    },
+    {
+      "at": 1791918180,
+      "kind": {
+        "band_changed": {
+          "from": "B3",
+          "to": "B20"
+        }
+      }
+    },
+    {
+      "at": 1791918240,
+      "kind": "service_lost"
+    },
+    {
+      "at": 1791918300,
+      "kind": "service_regained"
+    },
+    {
+      "at": 1791918360,
+      "kind": "session_restarted"
+    },
+    {
+      "at": 1791918420,
+      "kind": {
+        "plmn_changed": {
+          "from": {
+            "mcc": "234",
+            "mnc": "30"
+          },
+          "to": {
+            "mcc": "234",
+            "mnc": "20"
+          }
+        }
+      }
+    },
+    {
+      "at": 1791918480,
+      "kind": "router_rebooted"
+    }
+  ],
+  "incomplete_days": [
+    "2026-10-13"
+  ]
+}

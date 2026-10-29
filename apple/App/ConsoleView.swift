@@ -43,6 +43,7 @@ enum Screen: String, CaseIterable, Identifiable {
 struct ConsoleView: View {
     let model: ConsoleModel
     let daemon: DaemonService
+    let history: HistoryModel
     /// The screen shown, kept across launches.
     @AppStorage("screen") private var screen: Screen = .overview
 
@@ -59,7 +60,7 @@ struct ConsoleView: View {
                 Group {
                     switch (screen, model.status?.deployed) {
                     case (.overview, _): OverviewView(model: model)
-                    case (.router, _): RouterView(model: model)
+                    case (.router, _): RouterView(model: model, history: history)
                     case (.users, let deployed?): UsersView(status: deployed)
                     case (.nodes, let deployed?): NodesView(status: deployed)
                     case (.exit, let deployed?): ExitView(status: deployed)

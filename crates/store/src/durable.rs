@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Durable file primitives (design §7): the `state.lock` lock and the
-//! temp file → fsync → rename → directory fsync write.
+//! Durable file primitives (design §7): the `state.lock` lock, the temp
+//! file → fsync → rename → directory fsync write, the durable removal, and
+//! the private directories the store keeps its files in.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::error::{IoOp, StoreError};
 
 /// The mode of every file the store creates: owner read and write only.
 pub(crate) const FILE_MODE: u32 = 0o600;
+
+/// The mode of every directory the store creates: the owner's alone.
+const DIR_MODE: u32 = 0o700;
 
 /// The suffix of the temporary file a durable write goes through.
 const TEMP_SUFFIX: &str = ".tmp";
@@ -118,13 +122,36 @@ pub(crate) fn write_durably(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), 
 }
 
 /// Removes `dir/name` and flushes the directory, so the removal survives a
-/// crash; a file that is gone already is fine.
-pub(crate) fn remove_durably(dir: &Path, name: &str) -> Result<(), StoreError> {
+/// crash; a file that is gone already is fine. `op` names the removal in
+/// an error.
+pub(crate) fn remove_durably(dir: &Path, name: &str, op: IoOp) -> Result<(), StoreError> {
     let target = dir.join(name);
     match fs::remove_file(&target) {
         Ok(()) => sync_dir(dir),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(io_error(IoOp::RemoveLatch, &target)(error)),
+        Err(error) => Err(io_error(op, &target)(error)),
+    }
+}
+
+/// `parent/name`, a directory of the owner's alone: created with mode 0700
+/// when missing, and set back to it when found (a directory left open is
+/// closed again). Anything there that is not a directory, a link included,
+/// is `DirNotDirectory`, and nothing is written through it. `op` names the
+/// creation in an error.
+pub(crate) fn private_dir(parent: &Path, name: &str, op: IoOp) -> Result<PathBuf, StoreError> {
+    let dir = parent.join(name);
+    match DirBuilder::new().mode(DIR_MODE).create(&dir) {
+        Ok(()) => Ok(dir),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&dir).map_err(io_error(op, &dir))?;
+            if !metadata.file_type().is_dir() {
+                return Err(StoreError::DirNotDirectory { path: dir });
+            }
+            fs::set_permissions(&dir, fs::Permissions::from_mode(DIR_MODE))
+                .map_err(io_error(op, &dir))?;
+            Ok(dir)
+        }
+        Err(error) => Err(io_error(op, &dir)(error)),
     }
 }
 
@@ -138,7 +165,7 @@ fn remove_stale(temp: &Path) -> Result<(), StoreError> {
 }
 
 /// Flushes the directory entry changes of `dir` to stable storage.
-fn sync_dir(dir: &Path) -> Result<(), StoreError> {
+pub(crate) fn sync_dir(dir: &Path) -> Result<(), StoreError> {
     File::open(dir)
         .map_err(io_error(IoOp::OpenDir, dir))?
         .sync_all()

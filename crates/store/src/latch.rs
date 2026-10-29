@@ -82,5 +82,5 @@ pub fn write_latch(run_dir: &Path, latch: &LatchRecord) -> Result<(), StoreError
 
 /// Removes the latch, durably; no latch is fine.
 pub fn clear_latch(run_dir: &Path) -> Result<(), StoreError> {
-    remove_durably(run_dir, LATCH_FILE)
+    remove_durably(run_dir, LATCH_FILE, IoOp::RemoveLatch)
 }

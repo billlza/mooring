@@ -15,6 +15,7 @@ mod exit;
 mod export;
 mod flow;
 mod form;
+mod history;
 mod http;
 mod log;
 mod node;

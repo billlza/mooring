@@ -46,6 +46,15 @@
 //! - `status [--follow] [--json]` reads that status from the daemon, as
 //!   Mooring.app does.
 //!
+//! The radio history (design §15.6 rule 11) adds, to the daemon, one
+//! sample per poll of the M7 appended to `radio/<UTC day>.jsonl` under the
+//! support directory (the newest 90 day files are kept), and:
+//!
+//! - `router history [--since <date>] [--until <date>] [--json]` prints
+//!   those samples' days (yesterday and today by default): the changes
+//!   between polls and the hourly signal, or the document Mooring.app
+//!   charts. It reads the files and touches no network.
+//!
 //! Nothing is logged by a command: its only output is what it prints and
 //! its error on stderr. The daemon writes its own log,
 //! `~/Library/Logs/Mooring/daemon.log` (rotated at 5 MiB, standard error

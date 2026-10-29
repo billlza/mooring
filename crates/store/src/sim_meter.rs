@@ -9,12 +9,11 @@
 //! Only the daemon writes it, and only one daemon runs at a time (it holds
 //! its instance lock), so the write takes no state lock.
 
-use std::fs::{self, DirBuilder, File};
+use std::fs::File;
 use std::io::{self, Read};
-use std::os::unix::fs::DirBuilderExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::durable::write_durably;
+use crate::durable::{private_dir, write_durably};
 use crate::error::{IoOp, StoreError};
 
 /// The usage directory's name, in the support directory.
@@ -51,32 +50,10 @@ pub fn read_sim_meter(support_dir: &Path, limit: usize) -> Result<Option<Vec<u8>
 }
 
 /// Replaces the meter document with `bytes` (the store's durable write,
-/// mode 0600), creating the usage directory first if it is missing.
+/// mode 0600), creating the usage directory first if it is missing; a
+/// usage path that is not a directory (a link included) is
+/// `DirNotDirectory`.
 pub fn write_sim_meter(support_dir: &Path, bytes: &[u8]) -> Result<(), StoreError> {
-    let dir = usage_dir(support_dir)?;
+    let dir = private_dir(support_dir, USAGE_DIRECTORY, IoOp::CreateUsageDir)?;
     write_durably(&dir, SIM_METER_FILE, bytes)
-}
-
-/// The usage directory, created with mode 0700 when missing; anything
-/// there that is not a directory (a link included) is
-/// `UsageDirNotDirectory`.
-fn usage_dir(support_dir: &Path) -> Result<PathBuf, StoreError> {
-    let dir = support_dir.join(USAGE_DIRECTORY);
-    let failed = |source| StoreError::Io {
-        op: IoOp::CreateUsageDir,
-        path: dir.clone(),
-        source,
-    };
-    match DirBuilder::new().mode(0o700).create(&dir) {
-        Ok(()) => Ok(dir),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            let metadata = fs::symlink_metadata(&dir).map_err(failed)?;
-            if metadata.file_type().is_dir() {
-                Ok(dir)
-            } else {
-                Err(StoreError::UsageDirNotDirectory { path: dir })
-            }
-        }
-        Err(source) => Err(failed(source)),
-    }
 }

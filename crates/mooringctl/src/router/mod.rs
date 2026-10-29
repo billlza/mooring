@@ -21,10 +21,14 @@
 //!    the set-up the same way and whose session decides;
 //! 6. the document is parsed (`status`) or redacted (`capture`) through
 //!    `daemon-core`'s one allowlist.
+//!
+//! `router history` ([`history`]) touches no network at all: it reads the
+//! samples the daemon recorded from the store's day files.
 
 pub(crate) mod cookies;
 pub(crate) mod error;
 pub(crate) mod form;
+pub(crate) mod history;
 pub(crate) mod http;
 pub(crate) mod link;
 pub(crate) mod output;

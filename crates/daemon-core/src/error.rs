@@ -14,6 +14,7 @@ use mooring_model::{CalendarDate, ModelError, NodeId, UnixTime, UserId, kinds};
 use serde::{Deserialize, Serialize};
 
 use crate::alert::AlertKey;
+use crate::radio_history::{MAX_RADIO_LINE_BYTES, RADIO_HISTORY_VERSION, RADIO_SAMPLE_VERSION};
 use crate::router::netgear::{LeafPath, NetgearLeaf, carrier_list_path};
 use crate::router::{LteCarriers, RouterTextField, RouterUnavailableReason, SignalMetric};
 
@@ -922,6 +923,84 @@ impl ConsoleError {
         match self {
             Self::UnsupportedVersion { .. } => ConsoleErrorKind::UnsupportedVersion,
             Self::AdvisoriesMismatch => ConsoleErrorKind::AdvisoriesMismatch,
+        }
+    }
+}
+
+/// A radio history line or document cannot be read or written
+/// ([`crate::radio_history`]). Every variant is `Copy`: none holds a byte of
+/// a line, so no file content can reach a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RadioHistoryError {
+    /// A line is longer than its bound.
+    #[error(
+        "a radio history line of {bytes} bytes is longer than {}",
+        MAX_RADIO_LINE_BYTES
+    )]
+    LineTooLong {
+        /// The line's length, its newline included.
+        bytes: usize,
+    },
+    /// A line is not a whole version-1 sample.
+    #[error("a radio history line is not a radio sample")]
+    Undecodable,
+    /// A line names another sample version.
+    #[error(
+        "a radio history line names sample version {version}; this build reads version {}",
+        RADIO_SAMPLE_VERSION
+    )]
+    UnsupportedVersion {
+        /// The version found.
+        version: u32,
+    },
+    /// A document names another version.
+    #[error(
+        "a radio history document names version {found}; this build reads version {}",
+        RADIO_HISTORY_VERSION
+    )]
+    UnsupportedDocumentVersion {
+        /// The version found.
+        found: u32,
+    },
+    /// A document's events are not the ones its samples show.
+    #[error("a radio history document's events do not follow from its samples")]
+    EventsMismatch,
+    /// The value could not be written as JSON.
+    #[error("a radio sample or history could not be written as JSON")]
+    Unencodable,
+}
+
+kinds! {
+    /// The kind of a [`RadioHistoryError`].
+    pub enum RadioHistoryErrorKind {
+        /// See [`RadioHistoryError::LineTooLong`].
+        LineTooLong,
+        /// See [`RadioHistoryError::Undecodable`].
+        Undecodable,
+        /// See [`RadioHistoryError::UnsupportedVersion`].
+        UnsupportedVersion,
+        /// See [`RadioHistoryError::UnsupportedDocumentVersion`].
+        UnsupportedDocumentVersion,
+        /// See [`RadioHistoryError::EventsMismatch`].
+        EventsMismatch,
+        /// See [`RadioHistoryError::Unencodable`].
+        Unencodable,
+    }
+}
+
+impl RadioHistoryError {
+    /// The kind of this error.
+    #[must_use]
+    pub const fn kind(&self) -> RadioHistoryErrorKind {
+        match self {
+            Self::LineTooLong { .. } => RadioHistoryErrorKind::LineTooLong,
+            Self::Undecodable => RadioHistoryErrorKind::Undecodable,
+            Self::UnsupportedVersion { .. } => RadioHistoryErrorKind::UnsupportedVersion,
+            Self::UnsupportedDocumentVersion { .. } => {
+                RadioHistoryErrorKind::UnsupportedDocumentVersion
+            }
+            Self::EventsMismatch => RadioHistoryErrorKind::EventsMismatch,
+            Self::Unencodable => RadioHistoryErrorKind::Unencodable,
         }
     }
 }
