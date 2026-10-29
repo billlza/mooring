@@ -643,6 +643,7 @@ dependencies = [
 name = "mooring-macsys"
 version = "0.1.0"
 dependencies = [
+ "core-foundation",
  "libc",
 ]
 

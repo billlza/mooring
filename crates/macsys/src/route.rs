@@ -106,22 +106,27 @@ pub(crate) fn dump(mib: Mib) -> Result<Vec<u8>, MacsysError> {
     Err(MacsysError::TableChanged)
 }
 
-/// One IPv4 default route through a gateway. Crate-private, like the
-/// whole-table reads: callers ask the questions [`default_gateway_v4`] and
-/// [`neighbour_v4`] answer, so no caller can skip their interface filter
-/// and ambiguity rules (design §15.6 rule 4).
+/// One IPv4 default route through a gateway. The M7's identity is still
+/// asked through [`default_gateway_v4`] and [`neighbour_v4`], which keep
+/// their interface filter and ambiguity rules (design §15.6 rule 4); the
+/// list itself is public for the network check (design §10.2), which judges
+/// every unscoped default route by the interface it leaves through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct DefaultRoute {
+pub struct DefaultRoute {
     /// The interface it leaves through (`rtm_index`).
-    pub(crate) interface_index: u32,
+    pub interface_index: u32,
     /// Its gateway.
-    pub(crate) gateway: Ipv4Addr,
+    pub gateway: Ipv4Addr,
+    /// Whether the route is scoped to its interface (`RTF_IFSCOPE`): how
+    /// macOS keeps a default route per interface beside the one unscoped
+    /// default that carries unbound traffic.
+    pub scoped: bool,
 }
 
 /// Every IPv4 default route through a gateway, scoped (`RTF_IFSCOPE`) and
 /// unscoped: an up gateway route (`RTF_UP | RTF_GATEWAY`) to `0.0.0.0`,
 /// with no netmask or an all-zero one, whose gateway is an IPv4 address.
-pub(crate) fn default_routes_v4() -> Result<Vec<DefaultRoute>, MacsysError> {
+pub fn default_routes_v4() -> Result<Vec<DefaultRoute>, MacsysError> {
     default_routes_in(&dump(ROUTE_DUMP)?)
 }
 
@@ -143,6 +148,7 @@ fn default_route(message: &RouteMessage<'_>) -> Option<DefaultRoute> {
     Some(DefaultRoute {
         interface_index: u32::from(message.index),
         gateway: message.addresses[GATEWAY]?.inet()?,
+        scoped: message.has_flags(libc::RTF_IFSCOPE),
     })
 }
 

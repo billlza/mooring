@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use crate::error::{
-    MacsysError, MacsysErrorKind, ProcessCall, RlimitCall, RouteFault, TerminalCall,
+    ConfigdFault, MacsysError, MacsysErrorKind, ProcessCall, RlimitCall, RouteFault, TerminalCall,
 };
 
 #[test]
@@ -108,6 +108,13 @@ fn every_macsys_error_has_its_kind() {
             MacsysErrorKind::Process,
             "proc_pidpath failed with errno 3",
         ),
+        (
+            MacsysError::Configd {
+                fault: ConfigdFault::StoreUnavailable,
+            },
+            MacsysErrorKind::Configd,
+            "the system configuration store could not be opened",
+        ),
     ];
     let kinds: BTreeSet<MacsysErrorKind> = cases.iter().map(|(_, kind, _)| *kind).collect();
     assert_eq!(kinds.len(), cases.len(), "two errors share a kind");
@@ -176,4 +183,38 @@ fn route_faults_and_calls_are_named() {
     assert_eq!(ProcessCall::Kill.to_string(), "kill");
     assert_eq!(ProcessCall::KillGroup.to_string(), "killpg");
     assert_eq!(ProcessCall::Dup2.to_string(), "dup2");
+    for (fault, text) in [
+        (ConfigdFault::StoreUnavailable, "could not be opened"),
+        (ConfigdFault::KeyListUnavailable, "did not list its keys"),
+        (
+            ConfigdFault::UnexpectedKey,
+            "listed a key that is not an IPv4 service key",
+        ),
+        (
+            ConfigdFault::NotADictionary,
+            "holds a service value that is not a dictionary",
+        ),
+        (
+            ConfigdFault::NotAString,
+            "holds a key or text value that is not a string",
+        ),
+        (
+            ConfigdFault::InterfaceNameMissing,
+            "lists a service without an interface name",
+        ),
+        (
+            ConfigdFault::Router,
+            "gives a router that is not an IPv4 address",
+        ),
+        (
+            ConfigdFault::HardwareAddress,
+            "gives a router link-layer address that is not six hexadecimal octets",
+        ),
+    ] {
+        assert_eq!(fault.to_string(), text);
+        assert_eq!(
+            MacsysError::Configd { fault }.to_string(),
+            format!("the system configuration store {text}")
+        );
+    }
 }

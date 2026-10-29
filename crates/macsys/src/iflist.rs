@@ -3,7 +3,7 @@
 //! The kernel's interface list, read with PF_ROUTE `sysctl`
 //! `NET_RT_IFLIST2` (the source `ifconfig` and `netstat -I -b` read):
 //! each interface's name, link-layer address, flags, MTU and 64-bit byte
-//! counters (`if_data64`), and its IPv4 addresses.
+//! counters (`if_data64`), and its IPv4 and IPv6 addresses.
 //!
 //! The dump is one `RTM_IFINFO2` message (`if_msghdr2`, then its `AF_LINK`
 //! socket address) per interface, each followed by one `RTM_NEWADDR`
@@ -13,7 +13,7 @@
 //! refused rather than skipped.
 
 use std::mem::{offset_of, size_of};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU32;
 
 use crate::error::{MacsysError, RouteFault};
@@ -81,6 +81,9 @@ pub struct Interface {
     pub baudrate: u64,
     /// Its IPv4 addresses, in the kernel's order.
     pub ipv4: Vec<InterfaceAddrV4>,
+    /// Its IPv6 addresses, in the kernel's order, link-local ones without
+    /// the scope the kernel embeds in them.
+    pub ipv6: Vec<Ipv6Addr>,
 }
 
 /// One IPv4 address of an interface.
@@ -161,8 +164,10 @@ fn parse_list(table: &[u8]) -> Result<Vec<Interface>, RouteFault> {
                     .iter_mut()
                     .find(|interface| u32::from(index) == interface.index.get())
                     .ok_or(RouteFault::UnknownInterface)?;
-                if let Some(addr) = addr {
-                    owner.ipv4.push(addr);
+                match addr {
+                    NewAddr::V4(addr) => owner.ipv4.push(addr),
+                    NewAddr::V6(addr) => owner.ipv6.push(addr),
+                    NewAddr::Other => {}
                 }
             }
             libc::RTM_NEWMADDR2 => {}
@@ -212,6 +217,7 @@ fn parse_ifinfo(message: &[u8]) -> Result<Interface, RouteFault> {
         obytes: u64_at(message, IFI_OBYTES_AT),
         baudrate: u64_at(message, IFI_BAUDRATE_AT),
         ipv4: Vec::new(),
+        ipv6: Vec::new(),
     })
 }
 
@@ -232,19 +238,32 @@ fn link_name(link: Sockaddr<'_>) -> Result<String, RouteFault> {
     }
 }
 
+/// The address an `RTM_NEWADDR` message gives.
+enum NewAddr {
+    /// An IPv4 address with its netmask.
+    V4(InterfaceAddrV4),
+    /// An IPv6 address.
+    V6(Ipv6Addr),
+    /// An address of another family, or none.
+    Other,
+}
+
 /// One `RTM_NEWADDR` message: its interface index, and its address when
-/// that is IPv4.
-fn parse_newaddr(message: &[u8]) -> Result<(u16, Option<InterfaceAddrV4>), RouteFault> {
+/// that is IPv4 or IPv6.
+fn parse_newaddr(message: &[u8]) -> Result<(u16, NewAddr), RouteFault> {
     if message.len() < IFAM_HEADER_LEN {
         return Err(RouteFault::ShortHeader);
     }
     let addresses = parse_sockaddrs(i32_at(message, IFAM_ADDRS_AT), &message[IFAM_HEADER_LEN..])?;
     let index = u16_at(message, IFAM_INDEX_AT);
-    let Some(addr) = addresses[IFA].and_then(|ifa| ifa.inet()) else {
-        return Ok((index, None));
+    let Some(ifa) = addresses[IFA] else {
+        return Ok((index, NewAddr::Other));
     };
-    let prefix_len = addresses[NETMASK].map(prefix_of).transpose()?;
-    Ok((index, Some(InterfaceAddrV4 { addr, prefix_len })))
+    if let Some(addr) = ifa.inet() {
+        let prefix_len = addresses[NETMASK].map(prefix_of).transpose()?;
+        return Ok((index, NewAddr::V4(InterfaceAddrV4 { addr, prefix_len })));
+    }
+    Ok((index, ifa.inet6().map_or(NewAddr::Other, NewAddr::V6)))
 }
 
 /// The prefix length of a netmask as the kernel trims it: the mask bytes

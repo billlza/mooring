@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The crate's typed errors (design §14). Written by hand: the crate has no
-//! dependency but libc, so neither `thiserror` nor the model's `kinds!`.
+//! workspace dependency, so neither `thiserror` nor the model's `kinds!`.
 
 use std::fmt;
 
@@ -80,6 +80,11 @@ pub enum MacsysError {
         /// The `errno` value.
         errno: i32,
     },
+    /// configd's dynamic store did not give the IPv4 services.
+    Configd {
+        /// What failed.
+        fault: ConfigdFault,
+    },
 }
 
 impl fmt::Display for MacsysError {
@@ -128,11 +133,51 @@ impl fmt::Display for MacsysError {
                 f.write_str("the kernel's boot time is not one time at or after the epoch")
             }
             Self::Process { call, errno } => write!(f, "{call} failed with errno {errno}"),
+            Self::Configd { fault } => write!(f, "the system configuration store {fault}"),
         }
     }
 }
 
 impl std::error::Error for MacsysError {}
+
+/// How configd's dynamic store failed to give the IPv4 services
+/// ([`MacsysError::Configd`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConfigdFault {
+    /// `SCDynamicStoreCreate` returned no session.
+    StoreUnavailable,
+    /// `SCDynamicStoreCopyKeyList` returned no list.
+    KeyListUnavailable,
+    /// A listed key is not an IPv4 service key.
+    UnexpectedKey,
+    /// A service's value is not a dictionary.
+    NotADictionary,
+    /// A key, or a value read as text, is not a string.
+    NotAString,
+    /// A service names no interface.
+    InterfaceNameMissing,
+    /// A service's router is not an IPv4 address.
+    Router,
+    /// A router's link-layer address is not six hexadecimal octets.
+    HardwareAddress,
+}
+
+impl fmt::Display for ConfigdFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::StoreUnavailable => "could not be opened",
+            Self::KeyListUnavailable => "did not list its keys",
+            Self::UnexpectedKey => "listed a key that is not an IPv4 service key",
+            Self::NotADictionary => "holds a service value that is not a dictionary",
+            Self::NotAString => "holds a key or text value that is not a string",
+            Self::InterfaceNameMissing => "lists a service without an interface name",
+            Self::Router => "gives a router that is not an IPv4 address",
+            Self::HardwareAddress => {
+                "gives a router link-layer address that is not six hexadecimal octets"
+            }
+        })
+    }
+}
 
 /// The kind of a [`MacsysError`], without its details.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -171,6 +216,8 @@ pub enum MacsysErrorKind {
     BootTimeInvalid,
     /// See [`MacsysError::Process`].
     Process,
+    /// See [`MacsysError::Configd`].
+    Configd,
 }
 
 impl MacsysErrorKind {
@@ -193,6 +240,7 @@ impl MacsysErrorKind {
         Self::Terminal,
         Self::BootTimeInvalid,
         Self::Process,
+        Self::Configd,
     ];
 
     /// The stable name of this kind: its variant identifier.
@@ -216,6 +264,7 @@ impl MacsysErrorKind {
             Self::Terminal => "Terminal",
             Self::BootTimeInvalid => "BootTimeInvalid",
             Self::Process => "Process",
+            Self::Configd => "Configd",
         }
     }
 }
@@ -248,6 +297,7 @@ impl MacsysError {
             Self::Terminal { .. } => MacsysErrorKind::Terminal,
             Self::BootTimeInvalid => MacsysErrorKind::BootTimeInvalid,
             Self::Process { .. } => MacsysErrorKind::Process,
+            Self::Configd { .. } => MacsysErrorKind::Configd,
         }
     }
 }

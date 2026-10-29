@@ -90,10 +90,12 @@ libc = "0.2.189"
 # mooringctl only: the legacy login keychain (SecItem generic passwords).
 # The default features only raise the minimum macOS and TLS versions.
 security-framework = { version = "3.7.0", default-features = false }
-# mooringctl only: the `CFData` that security-framework's item add and update
+# mooringctl: the `CFData` that security-framework's item add and update
 # take, so `set-password` can replace an item whatever its label (its
-# password helper searches by the label too). Already in the graph as
-# security-framework's own dependency, at the same version and features.
+# password helper searches by the label too); macsys: the typed wrappers
+# that own the objects configd's dynamic store returns (crates/macsys/
+# src/configd.rs). Already in the graph as security-framework's own
+# dependency, at the same version and features.
 core-foundation = "0.10.1"
 # mooringctl and fieldkit: `all` provides bind_device_by_index_v4
 # (IP_BOUND_IF) on macOS, which binds the router client and the field

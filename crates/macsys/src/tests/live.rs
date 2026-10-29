@@ -69,8 +69,8 @@ fn the_routing_and_arp_tables_parse() {
 }
 
 /// `netstat -rn -f inet`'s up IPv4 default routes through an IPv4
-/// gateway, as (interface index, gateway).
-fn netstat_default_routes() -> BTreeSet<(u32, Ipv4Addr)> {
+/// gateway, as (interface index, gateway, scoped), `I` being `RTF_IFSCOPE`.
+fn netstat_default_routes() -> BTreeSet<(u32, Ipv4Addr, bool)> {
     run("/usr/sbin/netstat", &["-rn", "-f", "inet"])
         .lines()
         .filter_map(|line| {
@@ -82,16 +82,20 @@ fn netstat_default_routes() -> BTreeSet<(u32, Ipv4Addr)> {
                 return None;
             }
             let gateway: Ipv4Addr = gateway.parse().ok()?;
-            Some((interface_index(netif).unwrap().get(), gateway))
+            Some((
+                interface_index(netif).unwrap().get(),
+                gateway,
+                flags.contains('I'),
+            ))
         })
         .collect()
 }
 
-fn macsys_default_routes() -> BTreeSet<(u32, Ipv4Addr)> {
+fn macsys_default_routes() -> BTreeSet<(u32, Ipv4Addr, bool)> {
     default_routes_v4()
         .unwrap()
         .into_iter()
-        .map(|route| (route.interface_index, route.gateway))
+        .map(|route| (route.interface_index, route.gateway, route.scoped))
         .collect()
 }
 

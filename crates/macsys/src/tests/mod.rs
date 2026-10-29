@@ -6,6 +6,7 @@
 //! echo guard on a pseudo-terminal. None needs root, and none sends a
 //! packet except one datagram on lo0, to see its counter move.
 
+mod configd;
 mod errors;
 mod iflist;
 mod limits;

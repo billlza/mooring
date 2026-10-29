@@ -129,6 +129,14 @@ fn route(interface_index: u32, gateway: [u8; 4]) -> DefaultRoute {
     DefaultRoute {
         interface_index,
         gateway: Ipv4Addr::from(gateway),
+        scoped: false,
+    }
+}
+
+fn scoped_route(interface_index: u32, gateway: [u8; 4]) -> DefaultRoute {
+    DefaultRoute {
+        scoped: true,
+        ..route(interface_index, gateway)
     }
 }
 
@@ -187,7 +195,7 @@ fn a_default_route_message_yields_its_gateway() {
     );
     assert_eq!(
         default_routes_in(&scoped).unwrap(),
-        [route(9, [192, 0, 2, 7])]
+        [scoped_route(9, [192, 0, 2, 7])]
     );
     // So does a default route with no netmask at all.
     let bare = message(
@@ -285,7 +293,10 @@ fn two_default_gateways_on_one_interface_are_ambiguous() {
         UP_GATEWAY | libc::RTF_IFSCOPE,
     ));
     let routes = default_routes_in(&twice).unwrap();
-    assert_eq!(routes.len(), 2);
+    assert_eq!(
+        routes,
+        [route(9, [192, 0, 2, 1]), scoped_route(9, [192, 0, 2, 1])]
+    );
     assert_eq!(
         gateway_on(&routes, index(9)),
         Ok(Ipv4Addr::new(192, 0, 2, 1))

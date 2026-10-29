@@ -3,12 +3,12 @@
 //! The interface list: `NET_RT_IFLIST2` dumps built byte by byte, as the
 //! kernel lays them out (an `if_msghdr2` or `ifa_msghdr`, then each present
 //! socket address rounded up to four bytes), and the live list of this Mac
-//! checked against `ifconfig`. Failure messages give names, counts and
-//! IPv4 addresses, never a link-layer address.
+//! checked against `ifconfig`. Failure messages give names, counts and IP
+//! addresses, never a link-layer address.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::{offset_of, size_of};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU32;
 use std::process::Command;
 
@@ -200,13 +200,26 @@ fn inet(addr: [u8; 4]) -> Vec<u8> {
     sockaddr
 }
 
-fn inet6() -> Vec<u8> {
+/// A `sockaddr_in6` holding `octets` as the kernel writes them (a
+/// link-local address keeps its scope embedded in octets 2 and 3).
+fn inet6(octets: [u8; 16]) -> Vec<u8> {
     let mut sockaddr = vec![0_u8; 28];
     sockaddr[0] = 28;
     sockaddr[1] = u8::try_from(libc::AF_INET6).unwrap();
-    sockaddr[8] = 0xfe;
-    sockaddr[9] = 0x80;
+    sockaddr[8..24].copy_from_slice(&octets);
     sockaddr
+}
+
+/// `text` with the scope `scope` embedded, as the kernel keeps a link-local
+/// address.
+fn embedded(text: &str, scope: u16) -> [u8; 16] {
+    let mut octets = text.parse::<Ipv6Addr>().unwrap().octets();
+    octets[2..4].copy_from_slice(&scope.to_be_bytes());
+    octets
+}
+
+fn v6(text: &str) -> Ipv6Addr {
+    text.parse().unwrap()
 }
 
 fn netmask(len: u8, mask: &[u8]) -> Vec<u8> {
@@ -249,11 +262,15 @@ fn malformed(table: &[u8]) -> Option<RouteFault> {
 }
 
 #[test]
-fn a_list_gives_each_interface_with_its_ipv4_addresses() {
+fn a_list_gives_each_interface_with_its_ipv4_and_ipv6_addresses() {
     let table = [
         ifinfo(&LO0, link(LO0.index, b"lo0", &[])),
         newaddr(LO0.index, [127, 0, 0, 1], 5, &[255]),
-        addr_message(libc::RTM_NEWADDR, LO0.index, &[(IFA, inet6())]),
+        addr_message(
+            libc::RTM_NEWADDR,
+            LO0.index,
+            &[(IFA, inet6(embedded("fe80::1", LO0.index)))],
+        ),
         addr_message(
             libc::RTM_NEWMADDR2,
             LO0.index,
@@ -261,7 +278,17 @@ fn a_list_gives_each_interface_with_its_ipv4_addresses() {
         ),
         en9_message(),
         newaddr(EN9.index, [192, 168, 1, 60], 7, &[255, 255, 255]),
+        addr_message(
+            libc::RTM_NEWADDR,
+            EN9.index,
+            &[(IFA, inet6(v6("2001:2:0:64::1").octets()))],
+        ),
         newaddr(EN9.index, [10, 0, 0, 2], 8, &[255, 255, 255, 252]),
+        addr_message(
+            libc::RTM_NEWADDR,
+            EN9.index,
+            &[(IFA, inet6(embedded("fe80::abcd", EN9.index)))],
+        ),
     ]
     .concat();
     let list = interfaces_in(&table).unwrap();
@@ -283,6 +310,7 @@ fn a_list_gives_each_interface_with_its_ipv4_addresses() {
                     addr: Ipv4Addr::LOCALHOST,
                     prefix_len: Some(8),
                 }],
+                ipv6: vec![v6("fe80::1")],
             },
             Interface {
                 index: NonZeroU32::new(21).unwrap(),
@@ -305,9 +333,77 @@ fn a_list_gives_each_interface_with_its_ipv4_addresses() {
                         prefix_len: Some(30),
                     },
                 ],
+                ipv6: vec![v6("2001:2:0:64::1"), v6("fe80::abcd")],
             },
         ]
     );
+}
+
+/// The kernel embeds a link-local address's scope in its third and fourth
+/// octets; the list clears them, as `getifaddrs` does, whatever the scope
+/// says, and leaves every other address as given. A socket address too
+/// short for an IPv6 address, or of another family, gives no address.
+#[test]
+fn ipv6_addresses_lose_the_embedded_scope_of_link_local_ones() {
+    // 20 bytes hold only 12 of the address's 16 (a `sockaddr_in6` is 28,
+    // the address ending at 24).
+    let short = {
+        let mut sockaddr = inet6(embedded("fe80::9", EN9.index));
+        sockaddr.truncate(20);
+        sockaddr[0] = 20;
+        sockaddr
+    };
+    let appletalk = {
+        let mut sockaddr = inet6(v6("2001:db8::1").octets());
+        sockaddr[1] = 16;
+        sockaddr
+    };
+    let table = [
+        en9_message(),
+        addr_message(
+            libc::RTM_NEWADDR,
+            EN9.index,
+            &[(IFA, inet6(embedded("fe80::1", EN9.index)))],
+        ),
+        addr_message(
+            libc::RTM_NEWADDR,
+            EN9.index,
+            &[(IFA, inet6(embedded("fe80::2", 4)))],
+        ),
+        addr_message(
+            libc::RTM_NEWADDR,
+            EN9.index,
+            &[(IFA, inet6(embedded("fec0::3", EN9.index)))],
+        ),
+        addr_message(
+            libc::RTM_NEWADDR,
+            EN9.index,
+            &[(IFA, inet6(v6("2001:2:0:64::1").octets()))],
+        ),
+        addr_message(
+            libc::RTM_NEWADDR,
+            EN9.index,
+            &[(IFA, inet6(embedded("ff02::1", EN9.index)))],
+        ),
+        addr_message(libc::RTM_NEWADDR, EN9.index, &[(IFA, short)]),
+        addr_message(libc::RTM_NEWADDR, EN9.index, &[(IFA, appletalk)]),
+    ]
+    .concat();
+    let list = interfaces_in(&table).unwrap();
+    let [en9] = list.as_slice() else {
+        panic!("one interface expected, got {}", list.len());
+    };
+    assert_eq!(
+        en9.ipv6,
+        vec![
+            v6("fe80::1"),
+            v6("fe80::2"),
+            v6("fec0:15::3"),
+            v6("2001:2:0:64::1"),
+            v6("ff02:15::1"),
+        ]
+    );
+    assert!(en9.ipv4.is_empty());
 }
 
 #[test]
@@ -461,9 +557,12 @@ fn ifconfig(args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-/// Each interface `ifconfig` lists, with its `ether` address and IPv4
-/// addresses.
-fn ifconfig_interfaces() -> BTreeMap<String, (Option<[u8; 6]>, BTreeSet<Ipv4Addr>)> {
+/// Each interface `ifconfig` lists, with its `ether` address and IPv4 and
+/// IPv6 addresses (`inet6 fe80::1%lo0 …`, the zone after `%` dropped).
+type IfconfigInterfaces =
+    BTreeMap<String, (Option<[u8; 6]>, BTreeSet<Ipv4Addr>, BTreeSet<Ipv6Addr>)>;
+
+fn ifconfig_interfaces() -> IfconfigInterfaces {
     let mut found = BTreeMap::new();
     for name in ifconfig(&["-l"]).split_whitespace() {
         let text = ifconfig(&[name]);
@@ -485,7 +584,15 @@ fn ifconfig_interfaces() -> BTreeMap<String, (Option<[u8; 6]>, BTreeSet<Ipv4Addr
             .filter_map(|line| line.trim().strip_prefix("inet "))
             .filter_map(|rest| rest.split_whitespace().next()?.parse().ok())
             .collect();
-        found.insert(name.to_owned(), (ether, ipv4));
+        let ipv6 = text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("inet6 "))
+            .filter_map(|rest| {
+                let address = rest.split_whitespace().next()?;
+                address.split('%').next()?.parse().ok()
+            })
+            .collect();
+        found.insert(name.to_owned(), (ether, ipv4, ipv6));
     }
     found
 }
@@ -504,7 +611,7 @@ fn the_live_list_matches_ifconfig() {
         "interface names"
     );
     for interface in &list {
-        let (ether, ipv4) = &expected[&interface.name];
+        let (ether, ipv4, ipv6) = &expected[&interface.name];
         assert_eq!(
             interface.index,
             interface_index(&interface.name).unwrap(),
@@ -526,6 +633,12 @@ fn the_live_list_matches_ifconfig() {
                 .collect::<BTreeSet<_>>(),
             ipv4,
             "{}: IPv4 addresses",
+            interface.name
+        );
+        assert_eq!(
+            &interface.ipv6.iter().copied().collect::<BTreeSet<_>>(),
+            ipv6,
+            "{}: IPv6 addresses",
             interface.name
         );
     }

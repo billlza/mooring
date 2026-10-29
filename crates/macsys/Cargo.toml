@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [package]
 name = "mooring-macsys"
-description = "macOS kernel interfaces for Mooring: interface index and list, default gateway, neighbour table, open-files limit, terminal echo"
+description = "macOS kernel and configd interfaces for Mooring: interface index and list, default routes and gateway, neighbour table, configd's IPv4 services, open-files limit, terminal echo"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -37,3 +37,7 @@ multiple_unsafe_ops_per_block = "deny"
 # builds on the ubuntu L0 lane.
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
+# configd's dynamic store (`SCDynamicStore`, src/configd.rs): the typed
+# CoreFoundation wrappers own and release every object the three
+# SystemConfiguration calls return, so no hand-written release remains.
+core-foundation.workspace = true
