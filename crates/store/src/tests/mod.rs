@@ -10,6 +10,7 @@ use std::path::Path;
 
 use crate::store::Store;
 
+mod allowed_networks;
 mod builders;
 mod cas;
 mod concurrency;

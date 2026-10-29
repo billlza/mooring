@@ -26,6 +26,12 @@ use crate::verdict::UplinkAddress;
 pub struct MacAddr([u8; 6]);
 
 impl MacAddr {
+    /// The placeholder iOS reports to apps in place of a device's real
+    /// address. It is unicast in form but identifies no device, so it never
+    /// matches a pin (design §15.6 rule 4) and never identifies a router
+    /// ([`RouterIdentity`]); no macOS has been seen to report it.
+    pub const PRIVACY_PLACEHOLDER: Self = Self([0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
+
     /// Accepts six bytes forming a non-zero unicast address.
     pub fn from_bytes(bytes: [u8; 6]) -> Result<Self, ModelError> {
         if bytes == [0; 6] || bytes[0] & 0x01 == 0x01 {
@@ -394,6 +400,79 @@ pub struct EgressIdentity {
     pub lladdr: MacAddr,
 }
 
+/// A network's identity for the own-network declaration (design §10.2,
+/// P0-2): its IPv4 router and that router's link-layer address, as configd
+/// resolves and publishes them. The SSID is hidden from the daemon, so a
+/// network is identified the way the M7 is: by the device that routes it.
+///
+/// The link-layer address is never [`MacAddr::PRIVACY_PLACEHOLDER`]: it
+/// identifies no device, so an identity holding it would match any router
+/// reported with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "RouterIdentityDocument", into = "RouterIdentityDocument")]
+pub struct RouterIdentity {
+    addr: Ipv4Addr,
+    lladdr: MacAddr,
+}
+
+impl RouterIdentity {
+    /// The identity of the router at `addr` with the link-layer address
+    /// `lladdr`; `PlaceholderMacAddr` for the privacy placeholder.
+    pub fn new(addr: Ipv4Addr, lladdr: MacAddr) -> Result<Self, ModelError> {
+        if lladdr == MacAddr::PRIVACY_PLACEHOLDER {
+            return Err(ModelError::PlaceholderMacAddr);
+        }
+        Ok(Self { addr, lladdr })
+    }
+
+    /// The identity of a router observed at `addr` with the six bytes
+    /// `lladdr`, or `None` when the bytes identify no device: all zero, a
+    /// group address, or the privacy placeholder.
+    #[must_use]
+    pub fn from_observation(addr: Ipv4Addr, lladdr: [u8; 6]) -> Option<Self> {
+        let lladdr = MacAddr::from_bytes(lladdr).ok()?;
+        Self::new(addr, lladdr).ok()
+    }
+
+    /// The router's IPv4 address.
+    #[must_use]
+    pub const fn addr(&self) -> Ipv4Addr {
+        self.addr
+    }
+
+    /// The router's link-layer address.
+    #[must_use]
+    pub const fn lladdr(&self) -> MacAddr {
+        self.lladdr
+    }
+}
+
+/// The identity as a document holds it:
+/// `{"addr": "172.20.10.1", "lladdr": "aa:bb:cc:dd:ee:ff"}`.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouterIdentityDocument {
+    addr: Ipv4Addr,
+    lladdr: MacAddr,
+}
+
+impl TryFrom<RouterIdentityDocument> for RouterIdentity {
+    type Error = ModelError;
+
+    fn try_from(document: RouterIdentityDocument) -> Result<Self, Self::Error> {
+        Self::new(document.addr, document.lladdr)
+    }
+}
+
+impl From<RouterIdentity> for RouterIdentityDocument {
+    fn from(identity: RouterIdentity) -> Self {
+        Self {
+            addr: identity.addr,
+            lladdr: identity.lladdr,
+        }
+    }
+}
+
 /// The resolved tunnel uplink.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -577,6 +656,51 @@ mod tests {
             assert_eq!(
                 MacAddr::parse(bad),
                 Err(ModelError::InvalidMacAddr),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_router_identity_is_a_device_never_the_placeholder() {
+        let addr = Ipv4Addr::new(172, 20, 10, 1);
+        let lladdr = MacAddr::parse("44:64:3c:7b:d4:bf").unwrap();
+        let identity = RouterIdentity::new(addr, lladdr).unwrap();
+        assert_eq!((identity.addr(), identity.lladdr()), (addr, lladdr));
+        assert_eq!(
+            RouterIdentity::new(addr, MacAddr::PRIVACY_PLACEHOLDER),
+            Err(ModelError::PlaceholderMacAddr)
+        );
+        assert_eq!(
+            RouterIdentity::from_observation(addr, [0x44, 0x64, 0x3c, 0x7b, 0xd4, 0xbf]),
+            Some(identity)
+        );
+        for unusable in [
+            [0; 6],
+            [0x01, 0x00, 0x5e, 0x00, 0x00, 0x01],
+            [0xff; 6],
+            MacAddr::PRIVACY_PLACEHOLDER.octets(),
+        ] {
+            assert_eq!(
+                RouterIdentity::from_observation(addr, unusable),
+                None,
+                "{unusable:?}"
+            );
+        }
+        let json = r#"{"addr":"172.20.10.1","lladdr":"44:64:3c:7b:d4:bf"}"#;
+        assert_eq!(serde_json::to_string(&identity).unwrap(), json);
+        assert_eq!(
+            serde_json::from_str::<RouterIdentity>(json).unwrap(),
+            identity
+        );
+        for bad in [
+            r#"{"addr":"172.20.10.1","lladdr":"02:00:00:00:00:00"}"#,
+            r#"{"addr":"172.20.10.1","lladdr":"01:00:5e:00:00:01"}"#,
+            r#"{"addr":"172.20.10.1","lladdr":"44:64:3c:7b:d4:bf","ssid":"x"}"#,
+            r#"{"addr":"172.20.10.1"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<RouterIdentity>(bad).is_err(),
                 "{bad}"
             );
         }

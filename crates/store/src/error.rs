@@ -14,6 +14,7 @@ use mooring_model::ids::{NodeId, UserId};
 use mooring_model::secret::SecretRef;
 use mooring_model::user::UserStatus;
 
+use crate::allowed_networks::AllowedNetworksFault;
 use crate::router_pin::RouterPinFault;
 use crate::secrets::SecretStoreError;
 use mooring_model::kinds;
@@ -43,6 +44,8 @@ pub enum IoOp {
     SyncDir,
     /// Opening or reading the router identity file.
     ReadRouterPin,
+    /// Opening or reading the allowed-networks file.
+    ReadAllowedNetworks,
     /// Opening or reading the exit's latch.
     ReadLatch,
     /// Removing the exit's latch.
@@ -67,6 +70,7 @@ impl fmt::Display for IoOp {
             Self::OpenDir => "open the store directory",
             Self::SyncDir => "sync the store directory",
             Self::ReadRouterPin => "read the router identity file",
+            Self::ReadAllowedNetworks => "read the allowed-networks file",
             Self::ReadLatch => "read the exit's latch",
             Self::RemoveLatch => "remove the exit's latch",
             Self::ReadSimMeter => "read the SIM meter",
@@ -292,6 +296,16 @@ pub enum StoreError {
         /// What is wrong with it.
         fault: RouterPinFault,
     },
+    /// The allowed-networks file (`allowed-networks.json`) exists but is
+    /// not a version-1 declaration document; nothing was read from it, and
+    /// the daemon treats the declarations as none (fail closed).
+    #[error("allowed-networks file {} is corrupt: {fault}", path.display())]
+    AllowedNetworksCorrupt {
+        /// The allowed-networks file.
+        path: PathBuf,
+        /// What is wrong with it.
+        fault: AllowedNetworksFault,
+    },
     /// The state **was committed**, but deleting secrets it no longer
     /// references failed; those secrets are orphaned (`doctor` lists them).
     #[error(
@@ -351,6 +365,8 @@ kinds! {
         SecretCleanup,
         /// See [`StoreError::RouterPinCorrupt`].
         RouterPinCorrupt,
+        /// See [`StoreError::AllowedNetworksCorrupt`].
+        AllowedNetworksCorrupt,
         /// See [`StoreError::LatchCorrupt`].
         LatchCorrupt,
         /// See [`StoreError::UsageDirNotDirectory`].
@@ -384,6 +400,7 @@ impl StoreError {
             Self::SecretWrite { .. } => StoreErrorKind::SecretWrite,
             Self::SecretCleanup { .. } => StoreErrorKind::SecretCleanup,
             Self::RouterPinCorrupt { .. } => StoreErrorKind::RouterPinCorrupt,
+            Self::AllowedNetworksCorrupt { .. } => StoreErrorKind::AllowedNetworksCorrupt,
             Self::LatchCorrupt { .. } => StoreErrorKind::LatchCorrupt,
             Self::UsageDirNotDirectory { .. } => StoreErrorKind::UsageDirNotDirectory,
         }

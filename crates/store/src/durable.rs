@@ -4,7 +4,7 @@
 //! temp file → fsync → rename → directory fsync write.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -69,6 +69,39 @@ pub(crate) fn state_exists(path: &Path) -> Result<bool, StoreError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(io_error(IoOp::InspectState, path)(error)),
     }
+}
+
+/// What a bounded read of an optional document found.
+#[derive(Debug)]
+pub(crate) enum Bounded {
+    /// There is no file.
+    Absent,
+    /// The file holds more than the bound; none of it is returned.
+    TooLarge,
+    /// The whole file, within the bound.
+    Document(Vec<u8>),
+}
+
+/// Reads the optional document at `path` with the bound `max`: `Absent`
+/// when the file does not exist, `TooLarge` when it holds more than `max`
+/// bytes (one byte past the bound is read, so an oversized file is detected
+/// without reading it all), the bytes otherwise. Any other failure is
+/// `Io{op}`.
+pub(crate) fn read_bounded(path: &Path, max: usize, op: IoOp) -> Result<Bounded, StoreError> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Bounded::Absent),
+        Err(error) => return Err(io_error(op, path)(error)),
+    };
+    // usize to u64 is lossless on every target.
+    let mut bytes = Vec::with_capacity(max + 1);
+    file.take(max as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_error(op, path))?;
+    if bytes.len() > max {
+        return Ok(Bounded::TooLarge);
+    }
+    Ok(Bounded::Document(bytes))
 }
 
 /// Reads the state file; `NotInitialized` if it does not exist.

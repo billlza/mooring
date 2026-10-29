@@ -40,6 +40,15 @@
 //! lock), and [`read_router_pin`] reads it back, a version-1 file without
 //! the interface too (design §15.6 rule 4, §5.1).
 //!
+//! # The own networks
+//!
+//! Beside the state too, [`declare_allowed_network`] and
+//! [`revoke_allowed_network`] keep the operator's own-network declarations
+//! (design §10.2, P0-2) in `allowed-networks.json`, each a read-modify-write
+//! under the same lock with the same durable write, and
+//! [`read_allowed_networks`] reads them back without the lock, as the daemon
+//! does every tick; an absent file is no declaration.
+//!
 //! # The status snapshot
 //!
 //! [`write_status_snapshot`] replaces `status.json`, the daemon's copy of
@@ -66,6 +75,7 @@
 
 #![deny(missing_docs)]
 
+mod allowed_networks;
 mod durable;
 mod error;
 mod latch;
@@ -79,6 +89,10 @@ mod store;
 #[cfg(test)]
 mod tests;
 
+pub use allowed_networks::{
+    ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
+    declare_allowed_network, read_allowed_networks, revoke_allowed_network,
+};
 pub use error::{ChangeError, ChangeErrorKind, CleanupFailure, IoOp, StoreError, StoreErrorKind};
 pub use latch::{LATCH_FILE, clear_latch, read_latch, write_latch};
 pub use migrate::migrate;

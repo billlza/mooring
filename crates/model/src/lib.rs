@@ -35,6 +35,7 @@ pub mod iface;
 pub mod ipv4;
 pub mod keys;
 pub mod node;
+pub mod own_network;
 pub mod ports;
 pub mod quota;
 pub mod secret;
@@ -64,12 +65,13 @@ pub use exit::{
     EgressCheck, ExitSite, FlowCap, Pairing, ProbePolicy, TrafficPolicy, Uplink, UplinkBaseline,
 };
 pub use ids::{LocalLabel, NodeId, PublicAlias, ShortId, UserId, Uuid};
-pub use iface::{InterfaceSelector, MacAddr, ResolvedInterfaces};
+pub use iface::{InterfaceSelector, MacAddr, ResolvedInterfaces, RouterIdentity};
 pub use ipv4::{CarrierPrefix, PublicIpv4, SPECIAL_V4, SpecialClass, classify};
 pub use keys::{Ed25519Pub, WgKey, X25519Pub};
 pub use node::{
     HostFacts, Hy2Server, Node, NodeAddress, NodeLifecycle, NodeRole, RealityServer, SshPin,
 };
+pub use own_network::{OwnNetwork, OwnNetworkKind, OwnNetworks, PERSONAL_HOTSPOT_ROUTER};
 pub use ports::{HopInterval, Hy2Listener, Hy2Obfs, ListenerIdx, Port, PortPlan, PortRange};
 pub use quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
 pub use secret::{
