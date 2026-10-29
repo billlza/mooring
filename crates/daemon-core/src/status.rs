@@ -46,7 +46,7 @@ use crate::alert::{AlertCondition, DegradedReasonKind, MacEngine, OpenAlert};
 use crate::capacity::CapacityStatus;
 use crate::error::{ForecastErrorKind, StatusError, UsageErrorKind};
 use crate::forecast::SimForecast;
-use crate::network::ForeignNetworkFinding;
+use crate::network::{AllowedNetwork, ForeignNetworkFinding};
 use crate::period::{BillingCycle, UsagePeriods};
 use crate::policy::{ExpiryState, QuotaState};
 use crate::router::{RouterAdvisory, RouterReading};
@@ -70,6 +70,19 @@ pub enum ProbeStage {
     ProberUnavailable,
     /// The bracketing direct probes disagreed twice (design §10.2 step 4).
     CarrierAddressUnstable,
+}
+
+/// An input of the own-network match that could not be read (design §10.2,
+/// P0-2). Either way the daemon matches no declared network (fail closed):
+/// a declared network the Mac is joined to is then foreign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnNetworkInput {
+    /// The declarations file, `allowed-networks.json`, is corrupt or
+    /// unreadable (`mooringctl exit allowed-networks` names the fault).
+    Declarations,
+    /// The routers' identities could not be read from configd.
+    RouterIdentities,
 }
 
 /// Why the exit is degraded: it serves, with a problem.
@@ -100,6 +113,12 @@ pub enum DegradedReason {
     OnBattery,
     /// The power helper exited.
     PowerHelperExited,
+    /// An input of the own-network match could not be read; no declared
+    /// network matches until it can.
+    OwnNetworksUnreadable {
+        /// Which input.
+        input: OwnNetworkInput,
+    },
 }
 
 impl DegradedReason {
@@ -112,6 +131,7 @@ impl DegradedReason {
             Self::WatchStale { .. } => DegradedReasonKind::WatchStale,
             Self::OnBattery => DegradedReasonKind::OnBattery,
             Self::PowerHelperExited => DegradedReasonKind::PowerHelperExited,
+            Self::OwnNetworksUnreadable { .. } => DegradedReasonKind::OwnNetworksUnreadable,
         }
     }
 
@@ -120,7 +140,7 @@ impl DegradedReason {
             Self::NodeProbeFailed { node, .. }
             | Self::ReachabilitySuspect { node }
             | Self::WatchStale { node } => Some(node),
-            Self::OnBattery | Self::PowerHelperExited => None,
+            Self::OnBattery | Self::PowerHelperExited | Self::OwnNetworksUnreadable { .. } => None,
         }
     }
 }
@@ -453,6 +473,9 @@ pub struct ExitSection {
     pub power: PowerStatus,
     /// Networks the Mac must not be attached to.
     pub foreign_networks: BTreeSet<ForeignNetworkFinding>,
+    /// Attachments the check allowed: CFM's TUN, and the operator's own
+    /// networks (design §10.2, P0-2).
+    pub allowed_networks: BTreeSet<AllowedNetwork>,
 }
 
 impl ExitSection {

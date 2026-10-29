@@ -16,15 +16,13 @@
 //! no version-1 file remains, reading version 1 can go.
 
 use std::fmt;
-use std::fs::File;
-use std::io::{self, Read};
 use std::path::Path;
 
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::time::UnixTime;
 use serde::{Deserialize, Serialize};
 
-use crate::durable::{self, LockMode, StateLock};
+use crate::durable::{self, Bounded, LockMode, StateLock, read_bounded};
 use crate::error::{IoOp, StoreError};
 use crate::store::LOCK_FILE;
 
@@ -145,29 +143,15 @@ struct PinVersion {
 /// not a router identity of version 1 or 2 is `RouterPinCorrupt`.
 pub fn read_router_pin(dir: &Path) -> Result<Option<StoredPin>, StoreError> {
     let path = dir.join(ROUTER_PIN_FILE);
-    let io_error = |source: io::Error| StoreError::Io {
-        op: IoOp::ReadRouterPin,
-        path: path.clone(),
-        source,
-    };
-    let file = match File::open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(io_error(error)),
-    };
-    // One byte past the limit is read, so an oversized file is detected
-    // without reading it all (usize to u64 is lossless on every target).
-    let mut bytes = Vec::with_capacity(MAX_ROUTER_PIN_BYTES + 1);
-    file.take(MAX_ROUTER_PIN_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io_error)?;
     let corrupt = |fault| StoreError::RouterPinCorrupt {
         path: path.clone(),
         fault,
     };
-    if bytes.len() > MAX_ROUTER_PIN_BYTES {
-        return Err(corrupt(RouterPinFault::TooLarge));
-    }
+    let bytes = match read_bounded(&path, MAX_ROUTER_PIN_BYTES, IoOp::ReadRouterPin)? {
+        Bounded::Absent => return Ok(None),
+        Bounded::TooLarge => return Err(corrupt(RouterPinFault::TooLarge)),
+        Bounded::Document(bytes) => bytes,
+    };
     let version: PinVersion =
         serde_json::from_slice(&bytes).map_err(|_| corrupt(RouterPinFault::Undecodable))?;
     match version.version {

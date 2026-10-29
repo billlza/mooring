@@ -1026,6 +1026,12 @@ fn exit_alerts_are_derived_from_the_exit_state() {
             DegradedReason::PowerHelperExited,
             DegradedReasonKind::PowerHelperExited,
         ),
+        (
+            DegradedReason::OwnNetworksUnreadable {
+                input: crate::status::OwnNetworkInput::RouterIdentities,
+            },
+            DegradedReasonKind::OwnNetworksUnreadable,
+        ),
     ];
     for (reason, kind) in &reasons {
         assert_eq!(reason.kind(), *kind);
@@ -1081,6 +1087,7 @@ fn exit_alerts_are_derived_from_the_exit_state() {
             last_drain: None,
         },
         foreign_networks: BTreeSet::new(),
+        allowed_networks: BTreeSet::new(),
     };
     assert_eq!(exit.violation_alert(), None);
     let on_node = |name: &str| Violation::EgressIsNodeAddress {

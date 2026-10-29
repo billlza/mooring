@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use mooring_export::ExportFormat;
 use mooring_model::dns::DnsName;
 use mooring_model::exit::{FlowCap, Pairing};
+use mooring_model::ids::LocalLabel;
 use mooring_model::iface::BsdName;
 use mooring_model::ipv4::CarrierPrefix;
 use mooring_model::node::NodeRole;
@@ -214,6 +215,37 @@ pub(crate) enum ExitCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Declare the network joined on an interface as your own: a connection
+    /// you contract for yourself (your phone's Personal Hotspot, your home
+    /// broadband), so the exit keeps serving while this Mac is joined to it,
+    /// even when it holds the default route. Never an institutional network
+    /// (campus Wi-Fi, eduroam, Janet): on one the exit must stay down. The
+    /// file holds about 85 declarations (16 KiB); past that, withdraw one.
+    AllowNetwork {
+        /// The interface joined to the network (a BSD name, for example
+        /// en0); it is identified by its router, read from configd now.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// Your label for the network (1 to 64 characters); the SSID
+        /// cannot be read.
+        #[arg(long, value_name = "TEXT")]
+        name: LocalLabel,
+        /// The network is Apple's Personal Hotspot (router 172.20.10.1).
+        #[arg(long)]
+        personal_hotspot: bool,
+        /// Declare without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Withdraw a declared own network by its name; the daemon treats it as
+    /// foreign from its next tick.
+    DisallowNetwork {
+        /// The name it was declared under.
+        #[arg(long, value_name = "TEXT")]
+        name: LocalLabel,
+    },
+    /// List the declared own networks.
+    AllowedNetworks,
 }
 
 /// A flow cap, as the model accepts it.

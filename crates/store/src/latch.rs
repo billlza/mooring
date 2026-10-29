@@ -9,14 +9,12 @@
 //! its instance lock), so the write takes no state lock. The CLI's
 //! `exit retry` asks the daemon to clear it.
 
-use std::fs::File;
-use std::io::{self, Read};
 use std::path::Path;
 
 use mooring_model::verdict::LatchRecord;
 use serde::{Deserialize, Serialize};
 
-use crate::durable::{remove_durably, write_durably};
+use crate::durable::{Bounded, read_bounded, remove_durably, write_durably};
 use crate::error::{IoOp, StoreError};
 
 /// The latch's file name, in the daemon's run directory.
@@ -40,28 +38,11 @@ struct LatchDocument {
 /// rather than read it as no latch.
 pub fn read_latch(run_dir: &Path) -> Result<Option<LatchRecord>, StoreError> {
     let path = run_dir.join(LATCH_FILE);
-    let file = match File::open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(StoreError::Io {
-                op: IoOp::ReadLatch,
-                path,
-                source,
-            });
-        }
+    let bytes = match read_bounded(&path, MAX_LATCH_BYTES, IoOp::ReadLatch)? {
+        Bounded::Absent => return Ok(None),
+        Bounded::TooLarge => return Err(StoreError::LatchCorrupt { path }),
+        Bounded::Document(bytes) => bytes,
     };
-    let mut bytes = Vec::with_capacity(MAX_LATCH_BYTES + 1);
-    file.take(MAX_LATCH_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|source| StoreError::Io {
-            op: IoOp::ReadLatch,
-            path: path.clone(),
-            source,
-        })?;
-    if bytes.len() > MAX_LATCH_BYTES {
-        return Err(StoreError::LatchCorrupt { path });
-    }
     match serde_json::from_slice::<LatchDocument>(&bytes) {
         Ok(document) if document.version == LATCH_VERSION => Ok(Some(document.latch)),
         Ok(_) | Err(_) => Err(StoreError::LatchCorrupt { path }),

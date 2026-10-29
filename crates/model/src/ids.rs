@@ -359,7 +359,8 @@ impl ZeroizeOnDrop for Uuid {}
 /// The maximum number of characters in a local label.
 pub const MAX_LABEL_CHARS: usize = 64;
 
-/// A Mac-only human label for a user; never exported or sent to a VPS.
+/// A Mac-only human label for a user or an own network; never exported or
+/// sent to a VPS.
 ///
 /// 1 to 64 characters, no control characters, no leading or trailing
 /// whitespace. Any script is allowed.

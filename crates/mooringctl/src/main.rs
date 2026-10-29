@@ -35,6 +35,13 @@
 //!   the pinned M7 as the egress;
 //! - `exit record-carrier --prefix <cidr>... --pairing paired|unpaired
 //!   [--yes]` records the line's carrier check, once, as bookkeeping;
+//! - `exit allow-network --interface <bsd> --name <label>
+//!   [--personal-hotspot] [--yes]`, `exit disallow-network --name <label>`
+//!   and `exit allowed-networks` (2026-10-29, design §10.2, P0-2) declare,
+//!   withdraw and list the networks the operator contracts for themselves,
+//!   which the exit keeps serving on; never an institutional network; the
+//!   file holds at most 16 KiB of declarations (about 85), past which
+//!   `allow-network` refuses until one is withdrawn;
 //! - `sim set-anchor <date> [--yes]` moves fixed-length billing cycles.
 //!
 //! The console's first slice adds the daemon and its client (design §10.1,

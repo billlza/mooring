@@ -10,7 +10,7 @@
 //! byte order, as the kernel writes them.
 
 use std::mem::{offset_of, size_of};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::error::RouteFault;
 
@@ -25,6 +25,7 @@ const ADDRS_AT: usize = offset_of!(libc::rt_msghdr, rtm_addrs);
 const SDL_NLEN_AT: usize = offset_of!(libc::sockaddr_dl, sdl_nlen);
 const SDL_ALEN_AT: usize = offset_of!(libc::sockaddr_dl, sdl_alen);
 const SDL_DATA_AT: usize = offset_of!(libc::sockaddr_dl, sdl_data);
+const SIN6_ADDR_AT: usize = offset_of!(libc::sockaddr_in6, sin6_addr);
 
 /// The number of socket address slots (`RTAX_MAX`).
 pub(crate) const ADDRESS_SLOTS: usize = 8;
@@ -73,6 +74,28 @@ impl<'a> Sockaddr<'a> {
         }
         let octets: [u8; 4] = self.bytes.get(4..8)?.try_into().ok()?;
         Some(Ipv4Addr::from(octets))
+    }
+
+    /// The IPv6 address of an `AF_INET6` socket address (`sockaddr_in6`),
+    /// if this is one long enough to hold it. The kernel keeps a
+    /// link-local address's scope (the interface index) embedded in its
+    /// third and fourth bytes, as KAME does; they are cleared here, as
+    /// Libinfo's `getifaddrs` clears them, so `fe80:0015::1` on interface
+    /// 21 reads as `fe80::1`. Other addresses are read as given.
+    pub(crate) fn inet6(&self) -> Option<Ipv6Addr> {
+        if !self.is_family(libc::AF_INET6) {
+            return None;
+        }
+        let mut octets: [u8; 16] = self
+            .bytes
+            .get(SIN6_ADDR_AT..SIN6_ADDR_AT + 16)?
+            .try_into()
+            .ok()?;
+        if octets[0] == 0xfe && octets[1] & 0xc0 == 0x80 {
+            octets[2] = 0;
+            octets[3] = 0;
+        }
+        Some(Ipv6Addr::from(octets))
     }
 
     /// Whether this netmask selects no bits: an empty socket address, or

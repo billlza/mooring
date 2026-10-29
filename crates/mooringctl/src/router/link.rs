@@ -11,7 +11,7 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
-use mooring_macsys::{Interface, InterfaceAddrV4, MacsysError};
+use mooring_macsys::{DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 
 use crate::error::{CommandError, LocalError};
@@ -20,7 +20,8 @@ use crate::router::error::{
 };
 use crate::router::http::Endpoint;
 
-/// The kernel's interface, routing and neighbour tables.
+/// The kernel's interface, routing and neighbour tables, and configd's IPv4
+/// services.
 pub(crate) trait LinkLayer {
     /// The interface's index.
     fn interface_index(&self, name: &BsdName) -> Result<InterfaceIndex, MacsysError>;
@@ -36,6 +37,13 @@ pub(crate) trait LinkLayer {
 
     /// Every interface in the kernel's list.
     fn interfaces(&self) -> Result<Vec<Interface>, MacsysError>;
+
+    /// Every IPv4 default route, scoped and unscoped.
+    fn default_routes(&self) -> Result<Vec<DefaultRoute>, MacsysError>;
+
+    /// configd's IPv4 services: each interface's router, the router's
+    /// resolved link-layer address and the network's DNS domain.
+    fn ipv4_services(&self) -> Result<Vec<Ipv4Service>, MacsysError>;
 }
 
 /// The kernel itself, through `mooring-macsys`.
@@ -61,6 +69,14 @@ impl LinkLayer for KernelLink {
 
     fn interfaces(&self) -> Result<Vec<Interface>, MacsysError> {
         mooring_macsys::interfaces()
+    }
+
+    fn default_routes(&self) -> Result<Vec<DefaultRoute>, MacsysError> {
+        mooring_macsys::default_routes_v4()
+    }
+
+    fn ipv4_services(&self) -> Result<Vec<Ipv4Service>, MacsysError> {
+        mooring_macsys::ipv4_services()
     }
 }
 

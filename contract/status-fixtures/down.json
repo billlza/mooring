@@ -69,7 +69,20 @@
       "last_wake": null,
       "last_drain": null
     },
-    "foreign_networks": []
+    "foreign_networks": [],
+    "allowed_networks": [
+      {
+        "own": {
+          "interface": "en5",
+          "kind": "personal_hotspot"
+        }
+      },
+      {
+        "benchmarking_tun": {
+          "interface": "utun8"
+        }
+      }
+    ]
   },
   "sim": {
     "cycle": {

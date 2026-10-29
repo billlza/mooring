@@ -121,6 +121,19 @@ extension DegradedReason {
             String(localized: "The Mac runs on battery and may sleep.")
         case .powerHelperExited:
             String(localized: "The power helper exited.")
+        case .ownNetworksUnreadable(let input):
+            input.text
+        }
+    }
+}
+
+extension OwnNetworkInput {
+    var text: String {
+        switch self {
+        case .declarations:
+            String(localized: "The own-network declarations cannot be read; no declared network matches.")
+        case .routerIdentities:
+            String(localized: "configd's network services cannot be read; no declared network matches.")
         }
     }
 }
@@ -215,8 +228,19 @@ extension ForeignNetworkFinding {
             String(localized: "\(interface) carries an IPv4 default route")
         case .defaultRoute(let interface, .v6):
             String(localized: "\(interface) carries an IPv6 default route")
-        case .personalHotspot(let interface):
-            String(localized: "\(interface) is a Personal Hotspot")
+        }
+    }
+}
+
+extension AllowedNetwork {
+    var text: String {
+        switch self {
+        case .own(let interface, .personalHotspot):
+            String(localized: "\(interface) is your own Personal Hotspot")
+        case .own(let interface, .broadband):
+            String(localized: "\(interface) is your own broadband")
+        case .benchmarkingTun(let interface):
+            String(localized: "\(interface) is a tunnel in the benchmarking range (CFM's TUN)")
         }
     }
 }
@@ -583,6 +607,7 @@ extension DegradedReasonKind {
         case .watchStale: String(localized: "a node's watch is stale")
         case .onBattery: String(localized: "on battery")
         case .powerHelperExited: String(localized: "the power helper exited")
+        case .ownNetworksUnreadable: String(localized: "the own-network inputs cannot be read")
         }
     }
 }

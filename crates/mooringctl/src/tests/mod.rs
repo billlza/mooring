@@ -8,6 +8,7 @@
 
 mod add;
 mod apply;
+mod canary;
 mod capture;
 mod daemon;
 mod deployed;
@@ -20,6 +21,7 @@ mod http;
 mod log;
 mod node;
 mod output;
+mod own_network;
 mod password;
 mod pin;
 mod runtime;

@@ -135,6 +135,25 @@ pub(crate) fn run(
         Command::Exit(ExitCommand::Enable) => crate::exit::set_enabled(env, out, true),
         Command::Exit(ExitCommand::Disable) => crate::exit::set_enabled(env, out, false),
         Command::Exit(ExitCommand::Retry) => crate::exit::retry(env, out),
+        Command::Exit(ExitCommand::AllowNetwork {
+            interface,
+            name,
+            personal_hotspot,
+            yes,
+        }) => crate::exit::own_network::allow_network(
+            env,
+            out,
+            &interface,
+            name,
+            personal_hotspot,
+            yes,
+        ),
+        Command::Exit(ExitCommand::DisallowNetwork { name }) => {
+            crate::exit::own_network::disallow_network(env, out, &name)
+        }
+        Command::Exit(ExitCommand::AllowedNetworks) => {
+            crate::exit::own_network::allowed_networks(env, out)
+        }
         Command::Node(NodeCommand::New {
             node,
             role,

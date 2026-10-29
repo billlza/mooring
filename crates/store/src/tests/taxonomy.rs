@@ -30,7 +30,7 @@ fn assert_complete<K: Copy + Ord + Display>(
 
 #[test]
 fn kind_lists_are_complete() {
-    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 24);
+    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 25);
     assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 3);
     assert_complete(SnapshotReadErrorKind::ALL, SnapshotReadErrorKind::name, 2);
     assert_complete(ChangeErrorKind::ALL, ChangeErrorKind::name, 2);

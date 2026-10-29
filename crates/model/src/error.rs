@@ -166,6 +166,12 @@ pub enum ModelError {
     /// The link-layer address is malformed, zero or multicast.
     #[error("link-layer address must be a unicast aa:bb:cc:dd:ee:ff")]
     InvalidMacAddr,
+    /// The link-layer address is the placeholder iOS reports in place of a
+    /// real one, which identifies no device.
+    #[error(
+        "link-layer address 02:00:00:00:00:00 is the privacy placeholder, which identifies no device"
+    )]
+    PlaceholderMacAddr,
     /// Interface index zero does not name an interface.
     #[error("interface index must be non-zero")]
     InvalidInterfaceIndex,
@@ -629,6 +635,8 @@ kinds! {
         InvalidInterfaceName,
         /// See [`ModelError::InvalidMacAddr`].
         InvalidMacAddr,
+        /// See [`ModelError::PlaceholderMacAddr`].
+        PlaceholderMacAddr,
         /// See [`ModelError::InvalidInterfaceIndex`].
         InvalidInterfaceIndex,
         /// See [`ModelError::UplinkEqualsEgress`].
@@ -786,6 +794,7 @@ impl ModelError {
             Self::PortPlanConflict { .. } => ModelErrorKind::PortPlanConflict,
             Self::InvalidInterfaceName { .. } => ModelErrorKind::InvalidInterfaceName,
             Self::InvalidMacAddr => ModelErrorKind::InvalidMacAddr,
+            Self::PlaceholderMacAddr => ModelErrorKind::PlaceholderMacAddr,
             Self::InvalidInterfaceIndex => ModelErrorKind::InvalidInterfaceIndex,
             Self::UplinkEqualsEgress => ModelErrorKind::UplinkEqualsEgress,
             Self::InterfaceNotSelected { .. } => ModelErrorKind::InterfaceNotSelected,
@@ -876,7 +885,9 @@ mod tests {
         FlowCap, ProbeBasePort, ProbeInterval, ProbePolicy, ProbeProtocol, UplinkBaseline,
     };
     use crate::ids::{LocalLabel, ShortId, Uuid};
-    use crate::iface::{BsdName, InterfaceIndex, MacAddr, ResolvedInterface, ResolvedUplink};
+    use crate::iface::{
+        BsdName, InterfaceIndex, MacAddr, ResolvedInterface, ResolvedUplink, RouterIdentity,
+    };
     use crate::ipv4::{CarrierPrefix, PublicIpv4};
     use crate::keys::WgKey;
     use crate::node::NodeLifecycle;
@@ -991,6 +1002,10 @@ mod tests {
             ),
             (K::InvalidInterfaceName, BsdName::parse("").unwrap_err()),
             (K::InvalidMacAddr, MacAddr::parse("x").unwrap_err()),
+            (
+                K::PlaceholderMacAddr,
+                RouterIdentity::new(Ipv4Addr::LOCALHOST, MacAddr::PRIVACY_PLACEHOLDER).unwrap_err(),
+            ),
             (
                 K::InvalidInterfaceIndex,
                 InterfaceIndex::new(0).unwrap_err(),

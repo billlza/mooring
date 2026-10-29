@@ -104,6 +104,22 @@ struct ExitView: View {
                     }
                 }
             }
+            Section {
+                if exit.allowedNetworks.isEmpty {
+                    Text("None: no own network or CFM tunnel is attached.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(exit.allowedNetworks, id: \.self) { allowed in
+                        Label(allowed.text, systemImage: "checkmark.shield")
+                    }
+                }
+            } header: {
+                Text("Allowed networks")
+            } footer: {
+                Text(
+                    "Your own networks, declared with `mooringctl exit allow-network`, and CFM's tunnel keep the exit serving; every exit connection stays bound to the M7."
+                )
+            }
         }
         .formStyle(.grouped)
     }

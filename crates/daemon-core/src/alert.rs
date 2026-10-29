@@ -132,6 +132,9 @@ kinds! {
         OnBattery,
         /// The power helper exited.
         PowerHelperExited,
+        /// The own-network declarations or the routers they match could
+        /// not be read, so no declared network matches.
+        OwnNetworksUnreadable,
     }
 }
 

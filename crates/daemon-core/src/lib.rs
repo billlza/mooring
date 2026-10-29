@@ -97,7 +97,9 @@ pub use error::{
     UsageError, UsageErrorKind,
 };
 pub use forecast::{DailySimBytes, SimForecast};
-pub use network::{ForeignNetworkFinding, NetworkSnapshot, foreign_networks};
+pub use network::{
+    AllowedNetwork, ForeignNetworkFinding, NetworkCheck, NetworkSnapshot, network_check,
+};
 pub use period::{BillingCycle, UsagePeriods};
 pub use policy::{ExpiryState, PolicyAction, QuotaState, UserAction};
 pub use radio_history::{RadioHistory, RadioSample};

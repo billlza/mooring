@@ -27,10 +27,10 @@ use crate::exit::{
     IN_CHAIN_FIRST, InChainProbe, InChainTarget, NODE_CALL_RETRY, NodeCall, RenderOutcome,
     Rendered, RenderedProber, START_GRACE, SimUse, StartFault, TickInputs,
 };
-use crate::network::ForeignNetworkFinding;
+use crate::network::{AllowedNetwork, ForeignNetworkFinding};
 use crate::status::{
-    DegradedReason, DownReason, DrainOutcome, ExitSection, ExitState, LinkState, PowerSource,
-    PowerStatus, ProbeStage, ProcessEnd,
+    DegradedReason, DownReason, DrainOutcome, ExitSection, ExitState, LinkState, OwnNetworkInput,
+    PowerSource, PowerStatus, ProbeStage, ProcessEnd,
 };
 
 /// Inside the fixtures' carrier prefix, 31.120.0.0/14.
@@ -273,6 +273,8 @@ struct World {
     enabled: bool,
     egress: Result<Egress, EgressFault>,
     foreign: BTreeSet<ForeignNetworkFinding>,
+    allowed: BTreeSet<AllowedNetwork>,
+    own_networks_unreadable: BTreeSet<OwnNetworkInput>,
     sim_bytes: u64,
     power: PowerStatus,
     power_helper_running: bool,
@@ -298,6 +300,8 @@ impl World {
             enabled: true,
             egress,
             foreign: BTreeSet::new(),
+            allowed: BTreeSet::new(),
+            own_networks_unreadable: BTreeSet::new(),
             sim_bytes: 0,
             power_helper_running: true,
             nodes_degraded: Vec::new(),
@@ -319,6 +323,8 @@ impl World {
             exit_enabled: self.enabled,
             egress: self.egress.clone(),
             foreign: self.foreign.clone(),
+            allowed: self.allowed.clone(),
+            own_networks_unreadable: self.own_networks_unreadable.clone(),
             sim: SimUse {
                 cycle_start: mooring_model::CalendarDate::parse("2026-10-01").unwrap(),
                 bytes: self.sim_bytes,
@@ -557,6 +563,92 @@ fn preflight_checks_apply_in_order_and_stop_the_engine() {
         assert_eq!(fake.take_log(), [Event::Stop], "{name}");
         assert_eq!(section.engines.exit.pid, None, "{name}");
     }
+}
+
+/// An allowed network (the operator's own, CFM's TUN) changes nothing in
+/// the exit's state and is reported beside the findings; the inputs of the
+/// own-network match that cannot be read degrade a running exit, with one
+/// typed reason each, and never stop the engine.
+#[test]
+fn allowed_networks_are_reported_and_unreadable_inputs_only_degrade() {
+    let mut world = World::new();
+    let (mut machine, mut fake) = world.serving();
+    world.allowed = BTreeSet::from([
+        AllowedNetwork::Own {
+            interface: BsdName::parse("en0").unwrap(),
+            kind: mooring_model::own_network::OwnNetworkKind::PersonalHotspot,
+        },
+        AllowedNetwork::BenchmarkingTun {
+            interface: BsdName::parse("utun8").unwrap(),
+        },
+    ]);
+    world.advance(2);
+    let section = world.tick(&mut machine, &mut fake);
+    assert_eq!(section.state, ExitState::Verifying);
+    assert_eq!(fake.take_log(), Vec::<Event>::new());
+    assert_eq!(section.engines.exit.pid, Some(100));
+    assert_eq!(section.allowed_networks, world.allowed);
+    assert!(section.foreign_networks.is_empty());
+    let unreadable = |input| DegradedReason::OwnNetworksUnreadable { input };
+    world.own_networks_unreadable = BTreeSet::from([OwnNetworkInput::Declarations]);
+    world.advance(2);
+    let section = world.tick(&mut machine, &mut fake);
+    assert_eq!(
+        section.state,
+        ExitState::Degraded {
+            reasons: NonEmpty::new(unreadable(OwnNetworkInput::Declarations)),
+        }
+    );
+    assert_eq!(fake.take_log(), Vec::<Event>::new());
+    assert_eq!(section.engines.exit.pid, Some(100));
+    assert_eq!(section.allowed_networks, world.allowed);
+    world.own_networks_unreadable = BTreeSet::from([
+        OwnNetworkInput::Declarations,
+        OwnNetworkInput::RouterIdentities,
+    ]);
+    world.advance(2);
+    assert_eq!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Degraded {
+            reasons: NonEmpty::from_parts(
+                unreadable(OwnNetworkInput::Declarations),
+                vec![unreadable(OwnNetworkInput::RouterIdentities)]
+            ),
+        }
+    );
+    world.own_networks_unreadable.clear();
+    world.advance(2);
+    assert_eq!(
+        world.tick(&mut machine, &mut fake).state,
+        ExitState::Verifying
+    );
+}
+
+/// A foreign network takes the exit down whatever is allowed beside it,
+/// and the section still reports the allowed attachments.
+#[test]
+fn a_foreign_network_takes_the_exit_down_whatever_is_allowed_beside_it() {
+    let mut world = World::new();
+    let (mut machine, mut fake) = world.serving();
+    world.allowed = BTreeSet::from([AllowedNetwork::BenchmarkingTun {
+        interface: BsdName::parse("utun8").unwrap(),
+    }]);
+    let finding = ForeignNetworkFinding::RoutableIpv4 {
+        interface: BsdName::parse("en0").unwrap(),
+    };
+    world.foreign = BTreeSet::from([finding.clone()]);
+    world.advance(2);
+    let section = world.tick(&mut machine, &mut fake);
+    assert_eq!(
+        section.state,
+        down(DownReason::ForeignNetworkAttached {
+            findings: NonEmpty::new(finding),
+        })
+    );
+    assert_eq!(fake.take_log(), [Event::Stop]);
+    assert_eq!(section.engines.exit.pid, None);
+    assert_eq!(section.allowed_networks, world.allowed);
+    assert_eq!(section.foreign_networks, world.foreign);
 }
 
 #[test]
