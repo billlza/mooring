@@ -26,6 +26,7 @@ use mooring_daemon_core::control::{DaemonReply, decode_reply};
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::network::{AllowedNetwork, ForeignNetworkFinding, IpFamily};
 use mooring_daemon_core::power::HelperEvent;
+use mooring_daemon_core::radio_history::{RadioPoll, RadioSample, decode_line};
 use mooring_daemon_core::router::netgear::parse_netgear_model_json;
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
 use mooring_daemon_core::snapshot::NodePoll;
@@ -36,6 +37,7 @@ use mooring_daemon_core::status::{
 use mooring_macsys::{
     ConfigdFault, DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError,
 };
+use mooring_model::CalendarDate;
 use mooring_model::Sha256Digest;
 use mooring_model::collections::NonEmpty;
 use mooring_model::ids::LocalLabel;
@@ -44,8 +46,8 @@ use mooring_model::own_network::{OwnNetwork, OwnNetworkKind};
 use mooring_model::secret::SecretEntry;
 use mooring_model::verdict::Violation;
 use mooring_store::{
-    ALLOWED_NETWORKS_FILE, LATCH_FILE, SIM_METER_FILE, STATUS_SNAPSHOT_FILE, SecretStore, Store,
-    USAGE_DIRECTORY, declare_allowed_network, read_latch,
+    ALLOWED_NETWORKS_FILE, LATCH_FILE, RADIO_DIRECTORY, SIM_METER_FILE, STATUS_SNAPSHOT_FILE,
+    SecretStore, Store, USAGE_DIRECTORY, declare_allowed_network, read_latch, read_radio_day,
 };
 
 use super::runtime::STAND_IN;
@@ -58,7 +60,8 @@ use crate::daemon::deployed::{
     stale_watches, unreachable_cause,
 };
 use crate::daemon::hub::Hub;
-use crate::daemon::{Control, RunPaths};
+use crate::daemon::radio::RadioHistoryWriter;
+use crate::daemon::{Control, LoopState, RunPaths};
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::runtime::ports::{ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE};
@@ -147,7 +150,7 @@ fn with_exit<T>(
     fs::create_dir_all(RunPaths::under(&support).dir).unwrap();
     harness.with_env(|env| {
         let mut log = Vec::new();
-        let mut exit = Deployed::open(env, &support, &mut log, None).unwrap();
+        let mut exit = Deployed::open(env, &support, &mut log, LoopState::default()).unwrap();
         work(&mut exit, &mut log)
     })
 }
@@ -484,8 +487,9 @@ fn a_lost_power_helper_degrades_the_exit_and_a_missing_one_stops_the_start() {
 
     let support = harness.support_dir();
     harness.helper.refuse.set(true);
-    let error =
-        harness.with_env(|env| Deployed::open(env, &support, &mut Vec::new(), None).unwrap_err());
+    let error = harness.with_env(|env| {
+        Deployed::open(env, &support, &mut Vec::new(), LoopState::default()).unwrap_err()
+    });
     assert!(
         matches!(
             error,
@@ -747,8 +751,9 @@ fn a_corrupt_latch_or_meter_stops_the_daemon_at_its_start() {
             fs::create_dir_all(support.join(USAGE_DIRECTORY)).unwrap();
             fs::write(support.join(USAGE_DIRECTORY).join(SIM_METER_FILE), b"{}").unwrap();
         }
-        let error = harness
-            .with_env(|env| Deployed::open(env, &support, &mut Vec::new(), None).unwrap_err());
+        let error = harness.with_env(|env| {
+            Deployed::open(env, &support, &mut Vec::new(), LoopState::default()).unwrap_err()
+        });
         let found = match error {
             CommandError::Local(LocalError::Latch(_)) => "Latch",
             CommandError::Local(LocalError::Meter(_)) => "Meter",
@@ -756,6 +761,71 @@ fn a_corrupt_latch_or_meter_stops_the_daemon_at_its_start() {
         };
         assert_eq!(found, kind);
     }
+}
+
+/// The exit's own poll of the M7 at its start is recorded in the radio
+/// history like the router console's: one sample in the poll day's file,
+/// here the failed poll of a gateway no stub answers for, with the reason
+/// the published panel shows.
+#[test]
+fn the_exits_poll_of_the_m7_is_recorded_in_the_radio_history() {
+    let mut harness = deployed();
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
+    let support = harness.support_dir();
+    let (control, _retries) = shared();
+    with_exit(&mut harness, |exit, log| {
+        let day = read_radio_day(&support, CalendarDate::parse("2026-10-13").unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(!day.torn);
+        let lines: Vec<RadioSample> = day
+            .lines
+            .split_inclusive(|&byte| byte == b'\n')
+            .map(|line| decode_line(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].at.as_secs(), NOW);
+        let RadioPoll::Failed { reason } = lines[0].poll else {
+            panic!("{:?}", lines[0]);
+        };
+        exit.tick(&control, log, false).unwrap();
+        let status = published(&control);
+        assert_eq!(
+            status.parts().router,
+            RouterReading::Unavailable {
+                reason,
+                last_polled_at: None,
+            }
+        );
+    });
+}
+
+/// A radio history that cannot be written does not stop the exit: the
+/// start succeeds, the tick serves, and the log names the failure once. (A
+/// corrupt latch or meter does stop the start, above: those are read; the
+/// history is only written.)
+#[test]
+fn a_radio_history_that_cannot_be_written_does_not_stop_the_exit() {
+    let mut harness = deployed();
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
+    let support = harness.support_dir();
+    let radio = support.join(RADIO_DIRECTORY);
+    fs::write(&radio, b"").unwrap();
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        String::from_utf8(log.clone()).unwrap()
+    });
+    let expected = format!(
+        "mooringctl daemon: the radio history was not written: the radio history's files failed: {} is not a directory\n",
+        radio.display()
+    );
+    assert_eq!(log.matches(&expected).count(), 1, "{log}");
 }
 
 /// The process an earlier daemon left is the engine binary itself (a
@@ -775,7 +845,7 @@ fn an_engine_an_earlier_daemon_left_is_stopped_at_the_start() {
     fs::write(run.join(ENGINE_PID_FILE), format!("{}\n", left.id())).unwrap();
     let log = harness.with_env(|env| {
         let mut log = Vec::new();
-        let _exit = Deployed::open(env, &support, &mut log, None).unwrap();
+        let _exit = Deployed::open(env, &support, &mut log, LoopState::default()).unwrap();
         String::from_utf8(log).unwrap()
     });
     assert!(
@@ -894,6 +964,7 @@ fn an_egress_fault_is_logged_once_while_it_lasts_and_again_when_it_changes() {
     let (log, reading) = harness.with_env(|env| {
         let mut log = Vec::new();
         let mut failure = None;
+        let mut history = RadioHistoryWriter::default();
         let mut reading = good;
         for fault in [
             EgressFault::Absent,
@@ -908,6 +979,7 @@ fn an_egress_fault_is_logged_once_while_it_lasts_and_again_when_it_changes() {
                 &mut log,
                 Some(&reading),
                 &mut failure,
+                &mut history,
                 Err(&fault),
             )
             .unwrap();

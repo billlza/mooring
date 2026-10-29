@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Tests of the store: CAS, locking, durability, decoding, migrations,
-//! secret stores, the secret ordering rules and the router identity file
-//! (design §7, §15.6, §16 L1).
+//! secret stores, the secret ordering rules, the router identity file and
+//! the radio history's day files (design §7, §15.6, §16 L1).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -20,6 +20,7 @@ mod latch;
 mod migration;
 mod ordering;
 mod properties;
+mod radio_history;
 mod router_pin;
 mod secrets;
 mod sim_meter;

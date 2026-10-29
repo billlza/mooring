@@ -455,6 +455,23 @@ pub(crate) enum RouterCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Print the radio samples the daemon recorded, one per poll of the M7
+    /// (UTC day files under the support directory): a summary of each
+    /// day's polls, the changes between them and the hourly signal, or the
+    /// document Mooring.app reads. Yesterday and today by default.
+    History {
+        /// The first UTC day (YYYY-MM-DD); the day before --until by
+        /// default.
+        #[arg(long, value_name = "DATE")]
+        since: Option<CalendarDate>,
+        /// The last UTC day (YYYY-MM-DD); today by default.
+        #[arg(long, value_name = "DATE")]
+        until: Option<CalendarDate>,
+        /// Print one JSON line (a radio history document) instead of a
+        /// summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Write the M7's status document, redacted through the allowlist, to a
     /// new file. There is no raw option.
     Capture {

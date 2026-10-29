@@ -23,10 +23,17 @@ use mooring_daemon_core::control::{
     DaemonReply, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, ProtocolLine, Refusal, decode_reply,
     encode_line,
 };
+use mooring_daemon_core::radio_history::{
+    RadioPoll, RadioSample, decode_line, encode_line as encode_sample,
+};
 use mooring_daemon_core::router::netgear::parse_netgear_model_json;
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
+use mooring_model::CalendarDate;
 use mooring_model::time::UnixTime;
-use mooring_store::{ROUTER_PIN_FILE, STATE_FILE, STATUS_SNAPSHOT_FILE};
+use mooring_store::{
+    RADIO_DIRECTORY, ROUTER_PIN_FILE, STATE_FILE, STATUS_SNAPSHOT_FILE, append_radio_line,
+    radio_day_path, read_radio_day,
+};
 use tempfile::TempDir;
 
 use super::support::FakeParent;
@@ -34,6 +41,7 @@ use super::support::{FIXTURE, Harness, NOW};
 use crate::cli::Cli;
 use crate::daemon::hub::Hub;
 use crate::daemon::log::LOG_FILE;
+use crate::daemon::radio::RADIO_HISTORY_DAYS;
 use crate::daemon::serve::{End, Limits, accept, serve};
 use crate::daemon::{
     Control, LoopState, PollOutcome, Polled, RunPaths, Waited, after_poll, poll_once, poll_router,
@@ -387,7 +395,8 @@ fn each_poll_publishes_snapshots_and_logs_only_changes() {
 
 /// A snapshot that cannot be written is logged, and the status is still
 /// published: the snapshot is for diagnosis only. Like a poll's failure,
-/// it is logged once while it lasts, and its end is logged too.
+/// it is logged once while it lasts, and its end is logged too. The radio
+/// history, which needs the same directory, fails and recovers with it.
 #[test]
 fn a_snapshot_that_cannot_be_written_is_logged_not_fatal() {
     let dir = short_dir();
@@ -421,9 +430,10 @@ fn a_snapshot_that_cannot_be_written_is_logged_not_fatal() {
     )
     .unwrap();
     assert!(missing.join(STATUS_SNAPSHOT_FILE).exists());
+    assert_eq!(samples_of(&missing, day("2026-10-13")).len(), 1);
     let log = String::from_utf8(log).unwrap();
     let lines: Vec<&str> = log.lines().collect();
-    assert_eq!(lines.len(), 3, "{log}");
+    assert_eq!(lines.len(), 5, "{log}");
     assert_eq!(
         lines[0],
         "2026-10-13 19:20:00 UTC mooringctl daemon: router poll succeeded"
@@ -433,9 +443,318 @@ fn a_snapshot_that_cannot_be_written_is_logged_not_fatal() {
             .starts_with("2026-10-13 19:20:00 UTC mooringctl daemon: status.json not written: "),
         "{log}"
     );
+    assert!(
+        lines[2].starts_with(
+            "2026-10-13 19:20:00 UTC mooringctl daemon: the radio history was not written: "
+        ),
+        "{log}"
+    );
+    assert_eq!(
+        lines[3],
+        "2026-10-13 19:22:00 UTC mooringctl daemon: status.json written again"
+    );
+    assert_eq!(
+        lines[4],
+        "2026-10-13 19:22:00 UTC mooringctl daemon: the radio history is written again"
+    );
+}
+
+// --- The radio history ----------------------------------------------------
+
+/// 2026-10-13 00:00:00 UTC.
+const MIDNIGHT: u64 = NOW - 19 * 3600 - 20 * 60;
+
+fn day(text: &str) -> CalendarDate {
+    CalendarDate::parse(text).unwrap()
+}
+
+/// The samples a day's file holds, decoded.
+fn samples_of(support: &Path, date: CalendarDate) -> Vec<RadioSample> {
+    let day = read_radio_day(support, date).unwrap().unwrap();
+    assert!(!day.torn);
+    day.lines
+        .split_inclusive(|&byte| byte == b'\n')
+        .map(|line| decode_line(line).unwrap())
+        .collect()
+}
+
+/// Every poll, read or failed, leaves one sample line in the file of the
+/// UTC day it was polled on (the poll's time, not the time it ended);
+/// the directory is private and the file the daemon's alone.
+#[test]
+fn each_poll_appends_one_sample_to_the_polled_day() {
+    let dir = short_dir();
+    let support = dir.path().to_path_buf();
+    let hub = Hub::default();
+    let mut state = LoopState::default();
+    let mut log = Vec::new();
+    let mut poll = |at: u64, now: u64, outcome: &PollOutcome| {
+        after_poll(
+            &hub,
+            &support,
+            &mut log,
+            &mut state,
+            UnixTime::from_secs(at),
+            outcome,
+            UnixTime::from_secs(now),
+        )
+        .unwrap();
+    };
+    poll(NOW, NOW + 1, &Ok(fixture_status()));
+    assert_eq!(mode(&support.join(RADIO_DIRECTORY)), 0o700);
+    assert_eq!(mode(&radio_day_path(&support, day("2026-10-13"))), 0o600);
+    assert_eq!(
+        fs::read(radio_day_path(&support, day("2026-10-13"))).unwrap(),
+        encode_sample(&RadioSample::of(
+            UnixTime::from_secs(NOW),
+            Ok(&fixture_status())
+        ))
+        .unwrap()
+    );
+    poll(NOW + 60, NOW + 61, &Err(unreachable()));
+    // A poll that began at 23:59:50 and ended the next day belongs to the
+    // day it began on.
+    poll(MIDNIGHT + 86_390, MIDNIGHT + 86_410, &Ok(fixture_status()));
+    assert_eq!(
+        samples_of(&support, day("2026-10-13")),
+        [
+            RadioSample::of(UnixTime::from_secs(NOW), Ok(&fixture_status())),
+            RadioSample::of(
+                UnixTime::from_secs(NOW + 60),
+                Err(RouterUnavailableReason::Unreachable)
+            ),
+            RadioSample::of(
+                UnixTime::from_secs(MIDNIGHT + 86_390),
+                Ok(&fixture_status())
+            ),
+        ]
+    );
+    assert_eq!(read_radio_day(&support, day("2026-10-14")).unwrap(), None);
+    assert!(matches!(
+        samples_of(&support, day("2026-10-13"))[1].poll,
+        RadioPoll::Failed {
+            reason: RouterUnavailableReason::Unreachable
+        }
+    ));
+    // Recording is silent: the log holds the poll lines alone.
+    let log = String::from_utf8(log).unwrap();
+    assert_eq!(log.lines().count(), 3, "{log}");
+    assert!(!log.contains("radio"), "{log}");
+}
+
+/// The first append of a run, and the first of each new day, keep the
+/// newest `RADIO_HISTORY_DAYS` day files and remove the rest; what is in
+/// the directory without being a day file is named once in the log and
+/// left alone.
+#[test]
+fn a_new_day_keeps_the_newest_day_files_and_names_the_strays_once() {
+    assert_eq!(RADIO_HISTORY_DAYS, 90);
+    let dir = short_dir();
+    let support = dir.path().to_path_buf();
+    let today = day("2026-10-13");
+    let planted: Vec<CalendarDate> = (1..=91)
+        .map(|back| CalendarDate::from_days_since_epoch(today.days_since_epoch() - back).unwrap())
+        .collect();
+    for date in &planted {
+        append_radio_line(&support, *date, b"{}\n").unwrap();
+    }
+    // A torn tail left in today's file by an earlier run is healed.
+    let old = encode_sample(&RadioSample::of(
+        UnixTime::from_secs(MIDNIGHT),
+        Err(RouterUnavailableReason::NotConfigured),
+    ))
+    .unwrap();
+    fs::write(
+        radio_day_path(&support, today),
+        [old.as_slice(), b"{\"version\":1,\"at\":17"].concat(),
+    )
+    .unwrap();
+    let stray = support.join(RADIO_DIRECTORY).join(".DS_Store");
+    fs::write(&stray, b"").unwrap();
+    let hub = Hub::default();
+    let mut state = LoopState::default();
+    let mut log = Vec::new();
+    let mut poll = |at: u64, outcome: &PollOutcome| {
+        after_poll(
+            &hub,
+            &support,
+            &mut log,
+            &mut state,
+            UnixTime::from_secs(at),
+            outcome,
+            UnixTime::from_secs(at + 1),
+        )
+        .unwrap();
+    };
+    poll(NOW, &Ok(fixture_status()));
+    // 92 files: the two oldest go, the 90 newest (today included) stay.
+    for (index, date) in planted.iter().enumerate() {
+        let kept = index < 89;
+        assert_eq!(radio_day_path(&support, *date).exists(), kept, "{date}");
+    }
+    assert_eq!(
+        samples_of(&support, today),
+        [
+            RadioSample::of(
+                UnixTime::from_secs(MIDNIGHT),
+                Err(RouterUnavailableReason::NotConfigured)
+            ),
+            RadioSample::of(UnixTime::from_secs(NOW), Ok(&fixture_status())),
+        ]
+    );
+    assert!(stray.exists());
+    // Within the day nothing is pruned, and the strays are not named again.
+    let later = day("2026-01-01");
+    append_radio_line(&support, later, b"{}\n").unwrap();
+    poll(NOW + 60, &Ok(fixture_status()));
+    assert!(radio_day_path(&support, later).exists());
+    // The next day prunes again; the same strays stay silent.
+    poll(MIDNIGHT + 86_400 + 60, &Ok(fixture_status()));
+    assert!(!radio_day_path(&support, later).exists());
+    assert!(radio_day_path(&support, day("2026-10-14")).exists());
+    assert!(stray.exists());
+    // A new stray is named; strays that are gone end the note silently.
+    let another = support.join(RADIO_DIRECTORY).join("notes.txt");
+    fs::write(&another, b"").unwrap();
+    poll(MIDNIGHT + 2 * 86_400 + 60, &Ok(fixture_status()));
+    fs::remove_file(&stray).unwrap();
+    fs::remove_file(&another).unwrap();
+    poll(MIDNIGHT + 3 * 86_400 + 60, &Ok(fixture_status()));
+    let log = String::from_utf8(log).unwrap();
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines.len(), 3, "{log}");
+    assert_eq!(
+        lines[0],
+        "2026-10-13 19:20:01 UTC mooringctl daemon: router poll succeeded"
+    );
+    assert_eq!(
+        lines[1],
+        format!(
+            "2026-10-13 19:20:01 UTC mooringctl daemon: the radio directory holds files that are not day files: {}",
+            stray.display()
+        )
+    );
     assert_eq!(
         lines[2],
-        "2026-10-13 19:22:00 UTC mooringctl daemon: status.json written again"
+        format!(
+            "2026-10-15 00:01:01 UTC mooringctl daemon: the radio directory holds files that are not day files: {}, {}",
+            stray.display(),
+            another.display()
+        )
+    );
+}
+
+/// A sample that cannot be written is logged once while that lasts, and
+/// its recovery once; the poll's status is still published, and the tick
+/// goes on: the history is for diagnosis, never a reason to stop.
+#[test]
+fn a_radio_history_that_cannot_be_written_is_logged_once_and_not_fatal() {
+    let dir = short_dir();
+    let support = dir.path().to_path_buf();
+    let radio = support.join(RADIO_DIRECTORY);
+    fs::write(&radio, b"").unwrap();
+    let hub = Hub::default();
+    let mut state = LoopState::default();
+    let mut log = Vec::new();
+    let mut poll = |at: u64, outcome: &PollOutcome| {
+        after_poll(
+            &hub,
+            &support,
+            &mut log,
+            &mut state,
+            UnixTime::from_secs(at),
+            outcome,
+            UnixTime::from_secs(at),
+        )
+        .unwrap();
+    };
+    poll(NOW, &Ok(fixture_status()));
+    poll(NOW + 60, &Ok(fixture_status()));
+    assert_eq!(hub.latest().unwrap().unwrap().seq, 2);
+    fs::remove_file(&radio).unwrap();
+    poll(NOW + 120, &Ok(fixture_status()));
+    assert_eq!(samples_of(&support, day("2026-10-13")).len(), 1);
+    let log = String::from_utf8(log).unwrap();
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines.len(), 3, "{log}");
+    assert_eq!(
+        lines[0],
+        "2026-10-13 19:20:00 UTC mooringctl daemon: router poll succeeded"
+    );
+    assert_eq!(
+        lines[1],
+        format!(
+            "2026-10-13 19:20:00 UTC mooringctl daemon: the radio history was not written: the radio history's files failed: {} is not a directory",
+            radio.display()
+        )
+    );
+    assert_eq!(
+        lines[2],
+        "2026-10-13 19:22:00 UTC mooringctl daemon: the radio history is written again"
+    );
+}
+
+/// A prune that fails is logged once while it lasts and is tried again at
+/// the next poll; the sample is still written and the tick goes on. (A day
+/// file made immutable with `chflags uchg` cannot be removed by its owner,
+/// while the day's own file can still be appended to.)
+#[test]
+fn a_prune_that_fails_is_logged_once_and_tried_again() {
+    let dir = short_dir();
+    let support = dir.path().to_path_buf();
+    let today = day("2026-10-13");
+    for back in 1..=RADIO_HISTORY_DAYS {
+        let date = CalendarDate::from_days_since_epoch(today.days_since_epoch() - back).unwrap();
+        append_radio_line(&support, date, b"{}\n").unwrap();
+    }
+    let oldest = radio_day_path(
+        &support,
+        CalendarDate::from_days_since_epoch(today.days_since_epoch() - RADIO_HISTORY_DAYS).unwrap(),
+    );
+    let chflags = |flag: &str| {
+        let status = std::process::Command::new("/usr/bin/chflags")
+            .arg(flag)
+            .arg(&oldest)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    chflags("uchg");
+    let hub = Hub::default();
+    let mut state = LoopState::default();
+    let mut log = Vec::new();
+    let mut poll = |at: u64| {
+        after_poll(
+            &hub,
+            &support,
+            &mut log,
+            &mut state,
+            UnixTime::from_secs(at),
+            &Ok(fixture_status()),
+            UnixTime::from_secs(at + 1),
+        )
+        .unwrap();
+    };
+    poll(NOW);
+    poll(NOW + 60);
+    assert!(oldest.exists());
+    assert_eq!(samples_of(&support, today).len(), 2);
+    chflags("nouchg");
+    poll(NOW + 120);
+    assert!(!oldest.exists());
+    let log = String::from_utf8(log).unwrap();
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines.len(), 3, "{log}");
+    assert!(
+        lines[1].starts_with(&format!(
+            "2026-10-13 19:20:01 UTC mooringctl daemon: old radio history days were not removed: the radio history's files failed: failed to remove a radio history day file at {}: ",
+            oldest.display()
+        )),
+        "{log}"
+    );
+    assert_eq!(
+        lines[2],
+        "2026-10-13 19:22:01 UTC mooringctl daemon: old radio history days are removed again"
     );
 }
 

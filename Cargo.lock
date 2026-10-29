@@ -686,6 +686,7 @@ dependencies = [
 name = "mooring-store"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mooring-model",
  "proptest",
  "serde",
@@ -710,6 +711,7 @@ dependencies = [
  "mooring-render",
  "mooring-store",
  "security-framework",
+ "serde",
  "serde_json",
  "socket2",
  "tempfile",

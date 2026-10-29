@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! What `router status` prints: a human summary, or one JSON line of the
-//! `RouterReading` (`--json`). Enum values print as the M7 spells them, so
+//! `RouterReading` (`--json`; `router history` prints its document through
+//! the same line). Enum values print as the M7 spells them, so
 //! the operator can compare with its web interface. Text the M7 reports
 //! (the firmware and web app versions, the network's and the SIM's names)
 //! prints in double quotes, so nothing it holds can read as the summary's
@@ -12,12 +13,13 @@ use std::fmt::{self, Write as _};
 use mooring_daemon_core::router::netgear::NETGEAR_MODEL;
 use mooring_daemon_core::router::{
     CarrierName, LteCarrier, LteCarriers, LteSignal, NrSignal, Radio, RadioState, RouterAdvisory,
-    RouterReading, RouterStatus, WebAppVersion,
+    RouterStatus, WebAppVersion,
 };
 use mooring_model::date::CalendarDate;
 use mooring_model::error::ModelError;
 use mooring_model::iface::BsdName;
 use mooring_model::time::UnixTime;
+use serde::Serialize;
 
 const SECONDS_PER_DAY: u64 = 86_400;
 
@@ -272,9 +274,9 @@ const fn advisory_name(advisory: RouterAdvisory) -> &'static str {
     }
 }
 
-/// One line of JSON: the reading and a newline.
-pub(crate) fn json_line(reading: &RouterReading) -> Result<String, serde_json::Error> {
-    let mut line = serde_json::to_string(reading)?;
+/// One line of JSON: the document and a newline.
+pub(crate) fn json_line<T: Serialize>(document: &T) -> Result<String, serde_json::Error> {
+    let mut line = serde_json::to_string(document)?;
     line.push('\n');
     Ok(line)
 }

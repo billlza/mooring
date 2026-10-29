@@ -54,6 +54,20 @@ pub enum IoOp {
     ReadSimMeter,
     /// Creating or inspecting the usage directory.
     CreateUsageDir,
+    /// Creating or inspecting the radio history's directory.
+    CreateRadioDir,
+    /// Inspecting a radio history day file.
+    InspectRadioDay,
+    /// Opening or creating a radio history day file.
+    OpenRadioDay,
+    /// Reading a radio history day file.
+    ReadRadioDay,
+    /// Writing, truncating or flushing a radio history day file.
+    WriteRadioDay,
+    /// Listing the radio history's day files.
+    ListRadioDays,
+    /// Removing a radio history day file.
+    RemoveRadioDay,
 }
 
 impl fmt::Display for IoOp {
@@ -75,7 +89,38 @@ impl fmt::Display for IoOp {
             Self::RemoveLatch => "remove the exit's latch",
             Self::ReadSimMeter => "read the SIM meter",
             Self::CreateUsageDir => "create the usage directory",
+            Self::CreateRadioDir => "create the radio directory",
+            Self::InspectRadioDay => "inspect a radio history day file",
+            Self::OpenRadioDay => "open a radio history day file",
+            Self::ReadRadioDay => "read a radio history day file",
+            Self::WriteRadioDay => "write a radio history day file",
+            Self::ListRadioDays => "list the radio history's day files",
+            Self::RemoveRadioDay => "remove a radio history day file",
         })
+    }
+}
+
+/// What is wrong with a radio history day file. `Copy`: no fault holds a
+/// byte of the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RadioHistoryFault {
+    /// The file is, or an append would make it, larger than the day bound.
+    TooLarge,
+    /// Something other than a regular file (a link, a directory) is where
+    /// the day file belongs; nothing was read or written through it.
+    NotRegularFile,
+}
+
+impl fmt::Display for RadioHistoryFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge => write!(
+                f,
+                "it is larger than {} bytes",
+                crate::radio_history::MAX_RADIO_DAY_BYTES
+            ),
+            Self::NotRegularFile => f.write_str("it is not a regular file"),
+        }
     }
 }
 
@@ -273,12 +318,22 @@ pub enum StoreError {
         #[source]
         source: SecretStoreError,
     },
-    /// Something other than a directory (a link included) is where the
-    /// usage directory belongs; nothing was written.
+    /// Something other than a directory (a link included) is where one of
+    /// the store's private directories (`usage/`, `radio/`) belongs;
+    /// nothing was written.
     #[error("{} is not a directory", path.display())]
-    UsageDirNotDirectory {
-        /// The usage directory's path.
+    DirNotDirectory {
+        /// The directory's path.
         path: PathBuf,
+    },
+    /// A radio history day file cannot be used as one: see
+    /// [`RadioHistoryFault`]. Nothing was read or written through it.
+    #[error("radio history file {} is corrupt: {fault}", path.display())]
+    RadioHistoryCorrupt {
+        /// The day file.
+        path: PathBuf,
+        /// What is wrong with it.
+        fault: RadioHistoryFault,
     },
     /// The exit's latch (`run/latch.json`) exists but is not a version-1
     /// latch; the daemon keeps the exit down rather than read it as none.
@@ -369,8 +424,10 @@ kinds! {
         AllowedNetworksCorrupt,
         /// See [`StoreError::LatchCorrupt`].
         LatchCorrupt,
-        /// See [`StoreError::UsageDirNotDirectory`].
-        UsageDirNotDirectory,
+        /// See [`StoreError::DirNotDirectory`].
+        DirNotDirectory,
+        /// See [`StoreError::RadioHistoryCorrupt`].
+        RadioHistoryCorrupt,
     }
 }
 
@@ -402,7 +459,8 @@ impl StoreError {
             Self::RouterPinCorrupt { .. } => StoreErrorKind::RouterPinCorrupt,
             Self::AllowedNetworksCorrupt { .. } => StoreErrorKind::AllowedNetworksCorrupt,
             Self::LatchCorrupt { .. } => StoreErrorKind::LatchCorrupt,
-            Self::UsageDirNotDirectory { .. } => StoreErrorKind::UsageDirNotDirectory,
+            Self::DirNotDirectory { .. } => StoreErrorKind::DirNotDirectory,
+            Self::RadioHistoryCorrupt { .. } => StoreErrorKind::RadioHistoryCorrupt,
         }
     }
 }

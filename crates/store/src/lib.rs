@@ -61,6 +61,16 @@
 //! UTC day, and [`read_sim_meter`] reads it back with a bound; the daemon
 //! encodes and decodes it (design §10.1).
 //!
+//! # The radio history
+//!
+//! [`append_radio_line`] appends one sample line to the UTC day's file,
+//! `radio/<YYYY-MM-DD>.jsonl` (a torn last line is cut first, so no two
+//! lines are ever glued), [`read_radio_day`] reads a day's whole lines
+//! within a bound, and [`prune_radio_days`] keeps the newest day files; the
+//! daemon encodes the lines and the CLI decodes them (design §15.6 rule 11,
+//! §15.7). The daemon writes, the CLI reads: both through this crate, which
+//! alone knows the directory, the names and the framing.
+//!
 //! # Secrets
 //!
 //! The state holds no secrets. They live in a [`SecretStore`]; the
@@ -81,6 +91,7 @@ mod error;
 mod latch;
 mod migrate;
 mod ordered;
+mod radio_history;
 mod router_pin;
 mod secrets;
 mod sim_meter;
@@ -93,10 +104,17 @@ pub use allowed_networks::{
     ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
     declare_allowed_network, read_allowed_networks, revoke_allowed_network,
 };
-pub use error::{ChangeError, ChangeErrorKind, CleanupFailure, IoOp, StoreError, StoreErrorKind};
+pub use error::{
+    ChangeError, ChangeErrorKind, CleanupFailure, IoOp, RadioHistoryFault, StoreError,
+    StoreErrorKind,
+};
 pub use latch::{LATCH_FILE, clear_latch, read_latch, write_latch};
 pub use migrate::migrate;
 pub use ordered::{record_with_secrets, update_config_with_secrets};
+pub use radio_history::{
+    MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
+    prune_radio_days, radio_day_path, read_radio_day,
+};
 pub use router_pin::{
     MAX_ROUTER_PIN_BYTES, ROUTER_PIN_FILE, RouterPin, RouterPinFault, StoredPin, read_router_pin,
     write_router_pin,
