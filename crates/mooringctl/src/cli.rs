@@ -219,7 +219,8 @@ pub(crate) enum ExitCommand {
     /// you contract for yourself (your phone's Personal Hotspot, your home
     /// broadband), so the exit keeps serving while this Mac is joined to it,
     /// even when it holds the default route. Never an institutional network
-    /// (campus Wi-Fi, eduroam, Janet): on one the exit must stay down.
+    /// (campus Wi-Fi, eduroam, Janet): on one the exit must stay down. The
+    /// file holds about 85 declarations (16 KiB); past that, withdraw one.
     AllowNetwork {
         /// The interface joined to the network (a BSD name, for example
         /// en0); it is identified by its router, read from configd now.

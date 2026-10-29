@@ -14,9 +14,12 @@ use clap::Parser;
 use mooring_macsys::{ConfigdFault, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
 use mooring_model::exit::Uplink;
 use mooring_model::ids::LocalLabel;
-use mooring_model::iface::{InterfaceSelector, MacAddr};
-use mooring_model::own_network::OwnNetworkKind;
-use mooring_store::{ALLOWED_NETWORKS_FILE, read_allowed_networks};
+use mooring_model::iface::{InterfaceSelector, MacAddr, RouterIdentity};
+use mooring_model::own_network::{OwnNetwork, OwnNetworkKind};
+use mooring_model::time::UnixTime;
+use mooring_store::{
+    ALLOWED_NETWORKS_FILE, Declaration, declare_allowed_network, read_allowed_networks,
+};
 
 use super::support::{Harness, OTHER, PINNED};
 use super::user::{fixture, harness_with};
@@ -384,6 +387,62 @@ fn allow_network_records_nothing_without_a_yes() {
     assert!(outcome.stderr.contains("is corrupt"), "{}", outcome.stderr);
     assert!(corrupt.console.asked.is_empty());
     assert_eq!(fs::read(&path).unwrap(), b"{}");
+}
+
+/// A declarations file that cannot hold another network refuses the
+/// declaration before anything is asked, says how to make room, and is left
+/// as it is.
+#[test]
+fn allow_network_refuses_a_declaration_the_file_cannot_hold() {
+    let mut harness = joined(hotspot());
+    let dir = harness.support_dir();
+    // Declared through the store until it says the file is full.
+    let router = RouterIdentity::new(
+        Ipv4Addr::new(192, 168, 0, 1),
+        MacAddr::parse("02:00:5e:10:20:40").unwrap(),
+    )
+    .unwrap();
+    let mut count = 0;
+    loop {
+        let filler = OwnNetwork {
+            kind: OwnNetworkKind::Broadband,
+            router,
+            declared_at: UnixTime::from_secs(1_793_300_000),
+        };
+        let name = LocalLabel::parse(&format!("filler {count:03}")).unwrap();
+        match declare_allowed_network(&dir, name, filler).unwrap() {
+            Declaration::Recorded => count += 1,
+            Declaration::Full { .. } => break,
+            Declaration::AlreadyDeclared => unreachable!("fillers are distinct"),
+        }
+    }
+    let path = dir.join(ALLOWED_NETWORKS_FILE);
+    let before = fs::read(&path).unwrap();
+    let outcome = harness.run(&ALLOW);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: the allowed-networks file is full: {count} networks are declared and another does not fit within its 16 KiB; `exit disallow-network --name` withdraws one first\n"
+        )
+    );
+    assert_eq!(outcome.stdout, "");
+    assert!(harness.console.asked.is_empty());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(read_allowed_networks(&dir).unwrap().len(), count);
+    // The remedy it names: withdrawing one makes room for this one.
+    let outcome = harness.run(&["exit", "disallow-network", "--name", "filler 000"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&ALLOW);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let declared = read_allowed_networks(&dir).unwrap();
+    assert_eq!(declared.len(), count);
+    assert!(
+        declared
+            .get(&LocalLabel::parse("my phone").unwrap())
+            .is_some()
+    );
 }
 
 #[test]

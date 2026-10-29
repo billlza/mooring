@@ -47,7 +47,11 @@
 //! (design §10.2, P0-2) in `allowed-networks.json`, each a read-modify-write
 //! under the same lock with the same durable write, and
 //! [`read_allowed_networks`] reads them back without the lock, as the daemon
-//! does every tick; an absent file is no declaration.
+//! does every tick; an absent file is no declaration. The file is bounded
+//! at 16 KiB on both sides: [`declare_allowed_network`] refuses a
+//! declaration the file cannot hold (`Declaration::Full`) rather than write
+//! a file its readers refuse, and [`allowed_networks_fit`] says beforehand
+//! whether a set of declarations would be held.
 //!
 //! # The status snapshot
 //!
@@ -102,7 +106,7 @@ mod tests;
 
 pub use allowed_networks::{
     ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
-    declare_allowed_network, read_allowed_networks, revoke_allowed_network,
+    allowed_networks_fit, declare_allowed_network, read_allowed_networks, revoke_allowed_network,
 };
 pub use error::{
     ChangeError, ChangeErrorKind, CleanupFailure, IoOp, RadioHistoryFault, StoreError,

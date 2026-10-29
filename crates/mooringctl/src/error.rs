@@ -27,7 +27,7 @@ use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretKind;
 use mooring_model::{CalendarDate, NodeId, PublicAlias, UserId};
 use mooring_render::RenderError;
-use mooring_store::{SecretStoreError, SnapshotReadError, StoreError};
+use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadError, StoreError};
 
 use crate::node::NodeError;
 use crate::node::adopt::Step;
@@ -679,6 +679,15 @@ pub(crate) enum LocalError {
     NetworkDeclared {
         /// The name given.
         name: LocalLabel,
+    },
+    /// The declarations file cannot hold another network.
+    #[error(
+        "the allowed-networks file is full: {declared} networks are declared and another does not fit within its {} KiB; `exit disallow-network --name` withdraws one first",
+        MAX_ALLOWED_NETWORKS_BYTES / 1024
+    )]
+    NetworksFull {
+        /// How many networks are declared.
+        declared: usize,
     },
     /// No declared network has that name.
     #[error("no declared network is named \"{name}\"; `exit allowed-networks` lists them")]

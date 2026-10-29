@@ -46,8 +46,9 @@ use mooring_model::own_network::{OwnNetwork, OwnNetworkKind};
 use mooring_model::secret::SecretEntry;
 use mooring_model::verdict::Violation;
 use mooring_store::{
-    ALLOWED_NETWORKS_FILE, LATCH_FILE, RADIO_DIRECTORY, SIM_METER_FILE, STATUS_SNAPSHOT_FILE,
-    SecretStore, Store, USAGE_DIRECTORY, declare_allowed_network, read_latch, read_radio_day,
+    ALLOWED_NETWORKS_FILE, Declaration, LATCH_FILE, RADIO_DIRECTORY, SIM_METER_FILE,
+    STATUS_SNAPSHOT_FILE, SecretStore, Store, USAGE_DIRECTORY, declare_allowed_network, read_latch,
+    read_radio_day,
 };
 
 use super::runtime::STAND_IN;
@@ -722,7 +723,7 @@ fn a_declared_network_is_allowed_and_an_unreadable_input_fails_closed() {
 }
 
 fn declare_hotspot_in(support: &std::path::Path) {
-    declare_allowed_network(
+    let declared = declare_allowed_network(
         support,
         LocalLabel::parse("my phone").unwrap(),
         OwnNetwork {
@@ -736,6 +737,7 @@ fn declare_hotspot_in(support: &std::path::Path) {
         },
     )
     .unwrap();
+    assert_eq!(declared, Declaration::Recorded);
 }
 
 #[test]

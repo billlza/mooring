@@ -27,8 +27,8 @@ use mooring_model::ids::LocalLabel;
 use mooring_model::iface::{BsdName, MacAddr, RouterIdentity};
 use mooring_model::own_network::{OwnNetwork, OwnNetworkKind, PERSONAL_HOTSPOT_ROUTER};
 use mooring_store::{
-    Declaration, Store, StoreError, declare_allowed_network, read_allowed_networks,
-    revoke_allowed_network,
+    Declaration, Store, StoreError, allowed_networks_fit, declare_allowed_network,
+    read_allowed_networks, revoke_allowed_network,
 };
 
 use crate::app::{Env, support_dir};
@@ -179,6 +179,19 @@ pub(crate) fn allow_network(
     } else {
         OwnNetworkKind::Broadband
     };
+    let declaration = OwnNetwork {
+        kind,
+        router: network.identity,
+        declared_at: (env.clock)()?,
+    };
+    // The file is bounded: a declaration it cannot hold is refused here,
+    // before anything is asked, as the store refuses it under the lock.
+    let count = declared.len();
+    let mut with_this = declared;
+    with_this.insert(name.clone(), declaration.clone());
+    if !allowed_networks_fit(&with_this).map_err(store_error)? {
+        return Err(LocalError::NetworksFull { declared: count }.into());
+    }
     writeln!(
         out,
         "network on {}: router {} ({}), DNS domain {}; the SSID cannot be read, so \"{name}\" is your label for it",
@@ -195,14 +208,12 @@ pub(crate) fn allow_network(
     .map_err(output)?;
     writeln!(out, "{POLICY}").map_err(output)?;
     confirm(env, yes, "Allow this network for the exit?")?;
-    let declaration = OwnNetwork {
-        kind,
-        router: network.identity,
-        declared_at: (env.clock)()?,
-    };
     match declare_allowed_network(&dir, name.clone(), declaration).map_err(store_error)? {
         Declaration::Recorded => {}
         Declaration::AlreadyDeclared => return Err(LocalError::NetworkDeclared { name }.into()),
+        Declaration::Full { declared } => {
+            return Err(LocalError::NetworksFull { declared }.into());
+        }
     }
     writeln!(
         out,

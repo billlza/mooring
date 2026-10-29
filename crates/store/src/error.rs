@@ -205,7 +205,7 @@ pub enum StoreError {
         source: ModelError,
     },
     /// The state could not be serialised.
-    #[error("failed to encode the state")]
+    #[error("failed to encode a document for the store")]
     Encode {
         /// The serialiser's error.
         #[source]

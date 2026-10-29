@@ -14,6 +14,12 @@
 //! store's exclusive lock, so two commands cannot lose each other's change;
 //! the daemon reads without the lock, as the durable write replaces the
 //! file atomically.
+//!
+//! The file is bounded at [`MAX_ALLOWED_NETWORKS_BYTES`] on both sides: a
+//! reader refuses a larger file as corrupt, so a declaration that would
+//! take the document past the bound is refused (`Full`) with the file
+//! unchanged, and a reader never meets a file this module wrote and
+//! refuses. A withdrawal only shrinks the document, and so makes room.
 
 use std::fmt;
 use std::path::Path;
@@ -31,8 +37,10 @@ use crate::store::LOCK_FILE;
 /// The declarations' file name.
 pub const ALLOWED_NETWORKS_FILE: &str = "allowed-networks.json";
 
-/// The largest declarations file read, in bytes; a larger file is corrupt
-/// (one declaration is about 170 bytes, so this bounds the count too).
+/// The largest declarations file read or written, in bytes: a larger file
+/// is corrupt to a reader, so a writer never makes one (a declaration with a
+/// short label is about 190 bytes, so this bounds the count too, at about
+/// 85).
 pub const MAX_ALLOWED_NETWORKS_BYTES: usize = 16 * 1024;
 
 /// The format version this build reads and writes.
@@ -64,13 +72,22 @@ impl fmt::Display for AllowedNetworksFault {
     }
 }
 
-/// What declaring a network did.
+/// What declaring a network did. Two of the three write nothing, so a
+/// caller must look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub enum Declaration {
     /// The network is declared and the file written.
     Recorded,
     /// A network of that name was declared already; nothing was written.
     AlreadyDeclared,
+    /// With this network the file would be larger than
+    /// [`MAX_ALLOWED_NETWORKS_BYTES`], which no reader accepts; nothing was
+    /// written. Withdrawing a declaration makes room.
+    Full {
+        /// How many networks are declared.
+        declared: usize,
+    },
 }
 
 /// The document on disk: keys in this order, unknown keys refused.
@@ -133,10 +150,9 @@ pub fn read_allowed_networks(dir: &Path) -> Result<OwnNetworks, StoreError> {
     Ok(networks)
 }
 
-/// Writes `networks` as version 1 with the store's durable write (temporary
-/// file, fsync, rename, directory fsync; mode 0600). The caller holds the
-/// exclusive lock. The directory must exist: the store never creates it.
-fn write_allowed_networks(dir: &Path, networks: &OwnNetworks) -> Result<(), StoreError> {
+/// The version-1 document for `networks`, pretty-printed and ending in a
+/// newline: the file's bytes, exactly.
+fn encode(networks: &OwnNetworks) -> Result<Vec<u8>, StoreError> {
     let document = Document {
         version: ALLOWED_NETWORKS_VERSION,
         networks: networks
@@ -152,12 +168,36 @@ fn write_allowed_networks(dir: &Path, networks: &OwnNetworks) -> Result<(), Stor
     let mut bytes =
         serde_json::to_vec_pretty(&document).map_err(|source| StoreError::Encode { source })?;
     bytes.push(b'\n');
-    durable::write_durably(dir, ALLOWED_NETWORKS_FILE, &bytes)
+    Ok(bytes)
+}
+
+/// The document for `networks` when it is within
+/// [`MAX_ALLOWED_NETWORKS_BYTES`], the bound every reader holds the file to,
+/// and `None` when it is not: the one place the bound meets a write.
+fn encode_within_bound(networks: &OwnNetworks) -> Result<Option<Vec<u8>>, StoreError> {
+    let bytes = encode(networks)?;
+    Ok((bytes.len() <= MAX_ALLOWED_NETWORKS_BYTES).then_some(bytes))
+}
+
+/// Whether the file can hold `networks`, so that declaring the last of them
+/// would be `Recorded` rather than `Full`. The CLI asks before it asks the
+/// operator anything; the answer under the lock is the store's.
+pub fn allowed_networks_fit(networks: &OwnNetworks) -> Result<bool, StoreError> {
+    Ok(encode_within_bound(networks)?.is_some())
+}
+
+/// Writes a document from [`encode`] with the store's durable write
+/// (temporary file, fsync, rename, directory fsync; mode 0600). The caller
+/// holds the exclusive lock. The directory must exist: the store never
+/// creates it.
+fn write_allowed_networks(dir: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+    durable::write_durably(dir, ALLOWED_NETWORKS_FILE, bytes)
 }
 
 /// Declares `network` under `name` in `dir`, under the store's exclusive
 /// lock: the file is read, the declaration added and the file written, or
-/// nothing is written when the name is in use (`AlreadyDeclared`).
+/// nothing is written when the name is in use (`AlreadyDeclared`) or the
+/// file cannot hold another network (`Full`).
 pub fn declare_allowed_network(
     dir: &Path,
     name: LocalLabel,
@@ -168,8 +208,12 @@ pub fn declare_allowed_network(
     if networks.get(&name).is_some() {
         return Ok(Declaration::AlreadyDeclared);
     }
+    let declared = networks.len();
     networks.insert(name, network);
-    write_allowed_networks(dir, &networks)?;
+    let Some(bytes) = encode_within_bound(&networks)? else {
+        return Ok(Declaration::Full { declared });
+    };
+    write_allowed_networks(dir, &bytes)?;
     Ok(Declaration::Recorded)
 }
 
@@ -185,6 +229,7 @@ pub fn revoke_allowed_network(
     let Some(removed) = networks.remove(name) else {
         return Ok(None);
     };
-    write_allowed_networks(dir, &networks)?;
+    // The document only shrinks: read within the bound, it stays within it.
+    write_allowed_networks(dir, &encode(&networks)?)?;
     Ok(Some(removed))
 }

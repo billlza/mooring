@@ -2,8 +2,9 @@
 
 //! The own-network declarations file (design §10.2, P0-2): its exact
 //! format and mode, declaring and withdrawing under the lock, an absent file
-//! read as no declaration, and the typed refusal of anything that is not a
-//! version-1 declaration document.
+//! read as no declaration, the typed refusal of anything that is not a
+//! version-1 declaration document, and the bound held on the writer's side
+//! as on the reader's.
 
 use std::fs;
 use std::net::Ipv4Addr;
@@ -16,7 +17,7 @@ use mooring_model::time::UnixTime;
 use super::mode_of;
 use crate::allowed_networks::{
     ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
-    declare_allowed_network, read_allowed_networks, revoke_allowed_network,
+    allowed_networks_fit, declare_allowed_network, read_allowed_networks, revoke_allowed_network,
 };
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 
@@ -88,8 +89,14 @@ fn declarations_round_trip_with_mode_0600_and_are_sorted_by_name() {
 #[test]
 fn a_name_in_use_is_not_redeclared_and_withdrawing_rewrites_the_file() {
     let dir = tempfile::tempdir().unwrap();
-    declare_allowed_network(dir.path(), label("home"), home()).unwrap();
-    declare_allowed_network(dir.path(), label("my phone"), phone()).unwrap();
+    assert_eq!(
+        declare_allowed_network(dir.path(), label("home"), home()).unwrap(),
+        Declaration::Recorded
+    );
+    assert_eq!(
+        declare_allowed_network(dir.path(), label("my phone"), phone()).unwrap(),
+        Declaration::Recorded
+    );
     let path = dir.path().join(ALLOWED_NETWORKS_FILE);
     // The same name with another network: refused, the file untouched.
     assert_eq!(
@@ -122,6 +129,77 @@ fn a_name_in_use_is_not_redeclared_and_withdrawing_rewrites_the_file() {
         read_allowed_networks(dir.path()).unwrap(),
         OwnNetworks::new()
     );
+}
+
+/// The bound holds on the writer's side as on the reader's: a declaration
+/// that would take the document past `MAX_ALLOWED_NETWORKS_BYTES` is
+/// refused as `Full` with the file unchanged, where a reader would have
+/// refused the file it made; a document exactly at the bound is written,
+/// read and withdrawn from, and the withdrawal makes room. The document is
+/// grown to the bound from what the store writes: the first two
+/// declarations give one entry's size, fixed-width labels fill the file,
+/// and the last label's UTF-8 length lands it exactly on the bound (any
+/// script is allowed, up to 64 characters: `a` is one byte, `家` three).
+#[test]
+fn a_declaration_the_file_cannot_hold_is_refused_and_the_bound_itself_is_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(ALLOWED_NETWORKS_FILE);
+    let len = || usize::try_from(fs::metadata(&path).unwrap().len()).unwrap();
+    let declare = |name: &str| declare_allowed_network(dir.path(), label(name), home()).unwrap();
+    assert_eq!(declare("000"), Declaration::Recorded);
+    let one = len();
+    assert_eq!(declare("001"), Declaration::Recorded);
+    // What one more entry with a three-character label adds, and what it
+    // adds without its label.
+    let entry = len() - one;
+    let overhead = entry - 3;
+    let mut next = 2;
+    while MAX_ALLOWED_NETWORKS_BYTES - len() > overhead + 190 {
+        assert_eq!(declare(&format!("{next:03}")), Declaration::Recorded);
+        next += 1;
+    }
+    let room = MAX_ALLOWED_NETWORKS_BYTES - len() - overhead;
+    assert!((2..=190).contains(&room), "{room}");
+    let (narrow, wide) = (room % 3, room / 3);
+    assert!(narrow + wide <= 64, "{narrow} + {wide}");
+    let last = format!("{}{}", "a".repeat(narrow), "家".repeat(wide));
+    assert_eq!(declare(&last), Declaration::Recorded);
+    assert_eq!(len(), MAX_ALLOWED_NETWORKS_BYTES);
+    let full = fs::read(&path).unwrap();
+    let declared = read_allowed_networks(dir.path()).unwrap();
+    assert_eq!(declared.len(), next + 1);
+    assert_eq!(declared.get(&label(&last)), Some(&home()));
+    assert!(allowed_networks_fit(&OwnNetworks::new()).unwrap());
+    assert!(allowed_networks_fit(&declared).unwrap());
+    // One more, of the shortest label, does not fit: refused, nothing
+    // written, nothing read differently.
+    let mut one_more = declared.clone();
+    one_more.insert(label("z"), phone());
+    assert!(!allowed_networks_fit(&one_more).unwrap());
+    assert_eq!(
+        declare_allowed_network(dir.path(), label("z"), phone()).unwrap(),
+        Declaration::Full { declared: next + 1 }
+    );
+    assert_eq!(fs::read(&path).unwrap(), full);
+    assert_eq!(read_allowed_networks(dir.path()).unwrap(), declared);
+    // A name in use is still refused as such, before any size is weighed,
+    // and the entry is not replaced.
+    assert_eq!(
+        declare_allowed_network(dir.path(), label("000"), phone()).unwrap(),
+        Declaration::AlreadyDeclared
+    );
+    assert_eq!(fs::read(&path).unwrap(), full);
+    // Withdrawing from the full file works and makes room: one entry's.
+    assert_eq!(
+        revoke_allowed_network(dir.path(), &label("000")).unwrap(),
+        Some(home())
+    );
+    assert_eq!(len(), MAX_ALLOWED_NETWORKS_BYTES - entry);
+    // (The phone's entry is a few bytes longer than the home's: the room
+    // is in bytes, not entries.)
+    assert_eq!(declare("z"), Declaration::Recorded);
+    assert_eq!(len(), MAX_ALLOWED_NETWORKS_BYTES - entry + overhead + 1);
+    assert_eq!(read_allowed_networks(dir.path()).unwrap().len(), next + 1);
 }
 
 #[test]
