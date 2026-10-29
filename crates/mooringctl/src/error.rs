@@ -20,6 +20,7 @@ use mooring_keys::KeysError;
 use mooring_macsys::MacsysError;
 use mooring_model::dns::DnsName;
 use mooring_model::error::ModelError;
+use mooring_model::ids::LocalLabel;
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretKind;
@@ -543,6 +544,110 @@ pub(crate) enum LocalError {
     /// The carrier prefixes given were not accepted.
     #[error("the carrier prefixes were not accepted")]
     CarrierCheck(#[source] ModelError),
+    /// configd's IPv4 services could not be read.
+    #[error("reading configd's network services failed")]
+    Configd(#[source] MacsysError),
+    /// The allowed-networks file could not be read or written.
+    #[error("the allowed-networks file failed")]
+    AllowedNetworks(#[source] Box<StoreError>),
+    /// `exit allow-network` named the interface facing the M7 or the
+    /// separate uplink.
+    #[error(
+        "{} faces the M7 (the pinned interface or the separate uplink): it is the exit's own path, not a network to allow",
+        interface.as_str()
+    )]
+    NetworkIsEgress {
+        /// The interface given.
+        interface: BsdName,
+    },
+    /// The interface has no IPv4 service with a router in configd.
+    #[error(
+        "{} has no IPv4 service with a router: join the network first and wait for its router to resolve",
+        interface.as_str()
+    )]
+    NoRouterOnInterface {
+        /// The interface given.
+        interface: BsdName,
+    },
+    /// The interface has more than one IPv4 service with a router.
+    #[error(
+        "{} has {count} IPv4 services with a router, so the network cannot be told apart",
+        interface.as_str()
+    )]
+    AmbiguousNetwork {
+        /// The interface given.
+        interface: BsdName,
+        /// How many services have a router.
+        count: usize,
+    },
+    /// configd has not resolved the router's link-layer address yet.
+    #[error(
+        "the router of {} has no resolved link-layer address yet: wait a few seconds after joining and try again",
+        interface.as_str()
+    )]
+    RouterUnresolved {
+        /// The interface given.
+        interface: BsdName,
+    },
+    /// The router's link-layer address identifies no device: all zero, a
+    /// group address, or the iOS privacy placeholder.
+    #[error(
+        "the router of {} shows a link-layer address that identifies no device",
+        interface.as_str()
+    )]
+    RouterUnusable {
+        /// The interface given.
+        interface: BsdName,
+        /// What the model refused.
+        #[source]
+        source: ModelError,
+    },
+    /// The router is the pinned M7 itself.
+    #[error(
+        "the router of {} is the pinned M7: the M7's network is the exit's own path, not a network to allow",
+        interface.as_str()
+    )]
+    RouterIsTheM7 {
+        /// The interface given.
+        interface: BsdName,
+    },
+    /// The network publishes a UK academic (Janet) DNS domain.
+    #[error(
+        "{} is on {domain}, a UK academic network (Janet): the exit must stay down on it (P0-2), so it cannot be allowed",
+        interface.as_str()
+    )]
+    InstitutionalDomain {
+        /// The interface given.
+        interface: BsdName,
+        /// The domain it publishes.
+        domain: DnsName,
+    },
+    /// `--personal-hotspot` was given for a network whose router is not
+    /// Apple's.
+    #[error(
+        "--personal-hotspot names Apple's Personal Hotspot, whose router is 172.20.10.1; the router of {} is {router}",
+        interface.as_str()
+    )]
+    NotAppleHotspot {
+        /// The interface given.
+        interface: BsdName,
+        /// Its router.
+        router: Ipv4Addr,
+    },
+    /// A network of that name is declared already.
+    #[error(
+        "a network named \"{name}\" is declared already; `exit disallow-network --name` withdraws it"
+    )]
+    NetworkDeclared {
+        /// The name given.
+        name: LocalLabel,
+    },
+    /// No declared network has that name.
+    #[error("no declared network is named \"{name}\"; `exit allowed-networks` lists them")]
+    NetworkUnknown {
+        /// The name given.
+        name: LocalLabel,
+    },
     /// The billing cycles are monthly, and `sim set-anchor` moves only
     /// fixed-length ones.
     #[error(

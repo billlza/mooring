@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 16091463a0a029bbf726952672c0d525d82fbfbc90f076763d885d1558e18e97 # shrinks to snapshot = NetworkSnapshot { interfaces: {BsdName("en0"): InterfaceObservation { ipv4: {}, ipv6: {}, router: Some(RouterIdentity { addr: 172.20.10.1, lladdr: MacAddr([170, 187, 204, 221, 238, 1]) }), domain: Some(DnsName("dur.ac.uk")) }}, default_routes: {} }, own = OwnNetworks({LocalLabel("my phone"): OwnNetwork { kind: PersonalHotspot, router: RouterIdentity { addr: 172.20.10.1, lladdr: MacAddr([170, 187, 204, 221, 238, 1]) }, declared_at: UnixTime(1793300000) }}), uplink = None

@@ -24,6 +24,7 @@ use mooring_daemon_core::alert::MacEngine;
 use mooring_daemon_core::console::ConsoleStatus;
 use mooring_daemon_core::control::{DaemonReply, decode_reply};
 use mooring_daemon_core::exit::EgressFault;
+use mooring_daemon_core::network::{AllowedNetwork, ForeignNetworkFinding, IpFamily};
 use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::router::netgear::parse_netgear_model_json;
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
@@ -32,13 +33,19 @@ use mooring_daemon_core::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, NodeAgentState,
     PowerSource,
 };
-use mooring_macsys::{Interface, InterfaceAddrV4};
+use mooring_macsys::{
+    ConfigdFault, DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError,
+};
 use mooring_model::Sha256Digest;
+use mooring_model::collections::NonEmpty;
+use mooring_model::ids::LocalLabel;
+use mooring_model::iface::{BsdName, MacAddr, RouterIdentity};
+use mooring_model::own_network::{OwnNetwork, OwnNetworkKind};
 use mooring_model::secret::SecretEntry;
 use mooring_model::verdict::Violation;
 use mooring_store::{
-    LATCH_FILE, SIM_METER_FILE, STATUS_SNAPSHOT_FILE, SecretStore, Store, USAGE_DIRECTORY,
-    read_latch,
+    ALLOWED_NETWORKS_FILE, LATCH_FILE, SIM_METER_FILE, STATUS_SNAPSHOT_FILE, SecretStore, Store,
+    USAGE_DIRECTORY, declare_allowed_network, read_latch,
 };
 
 use super::runtime::STAND_IN;
@@ -91,6 +98,7 @@ fn deployed() -> Harness {
             addr: Ipv4Addr::new(192, 168, 1, 20),
             prefix_len: Some(24),
         }],
+        ipv6: Vec::new(),
     }]);
     let state = store(&harness).load().unwrap();
     store(&harness)
@@ -555,6 +563,175 @@ fn an_engine_that_is_missing_or_unpinned_keeps_the_exit_down() {
             "{change}: {log}"
         );
     }
+}
+
+/// The iPhone's hotspot router, a made-up locally administered address.
+const HOTSPOT: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x20, 0x60];
+
+/// `deployed()` with the Mac joined to the operator's hotspot on en0,
+/// which holds the unscoped default route, and the hotspot declared.
+fn joined_to_the_declared_hotspot() -> Harness {
+    let mut harness = deployed();
+    if let Ok(listed) = &mut harness.link.listed {
+        listed.push(Interface {
+            index: NonZeroU32::new(4).unwrap(),
+            name: "en0".to_owned(),
+            link_type: 6,
+            lladdr: Some([0x02, 0x6d, 0x6f, 0x6f, 0x72, 0x09]),
+            up: true,
+            running: true,
+            mtu: 1500,
+            ibytes: 0,
+            obytes: 0,
+            baudrate: 0,
+            ipv4: vec![InterfaceAddrV4 {
+                addr: Ipv4Addr::new(172, 20, 10, 2),
+                prefix_len: Some(28),
+            }],
+            ipv6: Vec::new(),
+        });
+    }
+    harness.link.default_routes = Ok(vec![DefaultRoute {
+        interface_index: 4,
+        gateway: Ipv4Addr::new(172, 20, 10, 1),
+        scoped: false,
+    }]);
+    harness.link.services = Ok(vec![Ipv4Service {
+        interface: "en0".to_owned(),
+        router: Some(Ipv4Addr::new(172, 20, 10, 1)),
+        router_lladdr: Some(HOTSPOT),
+        domain: None,
+    }]);
+    declare_hotspot(&harness);
+    harness
+}
+
+fn declare_hotspot(harness: &Harness) {
+    declare_hotspot_in(&harness.support_dir());
+}
+
+/// The exit down on the hotspot as a foreign network.
+fn down_on_the_hotspot() -> ExitState {
+    let en0 = BsdName::parse("en0").unwrap();
+    ExitState::Down {
+        reason: DownReason::ForeignNetworkAttached {
+            findings: NonEmpty::from_parts(
+                ForeignNetworkFinding::RoutableIpv4 {
+                    interface: en0.clone(),
+                },
+                vec![ForeignNetworkFinding::DefaultRoute {
+                    interface: en0,
+                    family: IpFamily::V4,
+                }],
+            ),
+        },
+    }
+}
+
+/// A declared own network holding the default route keeps the exit up and
+/// is reported; the declarations or configd becoming unreadable is taken
+/// as no declaration (the hotspot is then foreign and the exit goes down),
+/// logged once per change, and never ends the daemon (design §10.2, P0-2).
+#[test]
+fn a_declared_network_is_allowed_and_an_unreadable_input_fails_closed() {
+    let mut harness = joined_to_the_declared_hotspot();
+    let support = harness.support_dir();
+    // The direct probe before each start.
+    for _ in 0..3 {
+        harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    }
+    statuses(&harness);
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        let status = published(&control);
+        let exit_section = &status.parts().exit;
+        assert_eq!(
+            exit_section.allowed_networks,
+            [AllowedNetwork::Own {
+                interface: BsdName::parse("en0").unwrap(),
+                kind: OwnNetworkKind::PersonalHotspot,
+            }]
+            .into()
+        );
+        assert!(exit_section.foreign_networks.is_empty());
+        // The declarations file is corrupt: read as none, the hotspot is
+        // foreign and the exit goes down; the daemon keeps ticking.
+        fs::write(support.join(ALLOWED_NETWORKS_FILE), b"{}").unwrap();
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            down_on_the_hotspot()
+        );
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            down_on_the_hotspot()
+        );
+        assert!(published(&control).parts().exit.allowed_networks.is_empty());
+        // Declared again: allowed again, the recovery logged.
+        fs::remove_file(support.join(ALLOWED_NETWORKS_FILE)).unwrap();
+        declare_hotspot_in(&support);
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        String::from_utf8(log.clone()).unwrap()
+    });
+    let corrupt = format!(
+        "the own-network declarations were not read: allowed-networks file {} is corrupt: it is not an allowed-networks document of version 1; no declared network can match\n",
+        support.join(ALLOWED_NETWORKS_FILE).display()
+    );
+    assert_eq!(log.matches(&corrupt).count(), 1, "{log}");
+    assert_eq!(
+        log.matches("the own-network declarations are read again\n")
+            .count(),
+        1,
+        "{log}"
+    );
+    assert!(!log.contains("configd"), "{log}");
+    // configd cannot be read: no router is known, so the declared hotspot
+    // is foreign too, with its own line.
+    harness.link.services = Err(MacsysError::Configd {
+        fault: ConfigdFault::StoreUnavailable,
+    });
+    statuses(&harness);
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            down_on_the_hotspot()
+        );
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            down_on_the_hotspot()
+        );
+        String::from_utf8(log.clone()).unwrap()
+    });
+    assert_eq!(
+        log.matches("the network services were not read from configd: the system configuration store could not be opened; no declared network can match\n").count(),
+        1,
+        "{log}"
+    );
+    assert!(!log.contains("declarations were not read"), "{log}");
+}
+
+fn declare_hotspot_in(support: &std::path::Path) {
+    declare_allowed_network(
+        support,
+        LocalLabel::parse("my phone").unwrap(),
+        OwnNetwork {
+            kind: OwnNetworkKind::PersonalHotspot,
+            router: RouterIdentity::new(
+                Ipv4Addr::new(172, 20, 10, 1),
+                MacAddr::from_bytes(HOTSPOT).unwrap(),
+            )
+            .unwrap(),
+            declared_at: mooring_model::UnixTime::from_secs(NOW),
+        },
+    )
+    .unwrap();
 }
 
 #[test]

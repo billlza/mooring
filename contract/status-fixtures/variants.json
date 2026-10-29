@@ -31,7 +31,12 @@
             }
           },
           "on_battery",
-          "power_helper_exited"
+          "power_helper_exited",
+          {
+            "own_networks_unreadable": {
+              "input": "declarations"
+            }
+          }
         ]
       }
     },
@@ -61,7 +66,12 @@
       }
     },
     "on_battery",
-    "power_helper_exited"
+    "power_helper_exited",
+    {
+      "own_networks_unreadable": {
+        "input": "declarations"
+      }
+    }
   ],
   "down_reason": [
     "egress_interface_absent",
@@ -144,11 +154,6 @@
             "default_route": {
               "interface": "en0",
               "family": "v6"
-            }
-          },
-          {
-            "personal_hotspot": {
-              "interface": "en5"
             }
           }
         ]
@@ -421,7 +426,8 @@
           "ReachabilitySuspect",
           "WatchStale",
           "OnBattery",
-          "PowerHelperExited"
+          "PowerHelperExited",
+          "OwnNetworksUnreadable"
         ]
       }
     },
@@ -553,7 +559,8 @@
     "ReachabilitySuspect",
     "WatchStale",
     "OnBattery",
-    "PowerHelperExited"
+    "PowerHelperExited",
+    "OwnNetworksUnreadable"
   ],
   "critical_thermal_level": [
     "level2",
@@ -617,12 +624,28 @@
         "interface": "en0",
         "family": "v6"
       }
+    }
+  ],
+  "allowed_network": [
+    {
+      "own": {
+        "interface": "en5",
+        "kind": "personal_hotspot"
+      }
     },
     {
-      "personal_hotspot": {
-        "interface": "en5"
+      "benchmarking_tun": {
+        "interface": "utun8"
       }
     }
+  ],
+  "own_network_kind": [
+    "personal_hotspot",
+    "broadband"
+  ],
+  "own_network_input": [
+    "declarations",
+    "router_identities"
   ],
   "ip_family": [
     "v4",

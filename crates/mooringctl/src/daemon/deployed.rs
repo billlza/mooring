@@ -26,20 +26,22 @@ use std::time::{Duration, Instant};
 
 use mooring_agent_proto::{LineRequest, ReadError, Response, WATCH_STALE_SECS};
 use mooring_daemon_core::console::ConsoleStatus;
-use mooring_daemon_core::exit::{EgressFault, ExitMachine, SimUse, TickInputs};
+use mooring_daemon_core::exit::{Egress, EgressFault, ExitMachine, SimUse, TickInputs};
 use mooring_daemon_core::meter::{MAX_SIM_METER_BYTES, SimMeter, accuracy};
+use mooring_daemon_core::network::NetworkCheck;
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::power::{HelperCommand, HelperEvent};
 use mooring_daemon_core::router::RouterReading;
 use mooring_daemon_core::snapshot::{NodePoll, SimTotals, StatusInputs, assemble};
 use mooring_daemon_core::status::{
-    AgentUnreachable, DegradedReason, DrainRecord, ExitState, NodeAgentState, PowerSource,
-    PowerStatus,
+    AgentUnreachable, DegradedReason, DrainRecord, ExitState, NodeAgentState, OwnNetworkInput,
+    PowerSource, PowerStatus,
 };
-use mooring_model::iface::BsdName;
+use mooring_model::iface::{BsdName, ResolvedUplink};
+use mooring_model::own_network::OwnNetworks;
 use mooring_model::time::UnixTime;
 use mooring_model::{Deployment, NodeId};
-use mooring_store::{Store, read_latch, read_sim_meter};
+use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
 use super::{
     Control, LoopState, POLL_INTERVAL, RunPaths, Waited, chain, poll_router_on, publish,
@@ -51,7 +53,7 @@ use crate::node::NodeError;
 use crate::node::session::ops_session;
 use crate::router::error::{RouterError, UnreachableCause};
 use crate::runtime::meter::{METER_TICK, MeterThread, PERSIST_EVERY, Watched};
-use crate::runtime::network::foreign;
+use crate::runtime::network;
 use crate::runtime::ports::{
     DaemonPorts, ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE, stop_stale_engine,
 };
@@ -127,6 +129,10 @@ pub(crate) struct Deployed<'e, 'a> {
     published_power: Option<PowerStatus>,
     snapshot_failure: Option<String>,
     meter_failure: Option<String>,
+    /// The latest failure to read configd's services, logged once.
+    services_failure: Option<String>,
+    /// The latest failure to read the own-network declarations, logged once.
+    declarations_failure: Option<String>,
     nodes_polled: Option<Instant>,
     polls: BTreeMap<NodeId, NodePoll>,
     unreachable: BTreeMap<NodeId, NodeAgentState>,
@@ -238,6 +244,8 @@ impl<'e, 'a> Deployed<'e, 'a> {
             published_power: None,
             snapshot_failure: None,
             meter_failure: None,
+            services_failure: None,
+            declarations_failure: None,
             nodes_polled: None,
             polls: BTreeMap::new(),
             unreachable: BTreeMap::new(),
@@ -271,12 +279,9 @@ impl<'e, 'a> Deployed<'e, 'a> {
             }))?;
         // The check runs while the egress resolves: without it the exit is
         // down already, for that.
-        let foreign = match &egress_name {
-            Ok(name) => foreign(
-                &env.router.link.interfaces().map_err(LocalError::Kernel)?,
-                name,
-            )?,
-            Err(_) => BTreeSet::new(),
+        let (network, own_networks_unreadable) = match &egress {
+            Ok(egress) => self.network(log, now, egress)?,
+            Err(_) => (NetworkCheck::default(), BTreeSet::new()),
         };
         let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), now)
             .map_err(LocalError::Cycle)?;
@@ -292,7 +297,9 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 deployment,
                 exit_enabled: state.runtime.exit_enabled,
                 egress,
-                foreign,
+                foreign: network.foreign,
+                allowed: network.allowed,
+                own_networks_unreadable,
                 sim: SimUse {
                     cycle_start: cycle.start(),
                     bytes: bytes.total(),
@@ -545,6 +552,90 @@ impl<'e, 'a> Deployed<'e, 'a> {
     }
 
     /// Polls the M7 through the egress ([`poll_m7`]).
+    /// The network check for this tick (design §10.2, P0-2). The kernel's
+    /// routes and interfaces are read first (a table that cannot be read
+    /// fails the tick, as it always has), then configd's services and the
+    /// own-network declarations: either of those that cannot be read is
+    /// taken as none, so no declared network matches (fail closed), is
+    /// named in the inputs returned, which degrade a running exit, and is
+    /// logged once per change, never ending the daemon over an optional
+    /// file or a configd fault.
+    fn network(
+        &mut self,
+        log: &mut dyn Write,
+        now: UnixTime,
+        egress: &Egress,
+    ) -> Result<(NetworkCheck, BTreeSet<OwnNetworkInput>), CommandError> {
+        let link = self.env.router.link;
+        let routes = link.default_routes().map_err(LocalError::Kernel)?;
+        let interfaces = link.interfaces().map_err(LocalError::Kernel)?;
+        let mut unreadable = BTreeSet::new();
+        let services = match link.ipv4_services() {
+            Ok(services) => Some(services),
+            Err(error) => {
+                unreadable.insert(OwnNetworkInput::RouterIdentities);
+                note_failure(
+                    log,
+                    now,
+                    &mut self.services_failure,
+                    Some(format!(
+                        "the network services were not read from configd: {}; no declared network can match",
+                        chain(&error)
+                    )),
+                    "",
+                )?;
+                None
+            }
+        };
+        if services.is_some() {
+            note_failure(
+                log,
+                now,
+                &mut self.services_failure,
+                None,
+                "the network services are read from configd again",
+            )?;
+        }
+        let own = match read_allowed_networks(&self.support_dir) {
+            Ok(own) => {
+                note_failure(
+                    log,
+                    now,
+                    &mut self.declarations_failure,
+                    None,
+                    "the own-network declarations are read again",
+                )?;
+                own
+            }
+            Err(error) => {
+                unreadable.insert(OwnNetworkInput::Declarations);
+                note_failure(
+                    log,
+                    now,
+                    &mut self.declarations_failure,
+                    Some(format!(
+                        "the own-network declarations were not read: {}; no declared network can match",
+                        chain(&error)
+                    )),
+                    "",
+                )?;
+                OwnNetworks::new()
+            }
+        };
+        let snapshot = network::snapshot(&interfaces, &routes, services.as_deref())?;
+        let uplink = match egress.interfaces.uplink() {
+            ResolvedUplink::Separate(uplink) => Some(&uplink.bsd_name),
+            ResolvedUplink::SameAsExit => None,
+        };
+        let check = network::check(
+            &snapshot,
+            &egress.interfaces.egress().bsd_name,
+            uplink,
+            &own,
+        );
+        Ok((check, unreadable))
+    }
+
     fn poll_router(
         &mut self,
         log: &mut dyn Write,
@@ -714,6 +805,31 @@ pub(crate) fn unreachable_cause(error: &CommandError) -> AgentUnreachable {
         },
         CommandError::Local(_) | CommandError::Router(_) => AgentUnreachable::Transport,
     }
+}
+
+/// Logs a failure's text once per change, keeping it in `last`, and the
+/// recovery (`recovered`) once when a failure clears.
+fn note_failure(
+    log: &mut dyn Write,
+    now: UnixTime,
+    last: &mut Option<String>,
+    failure: Option<String>,
+    recovered: &str,
+) -> Result<(), CommandError> {
+    match failure {
+        Some(text) => {
+            if last.as_deref() != Some(text.as_str()) {
+                say(log, now, &text)?;
+                *last = Some(text);
+            }
+        }
+        None => {
+            if last.take().is_some() {
+                say(log, now, recovered)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One poll of the M7 through `egress`, after `previous`. Without an

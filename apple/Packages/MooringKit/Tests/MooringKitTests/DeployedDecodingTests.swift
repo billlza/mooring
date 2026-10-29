@@ -37,6 +37,11 @@ import Testing
         #expect(status.exit.engines.exit.pid != nil)
         #expect(status.exit.power.source == .ac)
         #expect(status.exit.foreignNetworks.isEmpty)
+        #expect(
+            status.exit.allowedNetworks == [
+                .own(interface: "en5", kind: .personalHotspot),
+                .benchmarkingTun(interface: "utun8"),
+            ])
         #expect(status.sim.accuracy == .exact)
         guard case .hardStop = status.sim.thresholds.stop else {
             Issue.record("not a hard stop: \(status.sim.thresholds.stop)")

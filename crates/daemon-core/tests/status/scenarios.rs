@@ -21,7 +21,7 @@ use mooring_daemon_core::capacity::{
 };
 use mooring_daemon_core::forecast::{Crossing, DailySimBytes, SimForecast, SimThreshold};
 use mooring_daemon_core::network::{
-    Exemptions, InterfaceObservation, IpFamily, NetworkSnapshot, foreign_networks,
+    Exemptions, InterfaceObservation, IpFamily, NetworkCheck, NetworkSnapshot, network_check,
 };
 use mooring_daemon_core::policy::{evaluate, user_alerts};
 use mooring_daemon_core::router::{
@@ -42,8 +42,9 @@ use mooring_daemon_core::usage::{LedgerEnd, LedgerStart, LifetimeBase, NodeLedge
 use mooring_fixtures::Fixture;
 use mooring_model::exit::ProbeProtocol;
 use mooring_model::ids::LocalLabel;
-use mooring_model::iface::{BsdName, MacAddr};
+use mooring_model::iface::{BsdName, MacAddr, RouterIdentity};
 use mooring_model::node::NodeLifecycle;
+use mooring_model::own_network::{OwnNetwork, OwnNetworkKind, OwnNetworks};
 use mooring_model::user::{QuotaAction, SuspendReason, UserPolicy, UserQuota, WarnPercent};
 use mooring_model::verdict::Violation;
 use mooring_model::{
@@ -130,9 +131,26 @@ fn egress() -> EgressFacts {
     }
 }
 
-/// The exit Mac as designed, which the foreign-network check passes.
-fn clean_network() -> BTreeSet<mooring_daemon_core::ForeignNetworkFinding> {
+/// The exit Mac as designed, which the network check passes: the M7 on
+/// en8, Wi-Fi off, CFM's TUN holding the default route, and the operator's
+/// declared phone joined over USB on en5 (design §10.2, P0-2), so the
+/// fixtures carry both allowed kinds and no finding.
+fn clean_network() -> NetworkCheck {
     let name = |text| BsdName::parse(text).unwrap();
+    let phone = RouterIdentity::new(
+        Ipv4Addr::new(172, 20, 10, 1),
+        MacAddr::parse("02:00:5e:10:20:50").unwrap(),
+    )
+    .unwrap();
+    let mut own = OwnNetworks::new();
+    own.insert(
+        LocalLabel::parse(GRAMMAR_SHAPED_LABEL).unwrap(),
+        OwnNetwork {
+            kind: OwnNetworkKind::PersonalHotspot,
+            router: phone,
+            declared_at: at("2026-10-07", 9 * HOUR),
+        },
+    );
     let snapshot = NetworkSnapshot {
         interfaces: BTreeMap::from([
             (
@@ -150,16 +168,39 @@ fn clean_network() -> BTreeSet<mooring_daemon_core::ForeignNetworkFinding> {
                 },
             ),
             (name("en0"), InterfaceObservation::default()),
+            (
+                name("en5"),
+                InterfaceObservation {
+                    ipv4: BTreeSet::from([Ipv4Addr::new(172, 20, 10, 3)]),
+                    router: Some(phone),
+                    ..InterfaceObservation::default()
+                },
+            ),
+            (
+                name("utun8"),
+                InterfaceObservation {
+                    ipv4: BTreeSet::from([Ipv4Addr::new(198, 18, 64, 1)]),
+                    ipv6: BTreeSet::from(["2001:2:0:64::1".parse().unwrap()]),
+                    ..InterfaceObservation::default()
+                },
+            ),
         ]),
-        default_routes: BTreeSet::from([(IpFamily::V4, name("en8"))]),
+        default_routes: BTreeSet::from([
+            (IpFamily::V4, name("en8")),
+            (IpFamily::V4, name("utun8")),
+        ]),
     };
-    foreign_networks(
+    let check = network_check(
         &snapshot,
         &Exemptions {
             egress: name("en8"),
-            tunnels: BTreeSet::new(),
+            uplink: None,
+            own: &own,
         },
-    )
+    );
+    assert!(check.foreign.is_empty(), "{:?}", check.foreign);
+    assert_eq!(check.allowed.len(), 2);
+    check
 }
 
 fn engine(pid: Option<u32>, restarts: u32, last_exit: Option<EngineExit>) -> EngineProcess {
@@ -533,7 +574,8 @@ pub(crate) fn serving() -> MacStatusV1 {
                 outcome: mooring_daemon_core::status::DrainOutcome::Completed,
             }),
         },
-        foreign_networks: clean_network(),
+        foreign_networks: clean_network().foreign,
+        allowed_networks: clean_network().allowed,
     };
     assemble(Inputs {
         exit,
@@ -790,7 +832,8 @@ fn degraded() -> MacStatusV1 {
             last_wake: Some(at("2026-10-07", 22 * HOUR + 40 * MINUTE)),
             last_drain: None,
         },
-        foreign_networks: clean_network(),
+        foreign_networks: clean_network().foreign,
+        allowed_networks: clean_network().allowed,
     };
     // The policy actions the next apply window would take, and the alerts.
     let report = aggregate(&deployment, &ledgers, through).unwrap();
@@ -994,7 +1037,8 @@ fn down() -> MacStatusV1 {
             last_wake: None,
             last_drain: None,
         },
-        foreign_networks: clean_network(),
+        foreign_networks: clean_network().foreign,
+        allowed_networks: clean_network().allowed,
     };
     // The latch's alert names exactly the latched violations' kinds.
     let mut machine = AlertMachine::new(AlertTiming::DEFAULT);

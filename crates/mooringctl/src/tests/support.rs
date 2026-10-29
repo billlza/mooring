@@ -19,7 +19,7 @@ use mooring_agent_proto::{LineRequest, RequestKind, Response, Sha256Hex};
 use mooring_daemon_core::meter::CounterReading;
 use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::status::PowerSource;
-use mooring_macsys::{Interface, InterfaceAddrV4, MacsysError};
+use mooring_macsys::{DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry};
 use mooring_model::time::UnixTime;
@@ -282,6 +282,10 @@ pub(crate) struct FakeLink {
     /// Interfaces other than `lo0`, by index: each one's default gateway
     /// and that gateway's neighbour entry.
     pub(crate) routes: std::collections::BTreeMap<u32, Route>,
+    /// The kernel's default routes, as `default_routes()` answers them.
+    pub(crate) default_routes: Result<Vec<DefaultRoute>, MacsysError>,
+    /// configd's IPv4 services, as `ipv4_services()` answers them.
+    pub(crate) services: Result<Vec<Ipv4Service>, MacsysError>,
 }
 
 /// An interface's default gateway and that gateway's neighbour entry, as
@@ -300,6 +304,8 @@ impl FakeLink {
             }]),
             listed: Ok(Vec::new()),
             routes: std::collections::BTreeMap::new(),
+            default_routes: Ok(Vec::new()),
+            services: Ok(Vec::new()),
         }
     }
 
@@ -349,6 +355,14 @@ impl LinkLayer for FakeLink {
 
     fn interfaces(&self) -> Result<Vec<Interface>, MacsysError> {
         self.listed.clone()
+    }
+
+    fn default_routes(&self) -> Result<Vec<DefaultRoute>, MacsysError> {
+        self.default_routes.clone()
+    }
+
+    fn ipv4_services(&self) -> Result<Vec<Ipv4Service>, MacsysError> {
+        self.services.clone()
     }
 }
 

@@ -16,7 +16,9 @@
 //! 2. the SIM plan is recorded (`SimPlanUnrecorded`) and the cycle's bytes
 //!    are below the hard stop (`SimCapReached`, until the cycle resets);
 //! 3. the egress (and a separate uplink) resolve;
-//! 4. no foreign network is attached (P0-2);
+//! 4. no foreign network is attached (P0-2): CFM's TUN and the operator's
+//!    declared own networks are allowed and reported, not foreign
+//!    ([`crate::network`]);
 //! 5. the carrier check is recorded (`CarrierCheckUnrecorded`);
 //! 6. no violation is latched;
 //! 7. a node has confirmed a configuration (`NoAppliedNode`);
@@ -84,11 +86,11 @@ use mooring_model::verdict::{LatchRecord, Violation, direct_verdict};
 use mooring_model::{Deployment, NodeId, Sha256Digest, UnixTime};
 
 use crate::alert::MacEngine;
-use crate::network::ForeignNetworkFinding;
+use crate::network::{AllowedNetwork, ForeignNetworkFinding};
 use crate::status::{
     CarrierCheck, DegradedReason, DownReason, DrainOutcome, EgressFacts, EngineExit, EngineProcess,
-    ExitSection, ExitState, Latch, LinkState, MacEngines, PowerSource, PowerStatus, ProbeStage,
-    ProcessEnd, ProtocolVerdicts,
+    ExitSection, ExitState, Latch, LinkState, MacEngines, OwnNetworkInput, PowerSource,
+    PowerStatus, ProbeStage, ProcessEnd, ProtocolVerdicts,
 };
 
 pub use in_chain::{IN_CHAIN_FIRST, InChainProbe, InChainTarget, RenderedProber};
@@ -206,8 +208,14 @@ pub struct TickInputs<'a> {
     pub exit_enabled: bool,
     /// The interfaces, or why they did not resolve.
     pub egress: Result<Egress, EgressFault>,
-    /// What the foreign-network check found.
+    /// What the network check found foreign.
     pub foreign: BTreeSet<ForeignNetworkFinding>,
+    /// What the network check allowed (CFM's TUN, the operator's own
+    /// networks), reported in the section.
+    pub allowed: BTreeSet<AllowedNetwork>,
+    /// The inputs of the own-network match that could not be read this
+    /// tick; each degrades a running exit (`OwnNetworksUnreadable`).
+    pub own_networks_unreadable: BTreeSet<OwnNetworkInput>,
     /// The cycle's SIM bytes.
     pub sim: SimUse,
     /// The Mac's power.
@@ -992,6 +1000,12 @@ impl ExitMachine {
         if !inputs.power_helper_running {
             reasons.push(DegradedReason::PowerHelperExited);
         }
+        reasons.extend(
+            inputs
+                .own_networks_unreadable
+                .iter()
+                .map(|&input| DegradedReason::OwnNetworksUnreadable { input }),
+        );
         reasons.extend(inputs.nodes_degraded.iter().cloned());
         reasons.extend(self.in_chain.failures_since(started));
         match NonEmpty::try_from(reasons) {
@@ -1081,6 +1095,7 @@ impl ExitMachine {
             },
             power: inputs.power,
             foreign_networks: inputs.foreign.clone(),
+            allowed_networks: inputs.allowed.clone(),
         }
     }
 }

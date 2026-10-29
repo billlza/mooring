@@ -21,12 +21,15 @@ use std::time::{Duration, Instant};
 
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::{COUNTER_MODULUS, CounterReading, CycleBytes, SimMeter};
-use mooring_daemon_core::network::ForeignNetworkFinding;
+use mooring_daemon_core::network::{AllowedNetwork, ForeignNetworkFinding, IpFamily};
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::status::{LinkState, PowerSource, ProbeStage};
-use mooring_macsys::{Interface, InterfaceAddrV4, MacsysError};
+use mooring_macsys::{DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
+use mooring_model::dns::DnsName;
 use mooring_model::exit::Uplink;
-use mooring_model::iface::{BsdName, InterfaceIndex, InterfaceSelector, MacAddr};
+use mooring_model::ids::LocalLabel;
+use mooring_model::iface::{BsdName, InterfaceIndex, InterfaceSelector, MacAddr, RouterIdentity};
+use mooring_model::own_network::{OwnNetwork, OwnNetworkKind, OwnNetworks};
 use mooring_model::sim::{CycleRule, PeriodDays};
 use mooring_model::{CalendarDate, UnixTime};
 use mooring_store::{SIM_METER_FILE, USAGE_DIRECTORY};
@@ -35,7 +38,7 @@ use super::support::{FakeLink, PINNED, Route};
 use crate::error::LocalError;
 use crate::runtime::engine::{Engine, EngineError};
 use crate::runtime::meter::{MeterThread, Reader, Watched};
-use crate::runtime::network::foreign;
+use crate::runtime::network::{check, snapshot};
 use crate::runtime::ports::{ENGINE_PID_FILE, stop_stale_engine};
 use crate::runtime::power::read_lines;
 use crate::runtime::probe::{direct, in_chain};
@@ -67,6 +70,7 @@ fn interface(index: u32, name: &str, own: [u8; 6], addr: Option<[u8; 4]>, up: bo
             })
             .into_iter()
             .collect(),
+        ipv6: Vec::new(),
     }
 }
 
@@ -286,36 +290,224 @@ fn the_exit_site_resolves_to_the_machine_s_egress_or_its_fault() {
     ));
 }
 
-#[test]
-fn every_routable_interface_but_the_egress_is_foreign() {
-    let listed = vec![
+fn name(text: &str) -> BsdName {
+    BsdName::parse(text).unwrap()
+}
+
+fn service(
+    interface: &str,
+    router: Option<[u8; 4]>,
+    lladdr: Option<[u8; 6]>,
+    domain: Option<&str>,
+) -> Ipv4Service {
+    Ipv4Service {
+        interface: interface.to_owned(),
+        router: router.map(Ipv4Addr::from),
+        router_lladdr: lladdr,
+        domain: domain.map(str::to_owned),
+    }
+}
+
+fn default_route(interface_index: u32, gateway: [u8; 4], scoped: bool) -> DefaultRoute {
+    DefaultRoute {
+        interface_index,
+        gateway: Ipv4Addr::from(gateway),
+        scoped,
+    }
+}
+
+/// The iPhone's hotspot router, a made-up locally administered address.
+const HOTSPOT: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x20, 0x60];
+
+/// The exit Mac joined to the operator's hotspot on en0 beside the M7 on
+/// en8, with CFM's TUN holding the unscoped default and a VM bridge.
+fn joined() -> Vec<Interface> {
+    let mut utun8 = interface(20, "utun8", OTHER, Some([198, 18, 64, 1]), true);
+    utun8.ipv6 = vec!["2001:2:0:64::1".parse().unwrap()];
+    vec![
         interface(1, "lo0", OWN, Some([127, 0, 0, 1]), true),
         interface(8, "en8", OWN, Some([192, 168, 1, 20]), true),
         interface(4, "en0", OTHER, Some([172, 20, 10, 2]), true),
-        interface(20, "utun3", OTHER, None, true),
+        utun8,
         interface(30, "bridge100", OTHER, Some([192, 168, 64, 1]), true),
-        interface(31, "bridge0", OTHER, Some([169, 254, 3, 3]), true),
-    ];
-    let found = foreign(&listed, &BsdName::parse("en8").unwrap()).unwrap();
-    let names: Vec<String> = found
-        .iter()
-        .map(|finding| match finding {
-            ForeignNetworkFinding::RoutableIpv4 { interface } => interface.as_str().to_owned(),
-            other => panic!("{other:?}"),
-        })
-        .collect();
-    assert_eq!(names, ["bridge100", "en0"]);
-    // The same list with the egress elsewhere names en8 too.
-    assert_eq!(
-        foreign(&listed, &BsdName::parse("en0").unwrap())
-            .unwrap()
-            .len(),
-        2
+    ]
+}
+
+fn routes() -> Vec<DefaultRoute> {
+    vec![
+        default_route(8, [192, 168, 1, 1], true),
+        default_route(4, [172, 20, 10, 1], false),
+        default_route(20, [198, 18, 64, 2], false),
+        // An interface that went away between the two reads.
+        default_route(99, [10, 0, 0, 1], false),
+    ]
+}
+
+fn services(domain: Option<&str>) -> Vec<Ipv4Service> {
+    vec![
+        service("en0", Some([172, 20, 10, 1]), Some(HOTSPOT), domain),
+        service("en8", Some([192, 168, 1, 1]), Some(PINNED), None),
+        service("utun8", None, None, None),
+        // The router's link-layer address is not resolved yet.
+        service("bridge100", Some([192, 168, 64, 1]), None, None),
+        // A service on an interface the kernel does not list.
+        service("en7", Some([10, 0, 0, 1]), Some(OTHER), None),
+    ]
+}
+
+fn hotspot() -> RouterIdentity {
+    RouterIdentity::new(
+        Ipv4Addr::new(172, 20, 10, 1),
+        MacAddr::from_bytes(HOTSPOT).unwrap(),
+    )
+    .unwrap()
+}
+
+fn declared() -> OwnNetworks {
+    let mut own = OwnNetworks::new();
+    own.insert(
+        LocalLabel::parse("my phone").unwrap(),
+        OwnNetwork {
+            kind: OwnNetworkKind::PersonalHotspot,
+            router: hotspot(),
+            declared_at: UnixTime::from_secs(1_793_300_000),
+        },
     );
+    own
+}
+
+#[test]
+fn the_snapshot_holds_addresses_routers_domains_and_unscoped_default_routes() {
+    let services = services(Some("DUR.AC.UK"));
+    let seen = snapshot(&joined(), &routes(), Some(&services)).unwrap();
+    let en0 = &seen.interfaces[&name("en0")];
+    assert_eq!(en0.ipv4, [Ipv4Addr::new(172, 20, 10, 2)].into());
+    assert_eq!(en0.router, Some(hotspot()));
+    // The domain is lowercased: DNS names are case-insensitive.
+    assert_eq!(en0.domain.as_ref().map(DnsName::as_str), Some("dur.ac.uk"));
+    let utun8 = &seen.interfaces[&name("utun8")];
+    assert_eq!(utun8.ipv6, ["2001:2:0:64::1".parse().unwrap()].into());
+    assert_eq!((utun8.router, &utun8.domain), (None, &None));
+    assert_eq!(
+        seen.interfaces[&name("en8")].router,
+        Some(
+            RouterIdentity::new(
+                Ipv4Addr::new(192, 168, 1, 1),
+                MacAddr::from_bytes(PINNED).unwrap()
+            )
+            .unwrap()
+        )
+    );
+    // An unresolved link-layer address identifies no router yet.
+    assert_eq!(seen.interfaces[&name("bridge100")].router, None);
+    // A service on an unlisted interface is no interface.
+    assert!(!seen.interfaces.contains_key(&name("en7")));
+    // Scoped routes and the vanished interface's route are left out.
+    assert_eq!(
+        seen.default_routes,
+        [(IpFamily::V4, name("en0")), (IpFamily::V4, name("utun8"))].into()
+    );
+    // Two services with a router on one interface identify no network;
+    // a placeholder address identifies no device; a domain that is no DNS
+    // name is no domain.
+    let ambiguous = vec![
+        service(
+            "en0",
+            Some([172, 20, 10, 1]),
+            Some(HOTSPOT),
+            Some("example.com"),
+        ),
+        service(
+            "en0",
+            Some([192, 168, 0, 1]),
+            Some(OTHER),
+            Some("example.com"),
+        ),
+    ];
+    let en0 = &snapshot(&joined(), &[], Some(&ambiguous))
+        .unwrap()
+        .interfaces[&name("en0")];
+    assert_eq!((en0.router, &en0.domain), (None, &None));
+    let placeholder = vec![service(
+        "en0",
+        Some([172, 20, 10, 1]),
+        Some([0x02, 0, 0, 0, 0, 0]),
+        Some("not a domain!"),
+    )];
+    let en0 = &snapshot(&joined(), &[], Some(&placeholder))
+        .unwrap()
+        .interfaces[&name("en0")];
+    assert_eq!((en0.router, &en0.domain), (None, &None));
+    // Without configd no router is known.
+    let blind = snapshot(&joined(), &routes(), None).unwrap();
+    assert!(
+        blind
+            .interfaces
+            .values()
+            .all(|observed| observed.router.is_none())
+    );
+    assert_eq!(blind.default_routes.len(), 2);
+    // An interface whose name is no BSD name is a daemon error.
     let odd = vec![interface(1, "not a name", OWN, Some([10, 0, 0, 1]), true)];
     assert!(matches!(
-        foreign(&odd, &BsdName::parse("en8").unwrap()),
+        snapshot(&odd, &[], None),
         Err(LocalError::InterfaceName { name }) if name == "not a name"
+    ));
+}
+
+#[test]
+fn the_check_allows_cfm_tun_and_a_declared_network_and_exempts_the_uplink() {
+    let services = services(None);
+    let seen = snapshot(&joined(), &routes(), Some(&services)).unwrap();
+    let own = declared();
+    let none = OwnNetworks::new();
+    let found = check(&seen, &name("en8"), None, &own);
+    assert_eq!(
+        found.allowed,
+        [
+            AllowedNetwork::Own {
+                interface: name("en0"),
+                kind: OwnNetworkKind::PersonalHotspot,
+            },
+            AllowedNetwork::BenchmarkingTun {
+                interface: name("utun8"),
+            },
+        ]
+        .into()
+    );
+    assert_eq!(
+        found.foreign,
+        [ForeignNetworkFinding::RoutableIpv4 {
+            interface: name("bridge100"),
+        }]
+        .into()
+    );
+    // Undeclared, the hotspot is foreign with its default route.
+    let strict = check(&seen, &name("en8"), None, &none);
+    assert_eq!(
+        strict.foreign,
+        [
+            ForeignNetworkFinding::RoutableIpv4 {
+                interface: name("bridge100"),
+            },
+            ForeignNetworkFinding::RoutableIpv4 {
+                interface: name("en0"),
+            },
+            ForeignNetworkFinding::DefaultRoute {
+                interface: name("en0"),
+                family: IpFamily::V4,
+            },
+        ]
+        .into()
+    );
+    // The separate uplink is exempt like the egress.
+    let uplinked = check(&seen, &name("en8"), Some(&name("bridge100")), &own);
+    assert!(uplinked.foreign.is_empty(), "{:?}", uplinked.foreign);
+    // The same list with the egress elsewhere names en8 too.
+    assert!(check(&seen, &name("en0"), None, &none).foreign.contains(
+        &ForeignNetworkFinding::RoutableIpv4 {
+            interface: name("en8"),
+        }
     ));
 }
 

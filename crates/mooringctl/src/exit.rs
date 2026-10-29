@@ -23,6 +23,8 @@ use mooring_store::{Store, StoreError};
 
 use crate::app::{Env, support_dir};
 use crate::daemon::RunPaths;
+
+pub(crate) mod own_network;
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::node::dial::facing_the_m7;
 use crate::prompt::Answer;

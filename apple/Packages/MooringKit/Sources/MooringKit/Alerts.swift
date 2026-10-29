@@ -53,6 +53,7 @@ public enum DegradedReasonKind: String, Decodable, Sendable, CaseIterable {
     case watchStale = "WatchStale"
     case onBattery = "OnBattery"
     case powerHelperExited = "PowerHelperExited"
+    case ownNetworksUnreadable = "OwnNetworksUnreadable"
 }
 
 /// The M7's critical thermal levels.

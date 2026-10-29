@@ -71,6 +71,8 @@ import Testing
                 == CriticalThermalLevel.allCases)
         #expect(try decode(SimThreshold.self, "sim_threshold") == SimThreshold.allCases)
         #expect(try decode(IpFamily.self, "ip_family") == IpFamily.allCases)
+        #expect(try decode(OwnNetworkKind.self, "own_network_kind") == OwnNetworkKind.allCases)
+        #expect(try decode(OwnNetworkInput.self, "own_network_input") == OwnNetworkInput.allCases)
         #expect(try decode(ActiveNow.self, "active_now") == ActiveNow.allCases)
         #expect(
             try decode(ForecastErrorKind.self, "forecast_error_kind") == ForecastErrorKind.allCases)
@@ -91,7 +93,7 @@ import Testing
     /// cases. A variant the Rust side adds is a value the mirror refuses.
     @Test func everyDeploymentVariantWithFieldsIsRead() throws {
         try distinct(ExitState.self, "exit_state", cases: 8)
-        try distinct(DegradedReason.self, "degraded_reason", cases: 5)
+        try distinct(DegradedReason.self, "degraded_reason", cases: 6)
         try distinct(DownReason.self, "down_reason", cases: 19)
         try distinct(ProcessEnd.self, "process_end", cases: 2)
         try distinct(ForecastView.self, "forecast_view", cases: 2)
@@ -103,7 +105,8 @@ import Testing
         try distinct(Crossing.self, "crossing", cases: 3)
         try distinct(UplinkUse.self, "uplink_use", cases: 2)
         try distinct(Saturation.self, "saturation", cases: 4)
-        try distinct(ForeignNetworkFinding.self, "foreign_network_finding", cases: 4)
+        try distinct(ForeignNetworkFinding.self, "foreign_network_finding", cases: 3)
+        try distinct(AllowedNetwork.self, "allowed_network", cases: 2)
         try distinct(QuotaState.self, "quota_state", cases: 5)
         try distinct(ExpiryState.self, "expiry_state", cases: 3)
         try distinct(UserStatus.self, "user_status", cases: 4)
@@ -127,7 +130,7 @@ import Testing
         guard let object = document as? [String: Any] else {
             throw CocoaError(.coderValueNotFound)
         }
-        #expect(object.count == 59)
+        #expect(object.count == 62)
     }
 
     /// The M7's own spellings, which the CLI's summary prints too.

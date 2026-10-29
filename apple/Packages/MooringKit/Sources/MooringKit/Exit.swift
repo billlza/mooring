@@ -92,7 +92,6 @@ public enum ForeignNetworkFinding: Decodable, Hashable, Sendable {
     case routableIpv4(interface: String)
     case globalIpv6(interface: String)
     case defaultRoute(interface: String, family: IpFamily)
-    case personalHotspot(interface: String)
 
     public init(from decoder: any Decoder) throws {
         let (tag, value) = try decoder.variant()
@@ -106,9 +105,6 @@ public enum ForeignNetworkFinding: Decodable, Hashable, Sendable {
             self = .defaultRoute(
                 interface: try object.field(String.self, "interface"),
                 family: try object.field(IpFamily.self, "family"))
-        case ("personal_hotspot", let value?):
-            self = .personalHotspot(
-                interface: try value.fields("interface").field(String.self, "interface"))
         default:
             throw decoder.unknownVariant(tag)
         }
@@ -118,10 +114,54 @@ public enum ForeignNetworkFinding: Decodable, Hashable, Sendable {
     public var interface: String {
         switch self {
         case .routableIpv4(let interface), .globalIpv6(let interface),
-            .defaultRoute(let interface, _), .personalHotspot(let interface):
+            .defaultRoute(let interface, _):
             interface
         }
     }
+}
+
+/// What kind of connection a declared own network is (design §10.2, P0-2).
+public enum OwnNetworkKind: String, Decodable, Sendable, CaseIterable {
+    case personalHotspot = "personal_hotspot"
+    case broadband
+}
+
+/// An attachment the network check allowed: a network the operator declared
+/// as their own, or a TUN numbered only in the benchmarking range (CFM's).
+public enum AllowedNetwork: Decodable, Hashable, Sendable {
+    case own(interface: String, kind: OwnNetworkKind)
+    case benchmarkingTun(interface: String)
+
+    public init(from decoder: any Decoder) throws {
+        let (tag, value) = try decoder.variant()
+        switch (tag, value) {
+        case ("own", let value?):
+            let object = try value.fields("interface", "kind")
+            self = .own(
+                interface: try object.field(String.self, "interface"),
+                kind: try object.field(OwnNetworkKind.self, "kind"))
+        case ("benchmarking_tun", let value?):
+            self = .benchmarkingTun(
+                interface: try value.fields("interface").field(String.self, "interface"))
+        default:
+            throw decoder.unknownVariant(tag)
+        }
+    }
+
+    /// The interface allowed.
+    public var interface: String {
+        switch self {
+        case .own(let interface, _), .benchmarkingTun(let interface):
+            interface
+        }
+    }
+}
+
+/// An input of the own-network match that could not be read; no declared
+/// network matches until it can.
+public enum OwnNetworkInput: String, Decodable, Sendable, CaseIterable {
+    case declarations
+    case routerIdentities = "router_identities"
 }
 
 /// An IP family.
@@ -141,6 +181,9 @@ public enum DegradedReason: Decodable, Hashable, Sendable {
     case onBattery
     /// The power helper exited.
     case powerHelperExited
+    /// The own-network declarations or configd's services could not be
+    /// read, so no declared network matches.
+    case ownNetworksUnreadable(input: OwnNetworkInput)
 
     public init(from decoder: any Decoder) throws {
         let (tag, value) = try decoder.variant()
@@ -159,6 +202,9 @@ public enum DegradedReason: Decodable, Hashable, Sendable {
             self = .onBattery
         case ("power_helper_exited", nil):
             self = .powerHelperExited
+        case ("own_networks_unreadable", let value?):
+            self = .ownNetworksUnreadable(
+                input: try value.fields("input").field(OwnNetworkInput.self, "input"))
         default:
             throw decoder.unknownVariant(tag)
         }
@@ -496,12 +542,16 @@ public struct ExitSection: Decodable, Hashable, Sendable {
     public let power: PowerStatus
     /// Networks the Mac must not be attached to.
     public let foreignNetworks: [ForeignNetworkFinding]
+    /// Attachments the check allowed: CFM's TUN and the operator's own
+    /// networks.
+    public let allowedNetworks: [AllowedNetwork]
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case state, since, latches, egress
         case carrierCheck = "carrier_check"
         case engines, power
         case foreignNetworks = "foreign_networks"
+        case allowedNetworks = "allowed_networks"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -514,5 +564,6 @@ public struct ExitSection: Decodable, Hashable, Sendable {
         engines = try object.decode(MacEngines.self, forKey: .engines)
         power = try object.decode(PowerStatus.self, forKey: .power)
         foreignNetworks = try object.decode([ForeignNetworkFinding].self, forKey: .foreignNetworks)
+        allowedNetworks = try object.decode([AllowedNetwork].self, forKey: .allowedNetworks)
     }
 }

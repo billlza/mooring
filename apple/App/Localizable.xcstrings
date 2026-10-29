@@ -171,12 +171,12 @@
         }
       }
     },
-    "%@ is a Personal Hotspot": {
+    "%@ is a tunnel in the benchmarking range (CFM's TUN)": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ 是个人热点"
+            "value": "%@ 是基准测试地址段里的隧道（CFM 的 TUN）"
           }
         }
       }
@@ -207,6 +207,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@ 没有统计探测在 %2$@ 上的流量"
+          }
+        }
+      }
+    },
+    "%@ is your own Personal Hotspot": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 是你自己的个人热点"
+          }
+        }
+      }
+    },
+    "%@ is your own broadband": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 是你自己的宽带"
           }
         }
       }
@@ -586,6 +606,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "流量额度"
+          }
+        }
+      }
+    },
+    "Allowed networks": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许的网络"
           }
         }
       }
@@ -1752,6 +1782,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "节点"
+          }
+        }
+      }
+    },
+    "None: no own network or CFM tunnel is attached.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有：没有连着自有网络或 CFM 隧道。"
           }
         }
       }
@@ -2986,6 +3026,16 @@
         }
       }
     },
+    "The own-network declarations cannot be read; no declared network matches.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取自有网络声明；没有声明的网络能匹配。"
+          }
+        }
+      }
+    },
     "The power helper exited.": {
       "localizations": {
         "zh-Hans": {
@@ -3459,6 +3509,16 @@
     "Xray": {
       "shouldTranslate": false
     },
+    "Your own networks, declared with `mooringctl exit allow-network`, and CFM's tunnel keep the exit serving; every exit connection stays bound to the M7.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 `mooringctl exit allow-network` 声明的自有网络和 CFM 的隧道不影响出口继续服务；每个出口连接仍绑定在 M7 上。"
+          }
+        }
+      }
+    },
     "`mooringctl exit enable`, `disable` and `retry` change it from Terminal; the console only shows it.": {
       "localizations": {
         "zh-Hans": {
@@ -3785,6 +3845,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "已完成"
+          }
+        }
+      }
+    },
+    "configd's network services cannot be read; no declared network matches.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法从 configd 读取网络服务；没有声明的网络能匹配。"
           }
         }
       }
@@ -4575,6 +4645,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "运营者（%@）"
+          }
+        }
+      }
+    },
+    "the own-network inputs cannot be read": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取自有网络的输入"
           }
         }
       }

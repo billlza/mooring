@@ -23,6 +23,7 @@ use mooring_model::collections::NonEmpty;
 use mooring_model::exit::ProbeProtocol;
 use mooring_model::iface::BsdName;
 use mooring_model::node::{LifecycleStage, NodeRole};
+use mooring_model::own_network::OwnNetworkKind;
 use mooring_model::sim::{PlanLineKind, StopPolicy};
 use mooring_model::user::{SuspendReason, UserStatus};
 use mooring_model::verdict::{Violation, ViolationKind};
@@ -41,7 +42,7 @@ use crate::capacity::{Saturation, UplinkUse};
 use crate::console::ConsoleStatus;
 use crate::error::{ForecastErrorKind, UsageErrorKind};
 use crate::forecast::{Crossing, DailySimBytes, SimForecast, SimThreshold};
-use crate::network::{ForeignNetworkFinding, IpFamily};
+use crate::network::{AllowedNetwork, ForeignNetworkFinding, IpFamily};
 use crate::period::UsagePeriods;
 use crate::policy::{ExpiryState, QuotaState};
 use crate::router::{
@@ -51,8 +52,8 @@ use crate::router::{
 };
 use crate::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, ForecastView,
-    InChainOutcome, MacStatusV1, MeterAccuracy, NodeAgentState, NodeReport, PowerSource,
-    ProbeStage, ProcessEnd, UsageView,
+    InChainOutcome, MacStatusV1, MeterAccuracy, NodeAgentState, NodeReport, OwnNetworkInput,
+    PowerSource, ProbeStage, ProcessEnd, UsageView,
 };
 use crate::usage::ActiveNow;
 
@@ -87,6 +88,9 @@ struct Variants {
     uplink_use: Vec<UplinkUse>,
     saturation: Vec<Saturation>,
     foreign_network_finding: Vec<ForeignNetworkFinding>,
+    allowed_network: Vec<AllowedNetwork>,
+    own_network_kind: Vec<OwnNetworkKind>,
+    own_network_input: Vec<OwnNetworkInput>,
     ip_family: Vec<IpFamily>,
     quota_state: Vec<QuotaState>,
     expiry_state: Vec<ExpiryState>,
@@ -144,8 +148,17 @@ fn findings() -> Vec<ForeignNetworkFinding> {
             interface: interface("en0"),
             family: IpFamily::V6,
         },
-        ForeignNetworkFinding::PersonalHotspot {
+    ]
+}
+
+fn allowed() -> Vec<AllowedNetwork> {
+    vec![
+        AllowedNetwork::Own {
             interface: interface("en5"),
+            kind: OwnNetworkKind::PersonalHotspot,
+        },
+        AllowedNetwork::BenchmarkingTun {
+            interface: interface("utun8"),
         },
     ]
 }
@@ -182,6 +195,9 @@ fn degraded_reasons() -> Vec<DegradedReason> {
         DegradedReason::WatchStale { node: node("ams1") },
         DegradedReason::OnBattery,
         DegradedReason::PowerHelperExited,
+        DegradedReason::OwnNetworksUnreadable {
+            input: OwnNetworkInput::Declarations,
+        },
     ]
 }
 
@@ -383,6 +399,12 @@ fn variants() -> Variants {
             Saturation::Saturated { since: t(0) },
         ],
         foreign_network_finding: findings(),
+        allowed_network: allowed(),
+        own_network_kind: vec![OwnNetworkKind::PersonalHotspot, OwnNetworkKind::Broadband],
+        own_network_input: vec![
+            OwnNetworkInput::Declarations,
+            OwnNetworkInput::RouterIdentities,
+        ],
         ip_family: vec![IpFamily::V4, IpFamily::V6],
         quota_state: vec![
             QuotaState::NoQuota,
@@ -578,8 +600,9 @@ fn the_variants_fixture_lists_every_variant() {
             DegradedReason::WatchStale { .. } => 2,
             DegradedReason::OnBattery => 3,
             DegradedReason::PowerHelperExited => 4,
+            DegradedReason::OwnNetworksUnreadable { .. } => 5,
         },
-        5,
+        6,
     );
     every_variant(
         "down_reason",
@@ -816,9 +839,35 @@ fn the_variants_fixture_lists_every_variant() {
             ForeignNetworkFinding::RoutableIpv4 { .. } => 0,
             ForeignNetworkFinding::GlobalIpv6 { .. } => 1,
             ForeignNetworkFinding::DefaultRoute { .. } => 2,
-            ForeignNetworkFinding::PersonalHotspot { .. } => 3,
         },
-        4,
+        3,
+    );
+    every_variant(
+        "allowed_network",
+        &v.allowed_network,
+        |value| match value {
+            AllowedNetwork::Own { .. } => 0,
+            AllowedNetwork::BenchmarkingTun { .. } => 1,
+        },
+        2,
+    );
+    every_variant(
+        "own_network_kind",
+        &v.own_network_kind,
+        |value| match value {
+            OwnNetworkKind::PersonalHotspot => 0,
+            OwnNetworkKind::Broadband => 1,
+        },
+        2,
+    );
+    every_variant(
+        "own_network_input",
+        &v.own_network_input,
+        |value| match value {
+            OwnNetworkInput::Declarations => 0,
+            OwnNetworkInput::RouterIdentities => 1,
+        },
+        2,
     );
     every_variant(
         "ip_family",

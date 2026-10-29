@@ -45,6 +45,7 @@ fn exit(at: UnixTime) -> ExitSection {
             last_drain: None,
         },
         foreign_networks: std::collections::BTreeSet::new(),
+        allowed_networks: std::collections::BTreeSet::new(),
     }
 }
 

@@ -26,7 +26,8 @@ use mooring_daemon_core::router::{
 };
 use mooring_daemon_core::status::{DegradedReason, DownReason, ExitState, ForecastView, UsageView};
 use mooring_daemon_core::{
-    ForeignNetworkFinding, MacStatusParts, MacStatusV1, ReportError, ReportErrorKind,
+    AllowedNetwork, ForeignNetworkFinding, MacStatusParts, MacStatusV1, ReportError,
+    ReportErrorKind,
 };
 use mooring_model::collections::NonEmpty;
 use mooring_model::iface::BsdName;
@@ -670,8 +671,12 @@ fn identifiers(status: &MacStatusV1) -> Vec<String> {
     for finding in &parts.exit.foreign_networks {
         let (ForeignNetworkFinding::RoutableIpv4 { interface }
         | ForeignNetworkFinding::GlobalIpv6 { interface }
-        | ForeignNetworkFinding::DefaultRoute { interface, .. }
-        | ForeignNetworkFinding::PersonalHotspot { interface }) = finding;
+        | ForeignNetworkFinding::DefaultRoute { interface, .. }) = finding;
+        words.push(interface.as_str().to_owned());
+    }
+    for allowed in &parts.exit.allowed_networks {
+        let (AllowedNetwork::Own { interface, .. } | AllowedNetwork::BenchmarkingTun { interface }) =
+            allowed;
         words.push(interface.as_str().to_owned());
     }
     if let RouterReading::Available { status, .. } = &parts.router {
