@@ -111,6 +111,20 @@ The same status is available in Terminal:
 
 `cargo xtask clean` and `cargo xtask app` are refused while the daemon is loaded: it runs from the target directory that `clean` removes, and launchd would not start the `mooringctl` that `app` rebuilds (section 1).
 
+## 5. Your own networks (2026-10-29)
+
+The exit goes down while this Mac is joined to any network other than the M7's (design §10.2, P0-2): campus Wi-Fi, eduroam, campus Ethernet, another VPN's tunnel, a VM bridge. Two attachments are allowed: CFM's own tunnel in TUN mode, told by its addresses, and a connection you contract for yourself (your own phone's Personal Hotspot, your home broadband), which you declare once while the Mac is joined to it:
+
+```
+./target/signed/mooringctl exit allow-network --interface en0 --name "my phone" --personal-hotspot
+./target/signed/mooringctl exit allowed-networks
+./target/signed/mooringctl exit disallow-network --name "my phone"
+```
+
+`en0` is the interface joined to the network (`ifconfig`: the one with the hotspot's `172.20.10.x` address). The command prints the network's router and its link-layer address, which identify the network (the SSID cannot be read on macOS 27, so `--name` is your label only), states the policy and asks before it records anything. It refuses the interface that faces the M7, a network whose router is not resolved yet (wait a few seconds after joining), a hotspot whose router is not Apple's `172.20.10.1`, and any network on a `.ac.uk` domain: an institutional network is never allowed, whatever is declared. Each medium of the phone (Wi-Fi, USB, Bluetooth) shows another address and is declared on its own.
+
+With the network declared the exit stays `Serving` while the Mac is joined to it, even when it holds the default route (every exit connection is bound to the M7, design §10.4), and the console's Exit screen lists it under **Allowed networks**. The declaration is Mac-local (`allowed-networks.json` beside `state.json`); if it cannot be read the daemon treats it as none, the network becomes foreign again and the exit shows `Degraded` with `own networks unreadable` while it serves: `exit allowed-networks` names the fault.
+
 ## Troubleshooting
 
 **`the Mooring daemon is not running`:** the daemon is not started, or it stopped.
