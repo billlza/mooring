@@ -14,6 +14,7 @@ mod netgear;
 mod notify;
 mod policy;
 mod power;
+mod radio_history;
 mod router;
 mod snapshot;
 mod support;

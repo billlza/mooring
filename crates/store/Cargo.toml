@@ -13,6 +13,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# `O_NOFOLLOW` for the radio history's day files (a constant; no unsafe).
+libc.workspace = true
 mooring-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true

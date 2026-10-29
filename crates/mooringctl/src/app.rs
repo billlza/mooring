@@ -279,6 +279,9 @@ fn execute(
         } => pin(env, out, &interface, yes, replace),
         RouterCommand::SetPassword { stdin } => set_password(env, out, stdin),
         RouterCommand::Status { interface, json } => status(env, out, &interface, json),
+        RouterCommand::History { since, until, json } => {
+            router::history::history(env, out, since, until, json)
+        }
         RouterCommand::Capture {
             interface,
             out: path,

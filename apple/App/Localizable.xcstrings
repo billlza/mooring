@@ -364,6 +364,16 @@
         }
       }
     },
+    "%@: the last line is incomplete; the daemon may be writing it, or stopped while writing it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@：最后一行不完整；守护进程可能正在写入，或在写入时停止了。"
+          }
+        }
+      }
+    },
     "%d °C, %@": {
       "shouldTranslate": false
     },
@@ -650,6 +660,16 @@
         }
       }
     },
+    "Band %@ → %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "频段 %@ → %@"
+          }
+        }
+      }
+    },
     "Battery": {
       "localizations": {
         "zh-Hans": {
@@ -856,6 +876,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "日均"
+          }
+        }
+      }
+    },
+    "Data service %@ → %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "数据服务 %@ → %@"
+          }
+        }
+      }
+    },
+    "Data session restarted (shorter than at the last read)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "数据会话已重启（比上次读取时短）"
           }
         }
       }
@@ -1283,6 +1323,16 @@
         }
       }
     },
+    "Last 24 hours, as of %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近 24 小时，截至 %@。"
+          }
+        }
+      }
+    },
     "Last drain": {
       "localizations": {
         "zh-Hans": {
@@ -1399,6 +1449,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "负载下延迟"
+          }
+        }
+      }
+    },
+    "Loading the history…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在加载历史…"
           }
         }
       }
@@ -1532,6 +1592,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "网络"
+          }
+        }
+      }
+    },
+    "Network %@-%@ → %@-%@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网络 %@-%@ → %@-%@"
+          }
+        }
+      }
+    },
+    "Network service %@ → %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网络服务 %@ → %@"
           }
         }
       }
@@ -1716,6 +1796,16 @@
         }
       }
     },
+    "No samples in the last 24 hours.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最近 24 小时没有采样。"
+          }
+        }
+      }
+    },
     "No service": {
       "localizations": {
         "zh-Hans": {
@@ -1856,6 +1946,16 @@
         }
       }
     },
+    "One sample per poll of the M7, kept by the daemon for the newest 90 days (`mooringctl router history` prints them).": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每次轮询 M7 留下一条采样，守护进程保留最新的 90 天（`mooringctl router history` 可打印它们）。"
+          }
+        }
+      }
+    },
     "Only the count is read; read messages in the M7's web interface.": {
       "localizations": {
         "zh-Hans": {
@@ -1986,6 +2086,26 @@
         }
       }
     },
+    "Poll failed: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "轮询失败：%@"
+          }
+        }
+      }
+    },
+    "Poll recovered": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "轮询恢复"
+          }
+        }
+      }
+    },
     "Polled": {
       "localizations": {
         "zh-Hans": {
@@ -2086,6 +2206,9 @@
         }
       }
     },
+    "RSRP": {
+      "shouldTranslate": false
+    },
     "Radio": {
       "localizations": {
         "zh-Hans": {
@@ -2122,6 +2245,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "接收"
+          }
+        }
+      }
+    },
+    "Reload": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新加载"
           }
         }
       }
@@ -2236,6 +2369,9 @@
         }
       }
     },
+    "SINR": {
+      "shouldTranslate": false
+    },
     "Sampled": {
       "localizations": {
         "zh-Hans": {
@@ -2306,6 +2442,16 @@
         }
       }
     },
+    "Service regained": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新获得服务"
+          }
+        }
+      }
+    },
     "Serving": {
       "localizations": {
         "zh-Hans": {
@@ -2342,6 +2488,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "信号"
+          }
+        }
+      }
+    },
+    "Signal history": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "信号历史"
           }
         }
       }
@@ -2582,6 +2738,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "连不上 M7"
+          }
+        }
+      }
+    },
+    "The M7 rebooted (its uptime is shorter than at the last read)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 已重启（运行时间比上次读取时短）"
           }
         }
       }
@@ -2952,6 +3118,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "网关不是固定过的那台 M7"
+          }
+        }
+      }
+    },
+    "The history could not be read: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取历史记录：%@"
+          }
+        }
+      }
+    },
+    "The history document is version %u; this build reads version 1.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "历史记录文档是第 %u 版；这个版本只能读取第 1 版。"
+          }
+        }
+      }
+    },
+    "The history is longer than 4 MiB, so the app stopped reading it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "历史记录超过 4 MiB，应用已停止读取。"
           }
         }
       }

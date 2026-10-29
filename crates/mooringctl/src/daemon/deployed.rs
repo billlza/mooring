@@ -43,7 +43,7 @@ use mooring_store::{Store, read_latch, read_sim_meter};
 
 use super::{
     Control, LoopState, POLL_INTERVAL, RunPaths, Waited, chain, poll_router_on, publish,
-    router_after_poll, say, wait_for_next_poll,
+    radio::RadioHistoryWriter, router_after_poll, say, unavailable_reason, wait_for_next_poll,
 };
 use crate::app::Env;
 use crate::error::{CommandError, LocalError};
@@ -109,6 +109,8 @@ pub(crate) struct Deployed<'e, 'a> {
     router: RouterReading,
     router_failure: Option<String>,
     router_polled: Option<Instant>,
+    /// The radio history's writer, carried over from the router console.
+    history: RadioHistoryWriter,
     /// The power helper while it runs.
     helper: Option<PowerLink>,
     /// When the power helper ended, for its restart.
@@ -150,13 +152,19 @@ impl<'e, 'a> Deployed<'e, 'a> {
     /// not start or report within [`HELPER_FIRST_REPORT`] stops the daemon:
     /// the bundle that carries the daemon carries the helper); then it
     /// polls the M7 once, so every status it publishes has a panel.
-    /// `router` is the panel the router console last showed, if it ran.
+    /// `state` is the router console's, if it ran: the panel it last
+    /// showed, and the radio history's writer, carry on.
     pub(crate) fn open(
         env: &'e Env<'a>,
         support_dir: &Path,
         log: &mut dyn Write,
-        router: Option<RouterReading>,
+        state: LoopState,
     ) -> Result<Self, CommandError> {
+        let LoopState {
+            previous: router,
+            mut history,
+            ..
+        } = state;
         let now = (env.clock)()?;
         let run_dir = RunPaths::under(support_dir).dir;
         let engines = support_dir.join(ENGINES_DIRECTORY);
@@ -210,6 +218,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             log,
             router.as_ref(),
             &mut router_failure,
+            &mut history,
             egress
                 .as_ref()
                 .map(|egress| &egress.interfaces.egress().bsd_name),
@@ -225,6 +234,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             router,
             router_failure,
             router_polled: Some(Instant::now()),
+            history,
             helper: Some(helper),
             helper_lost: None,
             power,
@@ -557,6 +567,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             log,
             Some(&self.router),
             &mut self.router_failure,
+            &mut self.history,
             egress,
         )?;
         Ok(())
@@ -716,16 +727,18 @@ pub(crate) fn unreachable_cause(error: &CommandError) -> AgentUnreachable {
     }
 }
 
-/// One poll of the M7 through `egress`, after `previous`. Without an
-/// egress the M7 cannot be reached: that is the poll's failure, so the
-/// panel says so rather than show an older reading, and the log names the
-/// fault when the outcome changes, as for any other failure.
+/// One poll of the M7 through `egress`, after `previous`, recorded in the
+/// radio history by `history`. Without an egress the M7 cannot be
+/// reached: that is the poll's failure, so the panel says so rather than
+/// show an older reading, and the log names the fault when the outcome
+/// changes, as for any other failure.
 pub(crate) fn poll_m7(
     env: &Env<'_>,
     support_dir: &Path,
     log: &mut dyn Write,
     previous: Option<&RouterReading>,
     failure: &mut Option<String>,
+    history: &mut RadioHistoryWriter,
     egress: Result<&BsdName, &EgressFault>,
 ) -> Result<RouterReading, CommandError> {
     let polled_at = (env.clock)()?;
@@ -738,7 +751,15 @@ pub(crate) fn poll_m7(
         ))),
     };
     let now = (env.clock)()?;
-    router_after_poll(log, previous, failure, polled_at, &outcome, now)
+    let reading = router_after_poll(log, previous, failure, polled_at, &outcome, now)?;
+    history.record(
+        log,
+        support_dir,
+        polled_at,
+        outcome.as_ref().map_err(unavailable_reason),
+        now,
+    )?;
+    Ok(reading)
 }
 
 /// Serves the exit until the acceptor ends or the daemon fails. `state` is
@@ -753,7 +774,7 @@ pub(crate) fn serve(
     state: LoopState,
 ) -> Result<Stopped, CommandError> {
     let env: &Env<'_> = env;
-    let mut deployed = Deployed::open(env, support_dir, log, state.previous)?;
+    let mut deployed = Deployed::open(env, support_dir, log, state)?;
     control.deployed.store(true, Ordering::SeqCst);
     say(log, (env.clock)()?, "serving the exit")?;
     loop {

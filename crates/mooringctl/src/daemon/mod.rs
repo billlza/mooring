@@ -20,6 +20,7 @@
 pub(crate) mod deployed;
 pub(crate) mod hub;
 pub(crate) mod log;
+pub(crate) mod radio;
 pub(crate) mod serve;
 
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
@@ -48,6 +49,7 @@ use crate::paths::create_support_dir;
 use crate::router;
 
 use self::hub::Hub;
+use self::radio::RadioHistoryWriter;
 use self::serve::{AcceptFailed, LIMITS, MAX_CLIENTS, accept};
 
 /// How often the M7 is polled (design §15.6 rule 7: a 60 s poll must not
@@ -209,6 +211,8 @@ pub(crate) struct LoopState {
     /// Why `status.json` could not be written, while that lasts, logged
     /// the same way.
     pub(crate) snapshot_failure: Option<String>,
+    /// The radio history's writer, which records every poll.
+    pub(crate) history: RadioHistoryWriter,
 }
 
 /// Publishes `status` in the hub and writes it to `status.json`. A
@@ -281,8 +285,8 @@ pub(crate) fn router_after_poll(
 
 /// What follows a poll at `polled_at` that ended in `outcome`, at `now`,
 /// before a deployment exists: the panel after it is published in a
-/// status and written to `status.json`, and the log gets a line if the
-/// outcome changed.
+/// status and written to `status.json`, the poll is recorded in the radio
+/// history, and the log gets a line if the outcome changed.
 pub(crate) fn after_poll(
     hub: &Hub,
     support_dir: &Path,
@@ -307,6 +311,13 @@ pub(crate) fn after_poll(
         log,
         &mut state.snapshot_failure,
         &status,
+        now,
+    )?;
+    state.history.record(
+        log,
+        support_dir,
+        polled_at,
+        outcome.as_ref().map_err(unavailable_reason),
         now,
     )?;
     state.previous = Some(reading);

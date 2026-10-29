@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use mooring_agent_proto::{AgentError, Sha256Hex};
 use mooring_daemon_core::ControlError;
+use mooring_daemon_core::RadioHistoryError;
 use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::MeterError;
@@ -23,7 +24,7 @@ use mooring_model::error::ModelError;
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretKind;
-use mooring_model::{NodeId, PublicAlias, UserId};
+use mooring_model::{CalendarDate, NodeId, PublicAlias, UserId};
 use mooring_render::RenderError;
 use mooring_store::{SecretStoreError, SnapshotReadError, StoreError};
 
@@ -267,6 +268,43 @@ pub(crate) enum LocalError {
     /// `StateRead` is.)
     #[error("the SIM meter's file failed")]
     MeterFile(#[source] Box<StoreError>),
+    /// The radio history's files (`radio/<day>.jsonl`) failed. (Boxed, as
+    /// `StateRead` is.)
+    #[error("the radio history's files failed")]
+    HistoryFile(#[source] Box<StoreError>),
+    /// A radio sample could not be encoded as its line.
+    #[error("a radio sample could not be encoded")]
+    HistoryEncode(#[source] RadioHistoryError),
+    /// `router history`'s range runs backwards.
+    #[error("--since {since} is after --until {until}")]
+    HistoryRange {
+        /// The first day asked for.
+        since: CalendarDate,
+        /// The last day asked for.
+        until: CalendarDate,
+    },
+    /// `router history`'s range covers more days than the daemon keeps.
+    #[error(
+        "the range covers {days} days; at most {max} can be read at once (narrow it with --since and --until)"
+    )]
+    HistoryRangeTooLong {
+        /// The days the range covers.
+        days: u32,
+        /// The most it may cover.
+        max: u32,
+    },
+    /// A line of a radio history day file is not a sample this build
+    /// reads; the file is left as it is.
+    #[error("radio history file {} cannot be read at line {line}", path.display())]
+    HistoryLine {
+        /// The day file.
+        path: PathBuf,
+        /// The line, counted from 1.
+        line: usize,
+        /// Why the decoder refused it.
+        #[source]
+        source: RadioHistoryError,
+    },
     /// The SIM meter could not count a reading or read its document.
     /// (Boxed, as `StateRead` is, to keep `CommandError` small.)
     #[error("the SIM meter failed")]

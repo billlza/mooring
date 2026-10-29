@@ -86,7 +86,8 @@ The app lives in the menu bar (an antenna symbol); its menu opens the console wi
 
 **The router screen** lists first the settings the exit needs off that the M7 reports on (the Wi-Fi radio, Wi-Fi or Ethernet offload, UPnP, NETGEAR Insight), as the daemon decides them. It shows:
 - what the M7 reports: network, service types, band, LTE carriers, signal, temperature, power, its own traffic counters, Wi-Fi and the settings the exit needs off, and the unread SMS count;
-- the time of the poll.
+- the time of the poll;
+- **Signal history:** RSRP and SINR over the last 24 hours (LTE and NR; a gap in the readings breaks the line), the changes between polls (a failed poll and its recovery, a reboot, no service and its return, a service, band or network change, a session restart), and a note when today's file ends in a line the daemon is still writing. It comes from the samples the daemon records at every poll (`~/Library/Application Support/Mooring/radio/<UTC day>.jsonl`, the newest 90 days kept); **Reload** runs `mooringctl router history --json` again.
 
 The colours on RSRP and SINR are rules of thumb for placing the antenna, not limits.
 
@@ -103,7 +104,8 @@ The app only shows: every change (`exit enable`, `node apply`, `user …`, `sim 
 
 The same status is available in Terminal:
 - `target/app/Mooring.app/Contents/MacOS/mooringctl status` prints it once;
-- `… status --follow --json` prints each new status as one JSON line, as the app reads it (the app adds `--until-parent-exits`, so its follower ends with it).
+- `… status --follow --json` prints each new status as one JSON line, as the app reads it (the app adds `--until-parent-exits`, so its follower ends with it);
+- `… router history` prints yesterday's and today's radio samples (UTC) as a summary: a header per day, the changes between polls, and the hourly signal; `--since <day>` and `--until <day>` choose the days (at most 90), `--json` prints the document the app reads. It reads the daemon's files and never the M7, so it works while the daemon is stopped.
 
 ## 4. Stop
 

@@ -1,29 +1,150 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The router screen (design §15.6): everything the allowlist keeps of the
-// M7's status, as the M7 reported it, with the time it was polled. The
-// settings the exit needs off that are on are flagged as the daemon lists
-// them; the console never changes them (rule 8: advisory only).
+// M7's status, as the M7 reported it, with the time it was polled, and the
+// signal over the last 24 hours from the samples the daemon recorded (rule
+// 11). The settings the exit needs off that are on are flagged as the
+// daemon lists them; the console never changes them (rule 8: advisory
+// only).
 
 import MooringKit
 import SwiftUI
 
 struct RouterView: View {
     let model: ConsoleModel
+    let history: HistoryModel
 
     var body: some View {
-        switch model.status?.router {
-        case nil:
-            ContentUnavailableView(
-                "No router status yet",
-                systemImage: "antenna.radiowaves.left.and.right",
-                description: Text("The daemon has not reported a poll of the M7 yet.")
+        Form {
+            switch model.status?.router {
+            case nil:
+                Section {
+                    ContentUnavailableView(
+                        "No router status yet",
+                        systemImage: "antenna.radiowaves.left.and.right",
+                        description: Text("The daemon has not reported a poll of the M7 yet.")
+                    )
+                }
+            case .unavailable(let reason, let lastPolledAt)?:
+                Section {
+                    RouterUnavailableView(reason: reason, lastPolledAt: lastPolledAt)
+                }
+            case .available(let polledAt, let status)?:
+                RouterStatusForm(
+                    polledAt: polledAt, status: status, advisories: model.status?.advisories ?? [])
+            }
+            SignalHistorySection(history: history)
+        }
+        .formStyle(.grouped)
+        .task {
+            if case .idle = history.state {
+                history.reload()
+            }
+        }
+    }
+}
+
+/// The signal over the last 24 hours: `router history --json` run once
+/// when the screen first shows and on Reload, charted with its events.
+struct SignalHistorySection: View {
+    let history: HistoryModel
+
+    var body: some View {
+        Section {
+            switch history.state {
+            case .idle, .loading:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading the history…")
+                        .foregroundStyle(.secondary)
+                }
+            case .noCommand:
+                Text("This app carries no mooringctl")
+                    .foregroundStyle(.secondary)
+            case .failed(let failure, let at):
+                Text(failure.text)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+                asOf(at)
+            case .loaded(let loaded, let at):
+                let since = UnixTime(seconds: UInt64(max(0, at.timeIntervalSince1970 - 86_400)))
+                let samples = loaded.samples(since: since)
+                let events = loaded.events(since: since)
+                if samples.isEmpty {
+                    Text("No samples in the last 24 hours.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    SignalHistoryChart(samples: samples, events: events, end: at)
+                }
+                ForEach(Array(events.enumerated()), id: \.offset) { _, event in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(event.at.date.formatted(date: .omitted, time: .standard))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                        event.kind.text
+                    }
+                }
+                ForEach(loaded.incompleteDays, id: \.self) { day in
+                    Text(
+                        "\(day.text): the last line is incomplete; the daemon may be writing it, or stopped while writing it."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                asOf(at)
+            }
+        } header: {
+            HStack {
+                Text("Signal history")
+                Spacer()
+                Button("Reload") {
+                    history.reload()
+                }
+                .disabled(history.state == .loading)
+            }
+        } footer: {
+            Text(
+                "One sample per poll of the M7, kept by the daemon for the newest 90 days (`mooringctl router history` prints them)."
             )
-        case .unavailable(let reason, let lastPolledAt)?:
-            RouterUnavailableView(reason: reason, lastPolledAt: lastPolledAt)
-        case .available(let polledAt, let status)?:
-            RouterStatusForm(
-                polledAt: polledAt, status: status, advisories: model.status?.advisories ?? [])
+        }
+    }
+
+    private func asOf(_ at: Date) -> some View {
+        Text("Last 24 hours, as of \(at.formatted(date: .omitted, time: .standard)).")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+}
+
+extension RadioEventKind {
+    /// The change, in the user's language, with the M7's own spellings.
+    var text: Text {
+        switch self {
+        case .pollFailed(let reason): Text("Poll failed: \(Text(reason.title))")
+        case .pollRecovered: Text("Poll recovered")
+        case .routerRebooted: Text("The M7 rebooted (its uptime is shorter than at the last read)")
+        case .serviceLost: Text("No service")
+        case .serviceRegained: Text("Service regained")
+        case .networkServiceChanged(let from, let to): Text("Network service \(from.wire) → \(to.wire)")
+        case .dataServiceChanged(let from, let to): Text("Data service \(from.wire) → \(to.wire)")
+        case .bandChanged(let from, let to): Text("Band \(from.text) → \(to.text)")
+        case .plmnChanged(let from, let to): Text("Network \(from.mcc)-\(from.mnc) → \(to.mcc)-\(to.mnc)")
+        case .sessionRestarted: Text("Data session restarted (shorter than at the last read)")
+        }
+    }
+}
+
+extension HistoryFailure {
+    /// Why there is no history, in the user's language, then what the
+    /// command said (`mooringctl`'s own words).
+    var text: String {
+        switch self {
+        case .ended(let end): end.text
+        case .tooLong: String(localized: "The history is longer than 4 MiB, so the app stopped reading it.")
+        case .unsupportedVersion(let version):
+            String(localized: "The history document is version \(version); this build reads version 1.")
+        case .unreadable(let why): String(localized: "The history could not be read: \(why)")
         }
     }
 }
@@ -57,7 +178,7 @@ struct RouterStatusForm: View {
     let advisories: [RouterAdvisory]
 
     var body: some View {
-        Form {
+        Group {
             if !advisories.isEmpty {
                 Section {
                     Label(
@@ -132,7 +253,6 @@ struct RouterStatusForm: View {
                 )
             }
         }
-        .formStyle(.grouped)
     }
 
     private func connection(_ radio: Radio) -> some View {

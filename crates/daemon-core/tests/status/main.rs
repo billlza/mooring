@@ -15,6 +15,8 @@ mod console;
 #[cfg(test)]
 mod fixtures;
 #[cfg(test)]
+mod history;
+#[cfg(test)]
 mod invariants;
 #[cfg(test)]
 mod notify;

@@ -18,6 +18,9 @@
 //! - [`power`]: the power helper's protocol (`mooring-power`).
 //! - [`router`]: the M7's status types, and the MR7450 `model.json`
 //!   allowlist parser and redactor ([`router::netgear`]).
+//! - [`radio_history`]: the sample each poll of the M7 leaves, its line in
+//!   the day files the store keeps, and the events and hourly statistics
+//!   `router history` prints.
 //! - [`status`]: [`MacStatusV1`] itself.
 //! - [`snapshot`]: a [`MacStatusV1`] assembled from what the daemon holds
 //!   at one instant.
@@ -66,6 +69,7 @@ pub mod notify;
 pub mod period;
 pub mod policy;
 pub mod power;
+pub mod radio_history;
 pub mod report;
 pub mod router;
 pub mod share;
@@ -88,13 +92,15 @@ pub use error::{
     AlertError, AlertErrorKind, CapacityError, CapacityErrorKind, CarrierFaultKind, ConsoleError,
     ConsoleErrorKind, ControlError, ControlErrorKind, FieldFaultKind, FigureError, FigureErrorKind,
     ForecastError, ForecastErrorKind, NotifyError, NotifyErrorKind, PolicyError, PolicyErrorKind,
-    ReportError, ReportErrorKind, RouterParseError, RouterParseErrorKind, RouterValueError,
-    RouterValueErrorKind, StatusError, StatusErrorKind, UsageError, UsageErrorKind,
+    RadioHistoryError, RadioHistoryErrorKind, ReportError, ReportErrorKind, RouterParseError,
+    RouterParseErrorKind, RouterValueError, RouterValueErrorKind, StatusError, StatusErrorKind,
+    UsageError, UsageErrorKind,
 };
 pub use forecast::{DailySimBytes, SimForecast};
 pub use network::{ForeignNetworkFinding, NetworkSnapshot, foreign_networks};
 pub use period::{BillingCycle, UsagePeriods};
 pub use policy::{ExpiryState, PolicyAction, QuotaState, UserAction};
+pub use radio_history::{RadioHistory, RadioSample};
 pub use router::{RouterReading, RouterStatus};
 pub use snapshot::{NodePoll, SimTotals, SnapshotError, StatusInputs, assemble};
 pub use status::{MAC_STATUS_VERSION, MacStatusParts, MacStatusV1};
