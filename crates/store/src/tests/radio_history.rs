@@ -7,8 +7,9 @@
 //! file.
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 use std::path::Path;
+use std::process::Command;
 
 use mooring_model::CalendarDate;
 
@@ -29,6 +30,27 @@ fn radio_dir(support: &Path) -> std::path::PathBuf {
 
 fn day_bytes(support: &Path, day: &str) -> Vec<u8> {
     fs::read(radio_day_path(support, date(day))).unwrap()
+}
+
+/// `error` refuses the day file at `path` as not a regular file.
+fn assert_not_regular(error: &StoreError, path: &Path) {
+    assert!(
+        matches!(
+            error,
+            StoreError::RadioHistoryCorrupt {
+                path: found,
+                fault: RadioHistoryFault::NotRegularFile
+            } if found == path
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "radio history file {} is corrupt: it is not a regular file",
+            path.display()
+        )
+    );
 }
 
 #[test]
@@ -180,25 +202,7 @@ fn a_day_path_that_is_not_a_regular_file_is_refused() {
     let target = elsewhere.path().join("target");
     fs::write(&target, b"t\n").unwrap();
     symlink(&target, &path).unwrap();
-    let refused = |error: StoreError| {
-        assert!(
-            matches!(
-                &error,
-                StoreError::RadioHistoryCorrupt {
-                    path: found,
-                    fault: RadioHistoryFault::NotRegularFile
-                } if *found == path
-            ),
-            "{error:?}"
-        );
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "radio history file {} is corrupt: it is not a regular file",
-                path.display()
-            )
-        );
-    };
+    let refused = |error: StoreError| assert_not_regular(&error, &path);
     refused(append_radio_line(support.path(), day, b"b\n").unwrap_err());
     refused(read_radio_day(support.path(), day).unwrap_err());
     assert_eq!(fs::read(&target).unwrap(), b"t\n");
@@ -211,6 +215,27 @@ fn a_day_path_that_is_not_a_regular_file_is_refused() {
     fs::create_dir(&path).unwrap();
     refused(append_radio_line(support.path(), day, b"b\n").unwrap_err());
     refused(read_radio_day(support.path(), day).unwrap_err());
+}
+
+/// A FIFO where a day file belongs is refused too, and holds neither the
+/// append nor the read: the open never waits on it (`O_NONBLOCK`), and the
+/// check is on the open descriptor itself, so what an open cannot refuse by
+/// itself (as it refuses a link, or a directory opened for writing) is
+/// refused before anything is written into it or read from it.
+#[test]
+fn a_fifo_where_a_day_file_belongs_is_refused_without_blocking() {
+    let support = tempfile::tempdir().unwrap();
+    let day = date("2026-10-24");
+    append_radio_line(support.path(), date("2026-10-23"), b"a\n").unwrap();
+    let path = radio_day_path(support.path(), day);
+    let made = Command::new("/usr/bin/mkfifo").arg(&path).status().unwrap();
+    assert!(made.success(), "{made}");
+    assert_not_regular(
+        &append_radio_line(support.path(), day, b"b\n").unwrap_err(),
+        &path,
+    );
+    assert_not_regular(&read_radio_day(support.path(), day).unwrap_err(), &path);
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_fifo());
 }
 
 /// The radio directory itself must be a directory: a link or a file where

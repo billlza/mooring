@@ -15,12 +15,16 @@
 //! reads the files while the daemon may be appending: a reader ignores a
 //! last line without its newline, which may be a write in progress.
 //!
-//! Only a regular file is a day file: a link, a directory or anything
-//! else where one belongs is refused (`NotRegularFile`), and the files are
-//! opened with `O_NOFOLLOW`. A name in `radio/` that is not a day file's is
-//! a stray: named, never removed, never fatal. These are Level 0 data (the
-//! operator's own device's readings, on the operator's Mac); the faults
-//! guarded against are accidental.
+//! Only a regular file is a day file: a link, a directory, a FIFO or
+//! anything else where one belongs is refused (`NotRegularFile`), and
+//! nothing is read or written through it. The files are opened with
+//! `O_NOFOLLOW` (a link is never followed) and `O_NONBLOCK` (a FIFO cannot
+//! hold the open), and checked on the open descriptor itself, so what is
+//! then read or written is what was checked, whatever is exchanged for the
+//! path between a look and the open. A name in `radio/` that is not a day
+//! file's is a stray: named, never removed, never fatal. These are Level 0
+//! data (the operator's own device's readings, on the operator's Mac); the
+//! faults guarded against are accidental.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -81,18 +85,40 @@ fn io_error(op: IoOp, path: &Path) -> impl FnOnce(io::Error) -> StoreError {
     move |source| StoreError::Io { op, path, source }
 }
 
-/// Whether a day file is at `path`: `None` for nothing, `NotRegularFile`
-/// for anything but a regular file (a link is never followed).
-fn inspect(path: &Path) -> Result<Option<()>, StoreError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_file() => Ok(Some(())),
-        Ok(_) => Err(StoreError::RadioHistoryCorrupt {
-            path: path.to_path_buf(),
-            fault: RadioHistoryFault::NotRegularFile,
-        }),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(io_error(IoOp::InspectRadioDay, path)(error)),
+fn not_regular(path: &Path) -> StoreError {
+    StoreError::RadioHistoryCorrupt {
+        path: path.to_path_buf(),
+        fault: RadioHistoryFault::NotRegularFile,
     }
+}
+
+/// Opens the day file at `path` as `options` say, with `O_NOFOLLOW` (a
+/// link is never followed) and `O_NONBLOCK` (a FIFO cannot hold the open),
+/// and checks it on the open descriptor itself, so what is then read or
+/// written is what was checked, whatever is exchanged for the path in
+/// between: the file and its length, or `None` when there is no file.
+/// Anything but a regular file is `NotRegularFile`, whether the open says
+/// so (a link, `ELOOP`; a directory opened for writing, `EISDIR`) or the
+/// check does (a directory opened for reading, a FIFO).
+fn open_day(path: &Path, options: &mut OpenOptions) -> Result<Option<(File, u64)>, StoreError> {
+    let file = match options
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if matches!(error.raw_os_error(), Some(libc::ELOOP | libc::EISDIR)) => {
+            return Err(not_regular(path));
+        }
+        Err(error) => return Err(io_error(IoOp::OpenRadioDay, path)(error)),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(io_error(IoOp::InspectRadioDay, path))?;
+    if !metadata.file_type().is_file() {
+        return Err(not_regular(path));
+    }
+    Ok(Some((file, metadata.len())))
 }
 
 /// Appends `line` (one whole line, its newline included) to the day's
@@ -109,21 +135,20 @@ pub fn append_radio_line(
     let dir = private_dir(support_dir, RADIO_DIRECTORY, IoOp::CreateRadioDir)?;
     let path = dir.join(format!("{date}{RADIO_DAY_SUFFIX}"));
     let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .append(true)
-        .custom_flags(libc::O_NOFOLLOW);
-    let created = inspect(&path)?.is_none();
-    if created {
-        options.create_new(true).mode(FILE_MODE);
-    }
-    let mut file = options
-        .open(&path)
-        .map_err(io_error(IoOp::OpenRadioDay, &path))?;
-    let len = file
-        .metadata()
-        .map_err(io_error(IoOp::InspectRadioDay, &path))?
-        .len();
+    options.read(true).append(true);
+    let (mut file, len, created) = match open_day(&path, &mut options)? {
+        Some((file, len)) => (file, len, false),
+        // Nothing there: made new, mode 0600, and never a file put there
+        // since (`O_EXCL`: that append fails, and the next finds the file).
+        None => {
+            let file = options
+                .create_new(true)
+                .mode(FILE_MODE)
+                .open(&path)
+                .map_err(io_error(IoOp::OpenRadioDay, &path))?;
+            (file, 0, true)
+        }
+    };
     let complete = complete_len(&mut file, len, &path)?;
     if complete < len {
         file.set_len(complete)
@@ -191,14 +216,9 @@ pub fn read_radio_day(
     date: CalendarDate,
 ) -> Result<Option<RadioDay>, StoreError> {
     let path = radio_day_path(support_dir, date);
-    if inspect(&path)?.is_none() {
+    let Some((file, _)) = open_day(&path, OpenOptions::new().read(true))? else {
         return Ok(None);
-    }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-        .map_err(io_error(IoOp::OpenRadioDay, &path))?;
+    };
     let mut bytes = Vec::new();
     file.take(MAX_RADIO_DAY_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
