@@ -191,6 +191,43 @@ mod tests {
         );
     }
 
+    /// The same router may be declared under two names, which is how a
+    /// joined network is renamed or re-kinded without a tick on which no
+    /// declaration matches it: the new name first, the old one withdrawn
+    /// after. While both hold the router the first by name is the match.
+    #[test]
+    fn the_same_router_under_two_names_matches_while_either_is_declared() {
+        let hotspot = router([172, 20, 10, 1], "aa:bb:cc:dd:ee:01");
+        let mut declared = OwnNetworks::new();
+        assert_eq!(
+            declared.insert(
+                label("my phone"),
+                network(OwnNetworkKind::PersonalHotspot, hotspot)
+            ),
+            None
+        );
+        assert_eq!(
+            declared.insert(label("phone"), network(OwnNetworkKind::Broadband, hotspot)),
+            None
+        );
+        assert_eq!(declared.len(), 2);
+        assert_eq!(
+            declared
+                .matching(&hotspot)
+                .map(|(name, network)| (name.as_str(), network.kind)),
+            Some(("my phone", OwnNetworkKind::PersonalHotspot))
+        );
+        assert!(declared.remove(&label("my phone")).is_some());
+        assert_eq!(
+            declared
+                .matching(&hotspot)
+                .map(|(name, network)| (name.as_str(), network.kind)),
+            Some(("phone", OwnNetworkKind::Broadband))
+        );
+        assert!(declared.remove(&label("phone")).is_some());
+        assert_eq!(declared.matching(&hotspot), None);
+    }
+
     #[test]
     fn the_kind_encoding_and_the_hotspot_router_are_pinned() {
         assert_eq!(

@@ -3,12 +3,24 @@
 //! configd's view of the IPv4 services (the SystemConfiguration dynamic
 //! store, what `scutil` reads): for each service its interface, its router,
 //! the router's link-layer address as configd resolved it when the lease
-//! was taken (`ARPResolvedHardwareAddress`, kept for the service's lifetime,
-//! where the kernel's own ARP entry ages out after
-//! `net.link.ether.inet.max_age`, 1200 s, when nothing is sent over the
-//! interface), and the DNS domain the network publishes. The own-network
-//! declaration and the daemon's match both read this (design §10.2, P0-2),
-//! so they cannot disagree.
+//! was taken (`ARPResolvedHardwareAddress`), and the DNS domain the network
+//! publishes. The own-network declaration and the daemon's match both read
+//! this (design §10.2, P0-2), so they cannot disagree.
+//!
+//! configd republishes the address with the service for as long as the
+//! router's address, link-layer address and ARP verification all hold. A
+//! link-status change, a BSSID roam or a `RefreshConfiguration` renew
+//! clears the verification; the next DHCP bind resolves the router again
+//! and holds the publish back until the reply, so the service keeps the
+//! address meanwhile, and only 60 s without a reply publishes it without
+//! the address, tried again every 60 s. The kernel's own ARP entry, which
+//! ages out after `net.link.ether.inet.max_age` (1200 s) when nothing is
+//! sent over the interface, does not reach it. That is the DHCP path, read
+//! on 2026-10-30 from the `main` branch of apple-oss-distributions' bootp
+//! (`IPConfiguration.bproj/ipconfigd.c`, `dhcp.c`), configd
+//! (`KernelEventMonitor/ev_ipv4.c`) and xnu (`bsd/netinet/in_arp.c`), not
+//! from the macOS 27.2 binaries; a manually configured or self-assigned
+//! address was not read.
 //!
 //! Three SystemConfiguration calls are made, each in its own unsafe block;
 //! every object they return is wrapped by `core-foundation`, which owns and

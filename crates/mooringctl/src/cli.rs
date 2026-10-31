@@ -238,7 +238,10 @@ pub(crate) enum ExitCommand {
         yes: bool,
     },
     /// Withdraw a declared own network by its name; the daemon treats it as
-    /// foreign from its next tick.
+    /// foreign from its next tick (within 2 s), so withdrawing the network
+    /// this Mac is joined to takes the exit down. To rename it or change
+    /// its kind without that, allow it under the new name first (the same
+    /// router may be declared under two names), then withdraw the old one.
     DisallowNetwork {
         /// The name it was declared under.
         #[arg(long, value_name = "TEXT")]

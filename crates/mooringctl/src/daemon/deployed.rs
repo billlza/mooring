@@ -135,6 +135,9 @@ pub(crate) struct Deployed<'e, 'a> {
     services_failure: Option<String>,
     /// The latest failure to read the own-network declarations, logged once.
     declarations_failure: Option<String>,
+    /// The declarations last read, for the line that logs a change of the
+    /// set by its counts; none before the first read that succeeds.
+    declared: Option<OwnNetworks>,
     nodes_polled: Option<Instant>,
     polls: BTreeMap<NodeId, NodePoll>,
     unreachable: BTreeMap<NodeId, NodeAgentState>,
@@ -256,6 +259,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             meter_failure: None,
             services_failure: None,
             declarations_failure: None,
+            declared: None,
             nodes_polled: None,
             polls: BTreeMap::new(),
             unreachable: BTreeMap::new(),
@@ -561,7 +565,6 @@ impl<'e, 'a> Deployed<'e, 'a> {
         Ok(())
     }
 
-    /// Polls the M7 through the egress ([`poll_m7`]).
     /// The network check for this tick (design §10.2, P0-2). The kernel's
     /// routes and interfaces are read first (a table that cannot be read
     /// fails the tick, as it always has), then configd's services and the
@@ -569,8 +572,10 @@ impl<'e, 'a> Deployed<'e, 'a> {
     /// taken as none, so no declared network matches (fail closed), is
     /// named in the inputs returned, which degrade a running exit, and is
     /// logged once per change, never ending the daemon over an optional
-    /// file or a configd fault.
-    fn network(
+    /// file or a configd fault. A declaration set that differs from the
+    /// one last read is logged by its counts, so the log says when the
+    /// operator declared or withdrew a network and names none.
+    pub(crate) fn network(
         &mut self,
         log: &mut dyn Write,
         now: UnixTime,
@@ -606,8 +611,9 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 "the network services are read from configd again",
             )?;
         }
+        let none = OwnNetworks::new();
         let own = match read_allowed_networks(&self.support_dir) {
-            Ok(own) => {
+            Ok(read) => {
                 note_failure(
                     log,
                     now,
@@ -615,7 +621,20 @@ impl<'e, 'a> Deployed<'e, 'a> {
                     None,
                     "the own-network declarations are read again",
                 )?;
-                own
+                if let Some(previous) = &self.declared
+                    && *previous != read
+                {
+                    say(
+                        log,
+                        now,
+                        &format!(
+                            "the own-network declarations changed: {} declared, now {}",
+                            previous.len(),
+                            read.len()
+                        ),
+                    )?;
+                }
+                &*self.declared.insert(read)
             }
             Err(error) => {
                 unreadable.insert(OwnNetworkInput::Declarations);
@@ -629,7 +648,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                     )),
                     "",
                 )?;
-                OwnNetworks::new()
+                &none
             }
         };
         let snapshot = network::snapshot(&interfaces, &routes, services.as_deref())?;
@@ -637,12 +656,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             ResolvedUplink::Separate(uplink) => Some(&uplink.bsd_name),
             ResolvedUplink::SameAsExit => None,
         };
-        let check = network::check(
-            &snapshot,
-            &egress.interfaces.egress().bsd_name,
-            uplink,
-            &own,
-        );
+        let check = network::check(&snapshot, &egress.interfaces.egress().bsd_name, uplink, own);
         Ok((check, unreadable))
     }
 

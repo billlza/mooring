@@ -32,7 +32,7 @@ use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
 use mooring_daemon_core::snapshot::NodePoll;
 use mooring_daemon_core::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, NodeAgentState,
-    PowerSource,
+    OwnNetworkInput, PowerSource,
 };
 use mooring_macsys::{
     ConfigdFault, DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError,
@@ -42,13 +42,13 @@ use mooring_model::Sha256Digest;
 use mooring_model::collections::NonEmpty;
 use mooring_model::ids::LocalLabel;
 use mooring_model::iface::{BsdName, MacAddr, RouterIdentity};
-use mooring_model::own_network::{OwnNetwork, OwnNetworkKind};
+use mooring_model::own_network::{OwnNetwork, OwnNetworkKind, PERSONAL_HOTSPOT_ROUTER};
 use mooring_model::secret::SecretEntry;
 use mooring_model::verdict::Violation;
 use mooring_store::{
     ALLOWED_NETWORKS_FILE, Declaration, LATCH_FILE, RADIO_DIRECTORY, SIM_METER_FILE,
-    STATUS_SNAPSHOT_FILE, SecretStore, Store, USAGE_DIRECTORY, declare_allowed_network, read_latch,
-    read_radio_day,
+    STATUS_SNAPSHOT_FILE, SecretStore, Store, USAGE_DIRECTORY, declare_allowed_network,
+    read_allowed_networks, read_latch, read_radio_day, revoke_allowed_network,
 };
 
 use super::runtime::STAND_IN;
@@ -67,6 +67,7 @@ use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::runtime::ports::{ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE};
 use crate::runtime::power::PowerMessage;
+use crate::runtime::resolve::exit_interfaces;
 
 /// Inside the fixtures' carrier prefix, 31.120.0.0/14.
 const CARRIER: Ipv4Addr = Ipv4Addr::new(31, 120, 5, 6);
@@ -573,6 +574,10 @@ fn an_engine_that_is_missing_or_unpinned_keeps_the_exit_down() {
 /// The iPhone's hotspot router, a made-up locally administered address.
 const HOTSPOT: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x20, 0x60];
 
+/// A home router the Mac is not joined to, and its made-up address.
+const HOME_ROUTER: Ipv4Addr = Ipv4Addr::new(192, 168, 0, 1);
+const HOME: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x20, 0x61];
+
 /// `deployed()` with the Mac joined to the operator's hotspot on en0,
 /// which holds the unscoped default route, and the hotspot declared.
 fn joined_to_the_declared_hotspot() -> Harness {
@@ -598,12 +603,12 @@ fn joined_to_the_declared_hotspot() -> Harness {
     }
     harness.link.default_routes = Ok(vec![DefaultRoute {
         interface_index: 4,
-        gateway: Ipv4Addr::new(172, 20, 10, 1),
+        gateway: PERSONAL_HOTSPOT_ROUTER,
         scoped: false,
     }]);
     harness.link.services = Ok(vec![Ipv4Service {
         interface: "en0".to_owned(),
-        router: Some(Ipv4Addr::new(172, 20, 10, 1)),
+        router: Some(PERSONAL_HOTSPOT_ROUTER),
         router_lladdr: Some(HOTSPOT),
         domain: None,
     }]);
@@ -723,21 +728,331 @@ fn a_declared_network_is_allowed_and_an_unreadable_input_fails_closed() {
 }
 
 fn declare_hotspot_in(support: &std::path::Path) {
+    declare_in(
+        support,
+        "my phone",
+        OwnNetworkKind::PersonalHotspot,
+        PERSONAL_HOTSPOT_ROUTER,
+        HOTSPOT,
+        NOW,
+    );
+}
+
+/// Declares the network behind `router` under `name` in `support`.
+fn declare_in(
+    support: &std::path::Path,
+    name: &str,
+    kind: OwnNetworkKind,
+    router: Ipv4Addr,
+    lladdr: [u8; 6],
+    declared_at: u64,
+) {
     let declared = declare_allowed_network(
         support,
-        LocalLabel::parse("my phone").unwrap(),
+        LocalLabel::parse(name).unwrap(),
         OwnNetwork {
-            kind: OwnNetworkKind::PersonalHotspot,
-            router: RouterIdentity::new(
-                Ipv4Addr::new(172, 20, 10, 1),
-                MacAddr::from_bytes(HOTSPOT).unwrap(),
-            )
-            .unwrap(),
-            declared_at: mooring_model::UnixTime::from_secs(NOW),
+            kind,
+            router: RouterIdentity::new(router, MacAddr::from_bytes(lladdr).unwrap()).unwrap(),
+            declared_at: mooring_model::UnixTime::from_secs(declared_at),
         },
     )
     .unwrap();
     assert_eq!(declared, Declaration::Recorded);
+}
+
+/// Withdraws the declaration named `name` in `support`, which must exist.
+fn withdraw_in(support: &std::path::Path, name: &str) -> OwnNetwork {
+    revoke_allowed_network(support, &LocalLabel::parse(name).unwrap())
+        .unwrap()
+        .unwrap()
+}
+
+/// The lines of `log` that record a change of the declaration set, after
+/// the daemon's stamp and prefix.
+fn declaration_changes(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter_map(|line| line.split_once("mooringctl daemon: "))
+        .map(|(_, text)| text)
+        .filter(|text| text.starts_with("the own-network declarations changed"))
+        .collect()
+}
+
+/// Withdrawing the declaration of the joined network takes the exit down
+/// at the daemon's next tick, by the file alone: the declarations are read
+/// every tick, and a file with the declaration withdrawn is a readable file
+/// that matches nothing, so no input is reported unreadable and no read
+/// failure is logged; declared again, the exit starts again. The change of
+/// the set is logged each way, by its counts (design §10.2; §16 L6-own,
+/// run 2026-10-30).
+#[test]
+fn a_withdrawn_declaration_takes_the_exit_down_at_the_next_tick() {
+    let mut harness = joined_to_the_declared_hotspot();
+    let support = harness.support_dir();
+    // The direct probe before each start.
+    for _ in 0..2 {
+        harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    }
+    statuses(&harness);
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        assert_eq!(
+            withdraw_in(&support, "my phone").kind,
+            OwnNetworkKind::PersonalHotspot
+        );
+        // The file is still there and read: it holds no declaration.
+        assert!(read_allowed_networks(&support).unwrap().is_empty());
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            down_on_the_hotspot()
+        );
+        let status = published(&control);
+        let exit_section = &status.parts().exit;
+        assert!(exit_section.allowed_networks.is_empty());
+        let en0 = BsdName::parse("en0").unwrap();
+        assert_eq!(
+            exit_section.foreign_networks,
+            [
+                ForeignNetworkFinding::RoutableIpv4 {
+                    interface: en0.clone()
+                },
+                ForeignNetworkFinding::DefaultRoute {
+                    interface: en0,
+                    family: IpFamily::V4,
+                },
+            ]
+            .into()
+        );
+        declare_hotspot_in(&support);
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        String::from_utf8(log.clone()).unwrap()
+    });
+    assert!(!log.contains("were not read"), "{log}");
+    assert!(!log.contains("read again"), "{log}");
+    assert_eq!(
+        declaration_changes(&log),
+        [
+            "the own-network declarations changed: 1 declared, now 0",
+            "the own-network declarations changed: 0 declared, now 1",
+        ],
+        "{log}"
+    );
+}
+
+/// No declaration at all, the file absent or holding none, is a set read
+/// with nothing in it, not a read failure: the exit starts on it and the
+/// daemon logs nothing about the declarations, neither a failure nor a
+/// change (the set stays empty when a declaration is made and withdrawn
+/// between two ticks).
+#[test]
+fn an_absent_or_empty_declaration_file_is_none_declared_not_a_read_failure() {
+    let mut harness = deployed();
+    let support = harness.support_dir();
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        assert!(!support.join(ALLOWED_NETWORKS_FILE).exists());
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        // The file present and holding no declaration: the same.
+        declare_hotspot_in(&support);
+        withdraw_in(&support, "my phone");
+        assert!(support.join(ALLOWED_NETWORKS_FILE).exists());
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        String::from_utf8(log.clone()).unwrap()
+    });
+    assert!(log.contains("exit: Starting"), "{log}");
+    assert!(!log.contains("declarations"), "{log}");
+}
+
+/// The inputs of the own-network match that `network` reports unreadable:
+/// none for a declaration file that is absent or holds no declaration,
+/// the declarations for one that cannot be read. The set reaches the
+/// status only as a degraded reason once the engine has run for its start
+/// grace, which these tests do not wait for, so it is read at its source.
+#[test]
+fn the_unreadable_inputs_name_the_file_that_cannot_be_read_never_an_empty_one() {
+    let mut harness = deployed();
+    let support = harness.support_dir();
+    let site = mooring_fixtures::two_nodes_three_users()
+        .unwrap()
+        .deployment
+        .exit()
+        .clone();
+    let egress = exit_interfaces(&harness.link, &site).unwrap().unwrap();
+    statuses(&harness);
+    with_exit(&mut harness, |exit, log| {
+        let now = mooring_model::UnixTime::from_secs(NOW);
+        let file = support.join(ALLOWED_NETWORKS_FILE);
+        assert!(!file.exists());
+        let (_, unreadable) = exit.network(log, now, &egress).unwrap();
+        assert!(unreadable.is_empty());
+        declare_hotspot_in(&support);
+        withdraw_in(&support, "my phone");
+        assert!(file.exists());
+        let (_, unreadable) = exit.network(log, now, &egress).unwrap();
+        assert!(unreadable.is_empty());
+        fs::write(&file, b"{}").unwrap();
+        let (_, unreadable) = exit.network(log, now, &egress).unwrap();
+        assert_eq!(
+            unreadable,
+            std::collections::BTreeSet::from([OwnNetworkInput::Declarations])
+        );
+    });
+}
+
+/// A change of the declaration set is logged once, with the counts before
+/// and after and nothing that identifies a network: not at the daemon's
+/// first read, not on a tick that reads the same set, not on a tick that
+/// cannot read the file (the set last read stands, and the next readable
+/// file is compared with it), and a change that keeps the count, such as
+/// a declaration withdrawn and made again a second later between two
+/// ticks, is a change: the set compares the time of declaration too.
+/// Through a gap-free rename (the new name first, the old one withdrawn
+/// a tick later) the joined network stays allowed.
+#[test]
+fn a_change_of_the_declarations_is_logged_once_with_its_counts() {
+    let mut harness = joined_to_the_declared_hotspot();
+    let support = harness.support_dir();
+    // The direct probe before each start.
+    for _ in 0..2 {
+        harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    }
+    statuses(&harness);
+    let (control, _retries) = shared();
+    let allowed_on_en0 = |control: &Control| {
+        assert_eq!(
+            published(control).parts().exit.allowed_networks,
+            [AllowedNetwork::Own {
+                interface: BsdName::parse("en0").unwrap(),
+                kind: OwnNetworkKind::PersonalHotspot,
+            }]
+            .into()
+        );
+    };
+    let log = with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        allowed_on_en0(&control);
+        // The status is published again only when the state changes, so
+        // through the ticks below the allowance is carried by the state:
+        // en0 foreign would be the Down of `down_on_the_hotspot`.
+        // The same set read again: nothing to log.
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        // A second network declared: one more.
+        declare_in(
+            &support,
+            "cottage",
+            OwnNetworkKind::Broadband,
+            HOME_ROUTER,
+            HOME,
+            NOW,
+        );
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        // Withdrawn and declared again a second later, between two ticks:
+        // the count holds, the set does not, and the exit never saw the gap.
+        withdraw_in(&support, "my phone");
+        declare_in(
+            &support,
+            "my phone",
+            OwnNetworkKind::PersonalHotspot,
+            PERSONAL_HOTSPOT_ROUTER,
+            HOTSPOT,
+            NOW + 1,
+        );
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        // The gap-free rename: "phone" takes over before "my phone" goes.
+        declare_in(
+            &support,
+            "phone",
+            OwnNetworkKind::PersonalHotspot,
+            PERSONAL_HOTSPOT_ROUTER,
+            HOTSPOT,
+            NOW + 2,
+        );
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        withdraw_in(&support, "my phone");
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        // The file corrupt: unreadable, which is not a change of the set.
+        let file = support.join(ALLOWED_NETWORKS_FILE);
+        let kept = fs::read(&file).unwrap();
+        fs::write(&file, b"{}").unwrap();
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            down_on_the_hotspot()
+        );
+        // Mended, to another set than the one last read: the recovery and
+        // the change, compared with that set, not with the unreadable tick.
+        fs::write(&file, &kept).unwrap();
+        withdraw_in(&support, "cottage");
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+        allowed_on_en0(&control);
+        String::from_utf8(log.clone()).unwrap()
+    });
+    assert_eq!(
+        declaration_changes(&log),
+        [
+            "the own-network declarations changed: 1 declared, now 2",
+            "the own-network declarations changed: 2 declared, now 2",
+            "the own-network declarations changed: 2 declared, now 3",
+            "the own-network declarations changed: 3 declared, now 2",
+            "the own-network declarations changed: 2 declared, now 1",
+        ],
+        "{log}"
+    );
+    assert_eq!(log.matches("were not read").count(), 1, "{log}");
+    assert_eq!(log.matches("read again").count(), 1, "{log}");
+    // The recovery is logged before the change it uncovered.
+    assert!(
+        log.find("read again").unwrap() < log.find("2 declared, now 1").unwrap(),
+        "{log}"
+    );
+    // Counts only: no name, address or link-layer address of a network, in
+    // any rendering (a bare `MacAddr` debugs as decimal bytes).
+    for identity in [
+        "my phone",
+        "cottage",
+        "phone",
+        "172.20.10",
+        "192.168.0",
+        "02:00:5e",
+        "5e:10:20",
+        "94, 16, 32",
+    ] {
+        assert!(!log.contains(identity), "{identity}: {log}");
+    }
 }
 
 #[test]
