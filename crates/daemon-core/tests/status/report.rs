@@ -312,6 +312,20 @@ fn the_degraded_report_keeps_each_alert() {
     assert_eq!(suspended, 2);
 }
 
+/// While the daemon pulls no ledger, the report's usage is unavailable and
+/// no user carries a cycle figure.
+#[test]
+fn a_report_without_pulled_usage_keeps_it_unavailable() {
+    let mut status = scenario("serving");
+    status.usage = UsageView::NotPulled;
+    for row in status.users.values_mut() {
+        row.usage = None;
+    }
+    let parts = report(status).into_parts();
+    assert_eq!(parts.usage, ReportUsage::Unavailable);
+    assert!(parts.users.values().all(|user| user.cycle.is_none()));
+}
+
 /// A down exit with the router unreachable, no capacity sample, no
 /// forecast and no usage reports each as absent, never as zero.
 #[test]

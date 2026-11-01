@@ -32,7 +32,7 @@ use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
 use mooring_daemon_core::snapshot::NodePoll;
 use mooring_daemon_core::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, NodeAgentState,
-    OwnNetworkInput, PowerSource,
+    OwnNetworkInput, PowerSource, UsageView,
 };
 use mooring_macsys::{
     ConfigdFault, DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError,
@@ -172,6 +172,11 @@ fn the_exit_starts_its_engine_on_the_rendered_config_and_publishes_its_status() 
         let status = published(&control);
         let parts = status.parts();
         assert_eq!(parts.exit.state, ExitState::Starting);
+        // This build pulls no ledger: the usage view says so and no row
+        // carries figures.
+        assert_eq!(parts.usage, UsageView::NotPulled);
+        assert!(!parts.users.is_empty());
+        assert!(parts.users.values().all(|row| row.usage.is_none()));
         assert_eq!(
             parts.exit.egress.as_ref().unwrap().interface.as_str(),
             "lo0"

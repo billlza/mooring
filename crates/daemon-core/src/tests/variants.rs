@@ -323,6 +323,7 @@ fn variants() -> Variants {
             UsageView::Unavailable {
                 reason: UsageErrorKind::MissingLedger,
             },
+            UsageView::NotPulled,
         ],
         in_chain_outcome: vec![
             InChainOutcome::Verified,
@@ -694,8 +695,9 @@ fn the_variants_fixture_lists_every_variant() {
         |value| match value {
             UsageView::Report { .. } => 0,
             UsageView::Unavailable { .. } => 1,
+            UsageView::NotPulled => 2,
         },
-        2,
+        3,
     );
     every_variant(
         "in_chain_outcome",

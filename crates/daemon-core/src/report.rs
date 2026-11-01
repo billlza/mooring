@@ -77,7 +77,10 @@ pub fn project(status: &MacStatusV1) -> Result<MacReportV1, ReportError> {
             UsageView::Report { periods } => ReportUsage::Available {
                 through: wire_time(periods.through),
             },
-            UsageView::Unavailable { .. } => ReportUsage::Unavailable,
+            // The report has no third state: a viewer reads not-pulled as
+            // unavailable, which matters only once `PutMacReport` lands,
+            // with the pull (M5, design §15.2).
+            UsageView::Unavailable { .. } | UsageView::NotPulled => ReportUsage::Unavailable,
         },
         users,
         alerts,
