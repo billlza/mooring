@@ -43,6 +43,8 @@ pub(crate) const ENOTDIR: i32 = 20;
 pub(crate) const EISDIR: i32 = 21;
 /// A permission refused.
 pub(crate) const EACCES: i32 = 13;
+/// An operation only the owner, or root, may do.
+pub(crate) const EPERM: i32 = 1;
 
 /// What the stand-in node answers for one tool call.
 pub(crate) type Responder = Box<dyn Fn(Tool, &[&str]) -> io::Result<ToolOutput>>;
@@ -184,8 +186,8 @@ pub(crate) fn occupy_temporary(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// `path` with `mode` until dropped, then with the mode it had: a fault
-/// made of permissions, which holds for the non-root user tests run as
-/// (a root user passes every permission check).
+/// made of permissions, which holds only for a user other than root (root
+/// passes every permission check), so it refuses to be set up as root.
 pub(crate) struct ModeFault {
     path: std::path::PathBuf,
     mode: u32,
@@ -193,12 +195,26 @@ pub(crate) struct ModeFault {
 
 impl ModeFault {
     pub(crate) fn set(path: &std::path::Path, mode: u32) -> Self {
-        use std::os::unix::fs::PermissionsExt;
-        let before = std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = std::fs::metadata(path).unwrap();
+        assert_ne!(
+            meta.uid(),
+            0,
+            "a permission fault needs a user other than root: root passes every permission check"
+        );
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
         Self {
             path: path.to_owned(),
-            mode: before,
+            mode: meta.permissions().mode() & 0o7777,
+        }
+    }
+
+    /// Gives `path` `mode` when dropped, for a fault the stand-in node
+    /// makes while a test runs; nothing if `path` was never made.
+    pub(crate) fn restoring(path: &std::path::Path, mode: u32) -> Self {
+        Self {
+            path: path.to_owned(),
+            mode,
         }
     }
 }
@@ -206,7 +222,18 @@ impl ModeFault {
 impl Drop for ModeFault {
     fn drop(&mut self) {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode)).unwrap();
+        if !self.path.exists() {
+            return;
+        }
+        let restored =
+            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode));
+        // A test that already fails keeps its own message; a second panic
+        // while unwinding would abort every test of the process.
+        if let Err(error) = restored
+            && !std::thread::panicking()
+        {
+            panic!("restoring {}: {error}", self.path.display());
+        }
     }
 }
 

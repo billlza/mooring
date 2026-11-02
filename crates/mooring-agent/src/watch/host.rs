@@ -139,18 +139,28 @@ fn tree_bytes(root: &Path) -> Result<u64, AgentError> {
     let mut total = 0_u64;
     for entry in entries {
         let entry = entry.map_err(|error| io_error(IoOp::ReadState, &error))?;
-        let meta = fs::symlink_metadata(entry.path())
-            .map_err(|error| io_error(IoOp::ReadState, &error))?;
-        let bytes = if meta.is_dir() {
-            tree_bytes(&entry.path())?
-        } else if meta.is_file() {
-            meta.len()
-        } else {
-            0
-        };
-        total = total.saturating_add(bytes);
+        total = total.saturating_add(entry_bytes(&entry.path())?);
     }
     Ok(total)
+}
+
+/// The bytes one listed entry occupies: a regular file's length, a
+/// directory's tree, nothing for anything else. An entry gone since it was
+/// listed occupies nothing: journald removes its files while the watch
+/// reads them, and that is no failed reading.
+pub(crate) fn entry_bytes(path: &Path) -> Result<u64, AgentError> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(io_error(IoOp::ReadState, &error)),
+    };
+    if meta.is_dir() {
+        tree_bytes(path)
+    } else if meta.is_file() {
+        Ok(meta.len())
+    } else {
+        Ok(0)
+    }
 }
 
 /// When `path` was last modified; `None` if it does not exist.

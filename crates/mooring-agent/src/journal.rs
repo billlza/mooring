@@ -13,7 +13,10 @@
 //! newest event (so the next number is never reused), of the events older
 //! than [`RETENTION_SECS`] and beyond [`MAX_KEPT`]: an append that prunes
 //! rewrites the journal atomically with its events, so a rewrite that fails
-//! before its rename leaves the journal as it was.
+//! before its rename leaves the journal as it was. A write that fails after
+//! its lines reached the file (its `fsync`, or the directory's sync after a
+//! rename) is reported as failed all the same, and the watch appends those
+//! changes again: each is recorded at least once.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};

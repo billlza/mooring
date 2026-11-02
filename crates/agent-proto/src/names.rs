@@ -8,7 +8,8 @@
 //! can be mistaken for a command-line option where it becomes an argument.
 
 use crate::macros::text_newtype;
-use crate::{EngineUser, Generation, WG_INTERFACE};
+use crate::profile::TUNNEL_UNIT;
+use crate::{EngineUser, Generation};
 
 text_newtype!(
     /// A Linux network interface name, as the kernel accepts it
@@ -69,9 +70,10 @@ impl UnitName {
         Self(format!("{}.service", engine.name()))
     }
 
-    /// The tunnel's service, `wg-quick@wgexit.service`.
+    /// The tunnel's service, `wg-quick@wgexit.service`, as the host
+    /// profile enables it.
     pub fn tunnel() -> Self {
-        Self(format!("wg-quick@{WG_INTERFACE}.service"))
+        Self(TUNNEL_UNIT.to_owned())
     }
 
     /// The transient service a transaction for `generation` runs as,
@@ -234,7 +236,7 @@ fn is_ssh_ed25519_key(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ValueError;
+    use crate::{ENABLED_UNITS, HostFile, ValueError};
 
     #[test]
     fn interface_names_follow_the_kernel_rule() {
@@ -455,6 +457,26 @@ mod tests {
             "mooring-txn-revert-7"
         );
         assert_eq!(UnitName::new("no-suffix").unwrap().stem(), "no-suffix");
+        // The same names as the host profile's units, which it enables.
+        assert_eq!(
+            [
+                HostFile::XrayUnit.unit(),
+                HostFile::Hy2Unit.unit(),
+                Some(UnitName::tunnel().as_str()),
+            ],
+            [
+                Some(UnitName::engine(EngineUser::Xray).as_str()),
+                Some(UnitName::engine(EngineUser::Hy2).as_str()),
+                Some(format!("wg-quick@{}.service", crate::WG_INTERFACE).as_str()),
+            ]
+        );
+        for unit in [
+            UnitName::engine(EngineUser::Xray),
+            UnitName::engine(EngineUser::Hy2),
+            UnitName::tunnel(),
+        ] {
+            assert!(ENABLED_UNITS.contains(&unit.as_str()), "{unit}");
+        }
     }
 
     #[test]

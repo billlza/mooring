@@ -11,7 +11,7 @@ use mooring_agent_proto::{AgentError, Generation, IoOp, Sha256Hex};
 use super::world::World;
 use crate::tests::{EACCES, EEXIST, EISDIR, ENOENT, ENOTDIR, ModeFault, occupy_temporary};
 use crate::txn::activate::{activate, install};
-use crate::txn::record::pending;
+use crate::txn::record::{Change, Phase, pending};
 use crate::txn::{self, Why};
 
 /// A node whose forced command runs `old-agent`, with a new agent stored.
@@ -125,10 +125,11 @@ fn an_agent_that_cannot_be_installed_says_why() {
     );
 }
 
-/// A revert that cannot put the forced command back says so; the change
-/// is ended all the same, its timer stopped.
+/// A revert that cannot put the forced command back says so, and leaves
+/// the activation pending with its timer armed, so that a retried
+/// `Rollback` or the timer still puts it back.
 #[test]
-fn an_activation_whose_link_cannot_be_put_back_says_so() {
+fn an_activation_whose_link_cannot_be_put_back_stays_pending() {
     let (world, sha) = with_new_agent();
     assert_eq!(
         activate(&world.paths, &world.node(1000), sha),
@@ -148,9 +149,68 @@ fn an_activation_whose_link_cannot_be_put_back_says_so() {
         fs::read_link(world.paths.agent_current()).unwrap(),
         Path::new(&sha.to_string())
     );
-    assert_eq!(pending(&world.paths).unwrap(), None);
-    assert_eq!(
-        node.calls().last().map(String::as_str),
-        Some("/usr/bin/systemctl stop mooring-txn-revert-0.timer")
+    assert!(matches!(
+        pending(&world.paths).unwrap().map(|pending| pending.change),
+        Some(Change::Activate { .. })
+    ));
+    assert!(
+        !node
+            .calls()
+            .iter()
+            .any(|call| call.contains("systemctl stop")),
+        "the timer stays armed: {:#?}",
+        node.calls()
     );
+    let node = world.node(1060);
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Requested),
+        Ok(Generation::ZERO)
+    );
+    assert_unswitched(&world);
+}
+
+/// A switch to the new agent that fails after its rename (the directory
+/// cannot be synced) has switched: the activation stays pending with its
+/// timer armed, which puts the previous agent back unless it is confirmed.
+#[test]
+fn an_activation_whose_switch_fails_after_its_rename_keeps_its_timer() {
+    let (world, sha) = with_new_agent();
+    // Installed once, so that installing it again writes nothing.
+    activate(&world.paths, &world.node(1000), sha).unwrap();
+    txn::revert_pending(&world.paths, &world.node(1010), Why::Requested).unwrap();
+    let fault = ModeFault::set(&world.paths.agent_dir(), 0o300);
+    let node = world.node(1050);
+    assert_eq!(
+        activate(&world.paths, &node, sha),
+        Err(AgentError::Io {
+            op: IoOp::WriteState,
+            errno: Some(EACCES),
+        })
+    );
+    drop(fault);
+    assert_eq!(
+        fs::read_link(world.paths.agent_current()).unwrap(),
+        Path::new(&sha.to_string())
+    );
+    assert_eq!(
+        pending(&world.paths).unwrap().map(|pending| pending.phase),
+        Some(Phase::AwaitingConfirm)
+    );
+    assert!(
+        !node
+            .calls()
+            .iter()
+            .any(|call| call.contains("systemctl stop")),
+        "{:#?}",
+        node.calls()
+    );
+    assert_eq!(
+        txn::revert_pending(
+            &world.paths,
+            &world.node(1170),
+            Why::Unconfirmed(Generation::ZERO)
+        ),
+        Ok(Generation::ZERO)
+    );
+    assert_unswitched(&world);
 }

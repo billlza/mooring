@@ -135,6 +135,9 @@ pub(super) struct Faults {
     /// Xray's `-test` halts the node while it runs (a `Shutdown` arriving
     /// mid-transaction), writing the marker here.
     pub(super) halt_on_validate: Option<PathBuf>,
+    /// Xray's `-test` makes this directory read-only (0555) while it runs,
+    /// so that nothing in it can then be removed.
+    pub(super) read_only_on_validate: Option<PathBuf>,
     /// `systemd-run` cannot launch the transaction unit.
     pub(super) launch: bool,
     /// `systemctl is-active` reports one unit failed, with a zero exit, so
@@ -203,6 +206,7 @@ impl World {
         let guards = owner_guards(crate::tests::own_ids(&self.paths).0);
         let interface = self.paths.wgexit_accept_local();
         let conf = self.paths.wg_conf_link();
+        let validate = self.paths.validate_dir();
         FakeNode::answering(
             now,
             Box::new(move |tool, args| {
@@ -282,7 +286,17 @@ impl World {
                         }
                     }
                     (Tool::WgQuick, ["strip", ..]) => ok(format!("[Interface]\nPrivateKey = {WG_PRIVATE_KEY}\n").as_bytes()),
+                    // The stripped copy holds the tunnel's private key: root's
+                    // alone, and there while `wg syncconf` reads it.
+                    (Tool::Wg, ["syncconf", "wgexit", file]) => {
+                        assert_eq!(mode(file), 0o600, "{file}");
+                        assert!(fs::read_to_string(file).unwrap().contains(WG_PRIVATE_KEY));
+                        ok(b"")
+                    }
                     (Tool::Sshd, ["-t", "-f", config]) => {
+                        for copy in ["xray.json", "hy2.json"] {
+                            assert!(!validate.join(copy).exists(), "{copy} outlived the engine validators");
+                        }
                         *faults.sshd_config.borrow_mut() = Some(fs::read_to_string(config).unwrap());
                         if faults.sshd_fails_silently {
                             failed(b"")
@@ -310,8 +324,17 @@ impl World {
             if faults.unstartable_programs {
                 return Err(std::io::Error::from_raw_os_error(ENOENT));
             }
+            // The engines' copies hold the bundle's secrets: root's alone,
+            // and there while their validator reads them.
+            if let ("xray" | "mooring-hy2", ["run" | "check", .., copy]) = (name.as_str(), args) {
+                assert_eq!(mode(copy), 0o600, "{copy}");
+            }
             if let ("xray", ["run", "-test", "-c", copy]) = (name.as_str(), args) {
                 *faults.xray_copy.borrow_mut() = Some(fs::read_to_string(copy).unwrap());
+                if let Some(dir) = &faults.read_only_on_validate {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(dir, fs::Permissions::from_mode(0o555)).unwrap();
+                }
             }
             Ok(match (name.as_str(), args) {
                 ("xray", ["run", "-test", ..]) if faults.halt_on_validate.is_some() => {
@@ -458,4 +481,10 @@ pub(super) fn index_of(calls: &[String], fragment: &str) -> usize {
         .iter()
         .position(|call| call.contains(fragment))
         .unwrap_or_else(|| panic!("no call with {fragment:?} in {calls:#?}"))
+}
+
+/// The permission bits of the file at `path`.
+fn mode(path: &str) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
 }

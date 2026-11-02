@@ -20,13 +20,12 @@ use crate::target::sampler;
 use crate::tests::{EACCES, EEXIST, ENOENT, FakeNode, exited, scratch};
 use crate::txn::stage::{XRAY, store_path};
 
-/// A port on 127.0.0.1 that nothing listens on.
-fn closed_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// A port on 127.0.0.1 that nothing listens on, nor can: binding port 0
+/// takes another, so a connection to it always fails (refused on Linux, an
+/// address the system cannot assign on macOS), and no test running beside
+/// this one can take it, as it could a port freed for the purpose.
+const fn closed_port() -> u16 {
+    0
 }
 
 #[test]

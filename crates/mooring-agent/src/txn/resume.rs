@@ -26,8 +26,8 @@ pub(crate) fn resume(
         return Err(AgentError::GenerationMismatch { current });
     }
     crate::store::remove(&paths.halted())?;
-    for engine in [EngineUser::Xray, EngineUser::Hy2] {
-        let unit = UnitName::engine(engine);
+    for engine in EngineUser::ALL {
+        let unit = UnitName::engine(*engine);
         if run_ok(node, Tool::Systemctl, &["start", unit.as_str()])?.is_err() {
             return Err(AgentError::Systemd {
                 unit,

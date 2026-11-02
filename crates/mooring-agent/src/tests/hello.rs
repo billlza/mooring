@@ -6,17 +6,19 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io;
+use std::io::{self, Cursor};
 use std::net::Ipv4Addr;
+use std::process::ExitCode;
 
 use mooring_agent_proto::{
     AcceptLocal, AgentError, Arch, HostFact, HostProfile, HostProfileVersion, IfName, IoOp,
     KernelIdent, KernelRelease, LineRequest, PROTOCOL, PortRange, RequestKind, Response, Role,
-    SshdDirective,
+    SshdDirective, read_reply,
 };
 
 use super::serve::{SSH, ask, frame};
 use super::{EISDIR, ENOENT, FakeNode, failed, ok, scratch};
+use crate::agent::{Invocation, Process, run};
 use crate::blobs::digest_of;
 use crate::hello::{arch, client_ip, hello, host_facts, mismatches_in};
 use crate::host::Tool;
@@ -126,6 +128,36 @@ fn hello_is_served_to_the_ops_key_alone() {
             })
         );
     }
+}
+
+/// `serve-ssh` gives the request the `SSH_CONNECTION` sshd set, which
+/// `Hello` reports the client's address from.
+#[test]
+fn serve_ssh_gives_hello_the_connection_sshd_set() {
+    let (_dir, paths) = scratch();
+    node_root(&paths);
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let code = run(
+        Invocation::ServeSsh(Role::Ops),
+        &paths,
+        &node(),
+        &mut Process {
+            ssh_connection: Some("192.0.2.44 51234 203.0.113.203 22"),
+            stdin: &mut Cursor::new(frame(&LineRequest::Hello)),
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    );
+    assert_eq!(
+        code,
+        ExitCode::SUCCESS,
+        "{}",
+        String::from_utf8_lossy(&stderr)
+    );
+    let Ok(Response::Hello(info)) = read_reply(&mut Cursor::new(stdout)).unwrap() else {
+        panic!("no hello");
+    };
+    assert_eq!(info.client_ip, Ipv4Addr::new(192, 0, 2, 44));
 }
 
 #[test]

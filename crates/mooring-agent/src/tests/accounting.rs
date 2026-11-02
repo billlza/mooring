@@ -779,3 +779,26 @@ fn retention_reports_a_usage_directory_it_cannot_list() {
         })
     );
 }
+
+/// The usage directory's names are judged whatever their encoding: a
+/// leftover temporary file whose name is not UTF-8 is removed, and any
+/// other such file is no month and stays. APFS refuses such names, so this
+/// runs on Linux only.
+#[cfg(target_os = "linux")]
+#[test]
+fn usage_names_that_are_not_utf8_are_judged_like_any_other() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_dir, paths) = scratch();
+    fs::create_dir_all(paths.usage_dir()).unwrap();
+    let leftover = paths
+        .usage_dir()
+        .join(std::ffi::OsStr::from_bytes(b".\xff.json.4242.tmp"));
+    let stranger = paths
+        .usage_dir()
+        .join(std::ffi::OsStr::from_bytes(b"\xff.json"));
+    fs::write(&leftover, "{}").unwrap();
+    fs::write(&stranger, "{}").unwrap();
+    accounting::prune(&paths, UnixTime::from_secs(NOV)).unwrap();
+    assert!(!leftover.exists(), "a crash's temporary file");
+    assert!(stranger.exists(), "no month, so not pruned");
+}

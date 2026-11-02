@@ -279,10 +279,10 @@ fn attempt(
     running(paths, generation, TxnStage::Preconditions)?;
     preconditions(paths, node, header)?;
     running(paths, generation, TxnStage::Stage)?;
-    prune(paths, previous)?;
-    // What the change changes is read from the previous generation before
-    // anything is switched.
+    // What the change changes, read once from the previous generation
+    // before anything is staged or switched; pruning keeps its engines.
     let before = stage::installed_header(paths, previous)?;
+    prune(paths, previous, before.as_ref())?;
     let staged = stage::stage(paths, generation, header).and_then(|dir| {
         running(paths, generation, TxnStage::Validate)?;
         validate::validate(paths, node, &dir)?;
@@ -306,7 +306,10 @@ fn attempt(
     let dir = match staged {
         Ok(dir) => dir,
         Err(error) => {
-            remove_generation(paths, generation)?;
+            // The change's own failure is the one reported: a directory that
+            // cannot be removed now is replaced by the next staging of this
+            // generation, or refused there with its own error.
+            let _left = remove_generation(paths, generation);
             return Err(error);
         }
     };
@@ -638,9 +641,11 @@ fn roll_back(
 /// the health gate. With no previous generation the node goes back to
 /// serving nothing: no `current`, engines and tunnel stopped, and the
 /// ruleset it had before Mooring's first one reloaded. The failed
-/// generation's directory is removed either way. If any of it fails, both
-/// engines are stopped and the gate closed, and the first failure is
-/// returned.
+/// generation's directory is removed once `current` no longer names it: a
+/// revert that could not switch back keeps it, so that `current` and the
+/// fixed links into it stay whole. If any of it fails, both engines are
+/// stopped and the gate closed, and the first failure is returned. Done
+/// again, it puts back only what still differs.
 pub(crate) fn revert(
     paths: &Paths,
     node: &dyn Node,
@@ -655,7 +660,16 @@ pub(crate) fn revert(
     } else {
         to_previous(paths, node, failed_header.as_ref(), previous)
     };
-    let outcome = reverted.and(remove_failed(paths, failed));
+    let removed = match gate::current_generation(paths) {
+        Ok(current) if current == failed => Ok(()),
+        Ok(_) => remove_failed(paths, failed),
+        // Where `current` points is unknown: the directory stays, and the
+        // node is stopped as for any failure of the revert.
+        Err(error) => Err(RollbackCause::Swap {
+            errno: errno(&error),
+        }),
+    };
+    let outcome = reverted.and(removed);
     if outcome.is_err() {
         safe_stop(paths, node);
     }
@@ -745,8 +759,8 @@ fn to_nothing(paths: &Paths, node: &dyn Node) -> Result<(), RollbackCause> {
 /// The safe state after a failed rollback: both engines stopped and the
 /// gate closed, as far as the node lets either happen.
 fn safe_stop(paths: &Paths, node: &dyn Node) {
-    for engine in [EngineUser::Xray, EngineUser::Hy2] {
-        let unit = UnitName::engine(engine);
+    for engine in EngineUser::ALL {
+        let unit = UnitName::engine(*engine);
         let _attempted = run_ok(node, Tool::Systemctl, &["stop", unit.as_str()]);
     }
     let _attempted = Lock::exclusive(&paths.gate_lock()).and_then(|_lock| gate::close(node));
@@ -761,9 +775,14 @@ fn remove_generation(paths: &Paths, generation: Generation) -> Result<(), AgentE
     }
 }
 
-/// Keeps the current generation and the [`KEPT_PREVIOUS`] newest before
-/// it, and the engine artifacts they use; removes the rest.
-fn prune(paths: &Paths, current: Generation) -> Result<(), AgentError> {
+/// Keeps the current generation (whose header, read already, is
+/// `current_header`) and the [`KEPT_PREVIOUS`] newest before it, and the
+/// engine artifacts they use; removes the rest.
+fn prune(
+    paths: &Paths,
+    current: Generation,
+    current_header: Option<&BundleHeader>,
+) -> Result<(), AgentError> {
     let fail = |error: io::Error| io_error(IoOp::WriteState, &error);
     let mut generations: Vec<u64> = match fs::read_dir(paths.etc()) {
         Ok(entries) => entries
@@ -788,25 +807,24 @@ fn prune(paths: &Paths, current: Generation) -> Result<(), AgentError> {
     for generation in older.iter().skip(KEPT_PREVIOUS) {
         remove_generation(paths, Generation::new(*generation))?;
     }
-    let mut kept = vec![current];
-    kept.extend(
-        older
-            .iter()
-            .take(KEPT_PREVIOUS)
-            .map(|&generation| Generation::new(generation)),
-    );
-    let mut used = BTreeSet::new();
-    for generation in kept {
-        if let Some(header) = stage::installed_header(paths, generation)? {
-            used.extend(
-                header
-                    .engines
-                    .digests()
-                    .into_iter()
-                    .map(ToString::to_string),
-            );
-        }
+    let mut kept = vec![current_header.cloned()];
+    for generation in older.iter().take(KEPT_PREVIOUS) {
+        kept.push(stage::installed_header(
+            paths,
+            Generation::new(*generation),
+        )?);
     }
+    let used: BTreeSet<String> = kept
+        .iter()
+        .flatten()
+        .flat_map(|header| {
+            header
+                .engines
+                .digests()
+                .into_iter()
+                .map(ToString::to_string)
+        })
+        .collect();
     let store = match fs::read_dir(paths.engine_store()) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -866,15 +884,20 @@ pub(crate) enum Why {
 /// Reverts the pending change. A transaction unit holds the lock for its
 /// whole run, so a pending `Apply` found here that does not await
 /// confirmation belongs to a unit that died (or to one launched but not
-/// started, which then finds nothing to run), and is reverted too: rolled
-/// back if its generation is current, else, having switched nothing, only
-/// its staged directory removed. A revert that fails is `RollbackFailed`
-/// with the revert's own cause (a transaction's rollback reports the
-/// failure that made it roll back instead), after the node was stopped;
-/// a staged directory that cannot be removed is the request's error, the
-/// change reverted all the same. A requested revert stops the timer last,
-/// as every change ends (`end`); an unconfirmed change's timer has fired,
-/// and a reboot lost it.
+/// started, which then finds nothing to run), and is reverted too. One
+/// whose timer was armed may have been switched, by its transaction or by
+/// a revert that stopped part-way (one that failed, or died, with
+/// `current` already back on the previous generation), so it is rolled
+/// back, which puts back only what still differs. One only launched never
+/// reached its swap: only its staged directory goes, and a directory that
+/// cannot be removed is the request's error, the change reverted all the
+/// same. A revert that fails is `RollbackFailed` with the revert's own
+/// cause (a transaction's rollback reports the failure that made it roll
+/// back instead), after the node was stopped. An activation ends only
+/// once the forced command is back on the previous agent; a link that
+/// cannot be put back leaves it pending with its timer. A requested
+/// revert stops the timer last, as every change ends (`end`); an
+/// unconfirmed change's timer has fired, and a reboot lost it.
 pub(crate) fn revert_pending(
     paths: &Paths,
     node: &dyn Node,
@@ -892,7 +915,7 @@ pub(crate) fn revert_pending(
     let generation = pending.generation;
     let disarm = why == Why::Requested && pending.phase.armed();
     let (state, outcome) = match pending.change {
-        Change::Apply { previous } if gate::current_generation(paths)? == generation => {
+        Change::Apply { previous } if pending.phase.armed() => {
             match revert(paths, node, generation, previous) {
                 Ok(()) => (Some(reverted(why, generation)), Ok(())),
                 Err(cause) => {
@@ -908,7 +931,10 @@ pub(crate) fn revert_pending(
             Some(reverted(why, generation)),
             remove_generation(paths, generation),
         ),
-        Change::Activate { previous, .. } => (None, activate::restore(paths, &previous)),
+        Change::Activate { previous, .. } => {
+            activate::restore(paths, &previous)?;
+            (None, Ok(()))
+        }
     };
     end(paths, node, generation, state, disarm)?;
     outcome.map(|()| generation)

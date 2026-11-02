@@ -235,3 +235,29 @@ fn revoke_reports_keys_it_cannot_rewrite_or_read() {
         })
     );
 }
+
+/// Host keys are judged by their names' bytes: one whose name is not UTF-8
+/// goes like any other key the profile does not keep, and a file that is
+/// no host key stays. APFS refuses such names, so this runs on Linux only.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_host_key_whose_name_is_not_utf8_goes_like_any_other() {
+    use std::os::unix::ffi::OsStrExt;
+    let host = Host::new();
+    let odd = host
+        .paths
+        .ssh_dir()
+        .join(std::ffi::OsStr::from_bytes(b"ssh_host_\xff_key"));
+    let other = host
+        .paths
+        .ssh_dir()
+        .join(std::ffi::OsStr::from_bytes(b"\xffmoduli"));
+    fs::write(&odd, "a key the profile does not keep").unwrap();
+    fs::write(&other, "no host key").unwrap();
+    assert_eq!(
+        host.bootstrap(&host.node()),
+        Ok(SshEd25519Key::new(NEW_HOST_KEY).unwrap())
+    );
+    assert!(!odd.exists());
+    assert!(other.exists());
+}

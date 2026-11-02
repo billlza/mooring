@@ -149,6 +149,14 @@ fn a_removal_whose_directory_cannot_be_synced_is_reported() {
     }
     assert!(!paths.holds().exists(), "removed all the same");
     assert_eq!(remove(&paths.holds()), Ok(()), "and gone is not an error");
+    assert_eq!(
+        remove(Path::new("/")),
+        Err(AgentError::Io {
+            op: IoOp::WriteState,
+            errno: None
+        }),
+        "a path without a directory is refused before anything is removed"
+    );
 }
 
 #[test]

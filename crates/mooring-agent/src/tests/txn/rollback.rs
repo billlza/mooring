@@ -633,3 +633,122 @@ fn a_listener_check_that_cannot_run_fails_the_health_gate() {
     );
     assert_eq!(world.current(), None);
 }
+
+/// A revert that died after its first step, the swap back, is done again
+/// when the timer fires: `current` already naming the previous generation
+/// does not mean the change switched nothing.
+#[test]
+fn a_revert_that_died_after_its_swap_back_is_done_again() {
+    let world = awaiting_second(idle(301));
+    let two = Generation::new(2);
+    txn::swap(&world.paths, Generation::new(1)).unwrap();
+    let node = world.node(2120);
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Unconfirmed(two)),
+        Ok(two)
+    );
+    index_of(
+        &node.calls(),
+        "/usr/bin/systemctl restart mooring-xray.service",
+    );
+    assert_eq!(
+        world.state(2),
+        TxnState::Failed {
+            error: AgentError::RevertedUnconfirmed { generation: two }
+        }
+    );
+    assert!(!world.paths.generation(two).exists());
+    assert_eq!(pending(&world.paths).unwrap(), None);
+}
+
+/// A revert that failed, and whose failure could not be recorded, is tried
+/// again when the timer fires rather than taken as done: here the second
+/// attempt re-applies everything of the previous generation and the node
+/// serves again.
+#[test]
+fn a_failed_revert_that_could_not_be_recorded_is_tried_again() {
+    let world = awaiting_second(idle(301));
+    let two = Generation::new(2);
+    world.faults.borrow().failing_engine_restarts.set(1);
+    let blocker = occupy_temporary(&world.paths.txn_record(two));
+    let node = world.node(2050);
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Requested),
+        Err(AgentError::Io {
+            op: IoOp::WriteState,
+            errno: Some(EEXIST),
+        })
+    );
+    assert_stopped_safe(&node.calls());
+    fs::remove_dir(blocker).unwrap();
+    let node = world.node(2120);
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Unconfirmed(two)),
+        Ok(two)
+    );
+    let calls = node.calls();
+    index_of(&calls, "/usr/bin/systemctl restart mooring-xray.service");
+    index_of(&calls, "/usr/bin/systemctl restart mooring-hy2.service");
+    assert_eq!(
+        world.state(2),
+        TxnState::Failed {
+            error: AgentError::RevertedUnconfirmed { generation: two }
+        }
+    );
+    assert_eq!(world.current().as_deref(), Some("gen-1"));
+    assert_eq!(pending(&world.paths).unwrap(), None);
+}
+
+/// A revert that cannot swap back keeps the directory `current` still
+/// names, so that `current` and the fixed links into it stay whole for the
+/// stopped node.
+#[test]
+fn a_revert_that_cannot_swap_back_keeps_the_generation_current_names() {
+    let world = awaiting_second(idle(301));
+    let current = world.paths.current();
+    fs::create_dir_all(
+        current
+            .with_extension(format!("swap.{}", std::process::id()))
+            .join("entry"),
+    )
+    .unwrap();
+    let node = world.node(2050);
+    assert_eq!(
+        txn::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
+        Err(RollbackCause::Swap {
+            errno: Some(EEXIST)
+        })
+    );
+    assert_eq!(world.current().as_deref(), Some("gen-2"));
+    assert!(world.paths.generation(Generation::new(2)).is_dir());
+    assert!(fs::metadata(world.paths.nft_conf_link()).is_ok());
+    assert!(fs::metadata(world.paths.wg_conf_link()).is_ok());
+    assert_stopped_safe(&node.calls());
+}
+
+/// A revert that cannot tell where `current` points keeps the failed
+/// generation: here `current` is a directory, which the swap back cannot
+/// replace and no reading takes for a link. The node is stopped, and the
+/// swap's own failure is the one reported.
+#[test]
+fn a_revert_that_cannot_read_current_keeps_the_failed_generation() {
+    let world = awaiting_second(idle(301));
+    // What renaming a link onto a directory that holds something gives, on
+    // this system.
+    let probe = world.paths.at("/probe");
+    fs::create_dir_all(probe.join("full/entry")).unwrap();
+    std::os::unix::fs::symlink("gen-1", probe.join("link")).unwrap();
+    let errno = fs::rename(probe.join("link"), probe.join("full"))
+        .unwrap_err()
+        .raw_os_error();
+    let current = world.paths.current();
+    fs::remove_file(&current).unwrap();
+    fs::create_dir_all(current.join("entry")).unwrap();
+    let node = world.node(2050);
+    assert_eq!(
+        txn::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
+        Err(RollbackCause::Swap { errno })
+    );
+    assert!(world.paths.generation(Generation::new(2)).is_dir());
+    assert_stopped_safe(&node.calls());
+}

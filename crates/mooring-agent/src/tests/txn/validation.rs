@@ -7,12 +7,14 @@
 
 use std::fs;
 
-use mooring_agent_proto::{AgentError, Generation, IoOp, ManagedFile, TxnState};
+use mooring_agent_proto::{
+    AgentError, Generation, IoOp, ManagedFile, StderrTail, TxnState, ValidationTool,
+};
 use serde_json::Value;
 
 use super::world::{World, same};
 use crate::host::Tool;
-use crate::tests::{EEXIST, ENOENT, occupy_temporary};
+use crate::tests::{EEXIST, ENOENT, ModeFault, occupy_temporary};
 
 /// A bundle whose `file` reads `text`, the rest golden.
 fn with(world: &World, file: ManagedFile, text: &str) -> mooring_agent_proto::BundleHeader {
@@ -153,5 +155,42 @@ fn a_validator_that_cannot_be_started_fails_the_validation() {
             op: IoOp::SpawnProcess,
             errno: Some(ENOENT),
         },
+    );
+}
+
+/// A refused change is reported as refused even when its staged directory
+/// cannot then be removed: the refusal is the first failure, and the next
+/// staging replaces what is left.
+#[test]
+fn a_refusal_is_reported_even_when_the_staged_directory_stays() {
+    let world = World::new();
+    let engines = world.paths.generation(Generation::new(1)).join("engines");
+    let warning = "[Warning] deprecated field\n";
+    let read_only = ModeFault::restoring(&engines, 0o755);
+    {
+        let mut faults = world.faults.borrow_mut();
+        faults.xray_test = Some(warning.to_owned());
+        faults.read_only_on_validate = Some(engines.clone());
+    }
+    assert_eq!(
+        world.apply_and_run(&world.node(1000), world.bundle(1, same)),
+        TxnState::Failed {
+            error: AgentError::StageValidation {
+                tool: ValidationTool::Xray,
+                stderr_tail: StderrTail::scrubbed(warning.as_bytes(), &[]),
+            }
+        }
+    );
+    assert!(engines.is_dir(), "left behind");
+    drop(read_only);
+    {
+        let mut faults = world.faults.borrow_mut();
+        faults.xray_test = None;
+        faults.read_only_on_validate = None;
+    }
+    assert_eq!(
+        world.apply_and_run(&world.node(1100), world.bundle(1, same)),
+        TxnState::AwaitingConfirm,
+        "the next staging replaces what was left"
     );
 }

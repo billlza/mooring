@@ -8,7 +8,7 @@ use std::fs;
 use mooring_agent_proto::{AgentError, Generation, IoOp, TxnState};
 
 use super::world::{World, idle, same};
-use crate::tests::{EACCES, EEXIST, EISDIR, ENOENT, ENOTDIR, ModeFault};
+use crate::tests::{EACCES, EEXIST, EISDIR, ENOENT, ENOTDIR, EPERM, ModeFault, own_ids};
 use crate::txn::record::pending;
 use crate::txn::stage::{XRAY, copy_blob, store_path};
 use crate::txn::{self, Launched};
@@ -217,4 +217,100 @@ fn a_blob_copy_says_what_failed() {
 /// Takes the temporary name a blob copy to `target` uses.
 fn occupy_temporary_of_copy(target: &std::path::Path) {
     fs::create_dir(target.with_extension("staging")).unwrap();
+}
+
+/// What the change changes is read from the previous generation before the
+/// swap: a previous header that cannot be read fails the change with
+/// nothing switched, no timer armed and nothing restarted.
+#[test]
+fn a_previous_header_that_cannot_be_read_fails_the_change_before_the_swap() {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    let node = world.node(2000);
+    assert_eq!(
+        txn::apply(&world.paths, &node, world.bundle(2, idle(301))),
+        Ok(Launched::Launched(Generation::new(2)))
+    );
+    let header = world
+        .paths
+        .generation(Generation::new(1))
+        .join(txn::stage::BUNDLE_FILE);
+    fs::remove_file(&header).unwrap();
+    fs::create_dir(&header).unwrap();
+    txn::run(&world.paths, &node, Generation::new(2)).unwrap();
+    assert_unswitched(
+        &world,
+        2,
+        Some("gen-1"),
+        AgentError::Io {
+            op: IoOp::ReadState,
+            errno: Some(EISDIR),
+        },
+    );
+    let calls = node.calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.contains("--on-active") || call.contains("restart")),
+        "{calls:#?}"
+    );
+}
+
+/// A configuration that cannot be given its reader's group fails the
+/// staging: here the engine's group is one this user is not in, which a
+/// user other than root may not give a file (root may give any).
+#[test]
+fn a_configuration_that_cannot_be_given_its_readers_group_fails_the_staging() {
+    let world = World::new();
+    let (uid, gid) = own_ids(&world.paths);
+    assert_ne!(
+        uid, 0,
+        "needs a user other than root: root may give any group"
+    );
+    let group = world.paths.group();
+    let text = fs::read_to_string(&group).unwrap();
+    let foreign = text.replace(
+        &format!("mooring-xray:x:{gid}:"),
+        "mooring-xray:x:4000000000:",
+    );
+    assert_ne!(foreign, text);
+    fs::write(&group, foreign).unwrap();
+    world.apply_and_run(&world.node(1000), world.bundle(1, same));
+    assert_unswitched(
+        &world,
+        1,
+        None,
+        AgentError::Io {
+            op: IoOp::WriteState,
+            errno: Some(EPERM),
+        },
+    );
+}
+
+/// The pruning reads every generation it keeps, to keep the engines they
+/// use: an older kept generation whose header cannot be read fails the
+/// change before anything is staged, rather than prune what it may use.
+#[test]
+fn a_kept_generation_whose_header_cannot_be_read_fails_the_pruning() {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    world.commit(&world.node(2000), world.bundle(2, idle(301)));
+    world.commit(&world.node(3000), world.bundle(3, idle(302)));
+    let header = world
+        .paths
+        .generation(Generation::new(1))
+        .join(txn::stage::BUNDLE_FILE);
+    fs::remove_file(&header).unwrap();
+    fs::create_dir(&header).unwrap();
+    world.apply_and_run(&world.node(4000), world.bundle(4, idle(303)));
+    assert_unswitched(
+        &world,
+        4,
+        Some("gen-3"),
+        AgentError::Io {
+            op: IoOp::ReadState,
+            errno: Some(EISDIR),
+        },
+    );
+    assert!(world.paths.engine_store().is_dir());
 }

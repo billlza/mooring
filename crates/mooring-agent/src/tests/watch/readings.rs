@@ -439,3 +439,25 @@ fn a_view_that_is_not_one_is_refused_not_served() {
         );
     }
 }
+
+/// An entry the journal's listing named but journald has removed since is
+/// no failed reading: it occupies nothing. Anything else unreadable is the
+/// reading's error.
+#[test]
+fn an_entry_gone_since_it_was_listed_occupies_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(host::entry_bytes(&dir.path().join("vacuumed")), Ok(0));
+    let file = dir.path().join("system.journal");
+    fs::write(&file, b"twelve bytes").unwrap();
+    assert_eq!(host::entry_bytes(&file), Ok(12));
+    assert_eq!(host::entry_bytes(dir.path()), Ok(12));
+    std::os::unix::fs::symlink("system.journal", dir.path().join("link")).unwrap();
+    assert_eq!(host::entry_bytes(&dir.path().join("link")), Ok(0));
+    assert_eq!(
+        host::entry_bytes(&file.join("below")),
+        Err(AgentError::Io {
+            op: IoOp::ReadState,
+            errno: Some(ENOTDIR),
+        })
+    );
+}

@@ -228,8 +228,8 @@ pub(crate) fn shutdown(
     if let Err(error) = closed {
         first.get_or_insert(error);
     }
-    for engine in [EngineUser::Xray, EngineUser::Hy2] {
-        if let Err(error) = stop_engine(node, engine) {
+    for engine in EngineUser::ALL {
+        if let Err(error) = stop_engine(node, *engine) {
             first.get_or_insert(error);
         }
     }

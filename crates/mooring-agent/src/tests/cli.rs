@@ -11,12 +11,12 @@ use std::os::unix::ffi::OsStringExt;
 use std::process::ExitCode;
 
 use mooring_agent_proto::{
-    ClearableHold, Generation, Halt, Holds, LineRequest, Response, Role, ShutdownReason, UnixTime,
-    read_reply,
+    AgentError, ClearableHold, Generation, Halt, Holds, HostFact, IoOp, LineRequest, Response,
+    Role, ShutdownReason, StderrTail, UnixTime, WriteError, read_reply,
 };
 
 use super::serve::frame;
-use super::{FakeNode, failed, ok, scratch};
+use super::{ENOENT, FakeNode, failed, ok, scratch};
 use crate::agent::{Invocation, Process, entry, parse, run, self_test};
 use crate::host::Tool;
 use crate::paths::Paths;
@@ -213,12 +213,12 @@ fn serve_ssh_answers_its_stdin_on_its_stdout() {
     );
     let refused = refused(Invocation::ServeSsh(Role::Ops), &paths, &node, &request);
     assert_eq!(refused.code, ExitCode::from(1));
-    assert!(
-        refused
-            .stderr
-            .starts_with("mooring-agent: writing the reply failed: "),
-        "{}",
-        refused.stderr
+    assert_eq!(
+        refused.stderr,
+        format!(
+            "mooring-agent: writing the reply failed: {}\n",
+            WriteError::Io(io::Error::from(io::ErrorKind::BrokenPipe))
+        )
     );
 }
 
@@ -259,10 +259,14 @@ fn gate_close_closes_and_reports_a_failure() {
     let broken = FakeNode::answering(0, Box::new(|_, _| Ok(failed(b"no table"))));
     let refused = ran(Invocation::GateClose, &paths, &broken, b"");
     assert_eq!(refused.code, ExitCode::from(1));
-    assert!(
-        refused
-            .stderr
-            .starts_with("mooring-agent: closing the gate failed")
+    assert_eq!(
+        refused.stderr,
+        format!(
+            "mooring-agent: closing the gate failed: {}\n",
+            AgentError::GateCloseFailed {
+                stderr_tail: StderrTail::scrubbed(b"no table", &[])
+            }
+        )
     );
 }
 
@@ -279,26 +283,27 @@ fn the_self_test_prints_the_protocol_and_refuses_damaged_state() {
     assert!(passed.stderr.is_empty());
     let unprinted = refused(Invocation::SelfTest, &paths, &node, b"");
     assert_eq!(unprinted.code, ExitCode::from(1));
-    assert!(
-        unprinted
-            .stderr
-            .starts_with("mooring-agent: printing the protocol failed: "),
-        "{}",
-        unprinted.stderr
+    assert_eq!(
+        unprinted.stderr,
+        format!(
+            "mooring-agent: printing the protocol failed: {}\n",
+            io::Error::from(io::ErrorKind::BrokenPipe)
+        )
     );
     self_test(&paths).unwrap();
     std::fs::create_dir_all(paths.gate_dir()).unwrap();
     std::fs::write(paths.holds(), "{").unwrap();
-    assert!(self_test(&paths).is_err());
+    let malformed = AgentError::Io {
+        op: IoOp::ReadState,
+        errno: None,
+    };
+    assert_eq!(self_test(&paths), Err(malformed.clone()));
     let damaged = ran(Invocation::SelfTest, &paths, &node, b"");
     assert_eq!(damaged.code, ExitCode::from(1));
     assert!(damaged.stdout.is_empty());
-    assert!(
-        damaged
-            .stderr
-            .starts_with("mooring-agent: self-test failed: "),
-        "{}",
-        damaged.stderr
+    assert_eq!(
+        damaged.stderr,
+        format!("mooring-agent: self-test failed: {malformed}\n")
     );
 }
 
@@ -310,10 +315,14 @@ fn the_reflector_needs_the_uplinks_address() {
     let node = FakeNode::new(0);
     let refused = ran(Invocation::Reflect(27900), &paths, &node, b"");
     assert_eq!(refused.code, ExitCode::from(1));
-    assert!(
-        refused.stderr.contains("the uplink's address is unknown"),
-        "{}",
-        refused.stderr
+    assert_eq!(
+        refused.stderr,
+        format!(
+            "mooring-agent: the uplink's address is unknown: {}\n",
+            AgentError::HostFactUnavailable {
+                field: HostFact::Uplink
+            }
+        )
     );
     assert!(node.calls().is_empty(), "no route, so no address lookup");
 }
@@ -362,12 +371,16 @@ fn a_watch_that_cannot_read_the_node_exits_1_and_says_what() {
     let node = FakeNode::new(0);
     let stopped = ran(Invocation::Watch, &paths, &node, b"");
     assert_eq!(stopped.code, ExitCode::from(1));
-    assert!(
-        stopped
-            .stderr
-            .starts_with("mooring-agent: a reading the watch needs failed: "),
-        "{}",
-        stopped.stderr
+    // The first reading a tick takes is the kernel's boot id.
+    assert_eq!(
+        stopped.stderr,
+        format!(
+            "mooring-agent: a reading the watch needs failed: {}\n",
+            AgentError::Io {
+                op: IoOp::ReadState,
+                errno: Some(ENOENT)
+            }
+        )
     );
 }
 
@@ -379,12 +392,15 @@ fn the_hourly_target_check_exits_0_once_its_reading_is_written() {
     let node = FakeNode::new(5_000);
     let unconfigured = ran(Invocation::TargetWatch, &paths, &node, b"");
     assert_eq!(unconfigured.code, ExitCode::from(1));
-    assert!(
-        unconfigured
-            .stderr
-            .starts_with("mooring-agent: the target check failed: "),
-        "{}",
-        unconfigured.stderr
+    assert_eq!(
+        unconfigured.stderr,
+        format!(
+            "mooring-agent: the target check failed: {}\n",
+            AgentError::Io {
+                op: IoOp::ReadState,
+                errno: None
+            }
+        )
     );
     let config = paths.watch_config();
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();

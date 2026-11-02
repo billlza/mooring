@@ -90,12 +90,14 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> io::Result<(
 
 /// Removes `path`; a file that is already gone is not an error.
 pub(crate) fn remove(path: &Path) -> Result<(), AgentError> {
+    let fail = |error: io::Error| io_error(IoOp::WriteState, &error);
+    // The directory whose entry goes, synced once it has: a path without
+    // one is refused before anything is removed.
+    let dir = parent_of(path).map_err(fail)?;
     match fs::remove_file(path) {
-        Ok(()) => File::open(parent_of(path).map_err(|error| io_error(IoOp::WriteState, &error))?)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|error| io_error(IoOp::WriteState, &error)),
+        Ok(()) => File::open(dir).and_then(|dir| dir.sync_all()).map_err(fail),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(io_error(IoOp::WriteState, &error)),
+        Err(error) => Err(fail(error)),
     }
 }
 
