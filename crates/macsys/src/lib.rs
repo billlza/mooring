@@ -29,7 +29,8 @@
 //!   identify the operator's own networks (design §10.2, P0-2);
 //! - [`open_files_limit`] and [`raise_open_files`]: the open-files limit
 //!   (`RLIMIT_NOFILE`), which `fieldkit port-ceiling` raises before it
-//!   holds thousands of connections;
+//!   holds thousands of connections, and the descriptors in force, which
+//!   the kernel's per-process maximum can hold below the soft limit;
 //! - [`controlling_terminal`] and [`EchoOff`]: the process's terminal, and
 //!   its echo switched off while a password is typed;
 //! - [`kill_group`]: a process group ended, for an ssh session past its

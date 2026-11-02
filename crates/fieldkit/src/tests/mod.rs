@@ -7,6 +7,8 @@
 mod cli;
 #[cfg(target_os = "macos")]
 mod env;
+#[cfg(target_os = "macos")]
+mod limits;
 mod loopback;
 mod output;
 mod search;

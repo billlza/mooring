@@ -454,7 +454,9 @@ mooring/
                                       terminal echo guard. Built 2026-10-22 for fieldkit (M2b): the interface list (NET_RT_IFLIST2:
                                       name, own link-layer address, flags, MTU, if_data64 byte counters, IPv4 addresses) and the
                                       open-files limit (RLIMIT_NOFILE). 2026-10-29: IPv6 addresses in the interface list, the default
-                                      routes with their scope, configd's IPv4 services (src/configd.rs). Later: the PF_ROUTE monitor (M5)
+                                      routes with their scope, configd's IPv4 services (src/configd.rs). 2026-11-02: the descriptors
+                                      in force (getdtablesize), as macOS takes a soft limit above kern.maxfilesperproc and enforces
+                                      that maximum. Later: the PF_ROUTE monitor (M5)
     daemon-core/ mooring-daemon-core  daemon state machine, verdicts, probe primitive, latches, control protocol; traits for interfaces,
                                       engines, clock, power, secrets, ssh, router; console (revision 5, §15): MacStatusV1, event journal
                                       and availability, alert machine, SIM forecast, capacity monitor, the MR7450 `model.json` allowlist parser and redactor (revision 7),

@@ -6,19 +6,38 @@
 use crate::error::FieldkitError;
 
 /// Raises the soft open-files limit to at least `want` if the hard limit
-/// allows, and fails with `OpenFilesLimit` if it ends below `want`.
+/// allows, and fails if the descriptors the process may then hold end below
+/// `want`: with `OpenFilesLimit` when the soft limit is what stops it, and
+/// with `OpenFilesKernelMaximum` when the kernel's per-process maximum
+/// (`kern.maxfilesperproc`) is, which macOS enforces without refusing a
+/// soft limit above it.
 #[cfg(target_os = "macos")]
 pub(crate) fn ensure_open_files(want: u64) -> Result<(), FieldkitError> {
     let limit = mooring_macsys::raise_open_files(want).map_err(|error| FieldkitError::Limit {
         reason: error.to_string(),
     })?;
-    if limit.soft < want {
-        return Err(FieldkitError::OpenFilesLimit {
-            have: limit.soft,
-            want,
-        });
+    enough_open_files(limit.in_force, limit.soft, want)
+}
+
+/// Whether `in_force` descriptors cover `want`, under a soft limit of
+/// `soft`: if not, `OpenFilesKernelMaximum` when the kernel's maximum holds
+/// them below the soft limit, else `OpenFilesLimit`.
+#[cfg(target_os = "macos")]
+pub(crate) fn enough_open_files(in_force: u64, soft: u64, want: u64) -> Result<(), FieldkitError> {
+    if in_force >= want {
+        return Ok(());
     }
-    Ok(())
+    Err(if in_force < soft {
+        FieldkitError::OpenFilesKernelMaximum {
+            maximum: in_force,
+            want,
+        }
+    } else {
+        FieldkitError::OpenFilesLimit {
+            have: in_force,
+            want,
+        }
+    })
 }
 
 /// Fails with `OpenFilesLimit` if the soft open-files limit is below
