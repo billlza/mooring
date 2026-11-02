@@ -4,14 +4,17 @@
 //! [`world`], which runs every tool successfully unless a test says
 //! otherwise, and the rendered golden bundle.
 
+mod activation;
 mod launch;
 mod rollback;
+mod staging;
 mod timer;
+mod units;
 mod validation;
 mod world;
 
-pub(super) use world::facts;
-use world::{TUNNEL_START_FAILED, WG, WG_PRIVATE_KEY, World, XRAY, golden, idle, index_of, same};
+use world::{TUNNEL_START_FAILED, WG, WG_PRIVATE_KEY, World, XRAY, idle, index_of, same};
+pub(super) use world::{WATCH, facts, golden};
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

@@ -9,9 +9,11 @@ use std::net::Ipv4Addr;
 
 use mooring_agent_proto::{
     AcceptLocal, AgentError, Arch, HostFact, HostProfile, HostProfileVersion, IfName, IoOp,
-    KernelIdent, KernelRelease, PROTOCOL, PortRange, SshdDirective,
+    KernelIdent, KernelRelease, LineRequest, PROTOCOL, PortRange, RequestKind, Response, Role,
+    SshdDirective,
 };
 
+use super::serve::{SSH, ask, frame};
 use super::{FakeNode, failed, ok, scratch};
 use crate::blobs::digest_of;
 use crate::hello::{arch, client_ip, hello, host_facts, mismatches_in};
@@ -102,6 +104,26 @@ fn hello_reports_the_agent_the_host_and_the_gate() {
     assert_eq!(info.halted, None);
     assert!(info.holds.is_empty());
     assert_eq!(info.client_ip, Ipv4Addr::new(198, 51, 100, 97));
+}
+
+#[test]
+fn hello_is_served_to_the_ops_key_alone() {
+    let (_dir, paths) = scratch();
+    node_root(&paths);
+    let info = hello(&paths, &node(), Some(SSH)).unwrap();
+    assert_eq!(
+        ask(&paths, &node(), Role::Ops, frame(&LineRequest::Hello)),
+        Ok(Response::Hello(Box::new(info)))
+    );
+    for role in [Role::Viewer, Role::Bootstrap] {
+        assert_eq!(
+            ask(&paths, &node(), role, frame(&LineRequest::Hello)),
+            Err(AgentError::RoleNotPermitted {
+                role,
+                request: RequestKind::Hello,
+            })
+        );
+    }
 }
 
 #[test]

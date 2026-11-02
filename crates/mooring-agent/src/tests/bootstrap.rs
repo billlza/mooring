@@ -439,16 +439,13 @@ fn bootstrap_refuses_an_agent_that_is_not_the_one_expected() {
     let node = host.node();
     let (bootstrap_key, ops_key) = keys();
     let expected = Sha256Hex::from_bytes([7; 32]);
+    let request = LineRequest::Bootstrap {
+        expected_agent_sha: expected,
+        bootstrap_pubkey: bootstrap_key,
+        ops_pubkey: ops_key,
+    };
     assert_eq!(
-        bootstrap(
-            &host.paths,
-            &node,
-            expected,
-            Keys {
-                bootstrap: &bootstrap_key,
-                ops: &ops_key,
-            },
-        ),
+        ask(&host.paths, &node, Role::Bootstrap, frame(&request)),
         Err(AgentError::AgentShaMismatch {
             expected,
             actual: host.sha,
