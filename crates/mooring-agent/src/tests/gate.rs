@@ -8,14 +8,14 @@ use std::os::unix::fs::symlink;
 
 use mooring_agent_proto::{
     AgentError, ClearableHold, EgressViolationHold, EngineUser, GateReason, GateState, Generation,
-    Halt, Holds, IoOp, MacDrainHold, OperatorHold, ShutdownReason, SystemdOp, UnixTime,
+    Halt, Holds, IoOp, MacDrainHold, OperatorHold, ShutdownReason, SystemdOp, UnitName, UnixTime,
     VIEWER_STOP_WAIT_SECS,
 };
 
 use super::{ENOENT, FakeNode, failed, nft_set, ok, scratch};
 use crate::gate::{
-    clear, current_generation, engine_unit, halted, holds, may_start_engines, set_by_ops,
-    set_by_viewer, shutdown, state,
+    clear, current_generation, halted, holds, may_start_engines, set_by_ops, set_by_viewer,
+    shutdown, state,
 };
 use crate::host::Tool;
 use crate::store::write_json;
@@ -222,7 +222,7 @@ fn a_failed_engine_stop_names_the_unit() {
     assert_eq!(
         shutdown(&paths, &node, ShutdownReason::Operator).unwrap_err(),
         AgentError::Systemd {
-            unit: engine_unit(EngineUser::Hy2).unwrap(),
+            unit: UnitName::engine(EngineUser::Hy2),
             op: SystemdOp::Stop,
         }
     );
@@ -269,7 +269,7 @@ fn a_shutdown_whose_gate_will_not_close_still_stops_both_engines() {
     assert_eq!(
         shutdown(&paths, &node, ShutdownReason::Operator).unwrap_err(),
         AgentError::Systemd {
-            unit: engine_unit(EngineUser::Xray).unwrap(),
+            unit: UnitName::engine(EngineUser::Xray),
             op: SystemdOp::Stop,
         }
     );
@@ -296,18 +296,6 @@ fn engines_may_start_only_without_a_readable_marker() {
     assert!(!may_start_engines(&paths));
     std::fs::write(paths.halted(), "garbled").unwrap();
     assert!(!may_start_engines(&paths));
-}
-
-#[test]
-fn the_engine_units_are_named_as_design_5_2_says() {
-    assert_eq!(
-        engine_unit(EngineUser::Xray).unwrap().as_str(),
-        "mooring-xray.service"
-    );
-    assert_eq!(
-        engine_unit(EngineUser::Hy2).unwrap().as_str(),
-        "mooring-hy2.service"
-    );
 }
 
 #[test]

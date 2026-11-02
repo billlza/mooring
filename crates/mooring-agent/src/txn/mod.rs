@@ -36,7 +36,7 @@ use mooring_agent_proto::{
     UnitName, WG_INTERFACE,
 };
 
-use crate::gate::{self, engine_unit};
+use crate::gate;
 use crate::hello;
 use crate::host::{Node, Tool, run_ok};
 use crate::hostfiles;
@@ -53,22 +53,13 @@ pub(crate) const CONFIRM_SECS: u64 = 120;
 /// step 4).
 pub(crate) const KEPT_PREVIOUS: usize = 2;
 
-/// The transient unit of the transaction for `generation`.
-pub(crate) fn txn_unit(generation: Generation) -> String {
-    format!("mooring-txn-{}", generation.get())
-}
-
-/// The transient timer that reverts an unconfirmed change under
-/// `generation`.
-pub(crate) fn revert_unit(generation: Generation) -> String {
-    format!("mooring-txn-revert-{}", generation.get())
-}
-
-fn unit_name(name: &str) -> Result<UnitName, AgentError> {
-    UnitName::new(name).map_err(|_| AgentError::Io {
-        op: IoOp::SpawnProcess,
-        errno: None,
-    })
+/// The units a generation runs: both engines and the tunnel.
+pub(crate) fn generation_units() -> [UnitName; 3] {
+    [
+        UnitName::engine(EngineUser::Xray),
+        UnitName::engine(EngineUser::Hy2),
+        UnitName::tunnel(),
+    ]
 }
 
 /// `Busy` with the generation of the change that holds the lock or is
@@ -178,8 +169,8 @@ fn launch(
             phase: Phase::Launched,
         },
     )?;
-    let unit = txn_unit(generation);
-    let unit_arg = format!("--unit={unit}");
+    let unit = UnitName::transaction(generation);
+    let unit_arg = format!("--unit={}", unit.stem());
     let generation_arg = generation.get().to_string();
     match run_ok(
         node,
@@ -195,7 +186,7 @@ fn launch(
     )? {
         Ok(_) => Ok(()),
         Err(_) => Err(AgentError::Systemd {
-            unit: unit_name(&format!("{unit}.service"))?,
+            unit,
             op: SystemdOp::Run,
         }),
     }
@@ -387,8 +378,8 @@ fn preconditions(paths: &Paths, node: &dyn Node, header: &BundleHeader) -> Resul
 /// Arms the timer that reverts the change under `generation` unless it is
 /// confirmed within [`CONFIRM_SECS`], run by `agent`.
 fn arm_revert(node: &dyn Node, generation: Generation, agent: &Path) -> Result<(), AgentError> {
-    let unit = revert_unit(generation);
-    let unit_arg = format!("--unit={unit}");
+    let timer = UnitName::confirm_timer(generation);
+    let unit_arg = format!("--unit={}", timer.stem());
     let delay = format!("--on-active={CONFIRM_SECS}");
     let generation_arg = generation.get().to_string();
     let agent = agent.display().to_string();
@@ -407,7 +398,7 @@ fn arm_revert(node: &dyn Node, generation: Generation, agent: &Path) -> Result<(
     )? {
         Ok(_) => Ok(()),
         Err(_) => Err(AgentError::Systemd {
-            unit: unit_name(&format!("{unit}.timer"))?,
+            unit: timer,
             op: SystemdOp::Run,
         }),
     }
@@ -415,11 +406,11 @@ fn arm_revert(node: &dyn Node, generation: Generation, agent: &Path) -> Result<(
 
 /// Stops the revert timer of `generation`.
 fn disarm_revert(node: &dyn Node, generation: Generation) -> Result<(), AgentError> {
-    let unit = format!("{}.timer", revert_unit(generation));
-    match run_ok(node, Tool::Systemctl, &["stop", &unit])? {
+    let timer = UnitName::confirm_timer(generation);
+    match run_ok(node, Tool::Systemctl, &["stop", timer.as_str()])? {
         Ok(_) => Ok(()),
         Err(_) => Err(AgentError::Systemd {
-            unit: unit_name(&unit)?,
+            unit: timer,
             op: SystemdOp::Stop,
         }),
     }
@@ -542,12 +533,10 @@ pub(crate) fn apply_changes(
         (EngineUser::Hy2, ManagedFile::Hy2Config, HostFile::Hy2Unit),
     ] {
         if changed(file) || engines_changed || host.contains(&unit) {
-            let unit = engine_unit(engine)
-                .map_err(|error| step.failed(ApplyStep::EngineRestart, &error))?;
             step.run(
                 ApplyStep::EngineRestart,
                 Tool::Systemctl,
-                &["restart", unit.as_str()],
+                &["restart", UnitName::engine(engine).as_str()],
             )?;
         }
     }
@@ -607,10 +596,13 @@ fn apply_wireguard(
                 .any(|key| wg_value(&old, key) != wg_value(&next, key))
         })
     });
-    let unit = format!("wg-quick@{WG_INTERFACE}.service");
     if restart {
         return step
-            .run(ApplyStep::WireGuard, Tool::Systemctl, &["restart", &unit])
+            .run(
+                ApplyStep::WireGuard,
+                Tool::Systemctl,
+                &["restart", UnitName::tunnel().as_str()],
+            )
             .map(drop);
     }
     let conf = paths.wg_conf_link().display().to_string();
@@ -711,16 +703,13 @@ fn to_previous(
 /// tolerates it (design §8.4).
 fn to_nothing(paths: &Paths, node: &dyn Node) -> Result<(), RollbackCause> {
     let step = Step { node, secrets: &[] };
-    let tunnel = format!("wg-quick@{WG_INTERFACE}.service");
-    let stopped = [
-        "mooring-xray.service",
-        "mooring-hy2.service",
-        tunnel.as_str(),
-    ]
-    .iter()
-    .try_for_each(|unit| {
-        step.run(ApplyStep::EngineRestart, Tool::Systemctl, &["stop", unit])
-            .map(drop)
+    let stopped = generation_units().iter().try_for_each(|unit| {
+        step.run(
+            ApplyStep::EngineRestart,
+            Tool::Systemctl,
+            &["stop", unit.as_str()],
+        )
+        .map(drop)
     });
     let torn_down = stopped.and_then(|()| {
         let interface = hello::accept_local(paths)
@@ -757,9 +746,8 @@ fn to_nothing(paths: &Paths, node: &dyn Node) -> Result<(), RollbackCause> {
 /// gate closed, as far as the node lets either happen.
 fn safe_stop(paths: &Paths, node: &dyn Node) {
     for engine in [EngineUser::Xray, EngineUser::Hy2] {
-        if let Ok(unit) = engine_unit(engine) {
-            let _attempted = run_ok(node, Tool::Systemctl, &["stop", unit.as_str()]);
-        }
+        let unit = UnitName::engine(engine);
+        let _attempted = run_ok(node, Tool::Systemctl, &["stop", unit.as_str()]);
     }
     let _attempted = Lock::exclusive(&paths.gate_lock()).and_then(|_lock| gate::close(node));
 }

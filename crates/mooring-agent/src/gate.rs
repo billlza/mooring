@@ -241,7 +241,7 @@ pub(crate) fn shutdown(
 
 /// `systemctl stop` of one engine.
 fn stop_engine(node: &dyn Node, engine: EngineUser) -> Result<(), AgentError> {
-    let unit = engine_unit(engine)?;
+    let unit = UnitName::engine(engine);
     match run_ok(node, Tool::Systemctl, &["stop", unit.as_str()])? {
         Ok(_) => Ok(()),
         Err(_) => Err(AgentError::Systemd {
@@ -256,15 +256,4 @@ fn stop_engine(node: &dyn Node, engine: EngineUser) -> Result<(), AgentError> {
 /// marker never lets an engine start.
 pub(crate) fn may_start_engines(paths: &Paths) -> bool {
     matches!(halted(paths), Ok(None))
-}
-
-/// An engine's systemd unit, `mooring-xray.service` or
-/// `mooring-hy2.service` (design §5.2).
-pub(crate) fn engine_unit(engine: EngineUser) -> Result<UnitName, AgentError> {
-    // Both names are valid unit names (a test checks them); the error is
-    // only kept so that no conversion can panic.
-    UnitName::new(format!("{}.service", engine.name())).map_err(|_| AgentError::Io {
-        op: IoOp::SpawnProcess,
-        errno: None,
-    })
 }
