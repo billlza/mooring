@@ -6,10 +6,12 @@
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
+use mooring_model::collections::NonEmpty;
 use mooring_model::counters::ConfigGeneration;
+use mooring_model::ids::NodeId;
 use mooring_model::secret::SecretRef;
 
-use crate::error::{ChangeErrorKind, StoreError, StoreErrorKind};
+use crate::error::{ChangeErrorKind, CleanupFailure, IoOp, StoreError, StoreErrorKind};
 use crate::secrets::{SecretOp, SecretStoreError, SecretStoreErrorKind, SnapshotReadErrorKind};
 
 /// `ALL` lists each kind once, and each kind's name is its Display text.
@@ -90,4 +92,83 @@ fn an_invalid_item_names_its_reference_and_kind_only() {
     };
     assert_eq!(missing.kind(), SecretStoreErrorKind::SecretMissing);
     assert_eq!(missing.to_string(), "secret router/admin is missing");
+}
+
+/// Each filesystem operation has a description of its own, a lowercase
+/// verb phrase that `Io`'s message reads as "failed to …", so the message
+/// says which operation failed. `IoOp::ALL` comes from the list that
+/// declares the operations, so an operation added there is checked here.
+#[test]
+fn every_filesystem_operation_has_its_own_description() {
+    let descriptions: BTreeSet<String> = IoOp::ALL.iter().map(ToString::to_string).collect();
+    assert_eq!(descriptions.len(), IoOp::ALL.len());
+    for description in &descriptions {
+        assert!(
+            description.starts_with(|first: char| first.is_ascii_lowercase())
+                && !description.ends_with('.'),
+            "{description}"
+        );
+    }
+    assert_eq!(IoOp::ReadSimMeter.to_string(), "read the SIM meter");
+}
+
+/// The secret store's operations name themselves as its methods.
+#[test]
+fn secret_operations_are_named_as_their_calls() {
+    let names: Vec<String> = [SecretOp::Get, SecretOp::Put, SecretOp::Delete]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(names, ["get", "put", "delete"]);
+}
+
+/// A message about several secrets names every one, in order, and an empty
+/// list as such; a cleanup failure gives each secret with its own error.
+#[test]
+fn messages_name_every_secret_they_concern() {
+    let changed = StoreError::SecretRefsChanged {
+        added: BTreeSet::from([SecretRef::RouterAdmin, SecretRef::AlertTopic]),
+        removed: BTreeSet::new(),
+    };
+    assert_eq!(
+        changed.to_string(),
+        "the change adds secrets [alert/topic, router/admin] and removes secrets []; \
+         use the ordered secret update"
+    );
+    let mismatch = StoreError::SecretPlanMismatch {
+        missing: BTreeSet::from([SecretRef::AlertTopic]),
+        unreferenced: BTreeSet::from([
+            SecretRef::NodeHy2Key(NodeId::parse("lon1").unwrap()),
+            SecretRef::RouterAdmin,
+        ]),
+    };
+    assert_eq!(
+        mismatch.to_string(),
+        "the change needs new secrets [alert/topic] that were not supplied, \
+         and was given [router/admin, node/lon1/hy2-key] that it does not reference"
+    );
+    let cleanup = StoreError::SecretCleanup {
+        committed: ConfigGeneration::new(4).unwrap(),
+        failures: NonEmpty::from_parts(
+            CleanupFailure {
+                secret_ref: SecretRef::AlertTopic,
+                error: SecretStoreError::Keychain {
+                    op: SecretOp::Delete,
+                    status: -25_308,
+                },
+            },
+            vec![CleanupFailure {
+                secret_ref: SecretRef::RouterAdmin,
+                error: SecretStoreError::SecretMissing {
+                    secret_ref: SecretRef::RouterAdmin,
+                },
+            }],
+        ),
+    };
+    assert_eq!(
+        cleanup.to_string(),
+        "state committed at config generation 4, but deleting secrets failed: \
+         alert/topic: keychain delete failed with OSStatus -25308; \
+         router/admin: secret router/admin is missing"
+    );
 }

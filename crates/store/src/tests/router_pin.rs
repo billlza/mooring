@@ -5,11 +5,12 @@
 //! refusal of anything that is not a version-1 or version-2 pin.
 
 use std::fs;
+use std::io;
 
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::time::UnixTime;
 
-use super::mode_of;
+use super::{assert_io_error, mode_of};
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 use crate::router_pin::{
     MAX_ROUTER_PIN_BYTES, ROUTER_PIN_FILE, RouterPin, RouterPinFault, StoredPin, read_router_pin,
@@ -199,13 +200,12 @@ fn a_version_1_pin_is_read_without_an_interface() {
 fn unreadable_pins_and_missing_directories_are_io_errors() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join(ROUTER_PIN_FILE)).unwrap();
-    match read_router_pin(dir.path()).unwrap_err() {
-        StoreError::Io { op, path, .. } => {
-            assert_eq!(op, IoOp::ReadRouterPin);
-            assert_eq!(path, dir.path().join(ROUTER_PIN_FILE));
-        }
-        other => panic!("{other:?}"),
-    }
+    assert_io_error(
+        &read_router_pin(dir.path()).unwrap_err(),
+        IoOp::ReadRouterPin,
+        &dir.path().join(ROUTER_PIN_FILE),
+        io::ErrorKind::IsADirectory,
+    );
     let missing = dir.path().join("absent");
     let error = write_router_pin(&missing, &pin()).unwrap_err();
     assert_eq!(error.kind(), StoreErrorKind::Io);

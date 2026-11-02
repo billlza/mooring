@@ -19,85 +19,80 @@ use crate::router_pin::RouterPinFault;
 use crate::secrets::SecretStoreError;
 use mooring_model::kinds;
 
-/// The filesystem operation that failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IoOp {
-    /// Opening or creating `state.lock`.
-    OpenLock,
-    /// Checking whether `state.json` exists.
-    InspectState,
-    /// Reading `state.json`.
-    ReadState,
-    /// Removing a temporary file left behind by an interrupted write.
-    RemoveStaleTemp,
-    /// Creating a temporary file.
-    CreateTemp,
-    /// Writing a temporary file.
-    WriteTemp,
-    /// Flushing a temporary file to stable storage.
-    SyncTemp,
-    /// Renaming a temporary file over its target.
-    Rename,
-    /// Opening the store directory.
-    OpenDir,
-    /// Flushing the store directory to stable storage.
-    SyncDir,
-    /// Opening or reading the router identity file.
-    ReadRouterPin,
-    /// Opening or reading the allowed-networks file.
-    ReadAllowedNetworks,
-    /// Opening or reading the exit's latch.
-    ReadLatch,
-    /// Removing the exit's latch.
-    RemoveLatch,
-    /// Opening or reading the SIM meter's document.
-    ReadSimMeter,
-    /// Creating or inspecting the usage directory.
-    CreateUsageDir,
-    /// Creating or inspecting the radio history's directory.
-    CreateRadioDir,
-    /// Inspecting a radio history day file.
-    InspectRadioDay,
-    /// Opening or creating a radio history day file.
-    OpenRadioDay,
-    /// Reading a radio history day file.
-    ReadRadioDay,
-    /// Writing, truncating or flushing a radio history day file.
-    WriteRadioDay,
-    /// Listing the radio history's day files.
-    ListRadioDays,
-    /// Removing a radio history day file.
-    RemoveRadioDay,
+/// Declares [`IoOp`] from one list of its operations, each with the
+/// description an `Io` error gives it ("failed to …"), and, for the tests,
+/// every operation from the same list, so that none is left out of them.
+macro_rules! io_ops {
+    ($( $(#[$doc:meta])* $variant:ident => $description:literal, )+) => {
+        /// The filesystem operation that failed.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum IoOp {
+            $( $(#[$doc])* $variant, )+
+        }
+
+        #[cfg(test)]
+        impl IoOp {
+            /// Every operation, in declaration order.
+            pub(crate) const ALL: &'static [Self] = &[ $( Self::$variant, )+ ];
+        }
+
+        impl fmt::Display for IoOp {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(match self {
+                    $( Self::$variant => $description, )+
+                })
+            }
+        }
+    };
 }
 
-impl fmt::Display for IoOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::OpenLock => "open the lock file",
-            Self::InspectState => "inspect the state file",
-            Self::ReadState => "read the state file",
-            Self::RemoveStaleTemp => "remove a stale temporary file",
-            Self::CreateTemp => "create a temporary file",
-            Self::WriteTemp => "write a temporary file",
-            Self::SyncTemp => "sync a temporary file",
-            Self::Rename => "rename a temporary file into place",
-            Self::OpenDir => "open the store directory",
-            Self::SyncDir => "sync the store directory",
-            Self::ReadRouterPin => "read the router identity file",
-            Self::ReadAllowedNetworks => "read the allowed-networks file",
-            Self::ReadLatch => "read the exit's latch",
-            Self::RemoveLatch => "remove the exit's latch",
-            Self::ReadSimMeter => "read the SIM meter",
-            Self::CreateUsageDir => "create the usage directory",
-            Self::CreateRadioDir => "create the radio directory",
-            Self::InspectRadioDay => "inspect a radio history day file",
-            Self::OpenRadioDay => "open a radio history day file",
-            Self::ReadRadioDay => "read a radio history day file",
-            Self::WriteRadioDay => "write a radio history day file",
-            Self::ListRadioDays => "list the radio history's day files",
-            Self::RemoveRadioDay => "remove a radio history day file",
-        })
-    }
+io_ops! {
+    /// Opening or creating `state.lock`.
+    OpenLock => "open the lock file",
+    /// Checking whether `state.json` exists.
+    InspectState => "inspect the state file",
+    /// Reading `state.json`.
+    ReadState => "read the state file",
+    /// Removing a temporary file left behind by an interrupted write.
+    RemoveStaleTemp => "remove a stale temporary file",
+    /// Creating a temporary file.
+    CreateTemp => "create a temporary file",
+    /// Writing a temporary file.
+    WriteTemp => "write a temporary file",
+    /// Flushing a temporary file to stable storage.
+    SyncTemp => "sync a temporary file",
+    /// Renaming a temporary file over its target.
+    Rename => "rename a temporary file into place",
+    /// Opening the store directory.
+    OpenDir => "open the store directory",
+    /// Flushing the store directory to stable storage.
+    SyncDir => "sync the store directory",
+    /// Opening or reading the router identity file.
+    ReadRouterPin => "read the router identity file",
+    /// Opening or reading the allowed-networks file.
+    ReadAllowedNetworks => "read the allowed-networks file",
+    /// Opening or reading the exit's latch.
+    ReadLatch => "read the exit's latch",
+    /// Removing the exit's latch.
+    RemoveLatch => "remove the exit's latch",
+    /// Opening or reading the SIM meter's document.
+    ReadSimMeter => "read the SIM meter",
+    /// Creating or inspecting the usage directory.
+    CreateUsageDir => "create the usage directory",
+    /// Creating or inspecting the radio history's directory.
+    CreateRadioDir => "create the radio directory",
+    /// Inspecting a radio history day file.
+    InspectRadioDay => "inspect a radio history day file",
+    /// Opening or creating a radio history day file.
+    OpenRadioDay => "open a radio history day file",
+    /// Reading a radio history day file.
+    ReadRadioDay => "read a radio history day file",
+    /// Writing, truncating or flushing a radio history day file.
+    WriteRadioDay => "write a radio history day file",
+    /// Listing the radio history's day files.
+    ListRadioDays => "list the radio history's day files",
+    /// Removing a radio history day file.
+    RemoveRadioDay => "remove a radio history day file",
 }
 
 /// What is wrong with a radio history day file. `Copy`: no fault holds a

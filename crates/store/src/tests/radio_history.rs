@@ -7,13 +7,14 @@
 //! file.
 
 use std::fs;
+use std::io;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 use std::path::Path;
 use std::process::Command;
 
 use mooring_model::CalendarDate;
 
-use super::mode_of;
+use super::{assert_io_error, mode_of};
 use crate::error::{IoOp, RadioHistoryFault, StoreError, StoreErrorKind};
 use crate::radio_history::{
     MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
@@ -189,6 +190,44 @@ fn the_day_file_is_bounded_on_read_and_on_append() {
     );
 }
 
+/// A torn day file is healed within the bound and refused past it: at
+/// exactly the bound it is cut back to its last newline and appended to;
+/// one byte over, the append is refused with the file as it stands.
+#[test]
+fn a_torn_day_file_is_healed_within_the_bound_and_refused_past_it() {
+    let support = tempfile::tempdir().unwrap();
+    let day = date("2026-10-24");
+    append_radio_line(support.path(), day, b"a\n").unwrap();
+    let path = radio_day_path(support.path(), day);
+    // Sparse: zeros after the whole lines, so the last byte is no newline.
+    let grow = |len: usize| {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(len as u64)
+            .unwrap();
+    };
+    grow(MAX_RADIO_DAY_BYTES);
+    append_radio_line(support.path(), day, b"b\n").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"a\nb\n");
+    grow(MAX_RADIO_DAY_BYTES + 1);
+    let error = append_radio_line(support.path(), day, b"c\n").unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            StoreError::RadioHistoryCorrupt {
+                path: found,
+                fault: RadioHistoryFault::TooLarge
+            } if *found == path
+        ),
+        "{error:?}"
+    );
+    let after = fs::read(&path).unwrap();
+    assert_eq!(after.len(), MAX_RADIO_DAY_BYTES + 1);
+    assert_eq!(&after[..4], b"a\nb\n");
+}
+
 /// Only a regular file is a day file: a link or a directory where one
 /// belongs is refused, on append and on read, and nothing is written
 /// through it.
@@ -264,6 +303,23 @@ fn a_radio_path_that_is_not_a_directory_is_refused() {
     assert_eq!(
         prune_radio_days(support.path(), 1).unwrap_err().kind(),
         StoreErrorKind::DirNotDirectory
+    );
+    // The read checks no directory of its own: a day it cannot open is an
+    // error naming the open, never no day.
+    assert_io_error(
+        &read_radio_day(support.path(), date("2026-10-24")).unwrap_err(),
+        IoOp::OpenRadioDay,
+        &radio_day_path(support.path(), date("2026-10-24")),
+        io::ErrorKind::NotADirectory,
+    );
+    // A listing that fails is an error naming it, never an empty listing.
+    let not_a_directory = support.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"").unwrap();
+    assert_io_error(
+        &prune_radio_days(&not_a_directory, 1).unwrap_err(),
+        IoOp::ListRadioDays,
+        &radio_dir(&not_a_directory),
+        io::ErrorKind::NotADirectory,
     );
 }
 

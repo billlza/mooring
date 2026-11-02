@@ -2,14 +2,15 @@
 
 //! The SIM meter's file (design §10.1 step 5): the usage directory created
 //! with mode 0700 (and set back to it when found open), the document with
-//! mode 0600, the bounded read, and the refusal of a usage path that is not
-//! a directory.
+//! mode 0600, the bounded read, the refusal of a usage path that is not a
+//! directory, and a read that fails reported as such.
 
 use std::fs;
+use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
-use super::mode_of;
-use crate::error::StoreErrorKind;
+use super::{assert_io_error, mode_of};
+use crate::error::{IoOp, StoreErrorKind};
 use crate::sim_meter::{SIM_METER_FILE, USAGE_DIRECTORY, read_sim_meter, write_sim_meter};
 
 #[test]
@@ -52,5 +53,31 @@ fn a_usage_path_that_is_not_a_directory_is_refused() {
     assert_eq!(
         write_sim_meter(support.path(), b"{}").unwrap_err().kind(),
         StoreErrorKind::DirNotDirectory
+    );
+}
+
+/// A meter that cannot be read is an error naming the read, never "no
+/// meter", on which the daemon would start a fresh meter and lose the
+/// cycle's usage: here the open fails (the usage path is a file), then the
+/// read does (the meter path is a directory).
+#[test]
+fn a_meter_that_cannot_be_read_is_an_error_not_a_fresh_meter() {
+    let support = tempfile::tempdir().unwrap();
+    fs::write(support.path().join(USAGE_DIRECTORY), b"").unwrap();
+    let path = support.path().join(USAGE_DIRECTORY).join(SIM_METER_FILE);
+    assert_io_error(
+        &read_sim_meter(support.path(), 64).unwrap_err(),
+        IoOp::ReadSimMeter,
+        &path,
+        io::ErrorKind::NotADirectory,
+    );
+    let support = tempfile::tempdir().unwrap();
+    let path = support.path().join(USAGE_DIRECTORY).join(SIM_METER_FILE);
+    fs::create_dir_all(&path).unwrap();
+    assert_io_error(
+        &read_sim_meter(support.path(), 64).unwrap_err(),
+        IoOp::ReadSimMeter,
+        &path,
+        io::ErrorKind::IsADirectory,
     );
 }
