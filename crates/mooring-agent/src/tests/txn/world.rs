@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The stand-in node the transaction tests run against, its faults, and
-//! the rendered golden bundle (contract/golden/1-node-1-user).
+//! The stand-in node the transaction tests run against, its faults, the
+//! rendered golden bundle (contract/golden/1-node-1-user), and the checks
+//! several topics share.
 
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -10,9 +11,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use mooring_agent_proto::{
-    Arch, BlobLen, BundleFiles, BundleHeader, EngineSet, Generation, Halt, HostFacts, HostProfile,
-    IfName, KernelIdent, KernelRelease, ManagedFile, PortRange, Sha256Hex, ShutdownReason,
-    TxnState, UnixTime,
+    AgentError, Arch, BlobLen, BundleFiles, BundleHeader, EngineSet, Generation, Halt, HostFacts,
+    HostProfile, IfName, KernelIdent, KernelRelease, ManagedFile, PortRange, Sha256Hex,
+    ShutdownReason, TxnState, UnixTime,
 };
 
 use crate::blobs::{digest_of, put};
@@ -22,6 +23,7 @@ use crate::store::write_json;
 use crate::tests::{
     ENOENT, FakeNode, failed, nft_set, occupy_temporary, ok, scratch, temporary_of,
 };
+use crate::txn::record::pending;
 use crate::txn::{self, Launched};
 
 pub(crate) fn golden(text: &str) -> String {
@@ -481,6 +483,20 @@ pub(super) fn index_of(calls: &[String], fragment: &str) -> usize {
         .iter()
         .position(|call| call.contains(fragment))
         .unwrap_or_else(|| panic!("no call with {fragment:?} in {calls:#?}"))
+}
+
+/// The transaction ended with `error` before the swap: nothing switched,
+/// nothing left staged or pending.
+pub(super) fn assert_unswitched(
+    world: &World,
+    generation: u64,
+    current: Option<&str>,
+    error: AgentError,
+) {
+    assert_eq!(world.state(generation), TxnState::Failed { error });
+    assert_eq!(world.current().as_deref(), current);
+    assert!(!world.paths.generation(Generation::new(generation)).is_dir());
+    assert_eq!(pending(&world.paths).unwrap(), None);
 }
 
 /// The permission bits of the file at `path`.

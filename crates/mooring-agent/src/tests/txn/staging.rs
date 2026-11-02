@@ -1,84 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Pruning and staging (design §11.2 steps 2 and 4): what each refuses,
-//! with the error the transaction ends with, nothing switched.
+//! Staging (design §11.2 step 2): a directory an earlier attempt left
+//! replaced, each configuration in its reader's group and no one else's,
+//! and each way staging fails, named by its error, with nothing switched;
+//! and the previous generation's header, which the change reads before its
+//! swap.
 
 use std::fs;
 
-use mooring_agent_proto::{AgentError, Generation, IoOp, TxnState};
+use mooring_agent_proto::{AgentError, Generation, IoOp, ManagedFile, TxnState};
 
-use super::world::{World, idle, same};
+use super::world::{World, assert_unswitched, idle, same};
 use crate::tests::{EACCES, EEXIST, EISDIR, ENOENT, ENOTDIR, EPERM, ModeFault, own_ids};
-use crate::txn::record::pending;
 use crate::txn::stage::{XRAY, copy_blob, store_path};
 use crate::txn::{self, Launched};
-
-/// The transaction ended with `error` before the swap: nothing switched,
-/// nothing left staged or pending.
-fn assert_unswitched(world: &World, generation: u64, current: Option<&str>, error: AgentError) {
-    assert_eq!(world.state(generation), TxnState::Failed { error });
-    assert_eq!(world.current().as_deref(), current);
-    assert!(!world.paths.generation(Generation::new(generation)).is_dir());
-    assert_eq!(pending(&world.paths).unwrap(), None);
-}
-
-#[test]
-fn a_first_change_on_a_layout_without_an_engine_store_prunes_nothing() {
-    let world = World::new();
-    fs::create_dir_all(world.paths.etc()).unwrap();
-    assert!(!world.paths.engine_store().exists());
-    assert_eq!(
-        world.apply_and_run(&world.node(1000), world.bundle(1, same)),
-        TxnState::AwaitingConfirm
-    );
-}
-
-/// `/etc/mooring` that cannot be listed (here a file, put there after the
-/// `Apply` read `current` through it) fails the change at its pruning.
-#[test]
-fn generations_that_cannot_be_listed_fail_the_change_before_staging() {
-    let world = World::new();
-    let node = world.node(1000);
-    assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(1, same)),
-        Ok(Launched::Launched(Generation::new(1)))
-    );
-    fs::write(world.paths.etc(), "").unwrap();
-    txn::run(&world.paths, &node, Generation::new(1)).unwrap();
-    assert_eq!(
-        world.state(1),
-        TxnState::Failed {
-            error: AgentError::Io {
-                op: IoOp::WriteState,
-                errno: Some(ENOTDIR),
-            }
-        }
-    );
-    assert_eq!(pending(&world.paths).unwrap(), None);
-    assert!(
-        !node.calls().iter().any(|call| call.contains("--on-active")),
-        "no timer is armed for it"
-    );
-}
-
-#[test]
-fn an_engine_store_that_cannot_be_listed_fails_the_change_before_staging() {
-    let world = World::new();
-    world.commit(&world.node(1000), world.bundle(1, same));
-    let store = world.paths.engine_store();
-    fs::remove_dir_all(&store).unwrap();
-    fs::write(&store, "").unwrap();
-    world.apply_and_run(&world.node(2000), world.bundle(2, idle(301)));
-    assert_unswitched(
-        &world,
-        2,
-        Some("gen-1"),
-        AgentError::Io {
-            op: IoOp::WriteState,
-            errno: Some(ENOTDIR),
-        },
-    );
-}
 
 #[test]
 fn a_directory_an_earlier_attempt_left_is_replaced() {
@@ -287,30 +222,62 @@ fn a_configuration_that_cannot_be_given_its_readers_group_fails_the_staging() {
     );
 }
 
-/// The pruning reads every generation it keeps, to keep the engines they
-/// use: an older kept generation whose header cannot be read fails the
-/// change before anything is staged, rather than prune what it may use.
 #[test]
-fn a_kept_generation_whose_header_cannot_be_read_fails_the_pruning() {
+fn a_missing_engine_group_fails_the_stage_with_its_account() {
     let world = World::new();
-    world.commit(&world.node(1000), world.bundle(1, same));
-    world.commit(&world.node(2000), world.bundle(2, idle(301)));
-    world.commit(&world.node(3000), world.bundle(3, idle(302)));
-    let header = world
-        .paths
-        .generation(Generation::new(1))
-        .join(txn::stage::BUNDLE_FILE);
-    fs::remove_file(&header).unwrap();
-    fs::create_dir(&header).unwrap();
-    world.apply_and_run(&world.node(4000), world.bundle(4, idle(303)));
-    assert_unswitched(
-        &world,
-        4,
-        Some("gen-3"),
-        AgentError::Io {
-            op: IoOp::ReadState,
-            errno: Some(EISDIR),
-        },
+    let group = fs::read_to_string(world.paths.group()).unwrap();
+    let kept: String = group
+        .lines()
+        .filter(|line| !line.starts_with("mooring-xray:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(world.paths.group(), kept).unwrap();
+    assert_eq!(
+        world.apply_and_run(&world.node(1000), world.bundle(1, same)),
+        TxnState::Failed {
+            error: AgentError::AccountMissing {
+                account: mooring_agent_proto::HostAccount::Xray,
+            }
+        }
     );
-    assert!(world.paths.engine_store().is_dir());
+}
+
+/// The groups the tests' user is in besides its primary one.
+fn other_groups(primary: u32) -> Vec<u32> {
+    let output = std::process::Command::new("id").arg("-G").output().unwrap();
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .split_whitespace()
+        .map(|gid| gid.parse().unwrap())
+        .filter(|gid| *gid != primary)
+        .collect()
+}
+
+#[test]
+fn each_configuration_belongs_to_its_readers_group_and_no_one_elses() {
+    use std::os::unix::fs::MetadataExt;
+    let world = World::new();
+    let (_, primary) = own_ids(&world.paths);
+    let others = other_groups(primary);
+    let [xray, hy2, state, ..] = others.as_slice() else {
+        panic!("this test needs a user in three groups besides its own: {others:?}");
+    };
+    fs::write(
+        world.paths.group(),
+        format!(
+            "root:x:{primary}:\nmooring:x:{state}:\nmooring-xray:x:{xray}:\nmooring-hy2:x:{hy2}:\n"
+        ),
+    )
+    .unwrap();
+    let dir = txn::stage::stage(&world.paths, Generation::new(1), &world.bundle(1, same)).unwrap();
+    let owner = |file: ManagedFile| {
+        let meta = fs::metadata(dir.join(file.file_name())).unwrap();
+        (meta.gid(), meta.mode() & 0o777)
+    };
+    assert_eq!(owner(ManagedFile::XrayConfig), (*xray, 0o640));
+    assert_eq!(owner(ManagedFile::Hy2Config), (*hy2, 0o640));
+    assert_eq!(owner(ManagedFile::WatchConfig), (*state, 0o640));
+    assert_eq!(owner(ManagedFile::WgConf), (primary, 0o600));
+    assert_eq!(owner(ManagedFile::Nftables), (primary, 0o640));
+    assert_eq!(owner(ManagedFile::ViewerKeys), (primary, 0o644));
 }

@@ -27,11 +27,12 @@ use mooring_agent_proto::{
 };
 
 use super::serve::{ask, frame};
-use super::{FakeNode, occupy_temporary};
+use super::{ENOTDIR, FakeNode, occupy_temporary, scratch};
 use crate::gate::{StopRequest, holds, set_by_viewer, write_holds};
 use crate::host::Node;
 use crate::journal;
 use crate::store::{read_json, write_json};
+use crate::txn::record::last_committed;
 use crate::watch::journaling::changes;
 use crate::watch::{self, Fatal, HOST_READING_SECS, Watch};
 
@@ -1360,7 +1361,6 @@ fn status_is_the_watch_view_with_live_holds_halt_and_last_commit() {
 
 #[test]
 fn the_last_commit_is_the_newest_committed_record() {
-    use crate::txn::record::last_committed;
     let world = World::new();
     assert_eq!(last_committed(&world.paths), Ok(None), "no records yet");
     world.record(1, TxnState::Committed);
@@ -1388,6 +1388,21 @@ fn the_last_commit_is_the_newest_committed_record() {
             errno: None
         }),
         "a damaged record is an error, never skipped"
+    );
+}
+
+/// Records that cannot be listed are an error, never "no commit yet".
+#[test]
+fn records_that_cannot_be_listed_are_an_error() {
+    let (_dir, paths) = scratch();
+    fs::create_dir_all(paths.txn_dir().parent().unwrap()).unwrap();
+    fs::write(paths.txn_dir(), "").unwrap();
+    assert_eq!(
+        last_committed(&paths),
+        Err(AgentError::Io {
+            op: IoOp::ReadState,
+            errno: Some(ENOTDIR),
+        })
     );
 }
 

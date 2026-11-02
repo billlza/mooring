@@ -1,14 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `ActivateAgent` (design §11.2): each way installing and switching to a
-//! new agent can fail, leaving the forced command on the agent it had.
+//! `ActivateAgent` (design §11.2): a new agent installed, self-tested and
+//! made the forced command, and the agent before it put back unless the
+//! new one is confirmed; what installing an agent reports; and an
+//! activation refused with no forced command to revert to. A failure
+//! before the switch's rename leaves the forced command on the agent it
+//! had and no timer armed. One after the rename, or a revert that cannot
+//! put the link back, leaves the activation pending with its timer armed,
+//! so that the timer or a retried `Rollback` still puts the agent before
+//! back.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use mooring_agent_proto::{AgentError, Generation, IoOp, Sha256Hex};
 
-use super::world::World;
+use super::world::{World, index_of};
 use crate::tests::{EACCES, EEXIST, EISDIR, ENOENT, ENOTDIR, ModeFault, occupy_temporary};
 use crate::txn::activate::{activate, install};
 use crate::txn::record::{Change, Phase, pending};
@@ -213,4 +221,119 @@ fn an_activation_whose_switch_fails_after_its_rename_keeps_its_timer() {
         Ok(Generation::ZERO)
     );
     assert_unswitched(&world);
+}
+
+#[test]
+fn an_agent_is_activated_after_its_self_test_and_reverted_to_the_one_before() {
+    let world = World::new();
+    let node = world.node(1000);
+    fs::create_dir_all(world.paths.agent_dir()).unwrap();
+    std::os::unix::fs::symlink("old-agent", world.paths.agent_current()).unwrap();
+    let missing = Sha256Hex::from_bytes([3; 32]);
+    assert_eq!(
+        activate(&world.paths, &node, missing),
+        Err(AgentError::BlobMissing { sha256: missing })
+    );
+    let sha = world.put(b"new agent binary");
+    world.faults.borrow_mut().self_test = Some("0\n".to_owned());
+    let refused = activate(&world.paths, &world.node(1000), sha);
+    assert!(
+        matches!(refused, Err(AgentError::AgentSelfTestFailed { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(
+        fs::read_link(world.paths.agent_current()).unwrap(),
+        Path::new("old-agent")
+    );
+    world.faults.borrow_mut().self_test = None;
+    let node = world.node(1000);
+    assert_eq!(activate(&world.paths, &node, sha), Ok(Generation::ZERO));
+    assert_eq!(
+        fs::read_link(world.paths.agent_current()).unwrap(),
+        Path::new(&sha.to_string())
+    );
+    let installed = world.paths.agent_dir().join(sha.to_string());
+    assert_eq!(
+        fs::metadata(&installed).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    let calls = node.calls();
+    let armed = index_of(&calls, "--on-active=120");
+    assert!(
+        calls[armed].ends_with("/usr/local/lib/mooring/agent/old-agent txn-revert 0"),
+        "{}",
+        calls[armed]
+    );
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Requested),
+        Ok(Generation::ZERO)
+    );
+    assert_eq!(
+        fs::read_link(world.paths.agent_current()).unwrap(),
+        Path::new("old-agent")
+    );
+    assert_eq!(activate(&world.paths, &node, sha), Ok(Generation::ZERO));
+    assert_eq!(
+        txn::confirm(&world.paths, &node, Generation::ZERO),
+        Ok(Generation::ZERO)
+    );
+    assert_eq!(pending(&world.paths).unwrap(), None);
+}
+
+#[test]
+fn an_activation_needs_a_forced_command_to_revert_to() {
+    let world = World::new();
+    let node = world.node(1000);
+    let sha = world.put(b"new agent binary");
+    let refused = activate(&world.paths, &node, sha);
+    assert!(
+        matches!(
+            refused,
+            Err(AgentError::Io {
+                op: IoOp::ReadState,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    assert!(node.calls().is_empty(), "{:#?}", node.calls());
+    assert!(!world.paths.agent_dir().join(sha.to_string()).exists());
+    assert_eq!(pending(&world.paths).unwrap(), None);
+}
+
+#[test]
+fn an_activation_that_cannot_switch_stops_its_timer() {
+    let world = World::new();
+    fs::create_dir_all(world.paths.agent_dir()).unwrap();
+    std::os::unix::fs::symlink("old-agent", world.paths.agent_current()).unwrap();
+    let sha = world.put(b"new agent binary");
+    let node = world.node(1000);
+    activate(&world.paths, &node, sha).unwrap();
+    txn::revert_pending(&world.paths, &node, Why::Requested).unwrap();
+    // The new agent stays installed; the link cannot be replaced.
+    let read_only = fs::Permissions::from_mode(0o555);
+    fs::set_permissions(world.paths.agent_dir(), read_only).unwrap();
+    let node = world.node(2000);
+    let refused = activate(&world.paths, &node, sha);
+    fs::set_permissions(world.paths.agent_dir(), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        matches!(
+            refused,
+            Err(AgentError::Io {
+                op: IoOp::WriteState,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    let calls = node.calls();
+    assert!(
+        index_of(&calls, "/usr/bin/systemctl stop mooring-txn-revert-0.timer")
+            > index_of(&calls, "--on-active=120")
+    );
+    assert_eq!(pending(&world.paths).unwrap(), None);
+    assert_eq!(
+        fs::read_link(world.paths.agent_current()).unwrap(),
+        Path::new("old-agent")
+    );
 }

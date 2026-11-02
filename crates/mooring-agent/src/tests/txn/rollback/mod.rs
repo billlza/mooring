@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Rollback (design §11.2 step 8): a change that fails after the swap goes
-//! back to the previous generation, or to serving nothing; a rollback that
-//! fails too says what stopped it, keeps that in the record, and leaves
-//! both engines stopped and the gate closed.
+//! back to the previous generation; a rollback that fails too says what
+//! stopped it, keeps that in the record, and leaves both engines stopped
+//! and the gate closed. A first generation's rollback to serving nothing,
+//! and what a revert leaves, have files of their own, which share the
+//! helpers here.
+
+mod revert;
+mod to_nothing;
 
 use std::fs;
 use std::path::Path;
@@ -15,9 +20,7 @@ use mooring_agent_proto::{
 
 use super::world::{ENGINE_RESTART_FAILED, World, idle, index_of, same};
 use crate::host::Tool;
-use crate::tests::{
-    EACCES, EEXIST, EISDIR, ENOENT, ENOTDIR, FakeNode, ModeFault, header, occupy_temporary, scratch,
-};
+use crate::tests::{EACCES, EEXIST, EISDIR, ENOENT, ModeFault, occupy_temporary};
 use crate::txn::record::pending;
 use crate::txn::stage::BUNDLE_FILE;
 use crate::txn::{self, Why};
@@ -73,32 +76,6 @@ fn awaiting_second(edit: impl Fn(ManagedFile, String) -> String) -> World {
         TxnState::AwaitingConfirm
     );
     world
-}
-
-#[test]
-fn a_first_generation_whose_swap_fails_rolls_back_to_serving_nothing() {
-    let world = World::new();
-    // The tunnel's link cannot go where a file holds its directory's name.
-    fs::write(world.paths.at("/etc/wireguard"), "").unwrap();
-    let node = world.node(1000);
-    assert_eq!(
-        world.apply_and_run(&node, world.bundle(1, same)),
-        TxnState::Failed {
-            error: AgentError::RolledBack {
-                generation: Generation::new(1),
-                cause: RollbackCause::Swap {
-                    errno: Some(EEXIST)
-                },
-            }
-        }
-    );
-    assert_eq!(world.current(), None);
-    assert_eq!(
-        fs::read_to_string(world.paths.nft_conf_link()).unwrap(),
-        "#!/usr/sbin/nft -f\nflush ruleset\n",
-        "the ruleset the node had before Mooring is back"
-    );
-    assert_eq!(pending(&world.paths).unwrap(), None);
 }
 
 #[test]
@@ -389,173 +366,6 @@ fn a_stripped_tunnel_configuration_whose_write_fails_late_is_removed() {
     assert!(!validate.join("wgexit.stripped").exists());
 }
 
-/// The first generation awaiting its confirmation, as a `Rollback` to
-/// serving nothing finds it.
-fn awaiting_first() -> World {
-    let world = World::new();
-    assert_eq!(
-        world.apply_and_run(&world.node(1000), world.bundle(1, same)),
-        TxnState::AwaitingConfirm
-    );
-    world
-}
-
-#[test]
-fn a_rollback_to_nothing_that_cannot_read_the_tunnel_stops_the_node() {
-    let world = awaiting_first();
-    let accept_local = world.paths.wgexit_accept_local();
-    fs::remove_file(&accept_local).unwrap();
-    fs::create_dir(&accept_local).unwrap();
-    let node = world.node(1050);
-    txn::revert_pending(&world.paths, &node, Why::Requested).unwrap_err();
-    assert_rollback_failed(
-        &world,
-        1,
-        step_failed(
-            ApplyStep::WireGuard,
-            &AgentError::Io {
-                op: IoOp::ReadState,
-                errno: Some(EISDIR),
-            },
-        ),
-    );
-    assert_eq!(world.current(), None, "current goes whatever the stops did");
-    assert_stopped_safe(&node.calls());
-}
-
-#[test]
-fn a_rollback_to_nothing_that_cannot_restore_the_ruleset_says_why() {
-    let world = awaiting_first();
-    // What `rename` gives for a file moved onto a directory that holds
-    // something, on this system.
-    let probe = world.paths.at("/probe");
-    fs::create_dir_all(probe.join("full/entry")).unwrap();
-    fs::write(probe.join("file"), "").unwrap();
-    let errno = fs::rename(probe.join("file"), probe.join("full"))
-        .unwrap_err()
-        .raw_os_error();
-    let nft = world.paths.nft_conf_link();
-    fs::remove_file(&nft).unwrap();
-    fs::create_dir_all(nft.join("entry")).unwrap();
-    let node = world.node(1050);
-    txn::revert_pending(&world.paths, &node, Why::Requested).unwrap_err();
-    assert_rollback_failed(&world, 1, RollbackCause::Swap { errno });
-    assert!(
-        world.paths.at("/etc/nftables.conf.pre-mooring").exists(),
-        "the kept ruleset stays where it was"
-    );
-}
-
-#[test]
-fn a_rollback_to_nothing_whose_ruleset_does_not_load_says_why() {
-    let world = awaiting_first();
-    world.faults.borrow_mut().nft_load = true;
-    let node = world.node(1050);
-    txn::revert_pending(&world.paths, &node, Why::Requested).unwrap_err();
-    assert_rollback_failed(
-        &world,
-        1,
-        RollbackCause::Apply {
-            step: ApplyStep::Nftables,
-            stderr_tail: StderrTail::scrubbed(b"Error: syntax error\n", &[]),
-        },
-    );
-    assert_eq!(
-        fs::read_to_string(world.paths.nft_conf_link()).unwrap(),
-        "#!/usr/sbin/nft -f\nflush ruleset\n"
-    );
-}
-
-/// `current` that cannot be removed: the revert to nothing reports it, and
-/// still stops both engines and closes the gate.
-#[test]
-fn a_current_that_cannot_be_removed_fails_the_revert_to_nothing() {
-    let world = awaiting_first();
-    let probe = world.paths.at("/probe");
-    fs::create_dir_all(probe.join("entry")).unwrap();
-    let errno = fs::remove_file(&probe).unwrap_err().raw_os_error();
-    let current = world.paths.current();
-    fs::remove_file(&current).unwrap();
-    fs::create_dir_all(current.join("entry")).unwrap();
-    let node = world.node(1050);
-    assert_eq!(
-        txn::rollback::revert(&world.paths, &node, Generation::new(1), Generation::ZERO),
-        Err(RollbackCause::Swap { errno })
-    );
-    assert_stopped_safe(&node.calls());
-}
-
-/// A change that was launched but never ran has switched nothing; its
-/// rollback only removes what it staged. A directory that cannot be
-/// removed is the request's error, while the change is reverted all the
-/// same: nothing is stopped for it.
-#[test]
-fn a_cancelled_change_whose_directory_cannot_be_removed_says_so_and_stops_nothing() {
-    let (_dir, paths) = scratch();
-    let node = FakeNode::new(1_000);
-    let one = Generation::new(1);
-    txn::apply(&paths, &node, header(1)).unwrap();
-    let staged = paths.generation(one);
-    fs::create_dir_all(staged.parent().unwrap()).unwrap();
-    fs::write(&staged, "").unwrap();
-    let node = FakeNode::new(1_010);
-    assert_eq!(
-        txn::revert_pending(&paths, &node, Why::Requested),
-        Err(AgentError::Io {
-            op: IoOp::WriteState,
-            errno: Some(ENOTDIR),
-        })
-    );
-    assert_eq!(txn::status(&paths, one), Ok(TxnState::Reverted));
-    assert_eq!(pending(&paths), Ok(None));
-    assert!(node.calls().is_empty(), "{:#?}", node.calls());
-}
-
-/// `RollbackFailed` means the node was stopped: a rollback whose failed
-/// generation cannot be removed stops both engines and closes the gate,
-/// though the previous generation is back.
-#[test]
-fn a_failed_generation_that_cannot_be_removed_stops_the_node() {
-    let world = awaiting_second(idle(301));
-    let engines = world.paths.generation(Generation::new(2)).join("engines");
-    let fault = ModeFault::set(&engines, 0o555);
-    let node = world.node(2050);
-    let cause = RollbackCause::Swap {
-        errno: Some(EACCES),
-    };
-    assert_eq!(
-        txn::revert_pending(&world.paths, &node, Why::Requested),
-        Err(AgentError::RollbackFailed {
-            generation: Generation::new(2),
-            cause: cause.clone(),
-        })
-    );
-    drop(fault);
-    assert_rollback_failed(&world, 2, cause);
-    assert_eq!(world.current().as_deref(), Some("gen-1"));
-    assert_stopped_safe(&node.calls());
-}
-
-/// A rollback that fails reports its own failure, not the removal of the
-/// failed generation that fails after it.
-#[test]
-fn a_failed_rollback_keeps_its_cause_when_its_generation_cannot_be_removed_either() {
-    let world = awaiting_second(idle(301));
-    fs::remove_file(world.paths.generation(Generation::new(1)).join(BUNDLE_FILE)).unwrap();
-    let engines = world.paths.generation(Generation::new(2)).join("engines");
-    let fault = ModeFault::set(&engines, 0o555);
-    let node = world.node(2050);
-    assert_eq!(
-        txn::revert_pending(&world.paths, &node, Why::Requested),
-        Err(AgentError::RollbackFailed {
-            generation: Generation::new(2),
-            cause: RollbackCause::Swap { errno: None },
-        })
-    );
-    drop(fault);
-    assert_stopped_safe(&node.calls());
-}
-
 /// Every failure after the swap is rolled back: here the record of the
 /// stage reached cannot be written once the change is applied, and the
 /// previous generation is put back rather than the change left switched.
@@ -586,169 +396,78 @@ fn a_record_that_cannot_be_written_after_the_swap_rolls_the_change_back() {
 }
 
 #[test]
-fn the_ruleset_the_node_had_before_mooring_is_kept_once() {
+fn a_failed_health_gate_rolls_back_to_the_previous_generation() {
     let world = World::new();
     world.commit(&world.node(1000), world.bundle(1, same));
-    let nft = world.paths.nft_conf_link();
-    fs::remove_file(&nft).unwrap();
-    fs::write(&nft, "#!/usr/sbin/nft -f\n# written later\n").unwrap();
-    world.commit(&world.node(2000), world.bundle(2, idle(301)));
+    world.faults.borrow().missing_listeners.set(21);
+    let node = world.node(2000);
+    let next = world.bundle(2, |file, text| {
+        if file == ManagedFile::Hy2Config {
+            text.replace("fatal", "panic")
+        } else {
+            text
+        }
+    });
     assert_eq!(
-        fs::read_link(&nft).unwrap(),
-        Path::new("mooring/current/nftables.conf")
-    );
-    assert_eq!(
-        fs::read_to_string(world.paths.at("/etc/nftables.conf.pre-mooring")).unwrap(),
-        "#!/usr/sbin/nft -f\nflush ruleset\n"
-    );
-}
-
-#[test]
-fn a_link_without_a_parent_directory_is_refused() {
-    assert_eq!(
-        txn::links::replace_link(Path::new("/"), Path::new("gen-1"))
-            .unwrap_err()
-            .kind(),
-        std::io::ErrorKind::InvalidInput
-    );
-}
-
-/// A listener check that cannot run fails the health gate, never passes
-/// it: here `ss` cannot be started, and the first generation is rolled
-/// back to serving nothing.
-#[test]
-fn a_listener_check_that_cannot_run_fails_the_health_gate() {
-    let world = World::new();
-    world.faults.borrow_mut().unstartable = Some((Tool::Ss, "-Hltnu"));
-    assert_eq!(
-        world.apply_and_run(&world.node(1000), world.bundle(1, same)),
+        world.apply_and_run(&node, next),
         TxnState::Failed {
             error: AgentError::RolledBack {
-                generation: Generation::new(1),
+                generation: Generation::new(2),
                 cause: RollbackCause::HealthGate {
                     failed: HealthCheck::Listeners
                 },
             }
         }
     );
-    assert_eq!(world.current(), None);
-}
-
-/// A revert that died after its first step, the swap back, is done again
-/// when the timer fires: `current` already naming the previous generation
-/// does not mean the change switched nothing.
-#[test]
-fn a_revert_that_died_after_its_swap_back_is_done_again() {
-    let world = awaiting_second(idle(301));
-    let two = Generation::new(2);
-    txn::links::swap(&world.paths, Generation::new(1)).unwrap();
-    let node = world.node(2120);
-    assert_eq!(
-        txn::revert_pending(&world.paths, &node, Why::Unconfirmed(two)),
-        Ok(two)
-    );
-    index_of(
-        &node.calls(),
-        "/usr/bin/systemctl restart mooring-xray.service",
-    );
-    assert_eq!(
-        world.state(2),
-        TxnState::Failed {
-            error: AgentError::RevertedUnconfirmed { generation: two }
-        }
-    );
-    assert!(!world.paths.generation(two).exists());
-    assert_eq!(pending(&world.paths).unwrap(), None);
-}
-
-/// A revert that failed, and whose failure could not be recorded, is tried
-/// again when the timer fires rather than taken as done: here the second
-/// attempt re-applies everything of the previous generation and the node
-/// serves again.
-#[test]
-fn a_failed_revert_that_could_not_be_recorded_is_tried_again() {
-    let world = awaiting_second(idle(301));
-    let two = Generation::new(2);
-    world.faults.borrow().failing_engine_restarts.set(1);
-    let blocker = occupy_temporary(&world.paths.txn_record(two));
-    let node = world.node(2050);
-    assert_eq!(
-        txn::revert_pending(&world.paths, &node, Why::Requested),
-        Err(AgentError::Io {
-            op: IoOp::WriteState,
-            errno: Some(EEXIST),
-        })
-    );
-    assert_stopped_safe(&node.calls());
-    fs::remove_dir(blocker).unwrap();
-    let node = world.node(2120);
-    assert_eq!(
-        txn::revert_pending(&world.paths, &node, Why::Unconfirmed(two)),
-        Ok(two)
-    );
-    let calls = node.calls();
-    index_of(&calls, "/usr/bin/systemctl restart mooring-xray.service");
-    index_of(&calls, "/usr/bin/systemctl restart mooring-hy2.service");
-    assert_eq!(
-        world.state(2),
-        TxnState::Failed {
-            error: AgentError::RevertedUnconfirmed { generation: two }
-        }
-    );
     assert_eq!(world.current().as_deref(), Some("gen-1"));
+    assert!(!world.paths.generation(Generation::new(2)).exists());
     assert_eq!(pending(&world.paths).unwrap(), None);
+    assert_eq!(node.slept(), 20, "the gate waited its whole budget once");
+    let calls = node.calls();
+    assert!(
+        index_of(&calls, "/usr/bin/systemctl stop mooring-txn-revert-2.timer")
+            > index_of(&calls, "--on-active=120"),
+        "the failed transaction's timer is stopped, so the generation can be retried"
+    );
 }
 
-/// A revert that cannot swap back keeps the directory `current` still
-/// names, so that `current` and the fixed links into it stay whole for the
-/// stopped node.
 #[test]
-fn a_revert_that_cannot_swap_back_keeps_the_generation_current_names() {
-    let world = awaiting_second(idle(301));
-    let current = world.paths.current();
-    fs::create_dir_all(
-        current
-            .with_extension(format!("swap.{}", std::process::id()))
-            .join("entry"),
-    )
-    .unwrap();
-    let node = world.node(2050);
-    assert_eq!(
-        txn::rollback::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
-        Err(RollbackCause::Swap {
-            errno: Some(EEXIST)
+fn a_failed_apply_step_rolls_back_with_its_scrubbed_output() {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    world.faults.borrow_mut().nft_load = true;
+    let node = world.node(2000);
+    let next = world.bundle(2, |file, text| {
+        if file == ManagedFile::Nftables {
+            text.replace("ct count over 4096", "ct count over 4000")
+        } else {
+            text
+        }
+    });
+    let state = world.apply_and_run(&node, next);
+    let TxnState::Failed {
+        error:
+            AgentError::RollbackFailed {
+                cause: RollbackCause::Apply { step, stderr_tail },
+                ..
+            },
+    } = state
+    else {
+        panic!("{state:?}");
+    };
+    assert_eq!(step, ApplyStep::Nftables);
+    assert!(stderr_tail.as_str().contains("syntax error"));
+    let calls = node.calls();
+    let stops = calls
+        .iter()
+        .filter(|call| {
+            call.contains("systemctl stop mooring-xray")
+                || call.contains("systemctl stop mooring-hy2")
         })
-    );
-    assert_eq!(world.current().as_deref(), Some("gen-2"));
-    assert!(world.paths.generation(Generation::new(2)).is_dir());
-    assert!(fs::metadata(world.paths.nft_conf_link()).is_ok());
-    assert!(fs::metadata(world.paths.wg_conf_link()).is_ok());
-    assert_stopped_safe(&node.calls());
-}
-
-/// A revert that cannot tell where `current` points keeps the failed
-/// generation: here `current` is a directory, which the swap back cannot
-/// replace and no reading takes for a link. The node is stopped, and the
-/// swap's own failure is the one reported.
-#[test]
-fn a_revert_that_cannot_read_current_keeps_the_failed_generation() {
-    let world = awaiting_second(idle(301));
-    // What renaming a link onto a directory that holds something gives, on
-    // this system.
-    let probe = world.paths.at("/probe");
-    fs::create_dir_all(probe.join("full/entry")).unwrap();
-    std::os::unix::fs::symlink("gen-1", probe.join("link")).unwrap();
-    let errno = fs::rename(probe.join("link"), probe.join("full"))
-        .unwrap_err()
-        .raw_os_error();
-    let current = world.paths.current();
-    fs::remove_file(&current).unwrap();
-    fs::create_dir_all(current.join("entry")).unwrap();
-    let node = world.node(2050);
+        .count();
     assert_eq!(
-        txn::rollback::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
-        Err(RollbackCause::Swap { errno })
+        stops, 2,
+        "a rollback that fails too stops both engines: {calls:#?}"
     );
-    assert!(world.paths.generation(Generation::new(2)).is_dir());
-    assert_stopped_safe(&node.calls());
+    index_of(&calls, "add element inet mooring exit_closed");
 }
