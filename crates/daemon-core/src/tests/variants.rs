@@ -2,10 +2,13 @@
 
 //! `contract/status-fixtures/variants.json`: one value of every variant of
 //! every enum a `MacStatusV1` carries, the model's and agent-proto's
-//! included, and of the console document's `RouterAdvisory`. The scenario fixtures reach only the states their scenarios
-//! are in, so this document gives Mooring.app's Codable mirror a fixture
-//! for every variant, and pins each variant's encoding byte for byte: a
-//! renamed variant fails here.
+//! included, and of the console document's `RouterAdvisory`; and, for the
+//! records no scenario fills, one filled value: a plan's line of each
+//! kind, and a reported node that the operator halted after every hold
+//! had closed its gate. The scenario fixtures reach only the states their
+//! scenarios are in, so this document gives Mooring.app's Codable mirror a
+//! fixture for every variant and for those records, and pins each
+//! encoding byte for byte: a renamed variant or field fails here.
 //!
 //! [`variants`] builds it. Each list is checked to hold every variant once,
 //! in declaration order, by an exhaustive `match` (or the kind's `ALL`),
@@ -17,14 +20,18 @@
 //! promises.
 
 use std::net::Ipv4Addr;
+use std::num::NonZeroU64;
 
-use mooring_agent_proto::{EngineRun, GateState, Inbound, ShutdownReason, WatchError};
+use mooring_agent_proto::{
+    AppliedGeneration, EgressViolationHold, EngineRun, GateState, Generation, Halt, Holds, Inbound,
+    MacDrainHold, OperatorHold, Sha256Hex, ShutdownReason, WatchError,
+};
 use mooring_model::collections::NonEmpty;
 use mooring_model::exit::ProbeProtocol;
 use mooring_model::iface::BsdName;
 use mooring_model::node::{LifecycleStage, NodeRole};
 use mooring_model::own_network::OwnNetworkKind;
-use mooring_model::sim::{PlanLineKind, StopPolicy};
+use mooring_model::sim::{PlanLine, PlanLineKind, StopPolicy};
 use mooring_model::user::{SuspendReason, UserStatus};
 use mooring_model::verdict::{Violation, ViolationKind};
 use mooring_model::{CalendarDate, Pairing, UnixTime};
@@ -33,7 +40,7 @@ use serde_json::Value;
 
 use super::alerts::every_condition;
 use super::router;
-use super::support::{at, date, deployment, node, status};
+use super::support::{at, date, deployment, node, status, wire};
 use crate::alert::{
     AlertCondition, AlertConditionKind, CriticalThermalLevel, DegradedReasonKind, EngineHost,
     MacEngine, NodeEngine, Severity,
@@ -59,7 +66,7 @@ use crate::usage::ActiveNow;
 
 const FIXTURE: &[u8] = include_bytes!("../../../../contract/status-fixtures/variants.json");
 
-/// Every enum a status carries, one list per enum.
+/// Every enum a status carries, one list per enum, and the plan's lines.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Variants {
@@ -119,7 +126,7 @@ struct Variants {
     violation: Vec<Violation>,
     violation_kind: Vec<ViolationKind>,
     stop_policy: Vec<StopPolicy>,
-    plan_line_kind: Vec<PlanLineKind>,
+    plan_line: Vec<PlanLine>,
     gate_state: Vec<GateState>,
     shutdown_reason: Vec<ShutdownReason>,
     watch_error: Vec<WatchError>,
@@ -222,14 +229,41 @@ fn variants() -> Variants {
     )
     .unwrap();
     let now = at("2026-10-08", 36_000);
-    let report = NodeReport::of(
-        UnixTime::from_secs(now.as_secs() + 1),
-        &status(
-            now,
-            Some(UnixTime::from_secs(now.as_secs() - 30)),
-            Vec::new(),
-        ),
+    let before = |secs: u64| wire(UnixTime::from_secs(now.as_secs() - secs));
+    // The reported node is one the operator halted after every hold had
+    // closed its gate, as the agent reports it: an egress violation under
+    // the generation it had applied, the Mac drained with no handshake
+    // since (which keeps the drain hold), and both engines stopped by the
+    // halt, so the last accounting poll came before it. Each hold, the
+    // halt marker and the applied generation are read with their values.
+    let mut held = status(
+        now,
+        Some(UnixTime::from_secs(now.as_secs() - 90)),
+        Vec::new(),
     );
+    held.gate = GateState::Closed;
+    held.latest_handshake = Some(before(600));
+    held.applied = Some(AppliedGeneration {
+        generation: Generation::new(3),
+        digest: Sha256Hex::from_bytes([0x5c; 32]),
+    });
+    held.engines.xray.run = EngineRun::Inactive;
+    held.engines.hy2.run = EngineRun::Inactive;
+    held.holds = Holds {
+        mac_drain: Some(MacDrainHold {
+            handshake_at_drain: Some(before(600)),
+        }),
+        egress_violation: Some(EgressViolationHold {
+            at: before(300),
+            generation: Generation::new(3),
+        }),
+        operator: Some(OperatorHold { at: before(120) }),
+    };
+    held.halted = Some(Halt {
+        at: before(60),
+        reason: ShutdownReason::Operator,
+    });
+    let report = NodeReport::of(UnixTime::from_secs(now.as_secs() + 1), &held);
     let mut down_reasons = vec![
         DownReason::EgressInterfaceAbsent,
         DownReason::EgressAmbiguous { matches: 2 },
@@ -498,7 +532,16 @@ fn variants() -> Variants {
             },
             StopPolicy::AcceptDeprioritisation,
         ],
-        plan_line_kind: vec![PlanLineKind::FairUse, PlanLineKind::Allowance],
+        plan_line: vec![
+            PlanLine {
+                kind: PlanLineKind::FairUse,
+                bytes: NonZeroU64::new(500_000_000_000).unwrap(),
+            },
+            PlanLine {
+                kind: PlanLineKind::Allowance,
+                bytes: NonZeroU64::new(30_000_000_000).unwrap(),
+            },
+        ],
         gate_state: vec![GateState::Open, GateState::Closed],
         shutdown_reason: ShutdownReason::ALL.to_vec(),
         watch_error: watch_errors(),
@@ -1107,10 +1150,12 @@ fn the_variants_fixture_lists_every_variant() {
         },
         2,
     );
+    // A line's kind travels only inside a line, so the lines list every
+    // kind.
     every_variant(
-        "plan_line_kind",
-        &v.plan_line_kind,
-        |value| match value {
+        "plan_line",
+        &v.plan_line,
+        |line| match line.kind {
             PlanLineKind::FairUse => 0,
             PlanLineKind::Allowance => 1,
         },

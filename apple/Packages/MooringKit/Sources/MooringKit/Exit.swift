@@ -109,15 +109,6 @@ public enum ForeignNetworkFinding: Decodable, Hashable, Sendable {
             throw decoder.unknownVariant(tag)
         }
     }
-
-    /// The interface found.
-    public var interface: String {
-        switch self {
-        case .routableIpv4(let interface), .globalIpv6(let interface),
-            .defaultRoute(let interface, _):
-            interface
-        }
-    }
 }
 
 /// What kind of connection a declared own network is (design §10.2, P0-2).
@@ -145,14 +136,6 @@ public enum AllowedNetwork: Decodable, Hashable, Sendable {
                 interface: try value.fields("interface").field(String.self, "interface"))
         default:
             throw decoder.unknownVariant(tag)
-        }
-    }
-
-    /// The interface allowed.
-    public var interface: String {
-        switch self {
-        case .own(let interface, _), .benchmarkingTun(let interface):
-            interface
         }
     }
 }

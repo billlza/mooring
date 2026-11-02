@@ -93,15 +93,10 @@ import Testing
     @Test(arguments: ["no-deployment", "no-deployment-router-unavailable"])
     func everyObjectRefusesAnUnknownKey(_ name: String) throws {
         let json = try Fixtures.json(try Fixtures.console(name))
-        _ = try ConsoleStatus.decode(line: try Fixtures.encode(json))
-        let paths = JsonEdits.objectPaths(json)
-        #expect(paths.count >= (name == "no-deployment" ? 15 : 3))
-        for path in paths {
-            let edited = JsonEdits.inserting(into: json, at: path)
-            #expect(throws: (any Error).self, "accepted an unknown key at \(path)") {
-                try ConsoleStatus.decode(line: try Fixtures.encode(edited))
-            }
+        let objects = try JSONPaths.expectEveryObjectRefusesAnUnknownKey(in: json) {
+            _ = try ConsoleStatus.decode(line: $0)
         }
+        #expect(objects >= (name == "no-deployment" ? 15 : 3))
     }
 
     /// A value a closed enum does not name, a tag no variant has, a missing

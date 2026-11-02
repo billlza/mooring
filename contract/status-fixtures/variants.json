@@ -282,35 +282,38 @@
         "polled_at": 1791453601,
         "agent_now": 1791453600,
         "watch_age_secs": 2,
-        "gate": "Open",
+        "gate": "Closed",
         "holds": {
-          "mac_drain": null,
-          "egress_violation": null,
-          "operator": null
+          "mac_drain": {
+            "handshake_at_drain": 1791453000
+          },
+          "egress_violation": {
+            "at": 1791453300,
+            "generation": 3
+          },
+          "operator": {
+            "at": 1791453480
+          }
         },
-        "halted": null,
-        "handshake_age_secs": 20,
-        "applied": null,
+        "halted": {
+          "at": 1791453540,
+          "reason": "Operator"
+        },
+        "handshake_age_secs": 600,
+        "applied": {
+          "generation": 3,
+          "digest": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c"
+        },
         "conditions": [],
-        "accounting_at": 1791453570,
+        "accounting_at": 1791453510,
         "engines": {
           "xray": {
             "restarts": 0,
-            "run": {
-              "Active": {
-                "uptime_secs": 86400,
-                "go_heap_bytes": 48000000
-              }
-            }
+            "run": "Inactive"
           },
           "hy2": {
             "restarts": 0,
-            "run": {
-              "Active": {
-                "uptime_secs": 86400,
-                "go_heap_bytes": null
-              }
-            }
+            "run": "Inactive"
           }
         },
         "host": {
@@ -970,9 +973,15 @@
     },
     "accept_deprioritisation"
   ],
-  "plan_line_kind": [
-    "fair_use",
-    "allowance"
+  "plan_line": [
+    {
+      "kind": "fair_use",
+      "bytes": 500000000000
+    },
+    {
+      "kind": "allowance",
+      "bytes": 30000000000
+    }
   ],
   "gate_state": [
     "Open",

@@ -123,19 +123,8 @@ import Testing
     @Test(arguments: scenarios)
     func everyObjectRefusesAnUnknownKey(_ name: String) throws {
         let json = try Fixtures.json(try scenario(name))
-        _ = try decode(try Fixtures.encode(json))
-        let paths = JSONPaths.objects(json)
-        #expect(paths.count >= 40)
-        for path in paths {
-            let edited = JSONPaths.editing(json, at: path) { object in
-                var object = object
-                object["zz_unknown"] = true
-                return object
-            }
-            #expect(throws: (any Error).self, "accepted an unknown key at \(path)") {
-                try decode(try Fixtures.encode(edited))
-            }
-        }
+        let objects = try JSONPaths.expectEveryObjectRefusesAnUnknownKey(in: json) { _ = try decode($0) }
+        #expect(objects >= 40)
     }
 
     /// Every key of every object is required, a `null` too, except in the
@@ -143,26 +132,8 @@ import Testing
     @Test(arguments: scenarios)
     func everyKeyIsRequired(_ name: String) throws {
         let json = try Fixtures.json(try scenario(name))
-        var removed = 0
-        var nulls = 0
-        for path in JSONPaths.objects(json, skippingMaps: Self.maps) {
-            guard let object = JSONPaths.value(json, at: path) as? [String: Any] else {
-                continue
-            }
-            for key in object.keys.sorted() {
-                removed += 1
-                if object[key] is NSNull {
-                    nulls += 1
-                }
-                let edited = JSONPaths.editing(json, at: path) { object in
-                    var object = object
-                    object.removeValue(forKey: key)
-                    return object
-                }
-                #expect(throws: (any Error).self, "accepted a missing \(key) at \(path)") {
-                    try decode(try Fixtures.encode(edited))
-                }
-            }
+        let (removed, nulls) = try JSONPaths.expectEveryKeyIsRequired(in: json, skippingMaps: Self.maps) {
+            _ = try decode($0)
         }
         #expect(removed >= 100)
         #expect(nulls >= 3)
@@ -171,6 +142,21 @@ import Testing
     /// The JSON objects that are maps keyed by the deployment's ids, not
     /// records with fixed keys.
     static let maps: Set<String> = ["users", "nodes", "by_node", "cycle_by_node"]
+
+    /// A drain hold taken while the Mac had no handshake holds `null`,
+    /// which no fixture does; its key is required all the same.
+    @Test func aDrainHoldWithoutAHandshakeIsReadAndItsKeyRequired() throws {
+        let hold = try JSONDecoder().decode(MacDrainHold.self, from: Data(#"{"handshake_at_drain": null}"#.utf8))
+        #expect(hold.handshakeAtDrain == nil)
+        let error = #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(MacDrainHold.self, from: Data("{}".utf8))
+        }
+        guard case .keyNotFound(let key, _)? = error else {
+            Issue.record("not refused for its missing key: \(String(describing: error))")
+            return
+        }
+        #expect(key.stringValue == "handshake_at_drain")
+    }
 
     @Test func anotherVersionIsRefusedAsSuch() throws {
         let line = String(decoding: try scenario("serving"), as: UTF8.self)
@@ -199,60 +185,5 @@ import Testing
         #expect(throws: (any Error).self) {
             try JSONDecoder().decode(EngineRun.self, from: Data("\"inactive\"".utf8))
         }
-    }
-}
-
-/// Paths into a JSON value read with `JSONSerialization`, and edits at
-/// them.
-enum JSONPaths {
-    /// The path (keys and indices) of every object in `value`; with
-    /// `skippingMaps`, the objects under those keys are left out, though
-    /// the objects inside their entries are kept.
-    static func objects(_ value: Any, skippingMaps maps: Set<String> = [], _ path: [Any] = [])
-        -> [[Any]]
-    {
-        if let object = value as? [String: Any] {
-            let isMap = (path.last as? String).map(maps.contains) ?? false
-            let inner = object.keys.sorted().flatMap { key in
-                objects(object[key] as Any, skippingMaps: maps, path + [key])
-            }
-            return isMap ? inner : [path] + inner
-        }
-        if let array = value as? [Any] {
-            return array.indices.flatMap { objects(array[$0], skippingMaps: maps, path + [$0]) }
-        }
-        return []
-    }
-
-    /// The value at `path`.
-    static func value(_ value: Any, at path: [Any]) -> Any? {
-        guard let head = path.first else {
-            return value
-        }
-        let rest = Array(path.dropFirst())
-        if let key = head as? String, let object = value as? [String: Any], let inner = object[key] {
-            return Self.value(inner, at: rest)
-        }
-        if let index = head as? Int, let array = value as? [Any], array.indices.contains(index) {
-            return Self.value(array[index], at: rest)
-        }
-        return nil
-    }
-
-    /// `value` with the object at `path` replaced by `edit`'s result.
-    static func editing(_ value: Any, at path: [Any], _ edit: ([String: Any]) -> [String: Any]) -> Any {
-        guard let head = path.first else {
-            return edit(value as? [String: Any] ?? [:])
-        }
-        let rest = Array(path.dropFirst())
-        if let key = head as? String, var object = value as? [String: Any] {
-            object[key] = editing(object[key] as Any, at: rest, edit)
-            return object
-        }
-        if let index = head as? Int, var array = value as? [Any] {
-            array[index] = editing(array[index], at: rest, edit)
-            return array
-        }
-        return value
     }
 }
