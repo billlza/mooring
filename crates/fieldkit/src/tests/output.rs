@@ -61,14 +61,6 @@ fn errors_name_the_peer_and_what_failed() {
         "the open-files limit is 256, below the 8256 this measurement needs"
     );
     assert_eq!(
-        FieldkitError::OpenFilesKernelMaximum {
-            maximum: 61440,
-            want: 65599
-        }
-        .to_string(),
-        "the kernel lets a process hold 61440 open files (kern.maxfilesperproc), below the 65599 this measurement needs"
-    );
-    assert_eq!(
         FieldkitError::peer(peer, "connect", io::Error::other("refused")).to_string(),
         "203.0.113.7:27950: connect: refused"
     );

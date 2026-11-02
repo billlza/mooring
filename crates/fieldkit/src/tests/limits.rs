@@ -72,4 +72,12 @@ fn a_shortfall_names_the_kernels_maximum_or_the_soft_limit() {
             want: 8256
         })
     ));
+    assert_eq!(
+        FieldkitError::OpenFilesKernelMaximum {
+            maximum: 61440,
+            want: 65599
+        }
+        .to_string(),
+        "the kernel lets a process hold 61440 open files (kern.maxfilesperproc), below the 65599 this measurement needs"
+    );
 }
