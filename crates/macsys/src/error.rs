@@ -166,7 +166,7 @@ pub enum ConfigdFault {
     NotADictionary,
     /// A key, or a value read as text, is not a string.
     NotAString,
-    /// A service names no interface.
+    /// A service names no interface (no `InterfaceName`, or an empty one).
     InterfaceNameMissing,
     /// A service's router is not an IPv4 address.
     Router,

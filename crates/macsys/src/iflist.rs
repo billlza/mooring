@@ -18,7 +18,7 @@ use std::num::NonZeroU32;
 
 use crate::error::{MacsysError, RouteFault};
 use crate::route::messages::{Sockaddr, i32_at, parse_sockaddrs, u16_at};
-use crate::route::{Mib, dump};
+use crate::sysctl::{Mib, dump};
 
 /// The slot of an address's netmask (`RTAX_NETMASK`).
 const NETMASK: usize = 2;
@@ -101,19 +101,15 @@ pub fn interfaces() -> Result<Vec<Interface>, MacsysError> {
 }
 
 /// The interface with index `index`: `InterfaceAbsent` when the kernel
-/// lists none (the dump is filtered by the kernel to that index).
+/// lists none (the dump is filtered by the kernel to that index). A dump
+/// that gives the interface twice is refused as any list is
+/// (`DuplicateInterface`).
 pub fn interface(index: NonZeroU32) -> Result<Interface, MacsysError> {
     let wanted = libc::c_int::try_from(index.get()).map_err(|_| MacsysError::InterfaceAbsent)?;
-    let mut found = interfaces_in(&dump(list_mib(wanted))?)?
+    interfaces_in(&dump(list_mib(wanted))?)?
         .into_iter()
-        .filter(|interface| interface.index == index);
-    match (found.next(), found.next()) {
-        (Some(interface), None) => Ok(interface),
-        (None, _) => Err(MacsysError::InterfaceAbsent),
-        (Some(_), Some(_)) => Err(MacsysError::MalformedRoute {
-            fault: RouteFault::DuplicateInterface,
-        }),
-    }
+        .find(|interface| interface.index == index)
+        .ok_or(MacsysError::InterfaceAbsent)
 }
 
 /// The `NET_RT_IFLIST2` name for every family, filtered to interface
@@ -194,9 +190,9 @@ fn parse_ifinfo(message: &[u8]) -> Result<Interface, RouteFault> {
         return Err(RouteFault::ShortHeader);
     }
     let addresses = parse_sockaddrs(i32_at(message, IFM_ADDRS_AT), &message[IFM_HEADER_LEN..])?;
-    let link = addresses[IFP]
-        .filter(|sockaddr| sockaddr.is_family(libc::AF_LINK))
-        .ok_or(RouteFault::MissingLink)?;
+    // Absent, or of another family than `AF_LINK`: no link either way.
+    let link = addresses[IFP].ok_or(RouteFault::MissingLink)?;
+    let link_address = link.link().ok_or(RouteFault::MissingLink)?;
     let index =
         NonZeroU32::new(u32::from(u16_at(message, IFM_INDEX_AT))).ok_or(RouteFault::ZeroIndex)?;
     let flags = i32_at(message, IFM_FLAGS_AT);
@@ -204,11 +200,9 @@ fn parse_ifinfo(message: &[u8]) -> Result<Interface, RouteFault> {
         index,
         name: link_name(link)?,
         link_type: message[IFI_TYPE_AT],
-        lladdr: match link.link() {
-            Some(Ok((6, &[a, b, c, d, e, f]))) => Some([a, b, c, d, e, f]),
-            Some(Ok(_)) => None,
-            Some(Err(fault)) => return Err(fault),
-            None => return Err(RouteFault::MissingLink),
+        lladdr: match link_address? {
+            (6, &[a, b, c, d, e, f]) => Some([a, b, c, d, e, f]),
+            _ => None,
         },
         up: flags & libc::IFF_UP != 0,
         running: flags & libc::IFF_RUNNING != 0,

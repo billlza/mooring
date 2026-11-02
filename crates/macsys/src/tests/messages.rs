@@ -357,6 +357,17 @@ fn an_arp_entry_yields_its_link_layer_address() {
     );
     // An entry whose gateway is not a link-layer address is no neighbour.
     assert_eq!(neighbours_in(&not_link_entry()).unwrap(), []);
+    // Nor is one whose destination is absent or not an IPv4 address.
+    for slots in [
+        vec![(GATEWAY, link(9, "en9", &M7_LIKE))],
+        vec![
+            (DST, link(9, "en9", &M7_LIKE)),
+            (GATEWAY, link(9, "en9", &M7_LIKE)),
+        ],
+    ] {
+        let entry = message(9, libc::RTF_UP | libc::RTF_LLINFO, &slots);
+        assert_eq!(neighbours_in(&entry).unwrap(), []);
+    }
 }
 
 #[test]
