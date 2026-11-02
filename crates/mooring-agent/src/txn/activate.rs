@@ -13,7 +13,7 @@ use std::path::Path;
 use mooring_agent_proto::{AgentError, Generation, IoOp, PROTOCOL, Sha256Hex, StderrTail};
 
 use super::record::{Change, Pending, Phase, set_pending};
-use super::{abandon, arm_revert, exclusive, replace_link};
+use super::{arm_revert, end, exclusive, replace_link};
 use crate::blobs::digest_of;
 use crate::gate;
 use crate::host::Node;
@@ -67,7 +67,7 @@ pub(crate) fn activate(
             .map_err(|error| io_error(IoOp::WriteState, &error))
     });
     if let Err(error) = switched {
-        abandon(paths, node, generation, true)?;
+        end(paths, node, generation, None, true)?;
         return Err(error);
     }
     Ok(generation)

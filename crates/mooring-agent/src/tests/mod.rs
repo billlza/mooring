@@ -22,10 +22,24 @@ use std::cell::{Cell, RefCell};
 use std::io;
 use std::time::Duration;
 
-use mooring_agent_proto::UnixTime;
+use mooring_agent_proto::{
+    BundleFiles, BundleHeader, EngineSet, Generation, HostProfile, Sha256Hex, UnixTime,
+};
 
 use crate::host::{Node, Tool, ToolOutput};
 use crate::paths::Paths;
+
+/// Error numbers the tests expect, the same on Linux and macOS: a program
+/// that is not there.
+pub(crate) const ENOENT: i32 = 2;
+/// A path that exists already (an atomic write's temporary name taken).
+pub(crate) const EEXIST: i32 = 17;
+/// A path through a file, or a directory call on a file.
+pub(crate) const ENOTDIR: i32 = 20;
+/// A file call (`read`) on a directory.
+pub(crate) const EISDIR: i32 = 21;
+/// A permission refused.
+pub(crate) const EACCES: i32 = 13;
 
 /// What the stand-in node answers for one tool call.
 pub(crate) type Responder = Box<dyn Fn(Tool, &[&str]) -> io::Result<ToolOutput>>;
@@ -151,6 +165,48 @@ pub(crate) fn exited(code: i32, stdout: &[u8], stderr: &[u8]) -> ToolOutput {
     }
 }
 
+/// The temporary name `store::write_atomic` uses for `path`.
+pub(crate) fn temporary_of(path: &std::path::Path) -> std::path::PathBuf {
+    let name = path.file_name().unwrap().to_string_lossy();
+    path.with_file_name(format!(".{name}.{}.tmp", std::process::id()))
+}
+
+/// Takes [`temporary_of`] `path` with a directory, so that writing `path`
+/// fails (`EEXIST`) while reading it still gives what it held. Returns the
+/// directory, for a test to remove once the write may succeed again.
+pub(crate) fn occupy_temporary(path: &std::path::Path) -> std::path::PathBuf {
+    let blocker = temporary_of(path);
+    std::fs::create_dir_all(&blocker).unwrap();
+    blocker
+}
+
+/// `path` with `mode` until dropped, then with the mode it had: a fault
+/// made of permissions, which holds for the non-root user tests run as
+/// (a root user passes every permission check).
+pub(crate) struct ModeFault {
+    path: std::path::PathBuf,
+    mode: u32,
+}
+
+impl ModeFault {
+    pub(crate) fn set(path: &std::path::Path, mode: u32) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let before = std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        Self {
+            path: path.to_owned(),
+            mode: before,
+        }
+    }
+}
+
+impl Drop for ModeFault {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode)).unwrap();
+    }
+}
+
 /// A scratch root and the layout under it.
 pub(crate) fn scratch() -> (tempfile::TempDir, Paths) {
     let dir = tempfile::tempdir().unwrap();
@@ -213,4 +269,28 @@ pub(crate) fn nft_set(closed: bool) -> Vec<u8> {
         r#"{{"nftables":[{{"metainfo":{{"version":"1.1.3"}}}},{{"set":{{"family":"inet","name":"exit_closed","table":"mooring","type":"ifname","handle":3{elements}}}}}]}}"#
     )
     .into_bytes()
+}
+
+/// The digest of `text`.
+pub(crate) fn sha(text: &str) -> Sha256Hex {
+    crate::blobs::digest_of(text.as_bytes()).unwrap()
+}
+
+/// A header for `generation` on the stand-in host (`txn::facts`). `Apply`
+/// reads no blob before it launches the transaction's unit, so its digests
+/// name nothing stored.
+pub(crate) fn header(generation: u64) -> BundleHeader {
+    BundleHeader {
+        config_generation: Generation::new(generation),
+        digest: sha(&format!("bundle {generation}")),
+        host_facts: txn::facts(),
+        host_profile_version: HostProfile::CURRENT.version,
+        files: BundleFiles::from_fn(|file| sha(file.file_name())),
+        engines: EngineSet {
+            xray: sha("xray"),
+            hy2: sha("hy2"),
+            geoip: sha("geoip"),
+            geosite: sha("geosite"),
+        },
+    }
 }

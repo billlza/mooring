@@ -41,7 +41,7 @@ use crate::hello;
 use crate::host::{Node, Tool, run_ok};
 use crate::hostfiles;
 use crate::paths::{Paths, generation_name};
-use crate::store::{Lock, io_error};
+use crate::store::{Lock, Scratch, errno, io_error};
 use record::{
     Change, Pending, Phase, TxnRecord, clear_pending, pending, set_pending, set_record, set_state,
 };
@@ -141,18 +141,47 @@ pub(crate) fn apply(
             },
         },
     )?;
+    // Once recorded, a change that cannot be launched is recorded as
+    // failed and leaves nothing pending: nothing will run it, and the node
+    // is free for the next change.
+    match launch(paths, node, generation, current) {
+        Ok(()) => Ok(Launched::Launched(generation)),
+        Err(error) => {
+            end(
+                paths,
+                node,
+                generation,
+                Some(TxnState::Failed {
+                    error: error.clone(),
+                }),
+                false,
+            )?;
+            Err(error)
+        }
+    }
+}
+
+/// Records the change under `generation` as pending and launches the
+/// transaction's unit: `systemd-run` refusing it and `systemd-run` that
+/// cannot be started are both failures.
+fn launch(
+    paths: &Paths,
+    node: &dyn Node,
+    generation: Generation,
+    previous: Generation,
+) -> Result<(), AgentError> {
     set_pending(
         paths,
         &Pending {
             generation,
-            change: Change::Apply { previous: current },
+            change: Change::Apply { previous },
             phase: Phase::Launched,
         },
     )?;
     let unit = txn_unit(generation);
     let unit_arg = format!("--unit={unit}");
     let generation_arg = generation.get().to_string();
-    let launched = run_ok(
+    match run_ok(
         node,
         Tool::SystemdRun,
         &[
@@ -163,23 +192,13 @@ pub(crate) fn apply(
             "txn",
             &generation_arg,
         ],
-    )?;
-    if launched.is_err() {
-        let error = AgentError::Systemd {
+    )? {
+        Ok(_) => Ok(()),
+        Err(_) => Err(AgentError::Systemd {
             unit: unit_name(&format!("{unit}.service"))?,
             op: SystemdOp::Run,
-        };
-        set_state(
-            paths,
-            generation,
-            TxnState::Failed {
-                error: error.clone(),
-            },
-        )?;
-        clear_pending(paths)?;
-        return Err(error);
+        }),
     }
-    Ok(Launched::Launched(generation))
 }
 
 /// `txn <N>`, the transaction unit: runs the transaction for `generation`
@@ -199,7 +218,10 @@ pub(crate) fn run(
         return Err(AgentError::UnknownTransaction { generation });
     };
     let header = record::record(paths, generation)?.header;
-    match attempt(paths, node, generation, previous, &header) {
+    let mut armed = false;
+    match attempt(paths, node, generation, previous, &header, &mut armed) {
+        // Should either write fail, the change stays pending with its timer
+        // armed, which then reverts it, as when the unit dies.
         Ok(()) => {
             set_state(paths, generation, TxnState::AwaitingConfirm)?;
             set_pending(
@@ -211,24 +233,34 @@ pub(crate) fn run(
                 },
             )
         }
-        Err(error) => {
-            let armed = pending(paths)?.is_some_and(|pending| pending.phase.armed());
-            set_state(paths, generation, TxnState::Failed { error })?;
-            abandon(paths, node, generation, armed)
-        }
+        Err(error) => end(
+            paths,
+            node,
+            generation,
+            Some(TxnState::Failed { error }),
+            armed,
+        ),
     }
 }
 
-/// Ends a change that failed. The pending record goes first, so that a
-/// timer that cannot be stopped finds nothing to revert when it fires; then
-/// the timer, if one was armed, so that the generation can be retried at
-/// once rather than meeting the unit name still in use.
-fn abandon(
+/// Ends the pending change under `generation`, the one way every change
+/// ends: the record's final `state` (an activation has no record), then
+/// the pending change, then the confirm timer if one was armed. In this
+/// order a write that fails leaves the change pending with its timer still
+/// armed, so that the timer, or a retried request, can still end it; and a
+/// timer that cannot be stopped finds nothing to revert when it fires. A
+/// timer stopped last also lets the generation be retried at once rather
+/// than meet its unit name still in use.
+fn end(
     paths: &Paths,
     node: &dyn Node,
     generation: Generation,
+    state: Option<TxnState>,
     armed: bool,
 ) -> Result<(), AgentError> {
+    if let Some(state) = state {
+        set_state(paths, generation, state)?;
+    }
     clear_pending(paths)?;
     if armed {
         disarm_revert(node, generation)?;
@@ -240,18 +272,26 @@ fn running(paths: &Paths, generation: Generation, stage: TxnStage) -> Result<(),
     set_state(paths, generation, TxnState::Running { stage })
 }
 
-/// The stages of a transaction; `Ok` once it awaits confirmation.
+/// The stages of a transaction; `Ok` once it awaits confirmation. Before
+/// the swap a failure removes what was staged; from the swap on, every
+/// failure is rolled back. `armed` is set once the confirm timer is armed,
+/// so that the change's end stops it even when the phase that says so
+/// could not be recorded.
 fn attempt(
     paths: &Paths,
     node: &dyn Node,
     generation: Generation,
     previous: Generation,
     header: &BundleHeader,
+    armed: &mut bool,
 ) -> Result<(), AgentError> {
     running(paths, generation, TxnStage::Preconditions)?;
     preconditions(paths, node, header)?;
     running(paths, generation, TxnStage::Stage)?;
     prune(paths, previous)?;
+    // What the change changes is read from the previous generation before
+    // anything is switched.
+    let before = stage::installed_header(paths, previous)?;
     let staged = stage::stage(paths, generation, header).and_then(|dir| {
         running(paths, generation, TxnStage::Validate)?;
         validate::validate(paths, node, &dir)?;
@@ -260,6 +300,7 @@ fn attempt(
             generation,
             Path::new(mooring_agent_proto::AGENT_CURRENT_PATH),
         )?;
+        *armed = true;
         set_pending(
             paths,
             &Pending {
@@ -268,6 +309,7 @@ fn attempt(
                 phase: Phase::Armed,
             },
         )?;
+        running(paths, generation, TxnStage::Swap)?;
         Ok(dir)
     });
     let dir = match staged {
@@ -277,38 +319,39 @@ fn attempt(
             return Err(error);
         }
     };
-    running(paths, generation, TxnStage::Swap)?;
-    if let Err(error) = swap(paths, generation) {
-        return Err(roll_back(
-            paths,
-            node,
-            generation,
-            previous,
-            RollbackCause::Swap {
-                errno: error.raw_os_error(),
-            },
-        ));
-    }
-    let host = match install_host(paths, &dir) {
-        Ok(host) => host,
-        Err(cause) => return Err(roll_back(paths, node, generation, previous, cause)),
-    };
-    running(paths, generation, TxnStage::Apply)?;
-    let before = stage::installed_header(paths, previous)?;
-    if let Err(cause) = apply_changes(paths, node, before.as_ref(), header, &dir, &host) {
-        return Err(roll_back(paths, node, generation, previous, cause));
-    }
-    running(paths, generation, TxnStage::HealthGate)?;
-    if let Err(failed) = health::wait(paths, node, &dir, health::BUDGET) {
-        return Err(roll_back(
-            paths,
-            node,
-            generation,
-            previous,
-            RollbackCause::HealthGate { failed },
-        ));
-    }
-    Ok(())
+    switch(paths, node, generation, header, before.as_ref(), &dir)
+        .map_err(|cause| roll_back(paths, node, generation, previous, cause))
+}
+
+/// The swap and what follows it (design §11.2 steps 4 to 6), each failure
+/// with the cause the rollback reports.
+fn switch(
+    paths: &Paths,
+    node: &dyn Node,
+    generation: Generation,
+    header: &BundleHeader,
+    before: Option<&BundleHeader>,
+    dir: &Path,
+) -> Result<(), RollbackCause> {
+    swap(paths, generation).map_err(|error| RollbackCause::Swap {
+        errno: error.raw_os_error(),
+    })?;
+    let host = install_host(paths, dir)?;
+    progress(paths, generation, TxnStage::Apply)?;
+    apply_changes(paths, node, before, header, dir, &host)?;
+    progress(paths, generation, TxnStage::HealthGate)?;
+    health::wait(paths, node, dir, health::BUDGET)
+        .map_err(|failed| RollbackCause::HealthGate { failed })
+}
+
+/// Records a stage reached after the swap. A record that cannot be written
+/// there fails the change as a `Swap` with the write's error number: a
+/// change whose progress cannot be recorded could not be confirmed either,
+/// so it is rolled back at once rather than left switched.
+fn progress(paths: &Paths, generation: Generation, stage: TxnStage) -> Result<(), RollbackCause> {
+    running(paths, generation, stage).map_err(|error| RollbackCause::Swap {
+        errno: errno(&error),
+    })
 }
 
 /// Preconditions (design §11.2 step 1): not halted, a host profile this
@@ -442,10 +485,7 @@ fn install_host(paths: &Paths, dir: &Path) -> Result<BTreeSet<HostFile>, Rollbac
         return Ok(BTreeSet::new());
     }
     hostfiles::install(paths, &staged).map_err(|error| RollbackCause::Swap {
-        errno: match error {
-            AgentError::Io { errno, .. } => errno,
-            _ => None,
-        },
+        errno: errno(&error),
     })
 }
 
@@ -575,18 +615,16 @@ fn apply_wireguard(
     }
     let conf = paths.wg_conf_link().display().to_string();
     let stripped = step.run(ApplyStep::WireGuard, Tool::WgQuick, &["strip", &conf])?;
-    let scratch = paths.validate_dir().join("wgexit.stripped");
-    crate::store::write_atomic(&scratch, &stripped, 0o600)
+    // The stripped copy holds the private key; it goes whatever happens.
+    let scratch = Scratch::write(paths.validate_dir().join("wgexit.stripped"), &stripped)
         .map_err(|error| step.failed(ApplyStep::WireGuard, &io_error(IoOp::WriteState, &error)))?;
-    let scratch_arg = scratch.display().to_string();
-    let synced = step.run(
+    let scratch_arg = scratch.path().display().to_string();
+    step.run(
         ApplyStep::WireGuard,
         Tool::Wg,
         &["syncconf", WG_INTERFACE, &scratch_arg],
-    );
-    // The stripped copy holds the private key; it goes whatever happened.
-    let _absent = fs::remove_file(&scratch);
-    synced.map(drop)
+    )
+    .map(drop)
 }
 
 /// Rolls back the transaction for `generation` (design §11.2 step 8) and
@@ -607,8 +645,9 @@ fn roll_back(
 /// Puts `previous` back in place of `failed`: the links, what changed, and
 /// the health gate. With no previous generation the node goes back to
 /// serving nothing: no `current`, engines and tunnel stopped, and the
-/// ruleset it had before Mooring's first one reloaded. If any of it fails,
-/// both engines are stopped and the gate closed, and the failure is
+/// ruleset it had before Mooring's first one reloaded. The failed
+/// generation's directory is removed either way. If any of it fails, both
+/// engines are stopped and the gate closed, and the first failure is
 /// returned.
 pub(crate) fn revert(
     paths: &Paths,
@@ -619,25 +658,22 @@ pub(crate) fn revert(
     // A failed generation whose header cannot be read counts as having
     // changed everything, so everything of the previous one is re-applied.
     let failed_header = stage::installed_header(paths, failed).ok().flatten();
-    let outcome = if previous == Generation::ZERO {
+    let reverted = if previous == Generation::ZERO {
         to_nothing(paths, node)
     } else {
         to_previous(paths, node, failed_header.as_ref(), previous)
     };
+    let outcome = reverted.and(remove_failed(paths, failed));
     if outcome.is_err() {
         safe_stop(paths, node);
     }
-    remove_failed(paths, failed)?;
     outcome
 }
 
 /// Removes the failed generation's directory, a revert's last step.
 fn remove_failed(paths: &Paths, failed: Generation) -> Result<(), RollbackCause> {
     remove_generation(paths, failed).map_err(|error| RollbackCause::Swap {
-        errno: match error {
-            AgentError::Io { errno, .. } => errno,
-            _ => None,
-        },
+        errno: errno(&error),
     })
 }
 
@@ -651,12 +687,11 @@ fn to_previous(
         errno: error.raw_os_error(),
     })?;
     let dir = paths.generation(previous);
-    let header = match stage::installed_header(paths, previous) {
-        Ok(Some(header)) => header,
-        Ok(None) => return Err(RollbackCause::Swap { errno: None }),
-        Err(AgentError::Io { errno, .. }) => return Err(RollbackCause::Swap { errno }),
-        Err(_) => return Err(RollbackCause::Swap { errno: None }),
-    };
+    let header = stage::installed_header(paths, previous)
+        .map_err(|error| RollbackCause::Swap {
+            errno: errno(&error),
+        })?
+        .ok_or(RollbackCause::Swap { errno: None })?;
     let host = install_host(paths, &dir)?;
     apply_changes(paths, node, failed, &header, &dir, &host)?;
     health::wait(paths, node, &dir, health::BUDGET)
@@ -805,7 +840,9 @@ pub(crate) fn status(paths: &Paths, generation: Generation) -> Result<TxnState, 
 }
 
 /// `Confirm{generation}`: commits the change awaiting confirmation under
-/// `generation`, from a new SSH session.
+/// `generation`, from a new SSH session. A timer that cannot be stopped
+/// afterwards is the answer, though the change is committed: when it
+/// fires it finds nothing to revert.
 pub(crate) fn confirm(
     paths: &Paths,
     node: &dyn Node,
@@ -817,11 +854,11 @@ pub(crate) fn confirm(
             pending.generation == generation && pending.phase == Phase::AwaitingConfirm
         })
         .ok_or(AgentError::NotAwaitingConfirm)?;
-    disarm_revert(node, generation)?;
-    if let Change::Apply { .. } = pending.change {
-        set_state(paths, generation, TxnState::Committed)?;
-    }
-    clear_pending(paths)?;
+    let state = match pending.change {
+        Change::Apply { .. } => Some(TxnState::Committed),
+        Change::Activate { .. } => None,
+    };
+    end(paths, node, generation, state, true)?;
     Ok(generation)
 }
 
@@ -843,7 +880,13 @@ pub(crate) enum Why {
 /// confirmation belongs to a unit that died (or to one launched but not
 /// started, which then finds nothing to run), and is reverted too: rolled
 /// back if its generation is current, else, having switched nothing, only
-/// its staged directory removed.
+/// its staged directory removed. A revert that fails is `RollbackFailed`
+/// with the revert's own cause (a transaction's rollback reports the
+/// failure that made it roll back instead), after the node was stopped;
+/// a staged directory that cannot be removed is the request's error, the
+/// change reverted all the same. A requested revert stops the timer last,
+/// as every change ends (`end`); an unconfirmed change's timer has fired,
+/// and a reboot lost it.
 pub(crate) fn revert_pending(
     paths: &Paths,
     node: &dyn Node,
@@ -859,33 +902,36 @@ pub(crate) fn revert_pending(
         })
         .ok_or(AgentError::NotAwaitingConfirm)?;
     let generation = pending.generation;
-    if why == Why::Requested && pending.phase.armed() {
-        disarm_revert(node, generation)?;
-    }
-    let outcome = match pending.change {
-        Change::Apply { previous } => {
-            let reverted = if gate::current_generation(paths)? == generation {
-                revert(paths, node, generation, previous)
-            } else {
-                remove_failed(paths, generation)
-            };
-            let state = match (&reverted, why) {
-                (Ok(()), Why::Requested) => TxnState::Reverted,
-                (Ok(()), Why::Unconfirmed(_) | Why::Rebooted) => TxnState::Failed {
-                    error: AgentError::RevertedUnconfirmed { generation },
-                },
-                (Err(cause), _) => TxnState::Failed {
-                    error: AgentError::RollbackFailed {
-                        generation,
-                        cause: cause.clone(),
-                    },
-                },
-            };
-            set_state(paths, generation, state)?;
-            reverted.map_err(|cause| AgentError::RollbackFailed { generation, cause })
+    let disarm = why == Why::Requested && pending.phase.armed();
+    let (state, outcome) = match pending.change {
+        Change::Apply { previous } if gate::current_generation(paths)? == generation => {
+            match revert(paths, node, generation, previous) {
+                Ok(()) => (Some(reverted(why, generation)), Ok(())),
+                Err(cause) => {
+                    let error = AgentError::RollbackFailed { generation, cause };
+                    let failed = TxnState::Failed {
+                        error: error.clone(),
+                    };
+                    (Some(failed), Err(error))
+                }
+            }
         }
-        Change::Activate { previous, .. } => activate::restore(paths, &previous),
+        Change::Apply { .. } => (
+            Some(reverted(why, generation)),
+            remove_generation(paths, generation),
+        ),
+        Change::Activate { previous, .. } => (None, activate::restore(paths, &previous)),
     };
-    clear_pending(paths)?;
+    end(paths, node, generation, state, disarm)?;
     outcome.map(|()| generation)
+}
+
+/// The state of a change reverted for `why`.
+const fn reverted(why: Why, generation: Generation) -> TxnState {
+    match why {
+        Why::Requested => TxnState::Reverted,
+        Why::Unconfirmed(_) | Why::Rebooted => TxnState::Failed {
+            error: AgentError::RevertedUnconfirmed { generation },
+        },
+    }
 }

@@ -21,7 +21,7 @@ use mooring_agent_proto::{
 };
 
 use super::serve::{ask, frame};
-use super::{FakeNode, failed, nft_set, ok, scratch};
+use super::{FakeNode, failed, nft_set, occupy_temporary, ok, scratch};
 use crate::accounting;
 use crate::gate::{StopRequest, holds, set_by_viewer, write_holds};
 use crate::host::{Node, Tool};
@@ -630,11 +630,7 @@ fn a_stop_whose_hold_cannot_be_written_keeps_the_gate_closed() {
     .unwrap();
     // The atomic write's temporary name is taken, so the hold cannot be
     // written while holds.json reads as before.
-    let blocker = world
-        .paths
-        .gate_dir()
-        .join(format!(".holds.json.{}.tmp", std::process::id()));
-    fs::create_dir_all(&blocker).unwrap();
+    let blocker = occupy_temporary(&world.paths.holds());
     world.traffic(&node, 1);
     tick(&mut watch, &world, &node);
     assert!(
@@ -768,11 +764,7 @@ fn a_view_that_cannot_be_written_is_reported_at_the_next_tick() {
     let mut watch = Watch::start(&world.paths).unwrap();
     world.traffic(&node, 1);
     tick(&mut watch, &world, &node);
-    let blocker = world
-        .paths
-        .watch_dir()
-        .join(format!(".status.json.{}.tmp", std::process::id()));
-    fs::create_dir_all(&blocker).unwrap();
+    let blocker = occupy_temporary(&world.paths.watch_status());
     world.traffic(&node, 1);
     tick(&mut watch, &world, &node);
     world.traffic(&node, 1);
@@ -1835,11 +1827,7 @@ fn a_usage_file_that_cannot_be_written_is_state_write_until_a_reading_writes_it(
     world.traffic(&node, 1);
     let mut watch = Watch::start(&world.paths).unwrap();
     minute(&mut watch, &world, &node);
-    let blocker = world
-        .paths
-        .usage_dir()
-        .join(format!(".accounting.json.{}.tmp", std::process::id()));
-    fs::create_dir_all(&blocker).unwrap();
+    let blocker = occupy_temporary(&world.paths.accounting());
     world.xray().counters = BTreeMap::from([("u01@reality", (5, 5))]);
     minute(&mut watch, &world, &node);
     assert_eq!(world.conditions(), vec![WatchErrorKind::StateWrite]);

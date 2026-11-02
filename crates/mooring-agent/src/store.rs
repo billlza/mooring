@@ -8,7 +8,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mooring_agent_proto::{AgentError, IoOp};
 use serde::Serialize;
@@ -25,6 +25,15 @@ pub(crate) fn io_error(op: IoOp, error: &io::Error) -> AgentError {
 /// A state file that is not its type: there is no OS error to report.
 pub(crate) const fn malformed(op: IoOp) -> AgentError {
     AgentError::Io { op, errno: None }
+}
+
+/// The OS error number behind `error`, if it has one: the number a failed
+/// write reports in `StateWrite`, or a rollback in its cause.
+pub(crate) const fn errno(error: &AgentError) -> Option<i32> {
+    match error {
+        AgentError::Io { errno, .. } => *errno,
+        _ => None,
+    }
 }
 
 /// The value in `path`, or `None` when there is no such file.
@@ -90,9 +99,41 @@ pub(crate) fn remove(path: &Path) -> Result<(), AgentError> {
     }
 }
 
-fn parent_of(path: &Path) -> io::Result<&Path> {
+/// The directory holding `path`; a path with none (`/`) is refused.
+pub(crate) fn parent_of(path: &Path) -> io::Result<&Path> {
     path.parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a state path has no directory"))
+}
+
+/// A scratch file holding a secret (a validator's copy of an engine
+/// configuration, a stripped tunnel configuration): removed when dropped,
+/// whichever way the code that wrote it returns.
+#[derive(Debug)]
+pub(crate) struct Scratch {
+    path: PathBuf,
+}
+
+impl Scratch {
+    /// Writes `bytes` to `path` atomically with mode 0600. The file is
+    /// removed when the returned value is dropped, and at once if the write
+    /// fails after its rename.
+    pub(crate) fn write(path: PathBuf, bytes: &[u8]) -> io::Result<Self> {
+        let scratch = Self { path };
+        write_atomic(&scratch.path, bytes, 0o600)?;
+        Ok(scratch)
+    }
+
+    /// The file's path.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // A file that was never written is not there to remove.
+        let _absent = fs::remove_file(&self.path);
+    }
 }
 
 /// Creates `dir` and its parents with mode 0750 where missing.

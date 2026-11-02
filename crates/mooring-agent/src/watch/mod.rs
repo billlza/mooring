@@ -42,7 +42,7 @@ use crate::gate::{self, StopRequest};
 use crate::host::{Node, Tool, run_ok};
 use crate::journal::Journal;
 use crate::paths::Paths;
-use crate::store::{Lock, malformed, read_json};
+use crate::store::{Lock, errno, malformed, read_json};
 use crate::wg::{self, Peer};
 use status::{AccountingView, EngineRestarts, Failure, HostReading, Observed, WatchStatus};
 use transfer::Transfer;
@@ -889,13 +889,5 @@ fn boot_id(paths: &Paths) -> Result<String, AgentError> {
         Err(malformed(IoOp::ReadState))
     } else {
         Ok(id.to_owned())
-    }
-}
-
-/// The error number a failed write reports in `StateWrite`.
-const fn errno(error: &AgentError) -> Option<i32> {
-    match error {
-        AgentError::Io { errno, .. } => *errno,
-        _ => None,
     }
 }
