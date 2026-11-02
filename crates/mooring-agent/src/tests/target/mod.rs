@@ -4,10 +4,13 @@
 //! pinned ones print, and the handshake sampler against local servers that
 //! answer as TLS servers do.
 
+mod faults;
+
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::num::NonZeroU16;
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
@@ -24,6 +27,7 @@ use crate::paths::Paths;
 use crate::store::{read_json, write_json};
 use crate::target::sampler::{self, RANDOM_BYTES};
 use crate::target::{TargetReading, TlsDetails, TlsPing, parse_curl, parse_getent, parse_tls_ping};
+use crate::txn::stage::{XRAY, store_path};
 
 fn host() -> TargetHost {
     TargetHost::new("www.example.com").unwrap()
@@ -313,12 +317,7 @@ fn curl_goes_to_the_resolved_address_and_a_timeout_is_no_answer() {
 fn a_tls_ping_that_does_not_finish_is_unavailable() {
     let node = node_answering(|_, _| exited(124, b"TLS ping:  www.example.com\n", b""));
     assert!(matches!(
-        crate::target::tls_ping(
-            &node,
-            std::path::Path::new("/opt/xray"),
-            &host(),
-            Ipv4Addr::LOCALHOST
-        ),
+        crate::target::tls_ping(&node, Path::new("/opt/xray"), &host(), Ipv4Addr::LOCALHOST),
         Err(AgentError::TargetFactsUnavailable {
             tool: TargetTool::XrayTlsPing,
             ..
@@ -351,6 +350,9 @@ enum Server {
     Silent,
     /// Reads the hello and closes.
     Close,
+    /// Reads the hello's record header alone and closes, which, with the
+    /// rest unread, resets the connection.
+    Reset,
 }
 
 /// A server on 127.0.0.1 that answers `connections` connections as `how`
@@ -365,6 +367,9 @@ fn serve(how: Server, connections: usize) -> SocketAddr {
             };
             let mut header = [0; 5];
             stream.read_exact(&mut header).unwrap();
+            if let Server::Reset = how {
+                continue;
+            }
             let length = usize::from(u16::from_be_bytes([header[3], header[4]]));
             let mut body = vec![0; length];
             stream.read_exact(&mut body).unwrap();
@@ -384,7 +389,7 @@ fn serve(how: Server, connections: usize) -> SocketAddr {
                 Server::Silent => {
                     let _closed = stream.read(&mut [0; 1]);
                 }
-                Server::Close => {}
+                Server::Close | Server::Reset => {}
             }
         }
     });
@@ -576,7 +581,7 @@ fn a_whole_check_installs_the_xray_and_measures_the_target() {
         }
     );
     // The Xray went into the engine store, runnable.
-    let installed = crate::txn::stage::store_path(&paths, crate::txn::stage::XRAY, &xray);
+    let installed = store_path(&paths, XRAY, &xray);
     assert_eq!(std::fs::read(&installed).unwrap(), b"#!xray");
     {
         use std::os::unix::fs::PermissionsExt;

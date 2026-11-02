@@ -91,14 +91,11 @@ pub(crate) fn load_milli(text: &str) -> Result<u32, AgentError> {
     if !digits(whole) || !digits(fraction) || fraction.len() > 3 {
         return Err(malformed(IoOp::ReadState));
     }
-    let whole: u32 = whole.parse().map_err(|_| malformed(IoOp::ReadState))?;
-    let fraction: u32 = format!("{fraction:0<3}")
+    // The thousandths are the digits with the fraction padded to three; a
+    // load beyond `u32` thousandths does not parse.
+    format!("{whole}{fraction:0<3}")
         .parse()
-        .map_err(|_| malformed(IoOp::ReadState))?;
-    whole
-        .checked_mul(1000)
-        .and_then(|milli| milli.checked_add(fraction))
-        .ok_or(malformed(IoOp::ReadState))
+        .map_err(|_| malformed(IoOp::ReadState))
 }
 
 /// `MemAvailable` in bytes, from `/proc/meminfo` (in kB).
@@ -158,11 +155,8 @@ fn tree_bytes(root: &Path) -> Result<u64, AgentError> {
 
 /// When `path` was last modified; `None` if it does not exist.
 fn modified(path: &Path) -> Result<Option<UnixTime>, AgentError> {
-    match fs::metadata(path) {
-        Ok(meta) => {
-            let modified = meta
-                .modified()
-                .map_err(|error| io_error(IoOp::ReadState, &error))?;
+    match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(modified) => {
             let since = modified
                 .duration_since(UNIX_EPOCH)
                 .map_err(|_| malformed(IoOp::ReadState))?;

@@ -5,12 +5,15 @@
 //! layout as a node. The real tools run only on a node (M4's VM lane).
 
 mod accounting;
+mod accounts;
 mod blobs;
 mod bootstrap;
 mod cli;
 mod gate;
 mod health;
 mod hello;
+mod hostfiles;
+mod journal;
 mod reflect;
 mod serve;
 mod store;

@@ -5,6 +5,8 @@
 //! sshd drift compared as multisets.
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::io;
 use std::net::Ipv4Addr;
 
 use mooring_agent_proto::{
@@ -14,7 +16,7 @@ use mooring_agent_proto::{
 };
 
 use super::serve::{SSH, ask, frame};
-use super::{FakeNode, failed, ok, scratch};
+use super::{EISDIR, ENOENT, FakeNode, failed, ok, scratch};
 use crate::blobs::digest_of;
 use crate::hello::{arch, client_ip, hello, host_facts, mismatches_in};
 use crate::host::Tool;
@@ -41,8 +43,8 @@ fn sshd_t(profile: &HostProfile) -> String {
 fn node_root(paths: &Paths) {
     let write = |path: &str, text: &str| {
         let path = paths.at(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
     };
     write("/proc/net/route", ROUTE);
     write("/proc/sys/net/ipv4/ip_local_port_range", "32768\t60999\n");
@@ -131,16 +133,16 @@ fn accept_local_is_read_from_the_interfaces_sysctl() {
     let (_dir, paths) = scratch();
     node_root(&paths);
     let path = paths.wgexit_accept_local();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
     for (text, expected) in [
         ("1\n", AcceptLocal::Enabled),
         ("0\n", AcceptLocal::Disabled),
     ] {
-        std::fs::write(&path, text).unwrap();
+        fs::write(&path, text).unwrap();
         let info = hello(&paths, &node(), Some("1.2.3.4 1 5.6.7.8 22")).unwrap();
         assert_eq!(info.wgexit_accept_local, expected);
     }
-    std::fs::write(&path, "2\n").unwrap();
+    fs::write(&path, "2\n").unwrap();
     assert_eq!(
         hello(&paths, &node(), Some("1.2.3.4 1 5.6.7.8 22")).unwrap_err(),
         AgentError::Io {
@@ -152,7 +154,19 @@ fn accept_local_is_read_from_the_interfaces_sysctl() {
 
 #[test]
 fn every_unreadable_fact_is_refused_by_name() {
-    let cases: [(&str, Option<&str>, HostFact); 10] = [
+    let long_name = format!(
+        "{}\nenp0s31f6abcdefgh\t00000000\t01F67EB0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n",
+        ROUTE.lines().next().unwrap()
+    );
+    let cases: [(&str, Option<&str>, HostFact); 13] = [
+        ("/etc/os-release", None, HostFact::DebianMajor),
+        (
+            "/proc/sys/kernel/osrelease",
+            Some("6.12.113 cloud\n"),
+            HostFact::Kernel,
+        ),
+        // An interface name longer than the kernel allows.
+        ("/proc/net/route", Some(&long_name), HostFact::Uplink),
         (
             "/etc/os-release",
             Some("ID=debian\nVERSION_ID=\"+13\"\n"),
@@ -206,8 +220,8 @@ fn every_unreadable_fact_is_refused_by_name() {
         let (_dir, paths) = scratch();
         node_root(&paths);
         match text {
-            Some(text) => std::fs::write(paths.at(path), text).unwrap(),
-            None => std::fs::remove_file(paths.at(path)).unwrap(),
+            Some(text) => fs::write(paths.at(path), text).unwrap(),
+            None => fs::remove_file(paths.at(path)).unwrap(),
         }
         assert_eq!(
             host_facts(&paths, &node()),
@@ -222,7 +236,7 @@ fn a_default_route_that_is_down_is_not_the_uplink() {
     let (_dir, paths) = scratch();
     node_root(&paths);
     let down = format!("{ROUTE}eth1\t00000000\t01000000\t0002\t0\t0\t0\t00000000\t0\t0\t0\n");
-    std::fs::write(paths.at("/proc/net/route"), down).unwrap();
+    fs::write(paths.at("/proc/net/route"), down).unwrap();
     assert_eq!(
         host_facts(&paths, &node()).unwrap().uplink,
         IfName::new("eth0").unwrap()
@@ -282,7 +296,7 @@ fn the_client_is_the_first_field_of_ssh_connection() {
 fn an_agent_without_an_installed_profile_cannot_answer() {
     let (_dir, paths) = scratch();
     node_root(&paths);
-    std::fs::remove_file(paths.host_profile()).unwrap();
+    fs::remove_file(paths.host_profile()).unwrap();
     assert_eq!(
         hello(&paths, &node(), Some("1.2.3.4 1 5.6.7.8 22")).unwrap_err(),
         AgentError::Io {
@@ -297,6 +311,83 @@ fn an_agent_without_an_installed_profile_cannot_answer() {
             .host_profile_version,
         HostProfileVersion::new(1)
     );
+}
+
+#[test]
+fn the_agents_own_executable_must_be_readable() {
+    let (_dir, paths) = scratch();
+    node_root(&paths);
+    let own = paths.own_executable();
+    fs::remove_file(&own).unwrap();
+    assert_eq!(
+        hello(&paths, &node(), Some(SSH)).unwrap_err(),
+        AgentError::Io {
+            op: IoOp::ReadBlob,
+            errno: Some(ENOENT)
+        }
+    );
+    fs::create_dir(&own).unwrap();
+    assert_eq!(
+        hello(&paths, &node(), Some(SSH)).unwrap_err(),
+        AgentError::Io {
+            op: IoOp::ReadBlob,
+            errno: Some(EISDIR)
+        }
+    );
+}
+
+#[test]
+fn an_address_ip_cannot_list_is_refused() {
+    let (_dir, paths) = scratch();
+    node_root(&paths);
+    let unstartable = FakeNode::answering(
+        0,
+        Box::new(|_, _| Err(io::Error::from_raw_os_error(ENOENT))),
+    );
+    assert_eq!(
+        host_facts(&paths, &unstartable),
+        Err(AgentError::Io {
+            op: IoOp::SpawnProcess,
+            errno: Some(ENOENT)
+        })
+    );
+    let failing = FakeNode::answering(
+        0,
+        Box::new(|_, _| Ok(failed(b"Device \"eth0\" does not exist.\n"))),
+    );
+    assert_eq!(
+        host_facts(&paths, &failing),
+        Err(AgentError::HostFactUnavailable {
+            field: HostFact::Vps4
+        })
+    );
+}
+
+#[test]
+fn an_sshd_that_does_not_print_its_configuration_is_refused() {
+    let (_dir, paths) = scratch();
+    node_root(&paths);
+    for sshd in [
+        failed(b"sshd: no hostkeys available -- exiting.\n"),
+        ok(b"port 22\n\xff\n"),
+    ] {
+        let node = FakeNode::answering(
+            0,
+            Box::new(move |tool, _| {
+                Ok(match tool {
+                    Tool::Ip => ok(IP_ADDR.as_bytes()),
+                    _ => sshd.clone(),
+                })
+            }),
+        );
+        assert_eq!(
+            hello(&paths, &node, Some(SSH)).unwrap_err(),
+            AgentError::Io {
+                op: IoOp::ReadState,
+                errno: None
+            }
+        );
+    }
 }
 
 #[test]

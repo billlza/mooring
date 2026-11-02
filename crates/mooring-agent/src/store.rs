@@ -196,3 +196,15 @@ impl Drop for Lock {
         let _released = self.file.unlock();
     }
 }
+
+/// Appends `value` to `out` as one line of JSON, the form of a journal's
+/// events. A value that cannot be written leaves part of it in `out`,
+/// which the caller then discards.
+pub(crate) fn append_json_line<T: Serialize>(
+    out: &mut Vec<u8>,
+    value: &T,
+) -> Result<(), AgentError> {
+    serde_json::to_writer(&mut *out, value).map_err(|_| malformed(IoOp::WriteState))?;
+    out.push(b'\n');
+    Ok(())
+}
