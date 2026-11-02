@@ -32,7 +32,8 @@ use crate::gate::{StopRequest, holds, set_by_viewer, write_holds};
 use crate::host::Node;
 use crate::journal;
 use crate::store::{read_json, write_json};
-use crate::watch::{self, Fatal, HOST_READING_SECS, Watch, changes};
+use crate::watch::journaling::changes;
+use crate::watch::{self, Fatal, HOST_READING_SECS, Watch};
 
 #[test]
 fn the_gate_opens_only_for_a_live_peer_with_no_hold_and_no_halt() {

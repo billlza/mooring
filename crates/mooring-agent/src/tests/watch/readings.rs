@@ -144,8 +144,8 @@ fn disk_low_is_under_1_gib_or_under_a_tenth_free() {
 
 #[test]
 fn systemctl_show_and_nft_counters_are_parsed_exactly() {
-    use crate::watch::counter_packets;
     use crate::watch::engines::{Unit, parse_show};
+    use crate::watch::nft::counter_packets;
     // As systemd 257 printed it on the London VPS, in its own order.
     let active = b"NRestarts=3\nActiveState=active\nActiveEnterTimestampMonotonic=15699978\n";
     let unit = parse_show(active).unwrap();
