@@ -11,9 +11,11 @@ use std::path::Path;
 
 use mooring_agent_proto::{AgentError, Generation, IoOp, PROTOCOL, Sha256Hex, StderrTail};
 
+use super::links::replace_link;
 use super::record::{Change, Pending, Phase, set_pending};
 use super::stage::stored_intact;
-use super::{arm_revert, end, exclusive, replace_link};
+use super::timer::arm_revert;
+use super::{end, exclusive};
 use crate::gate;
 use crate::host::Node;
 use crate::paths::Paths;

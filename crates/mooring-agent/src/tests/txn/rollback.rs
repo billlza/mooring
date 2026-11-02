@@ -479,7 +479,7 @@ fn a_current_that_cannot_be_removed_fails_the_revert_to_nothing() {
     fs::create_dir_all(current.join("entry")).unwrap();
     let node = world.node(1050);
     assert_eq!(
-        txn::revert(&world.paths, &node, Generation::new(1), Generation::ZERO),
+        txn::rollback::revert(&world.paths, &node, Generation::new(1), Generation::ZERO),
         Err(RollbackCause::Swap { errno })
     );
     assert_stopped_safe(&node.calls());
@@ -606,7 +606,7 @@ fn the_ruleset_the_node_had_before_mooring_is_kept_once() {
 #[test]
 fn a_link_without_a_parent_directory_is_refused() {
     assert_eq!(
-        txn::replace_link(Path::new("/"), Path::new("gen-1"))
+        txn::links::replace_link(Path::new("/"), Path::new("gen-1"))
             .unwrap_err()
             .kind(),
         std::io::ErrorKind::InvalidInput
@@ -641,7 +641,7 @@ fn a_listener_check_that_cannot_run_fails_the_health_gate() {
 fn a_revert_that_died_after_its_swap_back_is_done_again() {
     let world = awaiting_second(idle(301));
     let two = Generation::new(2);
-    txn::swap(&world.paths, Generation::new(1)).unwrap();
+    txn::links::swap(&world.paths, Generation::new(1)).unwrap();
     let node = world.node(2120);
     assert_eq!(
         txn::revert_pending(&world.paths, &node, Why::Unconfirmed(two)),
@@ -714,7 +714,7 @@ fn a_revert_that_cannot_swap_back_keeps_the_generation_current_names() {
     .unwrap();
     let node = world.node(2050);
     assert_eq!(
-        txn::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
+        txn::rollback::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
         Err(RollbackCause::Swap {
             errno: Some(EEXIST)
         })
@@ -746,7 +746,7 @@ fn a_revert_that_cannot_read_current_keeps_the_failed_generation() {
     fs::create_dir_all(current.join("entry")).unwrap();
     let node = world.node(2050);
     assert_eq!(
-        txn::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
+        txn::rollback::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
         Err(RollbackCause::Swap { errno })
     );
     assert!(world.paths.generation(Generation::new(2)).is_dir());
