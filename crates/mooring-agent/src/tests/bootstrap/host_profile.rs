@@ -5,11 +5,12 @@
 //! bootstrap at its validation, and one that cannot be staged or
 //! installed fails it as the write or read that failed, each with nothing
 //! applied and root's keys as they were. A step of applying it that
-//! fails stops bootstrap at that step; units that cannot be started stop
-//! it with the profile applied, and units that cannot be enabled stop a
-//! later run with the recorded key kept. The profile lets the watch
-//! search the directory of the upgrade log it reads, which Debian keeps
-//! from everyone else.
+//! fails stops bootstrap at that step, and until a run has finished every
+//! retry applies the whole profile again, that step included; units that
+//! cannot be started stop it with the profile applied, and units that
+//! cannot be enabled stop a later run with the recorded key kept. The
+//! profile lets the watch search the directory of the upgrade log it
+//! reads, which Debian keeps from everyone else.
 
 use std::fs;
 
@@ -135,9 +136,10 @@ fn a_profile_that_cannot_be_installed_applies_nothing_and_keeps_the_old_keys() {
 
 /// A step of applying the profile that fails stops bootstrap at that
 /// step, with what it printed, and nothing after it runs: no later step,
-/// no final start of the units, no keys. The files are installed by then.
+/// no final start of the units, no keys. The files are installed by then;
+/// a retry applies them again, the step that failed included.
 #[test]
-fn a_profile_step_that_fails_stops_bootstrap_at_that_step() {
+fn a_profile_step_that_fails_stops_bootstrap_and_a_retry_applies_it() {
     for (failing, step, command) in [
         (
             Failing {
@@ -197,6 +199,43 @@ fn a_profile_step_that_fails_stops_bootstrap_at_that_step() {
             );
         }
         assert_keys_as_they_were(&host, &keys);
+        host.faults.borrow_mut().failing = None;
+        let retry = host.node();
+        assert_eq!(host.bootstrap(&retry), Ok(new_key()), "{command}");
+        assert!(
+            retry.calls().contains(&command.to_owned()),
+            "{command} is not applied again: {:#?}",
+            retry.calls()
+        );
+    }
+}
+
+/// Until a run has finished, which its record of the host key marks,
+/// every run applies the whole profile: a retry after a failure past the
+/// profile (here sshd's reload) applies every step of it again.
+#[test]
+fn a_retry_before_a_run_has_finished_applies_the_whole_profile_again() {
+    let host = Host::new();
+    host.faults.borrow_mut().reload_fails = true;
+    assert_eq!(
+        host.bootstrap(&host.node()),
+        Err(AgentError::Bootstrap {
+            step: BootstrapStep::SshdReload,
+            stderr_tail: StderrTail::scrubbed(b"Job for ssh.service failed.\n", &[]),
+        })
+    );
+    host.faults.borrow_mut().reload_fails = false;
+    let retry = host.node();
+    assert_eq!(host.bootstrap(&retry), Ok(new_key()));
+    let calls = retry.calls();
+    for command in [
+        "/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/mooring.conf",
+        "/usr/sbin/sysctl --system",
+        "/usr/bin/systemctl daemon-reload",
+        "/usr/bin/systemctl restart mooring-watch.service",
+        "/usr/bin/systemctl restart systemd-journald.service",
+    ] {
+        assert!(calls.contains(&command.to_owned()), "{command}: {calls:#?}");
     }
 }
 

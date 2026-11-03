@@ -5,7 +5,8 @@
 //! attempt left removed first, and every other host key judged by its
 //! name's bytes), sshd's reload, and the record of the new key. A failure
 //! stops bootstrap: keys that cannot be written stop it before the host
-//! key; a host key that cannot be made, by a tool that fails or
+//! key, and a record of the key that cannot be read before the host
+//! profile; a host key that cannot be made, by a tool that fails or
 //! cannot start, leaves the old one and sshd as they were, with the keys
 //! restricted, and so does a new key with a half missing (the public half
 //! goes first, so the private key, which sshd serves, stays the old one
@@ -240,6 +241,36 @@ fn a_host_key_tool_that_cannot_start_leaves_the_old_key() {
     assert_unrecorded(&host);
     host.faults.borrow_mut().unstartable = None;
     assert_eq!(host.bootstrap(&host.node()), Ok(new_key()), "a retry");
+}
+
+/// The record of the key decides whether this run makes one, and how much
+/// of the host profile it applies: a record that cannot be read stops
+/// bootstrap before the host profile, with the keys and the host key as
+/// the user-data left them.
+#[test]
+fn a_record_of_the_key_that_cannot_be_read_stops_bootstrap_before_the_host_profile() {
+    let host = Host::new();
+    write(&host.paths, "/var/lib/mooring/host-key.json", "not a key");
+    let keys = fs::read_to_string(host.paths.root_authorized_keys()).unwrap();
+    let node = host.node();
+    assert_eq!(host.bootstrap(&node), Err(malformed(IoOp::ReadState)));
+    assert!(
+        host.paths.agent_current().exists(),
+        "the agent, installed first"
+    );
+    assert!(!host.paths.host_profile().exists(), "no host profile");
+    let calls = node.calls();
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("/usr/sbin/sshd") && !call.contains("systemctl")),
+        "{calls:#?}"
+    );
+    assert_eq!(
+        fs::read_to_string(host.paths.root_authorized_keys()).unwrap(),
+        keys
+    );
+    assert_old_host_key(&host);
 }
 
 /// A new key without its public half (`ssh-keygen` wrote the private one

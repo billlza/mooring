@@ -6,11 +6,16 @@
 //!
 //! `Bootstrap` may run again: every step converges, and the host key is
 //! replaced only until a replacement has been recorded, so a retry after
-//! a lost reply returns the same key. The order keeps a way back in at
-//! every step: the agent is installed before `authorized_keys` restricts
-//! the bootstrap key to its forced command, and sshd, which enforces the
+//! a lost reply returns the same key. That record is the last step, so
+//! until there is one every run applies the whole host profile: an
+//! attempt that stopped may have installed files it did not apply, and
+//! a retry would find their text unchanged. Once there is one, a run
+//! applies only what changed. The order keeps a way back in at every
+//! step: the agent is installed before `authorized_keys` restricts the
+//! bootstrap key to its forced command, and sshd, which enforces the
 //! profile's drop-in, is reloaded only once both are in place.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
@@ -18,8 +23,8 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
 use mooring_agent_proto::{
-    AgentError, BootstrapStep, ENABLED_UNITS, HostProfile, IoOp, PACKAGES, Role, Sha256Hex,
-    SshEd25519Key, StderrTail,
+    AgentError, BootstrapStep, ENABLED_UNITS, HostFile, HostProfile, IoOp, PACKAGES, Role,
+    Sha256Hex, SshEd25519Key, StderrTail,
 };
 
 use crate::host::{Node, Tool, run_ok};
@@ -57,9 +62,17 @@ pub(crate) fn bootstrap(
     crate::txn::activate::install(paths, &actual, &paths.own_executable())?;
     crate::txn::links::replace_link(&paths.agent_current(), Path::new(&actual.to_string()))
         .map_err(|error| io_error(IoOp::WriteState, &error))?;
-    host_profile(paths, node)?;
-    authorize(paths, keys)?;
     let replaced: Option<SshEd25519Key> = read_json(&paths.host_key_record())?;
+    host_profile(
+        paths,
+        node,
+        if replaced.is_some() {
+            Applied::Changed
+        } else {
+            Applied::Every
+        },
+    )?;
+    authorize(paths, keys)?;
     if replaced.is_none() {
         replace_host_key(paths, node)?;
     }
@@ -153,19 +166,38 @@ fn packages(node: &dyn Node) -> Result<(), AgentError> {
     Ok(())
 }
 
+/// Which of the host profile's files a run of `Bootstrap` applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Applied {
+    /// Every file: no run has finished on this host (none has recorded
+    /// the host key), and one that stopped may have installed files it
+    /// did not apply.
+    Every,
+    /// Only the files whose text changed: a run has finished, and applied
+    /// all it installed. A later run that installs a changed file and
+    /// then fails to apply it leaves it so for its retry too, until a
+    /// reboot reads it.
+    Changed,
+}
+
 /// The host profile: staged in scratch space, validated (the units that
 /// run a generation's programs wait for the first transaction), installed,
-/// and applied, sshd's reload aside, which comes once the keys are in
-/// place; then every profile unit enabled, and the watch, the reflector
-/// and the target check's timer started.
-fn host_profile(paths: &Paths, node: &dyn Node) -> Result<(), AgentError> {
+/// and applied as `applied` says, sshd's reload aside, which comes once
+/// the keys are in place; then every profile unit enabled, and the watch,
+/// the reflector and the target check's timer started.
+fn host_profile(paths: &Paths, node: &dyn Node, applied: Applied) -> Result<(), AgentError> {
     let staged = paths.validate_dir().join("bootstrap-host");
     let _stale = fs::remove_dir_all(&staged);
     hostfiles::stage(&staged, &HostProfile::CURRENT)?;
     hostfiles::validate(paths, node, &staged, None)?;
     let changed = hostfiles::install(paths, &staged);
     let _absent = fs::remove_dir_all(&staged);
-    for command in hostfiles::commands(&changed?) {
+    let changed = changed?;
+    let applying: BTreeSet<HostFile> = match applied {
+        Applied::Every => HostFile::ALL.iter().copied().collect(),
+        Applied::Changed => changed,
+    };
+    for command in hostfiles::commands(&applying) {
         if command.step == HostStep::SshdReload {
             continue;
         }
