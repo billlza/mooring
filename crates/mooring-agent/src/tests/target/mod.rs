@@ -25,8 +25,9 @@ use crate::blobs::{digest_of, put};
 use crate::host::Tool;
 use crate::paths::Paths;
 use crate::store::{read_json, write_json};
+use crate::target::hourly::TargetReading;
+use crate::target::probes::{TlsDetails, TlsPing, parse_curl, parse_getent, parse_tls_ping};
 use crate::target::sampler::{self, RANDOM_BYTES};
-use crate::target::{TargetReading, TlsDetails, TlsPing, parse_curl, parse_getent, parse_tls_ping};
 use crate::txn::stage::{XRAY, store_path};
 
 fn host() -> TargetHost {
@@ -222,12 +223,12 @@ fn resolution_reads_getents_exit_status() {
             assert_eq!(args, ["ahostsv4", "www.example.com"]);
             exited(code, stdout, b"")
         });
-        assert_eq!(crate::target::resolve(&node, &host()), expected);
+        assert_eq!(crate::target::probes::resolve(&node, &host()), expected);
     }
     for (code, text) in [(124, "did not answer in time"), (1, "getent: broken")] {
         let node = node_answering(move |_, _| exited(code, b"", b"getent: broken\n"));
         let Err(AgentError::TargetFactsUnavailable { tool, stderr_tail }) =
-            crate::target::resolve(&node, &host())
+            crate::target::probes::resolve(&node, &host())
         else {
             panic!("{code}");
         };
@@ -300,12 +301,12 @@ fn curl_goes_to_the_resolved_address_and_a_timeout_is_no_answer() {
         exited(124, b"", b"")
     });
     assert_eq!(
-        crate::target::http_probe(&node, &host(), Ipv4Addr::new(198, 51, 100, 7)),
+        crate::target::probes::http_probe(&node, &host(), Ipv4Addr::new(198, 51, 100, 7)),
         Ok(HttpProbe::Failed)
     );
     let garbled = node_answering(|_, _| exited(0, b"garbled", b""));
     assert!(matches!(
-        crate::target::http_probe(&garbled, &host(), Ipv4Addr::new(198, 51, 100, 7)),
+        crate::target::probes::http_probe(&garbled, &host(), Ipv4Addr::new(198, 51, 100, 7)),
         Err(AgentError::TargetFactsUnavailable {
             tool: TargetTool::Curl,
             ..
@@ -317,7 +318,12 @@ fn curl_goes_to_the_resolved_address_and_a_timeout_is_no_answer() {
 fn a_tls_ping_that_does_not_finish_is_unavailable() {
     let node = node_answering(|_, _| exited(124, b"TLS ping:  www.example.com\n", b""));
     assert!(matches!(
-        crate::target::tls_ping(&node, Path::new("/opt/xray"), &host(), Ipv4Addr::LOCALHOST),
+        crate::target::probes::tls_ping(
+            &node,
+            Path::new("/opt/xray"),
+            &host(),
+            Ipv4Addr::LOCALHOST
+        ),
         Err(AgentError::TargetFactsUnavailable {
             tool: TargetTool::XrayTlsPing,
             ..
@@ -666,7 +672,7 @@ fn hourly(resolved: &'static [u8], ping: &'static str, curl: &'static [u8]) -> (
         "/usr/bin/curl" => exited(0, curl, b""),
         _ => exited(0, ping.as_bytes(), b""),
     });
-    let reading = crate::target::watch(&paths, &node).unwrap();
+    let reading = crate::target::hourly::watch(&paths, &node).unwrap();
     assert_eq!(
         read_json(&paths.target_reading()).unwrap(),
         Some(reading.clone())
@@ -709,7 +715,11 @@ fn the_hourly_check_degrades_a_target_that_moved_or_stopped_answering() {
 fn the_hourly_check_degrades_a_target_it_cannot_resolve() {
     let (_dir, paths) = configured();
     let node = node_answering(|_, _| exited(124, b"", b""));
-    assert!(crate::target::watch(&paths, &node).unwrap().degraded);
+    assert!(
+        crate::target::hourly::watch(&paths, &node)
+            .unwrap()
+            .degraded
+    );
     assert_eq!(node.calls().len(), 1);
 }
 
@@ -743,7 +753,7 @@ fn target_check_is_served_to_ops_alone() {
 fn a_reading_is_the_state_groups_to_read() {
     let (_dir, paths) = configured();
     let node = node_answering(|_, _| exited(124, b"", b""));
-    crate::target::watch(&paths, &node).unwrap();
+    crate::target::hourly::watch(&paths, &node).unwrap();
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(
         std::fs::metadata(paths.target_reading())

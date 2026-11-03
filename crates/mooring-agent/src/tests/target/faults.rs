@@ -40,16 +40,16 @@ fn a_tool_the_check_cannot_start_is_a_spawn_failure() {
     };
     let address = Ipv4Addr::new(198, 51, 100, 7);
     assert_eq!(
-        crate::target::resolve(&unstartable, &host()).unwrap_err(),
+        crate::target::probes::resolve(&unstartable, &host()).unwrap_err(),
         spawn
     );
     assert_eq!(
-        crate::target::tls_ping(&unstartable, Path::new("/opt/xray"), &host(), address)
+        crate::target::probes::tls_ping(&unstartable, Path::new("/opt/xray"), &host(), address)
             .unwrap_err(),
         spawn
     );
     assert_eq!(
-        crate::target::http_probe(&unstartable, &host(), address).unwrap_err(),
+        crate::target::probes::http_probe(&unstartable, &host(), address).unwrap_err(),
         spawn
     );
     for call in unstartable.calls() {
@@ -64,7 +64,7 @@ fn a_tool_the_check_cannot_start_is_a_spawn_failure() {
 fn a_resolver_that_prints_no_address_is_unavailable() {
     let node = node_answering(|_, _| exited(0, b"www.example.com STREAM\n", b""));
     assert_eq!(
-        crate::target::resolve(&node, &host()),
+        crate::target::probes::resolve(&node, &host()),
         Err(AgentError::TargetFactsUnavailable {
             tool: TargetTool::Resolver,
             stderr_tail: StderrTail::scrubbed(b"www.example.com STREAM\n", &[]),
@@ -82,7 +82,12 @@ fn a_ping_xray_prints_nothing_known_of_is_unavailable_with_both_streams() {
         )
     });
     assert_eq!(
-        crate::target::tls_ping(&node, Path::new("/opt/xray"), &host(), Ipv4Addr::LOCALHOST),
+        crate::target::probes::tls_ping(
+            &node,
+            Path::new("/opt/xray"),
+            &host(),
+            Ipv4Addr::LOCALHOST
+        ),
         Err(AgentError::TargetFactsUnavailable {
             tool: TargetTool::XrayTlsPing,
             stderr_tail: StderrTail::scrubbed(
