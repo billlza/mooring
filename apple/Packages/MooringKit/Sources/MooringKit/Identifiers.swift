@@ -3,7 +3,10 @@
 // The names a deployment's status uses for its nodes, its users and its
 // days (`mooring-model`'s `NodeId`, `UserId` and `CalendarDate`). Their
 // spelling is the Rust types' to check; the mirror keeps the text, and
-// orders it as the Rust maps do (byte order).
+// orders it as the Rust maps do (byte order). Equality is the text's
+// (canonical equivalence) and order its bytes; the two agree because the
+// Rust types allow only lowercase ASCII letters and digits, and two
+// different ASCII texts are never equivalent.
 
 import Foundation
 

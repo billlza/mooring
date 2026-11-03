@@ -1,22 +1,77 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // `contract/status-fixtures/variants.json` holds one value of every variant
-// of every enum a status carries. The router's enums are read from it here,
-// and each Swift enum has exactly as many cases as the Rust one has
-// variants, so a variant added on either side fails a test.
+// of every enum a status carries, and one filled value of each record no
+// scenario fills: a plan's line of each kind, and a node the operator
+// halted after every hold had closed its gate. Each Swift enum has exactly
+// as many cases as the Rust one has variants, so a variant added on either
+// side fails a test; and every object of the fixture is read as strictly
+// as the scenarios' are.
 
 import Foundation
 import Testing
 
 @testable import MooringKit
 
-@Suite struct VariantsTests {
-    private func list(_ key: String) throws -> [Any] {
-        let document = try Fixtures.json(try Fixtures.data("contract/status-fixtures/variants.json"))
-        guard let object = document as? [String: Any], let list = object[key] as? [Any] else {
-            throw CocoaError(.coderValueNotFound)
+/// A list of the fixture that holds objects (the values of an enum with
+/// fields, or of a record), and the Swift type that reads it.
+struct ListWithObjects: Sendable, CustomTestStringConvertible {
+    let key: String
+    /// How many values the list holds, each different.
+    let count: Int
+    /// Reads the list: how many values it holds, and how many differ.
+    let read: @Sendable (Data) throws -> (values: Int, different: Int)
+
+    init<T: Decodable & Hashable & Sendable>(_ type: T.Type, _ key: String, count: Int) {
+        self.key = key
+        self.count = count
+        read = { data in
+            let values = try JSONDecoder().decode([T].self, from: data)
+            return (values.count, Set(values).count)
         }
-        return list
+    }
+
+    var testDescription: String { key }
+}
+
+@Suite struct VariantsTests {
+    /// Every list of the fixture that holds an object.
+    static let listsWithObjects = [
+        ListWithObjects(ExitState.self, "exit_state", count: 8),
+        ListWithObjects(DegradedReason.self, "degraded_reason", count: 6),
+        ListWithObjects(DownReason.self, "down_reason", count: 19),
+        ListWithObjects(ProcessEnd.self, "process_end", count: 2),
+        ListWithObjects(ForecastView.self, "forecast_view", count: 2),
+        ListWithObjects(UsageView.self, "usage_view", count: 3),
+        ListWithObjects(InChainOutcome.self, "in_chain_outcome", count: 3),
+        ListWithObjects(NodeAgentState.self, "node_agent_state", count: 3),
+        ListWithObjects(AlertCondition.self, "alert_condition", count: 39),
+        ListWithObjects(EngineHost.self, "engine_host", count: 2),
+        ListWithObjects(Crossing.self, "crossing", count: 3),
+        ListWithObjects(UplinkUse.self, "uplink_use", count: 2),
+        ListWithObjects(Saturation.self, "saturation", count: 4),
+        ListWithObjects(ForeignNetworkFinding.self, "foreign_network_finding", count: 3),
+        ListWithObjects(AllowedNetwork.self, "allowed_network", count: 2),
+        ListWithObjects(QuotaState.self, "quota_state", count: 5),
+        ListWithObjects(ExpiryState.self, "expiry_state", count: 3),
+        ListWithObjects(UserStatus.self, "user_status", count: 4),
+        ListWithObjects(SuspendReason.self, "suspend_reason", count: 4),
+        ListWithObjects(Violation.self, "violation", count: 4),
+        ListWithObjects(StopPolicy.self, "stop_policy", count: 2),
+        ListWithObjects(WatchError.self, "watch_error", count: 11),
+        ListWithObjects(EngineRun.self, "engine_run", count: 2),
+        ListWithObjects(RouterReading.self, "router_reading", count: 2),
+        ListWithObjects(RadioState.self, "radio_state", count: 2),
+        ListWithObjects(PlanLine.self, "plan_line", count: 2),
+    ]
+
+    private static func document() throws -> [String: Any] {
+        let document = try Fixtures.json(try Fixtures.data("contract/status-fixtures/variants.json"))
+        return try #require(document as? [String: Any], "the fixture is not an object")
+    }
+
+    private func list(_ key: String) throws -> [Any] {
+        try #require(try Self.document()[key] as? [Any], "the fixture has no list \(key)")
     }
 
     private func decode<T: Decodable>(_ type: T.Type, _ key: String) throws -> [T] {
@@ -40,14 +95,14 @@ import Testing
 
     @Test func everyRouterReadingRadioStateAndBandIsRead() throws {
         let readings = try decode(RouterReading.self, "router_reading")
-        #expect(readings.count == 2)
+        try #require(readings.count == 2, "\(readings)")
         guard case .available = readings[0], case .unavailable(.identityMismatch, nil) = readings[1]
         else {
             Issue.record("unexpected readings \(readings)")
             return
         }
         let radios = try decode(RadioState.self, "radio_state")
-        #expect(radios.count == 2)
+        try #require(radios.count == 2, "\(radios)")
         #expect(radios[0] == .noService)
         let bands = try decode(Band.self, "band")
         #expect(bands == [.lte(3), .nr(78)])
@@ -82,39 +137,42 @@ import Testing
         #expect(try decode(Pairing.self, "pairing") == Pairing.allCases)
         #expect(try decode(ProbeProtocol.self, "probe_protocol") == ProbeProtocol.allCases)
         #expect(try decode(ViolationKind.self, "violation_kind") == ViolationKind.allCases)
-        #expect(try decode(PlanLineKind.self, "plan_line_kind") == PlanLineKind.allCases)
         #expect(try decode(GateState.self, "gate_state") == GateState.allCases)
         #expect(try decode(ShutdownReason.self, "shutdown_reason") == ShutdownReason.allCases)
         #expect(try decode(Inbound.self, "inbound") == Inbound.allCases)
     }
 
-    /// Every enum with fields, read from the fixture's list for it: one
-    /// value of each variant, each different, as many as the Swift enum has
-    /// cases. A variant the Rust side adds is a value the mirror refuses.
-    @Test func everyDeploymentVariantWithFieldsIsRead() throws {
-        try distinct(ExitState.self, "exit_state", cases: 8)
-        try distinct(DegradedReason.self, "degraded_reason", cases: 6)
-        try distinct(DownReason.self, "down_reason", cases: 19)
-        try distinct(ProcessEnd.self, "process_end", cases: 2)
-        try distinct(ForecastView.self, "forecast_view", cases: 2)
-        try distinct(UsageView.self, "usage_view", cases: 3)
-        try distinct(InChainOutcome.self, "in_chain_outcome", cases: 3)
-        try distinct(NodeAgentState.self, "node_agent_state", cases: 3)
-        try distinct(AlertCondition.self, "alert_condition", cases: 39)
-        try distinct(EngineHost.self, "engine_host", cases: 2)
-        try distinct(Crossing.self, "crossing", cases: 3)
-        try distinct(UplinkUse.self, "uplink_use", cases: 2)
-        try distinct(Saturation.self, "saturation", cases: 4)
-        try distinct(ForeignNetworkFinding.self, "foreign_network_finding", cases: 3)
-        try distinct(AllowedNetwork.self, "allowed_network", cases: 2)
-        try distinct(QuotaState.self, "quota_state", cases: 5)
-        try distinct(ExpiryState.self, "expiry_state", cases: 3)
-        try distinct(UserStatus.self, "user_status", cases: 4)
-        try distinct(SuspendReason.self, "suspend_reason", cases: 4)
-        try distinct(Violation.self, "violation", cases: 4)
-        try distinct(StopPolicy.self, "stop_policy", cases: 2)
-        try distinct(WatchError.self, "watch_error", cases: 11)
-        try distinct(EngineRun.self, "engine_run", cases: 2)
+    /// Every list that holds objects reads as one different value of each
+    /// variant (or each value the builder gave a record), as many as the
+    /// Swift enum has cases. A variant the Rust side adds is a value the
+    /// mirror refuses.
+    @Test(arguments: Self.listsWithObjects)
+    func everyListWithObjectsReadsAsDifferentValues(_ list: ListWithObjects) throws {
+        let read = try list.read(try Fixtures.encode(try self.list(list.key)))
+        #expect(read.values == list.count)
+        #expect(read.different == list.count)
+    }
+
+    /// Every object of every list refuses an unknown key, and every key of
+    /// every object is required, a `null` too: the strict decoding of each
+    /// variant with fields and each record, which the scenarios reach only
+    /// in part.
+    @Test(arguments: Self.listsWithObjects)
+    func everyObjectIsReadStrictly(_ list: ListWithObjects) throws {
+        let json = try self.list(list.key)
+        let read = { (data: Data) throws in _ = try list.read(data) }
+        let objects = try JSONPaths.expectEveryObjectRefusesAnUnknownKey(in: json, decode: read)
+        try JSONPaths.expectEveryKeyIsRequired(in: json, decode: read)
+        #expect(objects > 0)
+    }
+
+    /// The table above names every list of the fixture that holds an
+    /// object, so a list the Rust side adds is read strictly too.
+    @Test func theTableNamesEveryListWithObjects() throws {
+        let withObjects = try Self.document().filter { !JSONPaths.objects(in: $0.value).isEmpty }.keys
+        let listed = Set(Self.listsWithObjects.map(\.key))
+        #expect(listed.count == Self.listsWithObjects.count)
+        #expect(Set(withObjects) == listed)
     }
 
     /// The usage view's third value, the bare `not_pulled` string, reads as
@@ -123,20 +181,41 @@ import Testing
         #expect(try decode(UsageView.self, "usage_view").last == .notPulled)
     }
 
-    /// `key`'s list decodes as `cases` different values.
-    private func distinct<T: Decodable & Hashable>(_ type: T.Type, _ key: String, cases: Int) throws {
-        let values = try decode(T.self, key)
-        #expect(values.count == cases, "\(key)")
-        #expect(Set(values).count == cases, "\(key)")
-    }
-
     /// The fixture lists every group the mirror reads, and no other.
     @Test func everyGroupOfTheFixtureIsRead() throws {
-        let document = try Fixtures.json(try Fixtures.data("contract/status-fixtures/variants.json"))
-        guard let object = document as? [String: Any] else {
-            throw CocoaError(.coderValueNotFound)
+        #expect(try Self.document().count == 62)
+    }
+
+    /// The fixture's reported node is one the operator halted after every
+    /// hold had closed its gate, so each hold, the halt marker and the
+    /// applied generation are read with the values the Rust builder gave
+    /// them, beside the engines the halt stopped.
+    @Test func theHaltedNodeIsReadWithItsHoldsHaltAndGeneration() throws {
+        let reports = try decode(NodeAgentState.self, "node_agent_state").compactMap { state -> NodeReport? in
+            if case .reported(let report) = state { report } else { nil }
         }
-        #expect(object.count == 62)
+        try #require(reports.count == 1, "\(reports)")
+        let report = reports[0]
+        #expect(report.gate == .closed)
+        #expect(report.holds.macDrain?.handshakeAtDrain == UnixTime(seconds: 1_791_453_000))
+        #expect(report.handshakeAgeSecs == 600)
+        #expect(report.holds.egressViolation?.at == UnixTime(seconds: 1_791_453_300))
+        #expect(report.holds.egressViolation?.generation == 3)
+        #expect(report.applied?.generation == 3)
+        #expect(report.applied?.digest == String(repeating: "5c", count: 32))
+        #expect(report.holds.operator?.at == UnixTime(seconds: 1_791_453_480))
+        #expect(report.halted?.at == UnixTime(seconds: 1_791_453_540))
+        #expect(report.halted?.reason == .operator)
+        #expect(report.accountingAt == UnixTime(seconds: 1_791_453_510))
+        #expect(report.engines.xray.run == .inactive)
+        #expect(report.engines.hy2.run == .inactive)
+    }
+
+    /// A plan's line of each kind, with its bytes.
+    @Test func everyPlanLineIsReadWithItsKindAndBytes() throws {
+        let lines = try decode(PlanLine.self, "plan_line")
+        #expect(lines.map(\.kind) == PlanLineKind.allCases)
+        #expect(lines.map(\.bytes) == [500_000_000_000, 30_000_000_000])
     }
 
     /// The M7's own spellings, which the CLI's summary prints too.

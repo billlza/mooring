@@ -31,7 +31,8 @@ import Testing
                 == .failure(
                     .ended(
                         StreamEnd(
-                            reason: .exited(1), message: "mooringctl: --since 2026-10-14 is after --until 2026-10-13"))))
+                            reason: .exited(1),
+                            message: "mooringctl: --since 2026-10-14 is after --until 2026-10-13"))))
     }
 
     @Test func outputPastTheBoundIsRefusedWhole() async throws {
@@ -95,17 +96,24 @@ import Testing
         #expect(seen)
         #expect(HistoryModel(command: nil).state == .noCommand)
     }
-}
 
-/// Waits up to 10 s for `condition`, asked on the main actor.
-@MainActor
-private func eventually(_ condition: @MainActor () -> Bool) async throws -> Bool {
-    let deadline = Date().addingTimeInterval(10)
-    while Date() < deadline {
-        if condition() {
-            return true
+    /// A Reload while a run is under way starts no second run, and a model
+    /// with no command to run stays so.
+    @MainActor
+    @Test func aReloadWhileOneRunsStartsNoOther() async throws {
+        let standIn = try StandIn(lines: [try fixture()])
+        defer { try? standIn.remove() }
+        let model = HistoryModel(command: HistoryCommand(executable: standIn.executable))
+        model.reload()
+        model.reload()
+        let loaded = try await eventually {
+            if case .loaded = model.state { return true }
+            return false
         }
-        try await Task.sleep(for: .milliseconds(20))
+        #expect(loaded)
+        #expect(standIn.runs.count == 1)
+        let none = HistoryModel(command: nil)
+        none.reload()
+        #expect(none.state == .noCommand)
     }
-    return condition()
 }

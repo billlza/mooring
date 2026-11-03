@@ -17,19 +17,6 @@ private func collect(_ command: StatusCommand) async -> [StreamEvent] {
     return events
 }
 
-/// Waits up to 10 s for `condition`, asked on the main actor.
-@MainActor
-private func eventually(_ condition: @MainActor () -> Bool) async throws -> Bool {
-    let deadline = Date().addingTimeInterval(10)
-    while Date() < deadline {
-        if condition() {
-            return true
-        }
-        try await Task.sleep(for: .milliseconds(20))
-    }
-    return condition()
-}
-
 /// Whether a process with this id is running.
 private func running(_ pid: pid_t) -> Bool {
     kill(pid, 0) == 0
@@ -46,7 +33,7 @@ private func running(_ pid: pid_t) -> Bool {
         defer { try? standIn.remove() }
         let events = await collect(StatusCommand(executable: standIn.executable))
         #expect(try standIn.arguments == "status --follow --json --until-parent-exits ")
-        #expect(events.count == 3)
+        try #require(events.count == 3, "\(events)")
         #expect(events[0] == .status(try ConsoleStatus.decode(line: available)))
         #expect(events[1] == .status(try ConsoleStatus.decode(line: unavailable)))
         #expect(
@@ -65,7 +52,7 @@ private func running(_ pid: pid_t) -> Bool {
         let standIn = try StandIn(lines: [deployed, later, try Fixtures.console("no-deployment")])
         defer { try? standIn.remove() }
         let events = await collect(StatusCommand(executable: standIn.executable))
-        #expect(events.count == 4)
+        try #require(events.count == 4, "\(events)")
         guard case .status(.deployed(let status)) = events[0] else {
             Issue.record("the first line is not a deployment's status: \(events)")
             return
@@ -237,7 +224,9 @@ private func running(_ pid: pid_t) -> Bool {
         let waiting = try await eventually {
             if case .ended(_, let retryAt) = model.state {
                 retryAt.timeIntervalSinceNow < 0.15 && retryAt.timeIntervalSinceNow > 0
-            } else { false }
+            } else {
+                false
+            }
         }
         #expect(waiting)
         let met2 = try await eventually { standIn.runs.count >= 3 }

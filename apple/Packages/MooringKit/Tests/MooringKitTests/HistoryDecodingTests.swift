@@ -19,8 +19,8 @@ import Testing
         #expect(history.since == CalendarDate("2026-10-12"))
         #expect(history.until == CalendarDate("2026-10-13"))
         #expect(history.incompleteDays == [CalendarDate("2026-10-13")])
-        #expect(history.samples.count == 9)
-        #expect(history.events.count == 10)
+        try #require(history.samples.count == 9)
+        try #require(history.events.count == 10)
         // 2026-10-13 19:00:00 UTC, then one a minute.
         #expect(history.samples[0].at == UnixTime(seconds: 1_791_918_000))
         #expect(history.samples[8].at == UnixTime(seconds: 1_791_918_480))
@@ -48,6 +48,8 @@ import Testing
         }
         #expect(fifth.radio == .noService)
         #expect(history.samples[4].attachment == nil)
+        let firstPlmn = try #require(history.samples[0].attachment).plmn
+        let lastPlmn = try #require(history.samples[8].attachment).plmn
         #expect(
             history.events.map(\.kind) == [
                 .pollFailed(.unreachable),
@@ -58,7 +60,7 @@ import Testing
                 .serviceLost,
                 .serviceRegained,
                 .sessionRestarted,
-                .plmnChanged(from: history.samples[0].attachment!.plmn, to: history.samples[8].attachment!.plmn),
+                .plmnChanged(from: firstPlmn, to: lastPlmn),
                 .routerRebooted,
             ])
         #expect(history.events[0].at == UnixTime(seconds: 1_791_918_060))
@@ -91,18 +93,25 @@ import Testing
     /// types' `deny_unknown_fields` promises.
     @Test func everyObjectRefusesAnUnknownKey() throws {
         let json = try Fixtures.json(try fixture())
-        let paths = JsonEdits.objectPaths(json)
-        #expect(paths.count > 20)
-        for path in paths {
-            let edited = JsonEdits.inserting(into: json, at: path)
-            #expect(throws: (any Error).self, "\(path)") {
-                try RadioHistory.decode(line: try Fixtures.encode(edited))
-            }
+        let objects = try JSONPaths.expectEveryObjectRefusesAnUnknownKey(in: json) {
+            _ = try RadioHistory.decode(line: $0)
         }
+        #expect(objects > 20)
     }
 
-    /// Another version, a value outside its vocabulary, a variant in the
-    /// other form than its own, and a missing key are refused.
+    /// Every key of every object of the document is required, a `null`
+    /// too, as the Rust types require it.
+    @Test func everyKeyIsRequired() throws {
+        let json = try Fixtures.json(try fixture())
+        let (removed, nulls) = try JSONPaths.expectEveryKeyIsRequired(in: json) {
+            _ = try RadioHistory.decode(line: $0)
+        }
+        #expect(removed > 200)
+        #expect(nulls > 10)
+    }
+
+    /// Another version, a value outside its vocabulary and a variant in
+    /// the other form than its own are refused.
     @Test func closedValuesAndAnotherVersionAreRefused() throws {
         let text = String(decoding: try fixture(), as: UTF8.self)
         let later = text.replacingOccurrences(of: "\"version\": 1", with: "\"version\": 2")
@@ -122,11 +131,6 @@ import Testing
             #expect(throws: (any Error).self, Comment(rawValue: from)) {
                 try RadioHistory.decode(line: Data(edited.utf8))
             }
-        }
-        var object = try Fixtures.json(try fixture()) as! [String: Any]
-        object.removeValue(forKey: "incomplete_days")
-        #expect(throws: (any Error).self) {
-            try RadioHistory.decode(line: try Fixtures.encode(object))
         }
     }
 
