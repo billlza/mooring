@@ -55,6 +55,25 @@ fn a_usage_path_that_is_not_a_directory_is_refused() {
         write_sim_meter(support.path(), b"{}").unwrap_err().kind(),
         StoreErrorKind::DirNotDirectory
     );
+    // A directory that cannot be made is an error naming its creation,
+    // never a meter written elsewhere: the support path is a file, or there
+    // is none (the store never makes the support directory).
+    let not_a_directory = support.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"").unwrap();
+    assert_io_error(
+        &write_sim_meter(&not_a_directory, b"{}").unwrap_err(),
+        IoOp::CreateUsageDir,
+        &not_a_directory.join(USAGE_DIRECTORY),
+        io::ErrorKind::NotADirectory,
+    );
+    let absent = support.path().join("absent");
+    assert_io_error(
+        &write_sim_meter(&absent, b"{}").unwrap_err(),
+        IoOp::CreateUsageDir,
+        &absent.join(USAGE_DIRECTORY),
+        io::ErrorKind::NotFound,
+    );
+    assert!(!absent.exists());
 }
 
 /// The read checks the usage directory as the write does: a link where it

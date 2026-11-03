@@ -345,6 +345,23 @@ fn a_radio_path_that_is_not_a_directory_is_refused() {
         &radio_dir(&not_a_directory),
         io::ErrorKind::NotADirectory,
     );
+    // A directory that cannot be made is an error naming its creation,
+    // never a line written elsewhere: the support path is a file, or there
+    // is none (the store never makes the support directory).
+    assert_io_error(
+        &append_radio_line(&not_a_directory, date("2026-10-24"), b"a\n").unwrap_err(),
+        IoOp::CreateRadioDir,
+        &radio_dir(&not_a_directory),
+        io::ErrorKind::NotADirectory,
+    );
+    let absent = support.path().join("absent");
+    assert_io_error(
+        &append_radio_line(&absent, date("2026-10-24"), b"a\n").unwrap_err(),
+        IoOp::CreateRadioDir,
+        &radio_dir(&absent),
+        io::ErrorKind::NotFound,
+    );
+    assert!(!absent.exists());
 }
 
 /// The read checks the radio directory as the append and the prune do: a
