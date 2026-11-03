@@ -217,8 +217,8 @@ fn time_left(deadline: Instant) -> Option<Duration> {
         .filter(|left| !left.is_zero())
 }
 
-/// The end for a failed setsockopt(2). On macOS it fails with "[EINVAL] The
-/// socket has been shut down" when the client has closed its side.
+/// The end for a failed setsockopt(2). On macOS it fails with `EINVAL`
+/// ("The socket has been shut down") when the client has closed its side.
 fn setsockopt_end(error: io::Error) -> End {
     match error.kind() {
         ErrorKind::InvalidInput => End::ClientLeft,

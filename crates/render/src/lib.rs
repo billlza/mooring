@@ -7,8 +7,9 @@
 //!   `viewer_authorized_keys`, with their digests and the bundle digest an
 //!   `Apply` carries.
 //! - [`vps::cloud_init`] renders a planned node's cloud-init user-data.
-//! - [`mac::exit`] and [`mac::prober`] render the `mooring-exit` and
-//!   `mooring-probe` configs the daemon sends to the engines on stdin.
+//! - [`mac::exit`](fn@mac::exit) and [`mac::prober`](fn@mac::prober)
+//!   render the `mooring-exit` and `mooring-probe` configs the daemon sends
+//!   to the engines on stdin.
 //!
 //! Nothing here performs I/O, reads a clock or draws randomness. Every
 //! config is built as a closed type that also deserialises with unknown

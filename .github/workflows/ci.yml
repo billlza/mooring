@@ -3,7 +3,8 @@
 # The workspace gates on a hosted Linux runner (design D-7: builds and
 # lanes run off the exit Mac). `cargo xtask ci` is the same command the
 # Mac runs; on Linux it says that it skipped the Swift tests. The agent's
-# musl targets are linted besides, since they compile its Linux-only code.
+# two musl targets, the ones it ships for, are linted and documented
+# besides: `ci` checks its Linux-only code only for the runner's target.
 name: ci
 
 on:
@@ -42,4 +43,5 @@ jobs:
         run: |
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             cargo clippy -p mooring-agent --target "$target" --all-targets --locked -- -D warnings
+            RUSTDOCFLAGS="-D warnings" cargo doc -p mooring-agent --target "$target" --no-deps --locked
           done

@@ -3,7 +3,16 @@
 //! macOS kernel and configd interfaces for Mooring (design §6, §6.1), the
 //! only crate with `unsafe` code: libc for the kernel's tables, and the
 //! SystemConfiguration framework (through `core-foundation`'s typed
-//! wrappers) for configd's dynamic store:
+//! wrappers) for configd's dynamic store.
+//!
+//! macOS only: on any other target the crate is empty, so the workspace
+//! builds and its gates run on the ubuntu L0 lane (design §16). The rest
+//! of this page follows the crate's `#![cfg]`, so it is documented, and its
+//! links checked, on macOS alone.
+
+#![cfg(target_os = "macos")]
+
+//! On macOS it provides:
 //!
 //! - [`interface_index`]: a BSD interface name's index (`if_nametoindex`);
 //! - [`default_gateway_v4`]: an interface's one IPv4 default gateway, from
@@ -51,11 +60,7 @@
 //! The crate has no workspace dependency: it returns std types
 //! (`NonZeroU32`, `Ipv4Addr`, `[u8; 6]`, `String`), which `mooringctl`
 //! turns into the model's `InterfaceIndex`, `MacAddr` and `DnsName`.
-//!
-//! macOS only: on any other target the crate is empty, so the workspace
-//! builds and its gates run on the ubuntu L0 lane (design §16).
 
-#![cfg(target_os = "macos")]
 #![deny(missing_docs)]
 
 mod configd;
