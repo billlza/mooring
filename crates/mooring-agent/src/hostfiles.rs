@@ -20,7 +20,7 @@ use mooring_agent_proto::{
 
 use crate::host::{Node, Tool};
 use crate::paths::Paths;
-use crate::store::{ensure_dir, io_error, read_json, write_atomic, write_json};
+use crate::store::{ensure_dir, io_error, parent_of, read_json, write_atomic, write_json};
 
 /// A generation's subdirectory holding its staged profile files.
 pub(crate) const HOST_DIR: &str = "host";
@@ -181,13 +181,11 @@ pub(crate) fn install(paths: &Paths, staged: &Path) -> Result<BTreeSet<HostFile>
             Err(error) => return Err(io_error(IoOp::ReadState, &error)),
         };
         if installed.as_deref() != Some(text.as_slice()) {
-            if let Some(parent) = target.parent() {
-                fs::DirBuilder::new()
-                    .recursive(true)
-                    .mode(0o755)
-                    .create(parent)
-                    .map_err(fail)?;
-            }
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o755)
+                .create(parent_of(&target).map_err(fail)?)
+                .map_err(fail)?;
             write_atomic(&target, &text, 0o644).map_err(fail)?;
             changed.insert(file);
         }

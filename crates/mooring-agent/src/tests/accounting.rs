@@ -8,16 +8,17 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use mooring_agent_proto::{
-    AgentError, LineRequest, MAX_SERIES_ENTRIES, Resolution, Response, Role, SeriesRange,
+    AgentError, IoOp, LineRequest, MAX_SERIES_ENTRIES, Resolution, Response, Role, SeriesRange,
     SeriesSpan, StatsEmail, Traffic, UnixTime, UsageMonth, UsageV1,
 };
 
 use super::serve::{ask, frame};
-use super::{FakeNode, scratch};
+use super::{ENOTDIR, FakeNode, scratch};
 use crate::accounting::series::{SERIES_KEEP_SECS, Series};
 use crate::accounting::stats::{QueryFailed, SysStats, parse_query, parse_sys};
 use crate::accounting::{self, Canary, MONTH_KEEP_SECS, Polled, Readings, XrayRun};
 use crate::paths::Paths;
+use crate::store::malformed;
 
 /// 2026-10-01T00:00:00Z and 2026-11-01T00:00:00Z.
 const OCT: u64 = 1_790_812_800;
@@ -669,4 +670,135 @@ fn an_entry_that_did_not_grow_never_costs_a_bin_what_it_holds() {
         reply.bins()[0].traffic(),
         &counters(&[("u01@reality", 4, 5)])
     );
+}
+
+#[test]
+fn hour_and_day_ranges_are_answered_from_their_own_bins() {
+    let mut series = Series::default();
+    let added = counters(&[("u01@reality", 1, 2)]);
+    series.record(0, UnixTime::from_secs(OCT), None, &BTreeMap::new());
+    for minute in 1..=24 * 60 {
+        series.record(
+            minute,
+            UnixTime::from_secs(OCT + 60 * minute),
+            Some(minute - 1),
+            &added,
+        );
+    }
+    let now = UnixTime::from_secs(OCT + 86_400);
+    let range = |hours: u64, resolution: Resolution| {
+        SeriesRange::new(
+            UnixTime::from_secs(OCT),
+            UnixTime::from_secs(OCT + 3600 * hours),
+            resolution,
+        )
+        .unwrap()
+    };
+    let hours = series.answer(range(2, Resolution::Hour), now).unwrap();
+    let hourly: Vec<(UnixTime, BTreeMap<StatsEmail, Traffic>)> = hours
+        .bins()
+        .iter()
+        .map(|bin| (bin.start(), bin.traffic().clone()))
+        .collect();
+    assert_eq!(
+        hourly,
+        [OCT, OCT + 3600].map(|start| (
+            UnixTime::from_secs(start),
+            counters(&[("u01@reality", 60, 120)])
+        ))
+    );
+    let day = series.answer(range(24, Resolution::Day), now).unwrap();
+    assert_eq!(day.bins().len(), 1);
+    assert_eq!(
+        day.bins()[0].traffic(),
+        &counters(&[("u01@reality", 24 * 60, 24 * 120)])
+    );
+}
+
+#[test]
+fn a_series_stored_out_of_order_is_refused_not_served() {
+    let (_dir, paths) = scratch();
+    let day = OCT + 86_400;
+    for minute in 0..=10 {
+        poll(
+            &paths,
+            day + 60 * minute,
+            readings(5, &[("u01@reality", minute, minute)], 0),
+        );
+    }
+    let range = five_min(day, day + 600);
+    let now = UnixTime::from_secs(day + 600);
+    assert_eq!(
+        accounting::usage_series(&paths, now, range)
+            .unwrap()
+            .bins()
+            .len(),
+        2
+    );
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(paths.accounting()).unwrap()).unwrap();
+    stored["series"]["five_min"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    fs::write(paths.accounting(), serde_json::to_vec(&stored).unwrap()).unwrap();
+    assert_eq!(
+        accounting::usage_series(&paths, now, range),
+        Err(malformed(IoOp::ReadState))
+    );
+}
+
+#[test]
+fn a_poll_whose_last_second_is_past_the_last_month_is_refused() {
+    // 10000-01-01T00:00:00Z: its last second is 9999-12's.
+    let (_dir, paths) = scratch();
+    poll(&paths, 253_402_300_800, readings(5, &[], 0));
+    assert!(paths.usage_month(month(9999, 12)).exists());
+    let (_dir, paths) = scratch();
+    assert_eq!(
+        accounting::poll(
+            &paths,
+            None,
+            UnixTime::from_secs(253_402_300_801),
+            readings(5, &[], 0)
+        ),
+        Err(malformed(IoOp::WriteState))
+    );
+}
+
+#[test]
+fn retention_reports_a_usage_directory_it_cannot_list() {
+    let (_dir, paths) = scratch();
+    fs::create_dir_all(paths.var_lib()).unwrap();
+    fs::write(paths.usage_dir(), "not a directory").unwrap();
+    assert_eq!(
+        accounting::prune(&paths, UnixTime::from_secs(NOV)),
+        Err(AgentError::Io {
+            op: IoOp::ReadState,
+            errno: Some(ENOTDIR)
+        })
+    );
+}
+
+/// The usage directory's names are judged whatever their encoding: a
+/// leftover temporary file whose name is not UTF-8 is removed, and any
+/// other such file is no month and stays. APFS refuses such names, so this
+/// runs on Linux only.
+#[cfg(target_os = "linux")]
+#[test]
+fn usage_names_that_are_not_utf8_are_judged_like_any_other() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_dir, paths) = scratch();
+    fs::create_dir_all(paths.usage_dir()).unwrap();
+    let leftover = paths
+        .usage_dir()
+        .join(std::ffi::OsStr::from_bytes(b".\xff.json.4242.tmp"));
+    let stranger = paths
+        .usage_dir()
+        .join(std::ffi::OsStr::from_bytes(b"\xff.json"));
+    fs::write(&leftover, "{}").unwrap();
+    fs::write(&stranger, "{}").unwrap();
+    accounting::prune(&paths, UnixTime::from_secs(NOV)).unwrap();
+    assert!(!leftover.exists(), "a crash's temporary file");
+    assert!(stranger.exists(), "no month, so not pruned");
 }

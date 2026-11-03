@@ -300,10 +300,10 @@ pub(crate) fn prune(paths: &Paths, now: UnixTime) -> Result<(), AgentError> {
     };
     for entry in entries {
         let entry = entry.map_err(|error| io_error(IoOp::ReadState, &error))?;
+        // A name that is not UTF-8 is none of the watch's: it reads as no
+        // month, and is removed only if it has a temporary file's form.
         let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
+        let name = name.to_string_lossy();
         let leftover = name.starts_with('.') && name.ends_with(".tmp");
         let expired_month = name
             .strip_suffix(".json")

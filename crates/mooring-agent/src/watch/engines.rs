@@ -8,9 +8,8 @@
 //! (0 for a unit never active) and exit status 0 even for a unit that is
 //! not installed. The time since boot is the clock no step moves.
 
-use mooring_agent_proto::{AgentError, EngineRun, EngineState, EngineUser, IoOp};
+use mooring_agent_proto::{AgentError, EngineRun, EngineState, EngineUser, IoOp, UnitName};
 
-use crate::gate::engine_unit;
 use crate::host::{Node, Tool, run_ok};
 use crate::store::malformed;
 
@@ -45,7 +44,7 @@ impl Unit {
 
 /// Reads `engine`'s unit.
 pub(crate) fn read(node: &dyn Node, engine: EngineUser) -> Result<Unit, AgentError> {
-    let unit = engine_unit(engine)?;
+    let unit = UnitName::engine(engine);
     let stdout = run_ok(
         node,
         Tool::Systemctl,

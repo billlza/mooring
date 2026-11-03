@@ -59,7 +59,14 @@ pub(crate) fn answer(
     }
 }
 
-fn line_reply(paths: &Paths, node: &dyn Node, session: Session<'_>, line: LineRequest) -> Reply {
+/// The reply to a line request, which `answer` has authorised for the
+/// session's role.
+pub(crate) fn line_reply(
+    paths: &Paths,
+    node: &dyn Node,
+    session: Session<'_>,
+    line: LineRequest,
+) -> Reply {
     match line {
         LineRequest::Hello => Ok(Response::Hello(Box::new(hello::hello(
             paths,

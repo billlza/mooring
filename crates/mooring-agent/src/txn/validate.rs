@@ -11,7 +11,7 @@
 //! staged `host/` files.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mooring_agent_proto::{AgentError, IoOp, ManagedFile, StderrTail, ValidationTool};
 use serde_json::Value;
@@ -19,32 +19,55 @@ use serde_json::Value;
 use super::stage::{GEOIP, HY2, XRAY, program};
 use crate::host::{Node, Tool};
 use crate::paths::Paths;
-use crate::store::{ensure_dir, io_error};
+use crate::store::{Scratch, ensure_dir, io_error};
 
 /// Every secret in a staged generation: the WireGuard keys, and in the
 /// engine configurations every string under a key that holds a credential.
 pub(crate) fn secrets(dir: &Path) -> Result<Vec<Vec<u8>>, AgentError> {
-    let read = |file: ManagedFile| {
-        fs::read(dir.join(file.file_name())).map_err(|error| io_error(IoOp::ReadState, &error))
-    };
-    let mut found = Vec::new();
-    let wg = read(ManagedFile::WgConf)?;
-    for line in String::from_utf8_lossy(&wg).lines() {
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
+    Configs::read(dir).map(|configs| configs.secrets())
+}
+
+/// A staged generation's configurations that hold its secrets, each read
+/// once: the tunnel's, and the engines' as JSON.
+struct Configs {
+    wg: Vec<u8>,
+    xray: Value,
+    hy2: Value,
+}
+
+impl Configs {
+    fn read(dir: &Path) -> Result<Self, AgentError> {
+        let read = |file: ManagedFile| {
+            fs::read(dir.join(file.file_name())).map_err(|error| io_error(IoOp::ReadState, &error))
         };
-        if matches!(key.trim(), "PrivateKey" | "PresharedKey") && !value.trim().is_empty() {
-            found.push(value.trim().as_bytes().to_vec());
+        let json = |file: ManagedFile| {
+            serde_json::from_slice(&read(file)?)
+                .map_err(|_| crate::store::malformed(IoOp::ReadState))
+        };
+        Ok(Self {
+            wg: read(ManagedFile::WgConf)?,
+            xray: json(ManagedFile::XrayConfig)?,
+            hy2: json(ManagedFile::Hy2Config)?,
+        })
+    }
+
+    fn secrets(&self) -> Vec<Vec<u8>> {
+        let mut found = Vec::new();
+        for line in String::from_utf8_lossy(&self.wg).lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if matches!(key.trim(), "PrivateKey" | "PresharedKey") && !value.trim().is_empty() {
+                found.push(value.trim().as_bytes().to_vec());
+            }
         }
+        for value in [&self.xray, &self.hy2] {
+            collect(value, false, &mut found);
+        }
+        found.sort();
+        found.dedup();
+        found
     }
-    for file in [ManagedFile::XrayConfig, ManagedFile::Hy2Config] {
-        let value: Value = serde_json::from_slice(&read(file)?)
-            .map_err(|_| crate::store::malformed(IoOp::ReadState))?;
-        collect(&value, false, &mut found);
-    }
-    found.sort();
-    found.dedup();
-    Ok(found)
 }
 
 /// The keys whose string values (or arrays of strings) are credentials in
@@ -109,23 +132,24 @@ pub(crate) const BUNDLE_VALIDATORS: [Validator; 4] = [
 
 /// Runs every validator on the staged generation in `dir`.
 pub(crate) fn validate(paths: &Paths, node: &dyn Node, dir: &Path) -> Result<(), AgentError> {
-    let secrets = secrets(dir)?;
+    let configs = Configs::read(dir)?;
+    let secrets = configs.secrets();
     let scratch = paths.validate_dir();
     ensure_dir(&scratch).map_err(|error| io_error(IoOp::WriteState, &error))?;
     let xray_copy = warn_copy(
-        dir,
-        ManagedFile::XrayConfig,
-        &scratch,
+        configs.xray,
+        scratch.join(ManagedFile::XrayConfig.file_name()),
         &["log", "loglevel"],
         "warning",
     )?;
     let hy2_copy = warn_copy(
-        dir,
-        ManagedFile::Hy2Config,
-        &scratch,
+        configs.hy2,
+        scratch.join(ManagedFile::Hy2Config.file_name()),
         &["log", "level"],
         "warn",
     )?;
+    let xray_arg = xray_copy.path().display().to_string();
+    let hy2_arg = hy2_copy.path().display().to_string();
     let geodata_dir = dir.join(GEOIP.dir).display().to_string();
     let nft_file = dir
         .join(ManagedFile::Nftables.file_name())
@@ -138,10 +162,10 @@ pub(crate) fn validate(paths: &Paths, node: &dyn Node, dir: &Path) -> Result<(),
     let run = |validator: Validator| match validator {
         Validator::Xray => node.run_program(
             &program(dir, XRAY),
-            &["run", "-test", "-c", &xray_copy],
+            &["run", "-test", "-c", &xray_arg],
             &[("XRAY_LOCATION_ASSET", &geodata_dir)],
         ),
-        Validator::Hy2 => node.run_program(&program(dir, HY2), &["check", "-c", &hy2_copy], &[]),
+        Validator::Hy2 => node.run_program(&program(dir, HY2), &["check", "-c", &hy2_arg], &[]),
         Validator::Nft => node.run(Tool::Nft, &["-c", "-f", &nft_file]),
         Validator::WgQuick => node.run(Tool::WgQuick, &["strip", &wg_file]),
     };
@@ -165,9 +189,9 @@ pub(crate) fn validate(paths: &Paths, node: &dyn Node, dir: &Path) -> Result<(),
             })
         }
     });
-    for copy in [&xray_copy, &hy2_copy] {
-        let _absent = fs::remove_file(copy);
-    }
+    // The copies hold the bundle's secrets: they go before the host
+    // validators run, and on any return before this, when dropped.
+    drop((xray_copy, hy2_copy));
     outcome?;
     crate::hostfiles::validate(
         paths,
@@ -177,22 +201,18 @@ pub(crate) fn validate(paths: &Paths, node: &dyn Node, dir: &Path) -> Result<(),
     )
 }
 
-/// A copy of a staged JSON configuration in `scratch` with the log level
-/// at `path` set to `level`, so the validator reports warnings it would
-/// otherwise keep quiet. Returns the copy's path.
+/// `config`, an engine's staged configuration, written to `copy` with the
+/// log level at `path` set to `level`, so that the validator reports
+/// warnings it would otherwise keep quiet. The copy is removed when
+/// dropped.
 fn warn_copy(
-    dir: &Path,
-    file: ManagedFile,
-    scratch: &Path,
+    mut config: Value,
+    copy: PathBuf,
     path: &[&str; 2],
     level: &str,
-) -> Result<String, AgentError> {
+) -> Result<Scratch, AgentError> {
     let malformed = || crate::store::malformed(IoOp::ReadState);
-    let mut value: Value = serde_json::from_slice(
-        &fs::read(dir.join(file.file_name())).map_err(|error| io_error(IoOp::ReadState, &error))?,
-    )
-    .map_err(|_| malformed())?;
-    let section = value
+    let section = config
         .as_object_mut()
         .ok_or_else(malformed)?
         .entry(path[0])
@@ -201,9 +221,6 @@ fn warn_copy(
         .as_object_mut()
         .ok_or_else(malformed)?
         .insert(path[1].to_owned(), Value::String(level.to_owned()));
-    let copy = scratch.join(file.file_name());
-    let bytes = serde_json::to_vec(&value).map_err(|_| malformed())?;
-    crate::store::write_atomic(&copy, &bytes, 0o600)
-        .map_err(|error| io_error(IoOp::WriteState, &error))?;
-    Ok(copy.display().to_string())
+    Scratch::write(copy, config.to_string().as_bytes())
+        .map_err(|error| io_error(IoOp::WriteState, &error))
 }

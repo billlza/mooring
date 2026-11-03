@@ -5,8 +5,11 @@
 //! a stand-in node whose account and key tools change the scratch files as
 //! Debian's would.
 
+mod faults;
+
 use std::cell::RefCell;
 use std::fs;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::rc::Rc;
 
@@ -16,7 +19,7 @@ use mooring_agent_proto::{
 };
 
 use super::serve::{ask, frame};
-use super::{FakeNode, failed, ok, own_ids, scratch};
+use super::{ENOENT, FakeNode, failed, ok, own_ids, scratch};
 use crate::blobs::digest_of;
 use crate::bootstrap::{Keys, bootstrap, revoke};
 use crate::host::Tool;
@@ -51,6 +54,12 @@ struct Faults {
     keygen_fails: bool,
     /// `sshd -t` warns.
     sshd_warns: bool,
+    /// `dpkg-query` cannot be started.
+    dpkg_unstartable: bool,
+    /// `apt-get` cannot be started.
+    apt_unstartable: bool,
+    /// `systemctl reload ssh.service` fails.
+    reload_fails: bool,
     /// Whether `authorized_keys` held the ops line when sshd was reloaded.
     keys_at_reload: Option<bool>,
 }
@@ -143,6 +152,9 @@ impl Host {
                         .map(|index| args[index + 1].to_owned())
                 };
                 Ok(match tool {
+                    Tool::DpkgQuery if faults.dpkg_unstartable => {
+                        return Err(io::Error::from_raw_os_error(ENOENT));
+                    }
                     Tool::DpkgQuery => {
                         let listed = if faults.missing_packages { 2 } else { 5 };
                         let text: String = args[2..2 + listed]
@@ -200,6 +212,10 @@ impl Host {
                         ok(b"")
                     }
                     Tool::SshKeygen if faults.keygen_fails => failed(b"ssh-keygen: no space\n"),
+                    // As OpenSSH's does, with no terminal to say yes on.
+                    Tool::SshKeygen if std::path::Path::new(&after("-f").unwrap()).exists() => {
+                        failed(b"ssh_host_ed25519_key.mooring already exists.\nOverwrite (y/n)? ")
+                    }
                     Tool::SshKeygen => {
                         let path = after("-f").unwrap();
                         fs::write(&path, "fresh private").unwrap();
@@ -212,20 +228,26 @@ impl Host {
                     Tool::Systemctl if args == ["reload", "ssh.service"] => {
                         let keys = fs::read_to_string(paths.root_authorized_keys()).unwrap();
                         faults.keys_at_reload = Some(keys.contains(OPS_KEY));
-                        ok(b"")
+                        if faults.reload_fails {
+                            failed(b"Job for ssh.service failed.\n")
+                        } else {
+                            ok(b"")
+                        }
                     }
                     _ => ok(b""),
                 })
             }),
         )
         .programs(Box::new(move |_, args| {
-            Ok(
-                if apt.borrow().apt_fails && args.first() == Some(&"install") {
-                    failed(b"E: Unable to locate package wireguard-tools\n")
-                } else {
-                    ok(b"")
-                },
-            )
+            let faults = apt.borrow();
+            if faults.apt_unstartable {
+                return Err(io::Error::from_raw_os_error(ENOENT));
+            }
+            Ok(if faults.apt_fails && args.first() == Some(&"install") {
+                failed(b"E: Unable to locate package wireguard-tools\n")
+            } else {
+                ok(b"")
+            })
         }))
     }
 
@@ -439,16 +461,13 @@ fn bootstrap_refuses_an_agent_that_is_not_the_one_expected() {
     let node = host.node();
     let (bootstrap_key, ops_key) = keys();
     let expected = Sha256Hex::from_bytes([7; 32]);
+    let request = LineRequest::Bootstrap {
+        expected_agent_sha: expected,
+        bootstrap_pubkey: bootstrap_key,
+        ops_pubkey: ops_key,
+    };
     assert_eq!(
-        bootstrap(
-            &host.paths,
-            &node,
-            expected,
-            Keys {
-                bootstrap: &bootstrap_key,
-                ops: &ops_key,
-            },
-        ),
+        ask(&host.paths, &node, Role::Bootstrap, frame(&request)),
         Err(AgentError::AgentShaMismatch {
             expected,
             actual: host.sha,

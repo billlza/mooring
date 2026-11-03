@@ -73,17 +73,19 @@ use std::process::ExitCode;
 
 #[cfg(target_os = "linux")]
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut stderr = io::stderr().lock();
-    match agent::parse(&args) {
-        Ok(invocation) => agent::run(
-            invocation,
-            &paths::Paths::system(),
-            &host::RealNode,
-            &mut stderr,
-        ),
-        Err(usage) => fail(&mut stderr, &usage),
-    }
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let ssh_connection = std::env::var("SSH_CONNECTION").ok();
+    agent::entry(
+        &args,
+        &paths::Paths::system(),
+        &host::RealNode,
+        &mut agent::Process {
+            ssh_connection: ssh_connection.as_deref(),
+            stdin: &mut io::stdin().lock(),
+            stdout: &mut io::stdout().lock(),
+            stderr: &mut io::stderr().lock(),
+        },
+    )
 }
 
 /// Writes `message` to stderr and returns exit status 1.

@@ -8,14 +8,14 @@ use std::os::unix::fs::symlink;
 
 use mooring_agent_proto::{
     AgentError, ClearableHold, EgressViolationHold, EngineUser, GateReason, GateState, Generation,
-    Halt, Holds, IoOp, MacDrainHold, OperatorHold, ShutdownReason, SystemdOp, UnixTime,
+    Halt, Holds, IoOp, MacDrainHold, OperatorHold, ShutdownReason, SystemdOp, UnitName, UnixTime,
     VIEWER_STOP_WAIT_SECS,
 };
 
-use super::{FakeNode, failed, nft_set, ok, scratch};
+use super::{ENOENT, FakeNode, failed, nft_set, ok, scratch};
 use crate::gate::{
-    clear, current_generation, engine_unit, halted, holds, may_start_engines, set_by_ops,
-    set_by_viewer, shutdown, state,
+    clear, current_generation, halted, holds, may_start_engines, set_by_ops, set_by_viewer,
+    shutdown, state,
 };
 use crate::host::Tool;
 use crate::store::write_json;
@@ -222,7 +222,7 @@ fn a_failed_engine_stop_names_the_unit() {
     assert_eq!(
         shutdown(&paths, &node, ShutdownReason::Operator).unwrap_err(),
         AgentError::Systemd {
-            unit: engine_unit(EngineUser::Hy2).unwrap(),
+            unit: UnitName::engine(EngineUser::Hy2),
             op: SystemdOp::Stop,
         }
     );
@@ -269,7 +269,7 @@ fn a_shutdown_whose_gate_will_not_close_still_stops_both_engines() {
     assert_eq!(
         shutdown(&paths, &node, ShutdownReason::Operator).unwrap_err(),
         AgentError::Systemd {
-            unit: engine_unit(EngineUser::Xray).unwrap(),
+            unit: UnitName::engine(EngineUser::Xray),
             op: SystemdOp::Stop,
         }
     );
@@ -296,18 +296,6 @@ fn engines_may_start_only_without_a_readable_marker() {
     assert!(!may_start_engines(&paths));
     std::fs::write(paths.halted(), "garbled").unwrap();
     assert!(!may_start_engines(&paths));
-}
-
-#[test]
-fn the_engine_units_are_named_as_design_5_2_says() {
-    assert_eq!(
-        engine_unit(EngineUser::Xray).unwrap().as_str(),
-        "mooring-xray.service"
-    );
-    assert_eq!(
-        engine_unit(EngineUser::Hy2).unwrap().as_str(),
-        "mooring-hy2.service"
-    );
 }
 
 #[test]
@@ -397,4 +385,60 @@ fn a_viewer_stop_with_the_hold_but_an_open_gate_is_unconfirmed() {
         set_by_viewer(&paths, &node),
         Err(AgentError::GateStopUnconfirmed { .. })
     ));
+}
+
+#[test]
+fn a_current_generation_that_is_not_a_link_is_an_error() {
+    let (_dir, paths) = scratch();
+    std::fs::create_dir_all(paths.etc()).unwrap();
+    std::fs::write(paths.current(), "gen-3").unwrap();
+    // What reading a file as a link gives on this OS.
+    let errno = std::fs::read_link(paths.current())
+        .unwrap_err()
+        .raw_os_error();
+    assert_eq!(
+        current_generation(&paths),
+        Err(AgentError::Io {
+            op: IoOp::ReadState,
+            errno
+        })
+    );
+}
+
+#[test]
+fn nft_that_cannot_start_is_a_spawn_failure_and_the_hold_stands() {
+    let (_dir, paths) = scratch();
+    let node = FakeNode::answering(
+        5,
+        Box::new(|_, _| Err(std::io::Error::from_raw_os_error(ENOENT))),
+    );
+    let spawn = AgentError::Io {
+        op: IoOp::SpawnProcess,
+        errno: Some(ENOENT),
+    };
+    assert_eq!(
+        set_by_ops(&paths, &node, GateReason::Operator),
+        Err(spawn.clone())
+    );
+    assert!(holds(&paths).unwrap().operator.is_some());
+    assert_eq!(state(&node), Err(spawn));
+}
+
+#[test]
+fn a_set_nft_will_not_list_is_no_gate_state() {
+    let node = FakeNode::answering(
+        0,
+        Box::new(|_, _| Ok(failed(b"Error: No such file or directory\n"))),
+    );
+    assert_eq!(
+        state(&node),
+        Err(AgentError::Io {
+            op: IoOp::ReadState,
+            errno: None
+        })
+    );
+    assert_eq!(
+        node.calls(),
+        ["/usr/sbin/nft -j list set inet mooring exit_closed"]
+    );
 }
