@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Reading `state.json`: missing, corrupt and newer documents (design §7,
-//! §14 `StateCorrupt`, `DowngradeRefused`).
+//! Reading `state.json`: missing, unreadable, corrupt and newer documents
+//! (design §7, §14 `StateCorrupt`, `DowngradeRefused`).
 
 use std::convert::Infallible;
 use std::fs;
+use std::io;
 
 use super::builders::{applied_record, deployment_init, empty_store, initialised};
-use super::{state_bytes, store_error};
+use super::{assert_io_error, state_bytes, store_error};
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 use crate::store::Store;
 
@@ -41,6 +42,22 @@ fn a_missing_state_is_not_initialised() {
     assert_every_operation_fails(&store, StoreErrorKind::NotInitialized);
     assert!(
         matches!(store.load().unwrap_err(), StoreError::NotInitialized { path } if path == store.state_path())
+    );
+}
+
+/// A state file that cannot be read is an error naming the read, never
+/// `NotInitialized`, which would hide the fault behind the advice to
+/// initialise the store; every operation reads it first, and fails so.
+#[test]
+fn a_state_file_that_cannot_be_read_is_an_error_not_uninitialised() {
+    let (_dir, store) = empty_store();
+    fs::create_dir(store.state_path()).unwrap();
+    assert_every_operation_fails(&store, StoreErrorKind::Io);
+    assert_io_error(
+        &store.load().unwrap_err(),
+        IoOp::ReadState,
+        &store.state_path(),
+        io::ErrorKind::IsADirectory,
     );
 }
 

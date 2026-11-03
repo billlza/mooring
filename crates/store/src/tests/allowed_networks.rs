@@ -7,6 +7,7 @@
 //! as on the reader's.
 
 use std::fs;
+use std::io;
 use std::net::Ipv4Addr;
 
 use mooring_model::ids::LocalLabel;
@@ -14,7 +15,7 @@ use mooring_model::iface::{MacAddr, RouterIdentity};
 use mooring_model::own_network::{OwnNetwork, OwnNetworkKind, OwnNetworks};
 use mooring_model::time::UnixTime;
 
-use super::mode_of;
+use super::{assert_io_error, mode_of};
 use crate::allowed_networks::{
     ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
     allowed_networks_fit, declare_allowed_network, read_allowed_networks, revoke_allowed_network,
@@ -311,17 +312,10 @@ fn a_corrupt_declarations_file_is_typed_and_read_as_nothing() {
     // A directory in place of the file is an I/O failure, not corruption.
     fs::remove_file(&path).unwrap();
     fs::create_dir(&path).unwrap();
-    let error = read_allowed_networks(dir.path()).unwrap_err();
-    assert_eq!(error.kind(), StoreErrorKind::Io);
-    assert!(
-        matches!(&error, StoreError::Io { op: IoOp::ReadAllowedNetworks, path: found, .. } if found == &path),
-        "{error:?}"
-    );
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "failed to read the allowed-networks file at {}",
-            path.display()
-        )
+    assert_io_error(
+        &read_allowed_networks(dir.path()).unwrap_err(),
+        IoOp::ReadAllowedNetworks,
+        &path,
+        io::ErrorKind::IsADirectory,
     );
 }
