@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::path::Path;
+use std::time::Duration;
 
 use mooring_agent_proto::{
     AgentError, CertName, HttpProbe, HttpStatus, HttpVersion, IoOp, RedirectUrl, StderrTail,
@@ -25,6 +26,13 @@ use crate::store::io_error;
 
 /// The longest any one tool of the check may run.
 const TOOL_SECS: u64 = 10;
+
+/// How long after [`TOOL_SECS`] `timeout` kills a tool that is still there.
+const KILL_AFTER_SECS: u64 = 2;
+
+/// The longest one tool takes: `timeout` ends it after [`TOOL_SECS`] and
+/// kills it [`KILL_AFTER_SECS`] later.
+pub(super) const TOOL_BOUND: Duration = Duration::from_secs(TOOL_SECS + KILL_AFTER_SECS);
 
 /// `timeout`'s exit status when the time ran out.
 const TIMED_OUT: i32 = 124;
@@ -45,10 +53,12 @@ fn unavailable(tool: TargetTool, text: &[u8]) -> AgentError {
 }
 
 /// Runs `program` with `args` under `timeout`, which ends it after
-/// [`TOOL_SECS`] and kills it two seconds later if it is still there.
+/// [`TOOL_SECS`] and kills it [`KILL_AFTER_SECS`] later if it is still
+/// there.
 fn bounded(node: &dyn Node, program: &str, args: &[&str]) -> Result<ToolOutput, AgentError> {
+    let kill_after = format!("--kill-after={KILL_AFTER_SECS}");
     let secs = TOOL_SECS.to_string();
-    let mut all = vec!["--kill-after=2", secs.as_str(), program];
+    let mut all = vec![kill_after.as_str(), secs.as_str(), program];
     all.extend(args);
     node.run(Tool::Timeout, &all)
         .map_err(|error| io_error(IoOp::SpawnProcess, &error))

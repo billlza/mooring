@@ -9,7 +9,9 @@
 //! handshake, and times the target's answer: from the hello's last byte to
 //! the last byte of the server's first flight, which ends when the server
 //! goes quiet for [`IDLE`] waiting for the client's next flight. The
-//! flight's size counts every byte of it, record headers included.
+//! flight's size counts every byte of it, record headers included. The
+//! flight must end within [`DEADLINE`] of the hello, so one handshake
+//! takes at most [`SAMPLE_BOUND`].
 //!
 //! The hello offers no certificate compression, so a target that would
 //! compress its chain for a browser is measured at its larger size: the
@@ -32,8 +34,18 @@ const CONNECT: Duration = Duration::from_secs(3);
 /// this long.
 pub(crate) const IDLE: Duration = Duration::from_millis(300);
 
-/// How long the server may take to start answering.
+/// How long the server may take over its first flight, from the hello's
+/// last byte to the flight's: one that has not started by then, or is
+/// still coming, is no sample. A target that passes the 5 ms rule sends
+/// its flight within milliseconds; without the bound, a byte dripped out
+/// under every [`IDLE`] would hold a sample until the flight reached
+/// [`MAX_FLIGHT`], for hours.
 const DEADLINE: Duration = Duration::from_secs(3);
+
+/// The longest one handshake takes: the connection, then the flight
+/// within [`DEADLINE`] and the quiet that shows it ended, or for a target
+/// that sends nothing the first quiet past the deadline.
+pub(super) const SAMPLE_BOUND: Duration = CONNECT.saturating_add(DEADLINE).saturating_add(IDLE);
 
 /// The most of a flight read: far above REALITY's 16 KiB limit.
 const MAX_FLIGHT: usize = 64 * 1024;
@@ -128,8 +140,15 @@ pub(crate) fn sample(
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
+                let now = Instant::now();
+                if now.duration_since(sent) >= DEADLINE {
+                    return Err(format!(
+                        "the target was still sending its first flight {} s after the hello",
+                        DEADLINE.as_secs()
+                    ));
+                }
                 flight.extend_from_slice(&buffer[..read]);
-                last = Some(Instant::now());
+                last = Some(now);
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error)

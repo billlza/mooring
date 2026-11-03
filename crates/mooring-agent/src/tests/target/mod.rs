@@ -29,7 +29,7 @@ use super::{EEXIST, FakeNode, exited, scratch};
 use crate::blobs::{digest_of, put};
 use crate::paths::Paths;
 use crate::txn::stage::{XRAY, store_path};
-use world::{PING_TLS13, Server, flight, host, node_answering, serve, tls13};
+use world::{PING_TLS13, Server, closed_port, flight, host, node_answering, serve, tls13};
 
 /// Stores `bytes` as a blob and returns its digest.
 fn stored(paths: &Paths, bytes: &[u8]) -> Sha256Hex {
@@ -62,14 +62,6 @@ fn check_node(resolved: &'static [u8], ping: &'static str) -> FakeNode {
             exited(0, ping.as_bytes(), b"")
         }
     })
-}
-
-/// A port on 127.0.0.1 that nothing listens on, nor can: binding port 0
-/// takes another, so a connection to it always fails (refused on Linux, an
-/// address the system cannot assign on macOS), and no test running beside
-/// this one can take it, as it could a port freed for the purpose.
-const fn closed_port() -> u16 {
-    0
 }
 
 #[test]

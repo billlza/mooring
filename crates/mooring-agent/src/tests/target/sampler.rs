@@ -4,16 +4,17 @@
 //! the ClientHello it builds, the ServerHello that starts a flight, a
 //! sample timed to the flight's last byte and counting all of it, and the
 //! p95 by nearest rank; no sample from a target that refuses the
-//! connection, does not answer the hello, closes or resets it; and no
-//! connection at all without randomness.
+//! connection, does not answer the hello, closes or resets it, or is still
+//! sending its flight at the deadline; and no connection at all without
+//! randomness.
 
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
 
 use mooring_agent_proto::{AgentError, StderrTail, TargetTool};
 
-use super::world::{Server, flight, host, serve};
+use super::world::{Server, closed_port, flight, host, serve};
 use crate::target::sampler::{self, RANDOM_BYTES};
 use crate::tests::EACCES;
 
@@ -109,12 +110,21 @@ fn a_target_that_does_not_answer_a_hello_is_no_sample() {
         sampler::sample(closing, &host(), &random()),
         Err("the target closed without an answer".to_owned())
     );
-    let gone = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    let refused = sampler::sample(gone, &host(), &random()).unwrap_err();
+    let closed = SocketAddr::from((Ipv4Addr::LOCALHOST, closed_port()));
+    let refused = sampler::sample(closed, &host(), &random()).unwrap_err();
     assert!(refused.starts_with("connect:"), "{refused}");
+}
+
+#[test]
+fn a_flight_still_coming_at_the_deadline_is_no_sample() {
+    // A byte every 20 ms never leaves the 300 ms quiet that ends a
+    // flight; without a deadline the sampler would read 200 of them over
+    // 4 s, and a target dripping 64 KiB would hold it for hours.
+    let dripping = serve(Server::Drip(flight(0), Duration::from_millis(20), 200), 1);
+    assert_eq!(
+        sampler::sample(dripping, &host(), &random()),
+        Err("the target was still sending its first flight 3 s after the hello".to_owned())
+    );
 }
 
 #[test]

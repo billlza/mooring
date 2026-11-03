@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::net::Ipv4Addr;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +66,13 @@ pub struct TlsSession {
 
 /// The number of handshakes `TargetCheck` times for the p95 figure.
 pub const TARGET_HANDSHAKE_SAMPLES: u8 = 20;
+
+/// The longest a node takes to answer `TargetCheck` (design §11.7): its
+/// tools each end under `timeout`, and each of the
+/// [`TARGET_HANDSHAKE_SAMPLES`] handshakes by its own deadline. The
+/// agent's build holds its collectors to this bound, so the operator
+/// waiting on `node target check` waits for the node at most this long.
+pub const TARGET_CHECK_BOUND: Duration = Duration::from_secs(180);
 
 closed_enum! {
     /// A negotiated TLS version (`xray tls ping` offers 1.2 and 1.3 only).
