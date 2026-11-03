@@ -4,11 +4,12 @@
 //! stand-in host of [`world`]. This file holds bootstrap's whole path: the
 //! host set up step by step in order and its new key returned, a second
 //! run that only converges and keeps the key, an agent that is not the
-//! one expected refused before anything is done, and an agent link that
-//! cannot be made stopping it before the keys, so that a retry goes
-//! through; and both requests served to their roles. The packages, the
-//! accounts, the layout, the host profile and the SSH steps have files of
-//! their own, as does revoke.
+//! one expected, or that cannot read itself, refused before anything is
+//! done, and an agent that cannot be installed, or whose link cannot be
+//! made, stopping it before the keys, so that a retry goes through; and
+//! both requests served to their roles. The packages, the accounts, the
+//! layout, the host profile and the SSH steps have files of their own, as
+//! does revoke.
 
 mod accounts;
 mod host_profile;
@@ -25,8 +26,8 @@ use mooring_agent_proto::{
     SshEd25519Key,
 };
 
-use super::EEXIST;
 use super::serve::{ask, frame};
+use super::{EEXIST, ENOENT, occupy_temporary};
 use crate::store::read_json;
 use world::{BOOTSTRAP_KEY, Host, NEW_HOST_KEY, OPS_KEY, keys, mode, new_key};
 
@@ -236,6 +237,62 @@ fn bootstrap_refuses_an_agent_that_is_not_the_one_expected() {
     );
     assert!(node.calls().is_empty());
     assert!(!host.paths.var_lib().exists());
+}
+
+/// An agent that cannot read its own executable cannot know its digest:
+/// bootstrap stops before anything is done.
+#[test]
+fn an_agent_that_cannot_read_itself_stops_bootstrap_before_anything() {
+    let host = Host::new();
+    fs::remove_file(host.paths.own_executable()).unwrap();
+    let node = host.node();
+    assert_eq!(
+        host.bootstrap(&node),
+        Err(AgentError::Io {
+            op: IoOp::ReadBlob,
+            errno: Some(ENOENT)
+        })
+    );
+    assert!(node.calls().is_empty());
+    assert!(!host.paths.var_lib().exists());
+}
+
+/// An agent that cannot be installed stops bootstrap before its link,
+/// the host profile and the keys; a retry goes through.
+#[test]
+fn an_agent_that_cannot_be_installed_stops_bootstrap_before_its_link() {
+    let host = Host::new();
+    let installed = host.paths.agent_dir().join(host.sha.to_string());
+    let blocker = occupy_temporary(&installed);
+    let keys = fs::read_to_string(host.paths.root_authorized_keys()).unwrap();
+    let node = host.node();
+    assert_eq!(
+        host.bootstrap(&node),
+        Err(AgentError::Io {
+            op: IoOp::WriteBlob,
+            errno: Some(EEXIST)
+        })
+    );
+    assert!(!installed.exists());
+    assert!(
+        fs::symlink_metadata(host.paths.agent_current()).is_err(),
+        "no link"
+    );
+    assert!(!host.paths.host_profile().exists(), "no host profile");
+    assert!(
+        node.calls()
+            .iter()
+            .all(|call| !call.contains("sshd") && !call.contains("systemctl")),
+        "{:#?}",
+        node.calls()
+    );
+    assert_eq!(
+        fs::read_to_string(host.paths.root_authorized_keys()).unwrap(),
+        keys,
+        "the keys as the user-data left them"
+    );
+    fs::remove_dir(&blocker).unwrap();
+    assert_eq!(host.bootstrap(&host.node()), Ok(new_key()), "a retry");
 }
 
 #[test]

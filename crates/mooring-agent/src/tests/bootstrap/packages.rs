@@ -9,6 +9,7 @@
 use mooring_agent_proto::{AgentError, IoOp};
 
 use super::world::Host;
+use crate::host::Tool;
 use crate::tests::ENOENT;
 
 #[test]
@@ -65,7 +66,7 @@ fn a_package_tool_that_cannot_start_stops_bootstrap_at_once() {
         errno: Some(ENOENT),
     };
     let host = Host::new();
-    host.faults.borrow_mut().dpkg_unstartable = true;
+    host.faults.borrow_mut().unstartable = Some(Tool::DpkgQuery);
     let node = host.node();
     assert_eq!(host.bootstrap(&node), Err(spawn.clone()));
     assert_eq!(node.calls().len(), 1);
@@ -73,7 +74,7 @@ fn a_package_tool_that_cannot_start_stops_bootstrap_at_once() {
     {
         let mut faults = host.faults.borrow_mut();
         faults.missing_packages = true;
-        faults.apt_unstartable = true;
+        faults.unstartable = Some(Tool::AptGet);
     }
     let node = host.node();
     assert_eq!(host.bootstrap(&node), Err(spawn));
