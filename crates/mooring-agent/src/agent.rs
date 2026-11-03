@@ -197,7 +197,7 @@ pub(crate) fn run(
             }
         }
         Invocation::Watch => watch::run(paths, node, stderr),
-        Invocation::TargetWatch => match target::watch(paths, node) {
+        Invocation::TargetWatch => match target::hourly::watch(paths, node) {
             Ok(_) => ExitCode::SUCCESS,
             Err(error) => fail(stderr, &format!("the target check failed: {error}")),
         },

@@ -1,71 +1,60 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `Bootstrap` and `RevokeBootstrap` where a step fails: a tool that cannot
-//! start or refuses, a file that cannot be written or read back. Each is
-//! reported as its step or as the I/O failure it is, before anything that
-//! would lock the Mac out, so that a retry goes through.
+//! Bootstrap's SSH steps (design §13.2): root's `authorized_keys`, the
+//! injected host key replaced by a fresh one (the fresh key an earlier
+//! attempt left removed first, and every other host key judged by its
+//! name's bytes), sshd's reload, and the record of the new key. A failure
+//! stops bootstrap: keys that cannot be written stop it before the host
+//! key; a host key that cannot be made leaves the old one and sshd as
+//! they were, with the keys restricted; a stale key that cannot be
+//! removed stops it before a new one is made; an sshd that will not
+//! reload leaves the new key unrecorded; and a host key that cannot be
+//! read back is refused. After a host key that cannot be made, and after
+//! an sshd that will not reload, a retry goes through.
 
 use std::fs;
 
-use mooring_agent_proto::{
-    AgentError, BootstrapStep, HostProfile, IoOp, Role, SshEd25519Key, StderrTail,
-};
+use mooring_agent_proto::{AgentError, BootstrapStep, IoOp, Role, SshEd25519Key, StderrTail};
 
-use super::{BOOTSTRAP_KEY, Host, NEW_HOST_KEY, OPS_KEY, write};
-use crate::bootstrap::revoke;
+use super::world::{Host, NEW_HOST_KEY, new_key, write};
 use crate::store::{malformed, read_json};
-use crate::tests::{EEXIST, EISDIR, ENOENT, ENOTDIR, bootstrapped, occupy_temporary};
-
-fn new_key() -> SshEd25519Key {
-    SshEd25519Key::new(NEW_HOST_KEY).unwrap()
-}
+use crate::tests::{EEXIST, EISDIR};
 
 #[test]
-fn a_package_tool_that_cannot_start_stops_bootstrap_at_once() {
-    let spawn = AgentError::Io {
-        op: IoOp::SpawnProcess,
-        errno: Some(ENOENT),
-    };
+fn a_host_key_failure_leaves_the_keys_restricted_and_sshd_as_it_was() {
     let host = Host::new();
-    host.faults.borrow_mut().dpkg_unstartable = true;
+    host.faults.borrow_mut().keygen_fails = true;
     let node = host.node();
-    assert_eq!(host.bootstrap(&node), Err(spawn.clone()));
-    assert_eq!(node.calls().len(), 1);
-    let host = Host::new();
-    {
-        let mut faults = host.faults.borrow_mut();
-        faults.missing_packages = true;
-        faults.apt_unstartable = true;
-    }
-    let node = host.node();
-    assert_eq!(host.bootstrap(&node), Err(spawn));
-    assert_eq!(node.calls().len(), 2, "dpkg-query, then apt-get update");
-    assert!(!host.paths.var_lib().exists());
-}
-
-#[test]
-fn an_agent_link_that_cannot_be_made_stops_bootstrap_before_the_keys() {
-    let host = Host::new();
-    // The link's temporary name is taken.
-    let link = host.paths.agent_current();
-    let blocker = link.with_extension(format!("swap.{}", std::process::id()));
-    fs::create_dir_all(&blocker).unwrap();
+    assert!(matches!(
+        host.bootstrap(&node),
+        Err(AgentError::Bootstrap {
+            step: BootstrapStep::HostKey,
+            ..
+        })
+    ));
+    // The bootstrap key can run the forced command again: a retry works.
     let keys = fs::read_to_string(host.paths.root_authorized_keys()).unwrap();
+    assert!(keys.starts_with(Role::Bootstrap.authorized_keys_options()));
+    assert!(host.paths.agent_current().exists());
+    assert_eq!(
+        fs::read_to_string(host.paths.ssh_host_key()).unwrap(),
+        "injected private"
+    );
+    assert!(
+        node.calls()
+            .iter()
+            .all(|call| !call.contains("reload ssh.service"))
+    );
+    assert_eq!(
+        read_json::<SshEd25519Key>(&host.paths.host_key_record()),
+        Ok(None)
+    );
+    // The retry replaces the key.
+    host.faults.borrow_mut().keygen_fails = false;
     assert_eq!(
         host.bootstrap(&host.node()),
-        Err(AgentError::Io {
-            op: IoOp::WriteState,
-            errno: Some(EEXIST)
-        })
+        Ok(SshEd25519Key::new(NEW_HOST_KEY).unwrap())
     );
-    assert!(fs::symlink_metadata(&link).is_err(), "no link");
-    assert_eq!(
-        fs::read_to_string(host.paths.root_authorized_keys()).unwrap(),
-        keys,
-        "the keys as the user-data left them"
-    );
-    fs::remove_dir(&blocker).unwrap();
-    assert_eq!(host.bootstrap(&host.node()), Ok(new_key()), "a retry");
 }
 
 #[test]
@@ -182,53 +171,6 @@ fn a_host_key_that_cannot_be_read_back_is_refused() {
     fs::create_dir(&public).unwrap();
     assert_eq!(
         host.bootstrap(&host.node()),
-        Err(AgentError::Io {
-            op: IoOp::ReadState,
-            errno: Some(EISDIR)
-        })
-    );
-}
-
-#[test]
-fn a_layout_directory_under_a_file_is_a_state_write() {
-    let host = Host::new();
-    bootstrapped(&host.paths);
-    // A file stands where `/var/lib` belongs.
-    fs::remove_dir_all(host.paths.at("/var/lib")).unwrap();
-    write(&host.paths, "/var/lib", "not a directory");
-    assert_eq!(
-        crate::layout::converge(&host.paths, &HostProfile::CURRENT),
-        Err(AgentError::Io {
-            op: IoOp::WriteState,
-            errno: Some(ENOTDIR)
-        })
-    );
-}
-
-#[test]
-fn revoke_reports_keys_it_cannot_rewrite_or_read() {
-    let host = Host::new();
-    let keys = host.paths.root_authorized_keys();
-    let both = format!(
-        "{} {BOOTSTRAP_KEY}\n{} {OPS_KEY}\n",
-        Role::Bootstrap.authorized_keys_options(),
-        Role::Ops.authorized_keys_options()
-    );
-    fs::write(&keys, &both).unwrap();
-    let blocker = occupy_temporary(&keys);
-    assert_eq!(
-        revoke(&host.paths),
-        Err(AgentError::Io {
-            op: IoOp::WriteState,
-            errno: Some(EEXIST)
-        })
-    );
-    assert_eq!(fs::read_to_string(&keys).unwrap(), both, "both lines kept");
-    fs::remove_dir(&blocker).unwrap();
-    fs::remove_file(&keys).unwrap();
-    fs::create_dir(&keys).unwrap();
-    assert_eq!(
-        revoke(&host.paths),
         Err(AgentError::Io {
             op: IoOp::ReadState,
             errno: Some(EISDIR)

@@ -178,7 +178,7 @@ fn rejected_flows_raise_exit_flow_cap_hit_with_the_count() {
 
 #[test]
 fn the_hourly_target_check_raises_target_degraded_for_the_configured_target_only() {
-    use crate::target::TargetReading;
+    use crate::target::hourly::TargetReading;
     let world = World::new();
     let reading = |ipv4: &str, degraded: bool| TargetReading {
         at: UnixTime::from_secs(OCT_8),

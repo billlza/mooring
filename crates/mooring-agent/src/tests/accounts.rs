@@ -3,7 +3,8 @@
 //! The profile's accounts as `/etc/passwd` and `/etc/group` say: a
 //! database that cannot be read, or holds a line of another shape, is an
 //! error, never an account that is missing; and an account the tools do
-//! not correct stops `Bootstrap` at its step.
+//! not correct stops `Bootstrap` at its step. The step within `Bootstrap`,
+//! on its stand-in host, is tested in `tests::bootstrap::accounts`.
 
 use std::fs;
 

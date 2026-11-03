@@ -164,7 +164,7 @@ impl Watch {
         };
         let installed = match &config {
             Some(config) => Some(Installed {
-                target_degraded: crate::target::degraded(paths, &config.target)?,
+                target_degraded: crate::target::hourly::degraded(paths, &config.target)?,
             }),
             None => None,
         };
