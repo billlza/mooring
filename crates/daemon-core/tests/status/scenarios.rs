@@ -31,7 +31,7 @@ use mooring_daemon_core::router::{
     RouterSettings, RouterStatus, RouterStatusParts, RouterUnavailableReason, RouterWifi, Rsrp,
     Rsrq, Rssi, Sinr, ThermalState, WebAppVersion, WifiApStatus, WwanCounters,
 };
-use mooring_daemon_core::snapshot::{self, NodePoll, SimTotals, StatusInputs};
+use mooring_daemon_core::snapshot::{self, Ledgers, NodePoll, SimTotals, StatusInputs};
 use mooring_daemon_core::status::{
     AgentUnreachable, CarrierCheck, DegradedReason, DownReason, EgressFacts, EngineExit,
     EngineProcess, ExitSection, ExitState, InChainOutcome, InChainResult, Latch, LinkState,
@@ -108,7 +108,7 @@ fn assemble(inputs: Inputs) -> MacStatusV1 {
         },
         router: inputs.router,
         capacity: inputs.capacity,
-        ledgers: &inputs.ledgers,
+        ledgers: Ledgers::Pulled(&inputs.ledgers),
         through: inputs.through,
         polls: &polls,
         unreachable: &inputs.unreachable,

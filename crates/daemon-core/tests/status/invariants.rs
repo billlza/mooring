@@ -136,19 +136,24 @@ fn user_rows_carry_usage_exactly_when_the_view_is_a_report() {
         MacStatusV1::new(parts),
         Err(StatusError::UsageMismatch { user })
     );
-    let mut parts = serving();
-    parts.usage = UsageView::Unavailable {
-        reason: UsageErrorKind::NotCoveredThrough,
-    };
-    let first = parts.users.keys().next().unwrap().clone();
-    assert_eq!(
-        MacStatusV1::new(parts.clone()),
-        Err(StatusError::UsageMismatch { user: first })
-    );
-    for row in parts.users.values_mut() {
-        row.usage = None;
+    for view in [
+        UsageView::Unavailable {
+            reason: UsageErrorKind::NotCoveredThrough,
+        },
+        UsageView::NotPulled,
+    ] {
+        let mut parts = serving();
+        parts.usage = view;
+        let first = parts.users.keys().next().unwrap().clone();
+        assert_eq!(
+            MacStatusV1::new(parts.clone()),
+            Err(StatusError::UsageMismatch { user: first })
+        );
+        for row in parts.users.values_mut() {
+            row.usage = None;
+        }
+        assert!(MacStatusV1::new(parts).is_ok());
     }
-    assert!(MacStatusV1::new(parts).is_ok());
 }
 
 #[test]

@@ -97,7 +97,7 @@ import Testing
         try distinct(DownReason.self, "down_reason", cases: 19)
         try distinct(ProcessEnd.self, "process_end", cases: 2)
         try distinct(ForecastView.self, "forecast_view", cases: 2)
-        try distinct(UsageView.self, "usage_view", cases: 2)
+        try distinct(UsageView.self, "usage_view", cases: 3)
         try distinct(InChainOutcome.self, "in_chain_outcome", cases: 3)
         try distinct(NodeAgentState.self, "node_agent_state", cases: 3)
         try distinct(AlertCondition.self, "alert_condition", cases: 39)
@@ -115,6 +115,12 @@ import Testing
         try distinct(StopPolicy.self, "stop_policy", cases: 2)
         try distinct(WatchError.self, "watch_error", cases: 11)
         try distinct(EngineRun.self, "engine_run", cases: 2)
+    }
+
+    /// The usage view's third value, the bare `not_pulled` string, reads as
+    /// its own case rather than as unavailable.
+    @Test func theUsageViewReadsNotPulledAsItsOwnCase() throws {
+        #expect(try decode(UsageView.self, "usage_view").last == .notPulled)
     }
 
     /// `key`'s list decodes as `cases` different values.

@@ -14,6 +14,7 @@ use mooring_daemon_core::MacStatusV1;
 use mooring_daemon_core::alert::{AlertNotice, NoticeEvent};
 use mooring_daemon_core::notify::{alert_message, digest_message};
 use mooring_daemon_core::router::{CarrierName, RadioState, RouterReading, RouterStatus};
+use mooring_daemon_core::status::UsageView;
 use mooring_model::MacAddr;
 use mooring_model::sim::{PlanLine, PlanLineKind, SimThresholds, StopPolicy};
 use serde_json::Value;
@@ -93,6 +94,20 @@ fn the_down_digest_marks_a_lower_bound_and_what_is_unavailable() {
             "Nodes 1: 0 behind, 0 unreachable",
         ]
     );
+}
+
+/// While the daemon pulls no ledger, the digest says the usage is not
+/// read, never zero.
+#[test]
+fn a_digest_without_pulled_usage_says_it_is_not_read() {
+    let mut parts = scenario("serving").into_parts();
+    parts.usage = UsageView::NotPulled;
+    for row in parts.users.values_mut() {
+        row.usage = None;
+    }
+    let message = digest_message(&MacStatusV1::new(parts).unwrap()).unwrap();
+    let lines: Vec<&str> = message.body.as_str().lines().collect();
+    assert_eq!(lines[4], "Served this cycle not read");
 }
 
 /// Under `AcceptDeprioritisation` there is no hard stop: the digest's SIM

@@ -46,13 +46,19 @@ struct UsersView: View {
                     }
                     .width(min: 60, ideal: 80)
                     TableColumn("This cycle") { row in
-                        Text(figure(row.row.usage?.cycle))
+                        Text(cycleFigure(row))
                     }
                     .width(min: 130, ideal: 170)
                 }
+                // On macOS 26 and 27 this table drew its first row under its
+                // column header, the Tahoe NSTableView regression for a table
+                // that does not fill its enclosing view from top to bottom
+                // (Sarah Reichelt via mjtsai.com, 2026-02-03); the point of
+                // space above is the workaround she found.
+                .padding(.top, 1)
                 .inspector(isPresented: inspectorShown) {
                     if let row = rows.first(where: { $0.id == selection }) {
-                        UserDetail(row: row)
+                        UserDetail(row: row, usageNotPulled: usageNotPulled)
                             .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
                     }
                 }
@@ -62,6 +68,17 @@ struct UsersView: View {
 
     private var rows: [UserListRow] {
         status.sortedUsers.map { UserListRow(id: $0.id, row: $0.row) }
+    }
+
+    /// Whether the daemon pulled no usage, so no figure is read.
+    private var usageNotPulled: Bool {
+        if case .notPulled = status.usage { true } else { false }
+    }
+
+    /// The row's bytes this cycle, or that none were read or none are
+    /// available.
+    private func cycleFigure(_ row: UserListRow) -> String {
+        usageNotPulled ? String(localized: "not read") : figure(row.row.usage?.cycle)
     }
 
     /// The inspector shows the selected user, and closing it clears the
@@ -76,19 +93,26 @@ struct UsersView: View {
     @ViewBuilder private var usageBanner: some View {
         switch status.usage {
         case .report(let periods):
-            Text("Usage through \(periods.through.text), cycle from \(periods.cycle.start.display).")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
+            caption(Text("Usage through \(periods.through.text), cycle from \(periods.cycle.start.display)."))
         case .unavailable(let reason):
             Label("Usage unavailable: \(reason.text).", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
+        case .notPulled:
+            caption(Text("Usage is not read by this build yet; status and activity are live."))
         }
+    }
+
+    /// A line of secondary text above the table.
+    private func caption(_ text: Text) -> some View {
+        text
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
     }
 }
 
@@ -109,6 +133,9 @@ func figure(_ traffic: Traffic?) -> String {
 /// One user's figures in full.
 struct UserDetail: View {
     let row: UserListRow
+    /// Whether the daemon pulled no usage, so a quota's usage is not read
+    /// rather than unavailable.
+    let usageNotPulled: Bool
 
     var body: some View {
         Form {
@@ -146,10 +173,19 @@ struct UserDetail: View {
                 }
             }
             Section("Limits") {
-                LabeledContent("Quota", value: row.row.quota.text)
+                LabeledContent("Quota", value: quotaText)
                 LabeledContent("Expiry", value: row.row.expiry.text)
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// The quota, which with no usage pulled reads as not read rather than
+    /// unavailable.
+    private var quotaText: String {
+        if usageNotPulled, case .usageUnavailable(let quota) = row.row.quota {
+            return String(localized: "Quota \(bytes(quota)); usage not read")
+        }
+        return row.row.quota.text
     }
 }

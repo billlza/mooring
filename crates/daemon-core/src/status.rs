@@ -536,7 +536,7 @@ pub struct SimMeterStatus {
     pub forecast: ForecastView,
 }
 
-/// The users' usage figures, or why there are none.
+/// The users' usage figures, why there are none, or that none were pulled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum UsageView {
@@ -550,6 +550,10 @@ pub enum UsageView {
         /// Why.
         reason: UsageErrorKind,
     },
+    /// No ledger was pulled from any node, so no user row carries usage:
+    /// this build does not read the nodes' `UsageSeries` (design §15.2).
+    /// M5's pull removes this variant.
+    NotPulled,
 }
 
 /// One user.

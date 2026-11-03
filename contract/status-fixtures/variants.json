@@ -249,7 +249,8 @@
       "unavailable": {
         "reason": "MissingLedger"
       }
-    }
+    },
+    "not_pulled"
   ],
   "in_chain_outcome": [
     "verified",

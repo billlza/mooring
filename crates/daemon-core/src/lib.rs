@@ -104,6 +104,6 @@ pub use period::{BillingCycle, UsagePeriods};
 pub use policy::{ExpiryState, PolicyAction, QuotaState, UserAction};
 pub use radio_history::{RadioHistory, RadioSample};
 pub use router::{RouterReading, RouterStatus};
-pub use snapshot::{NodePoll, SimTotals, SnapshotError, StatusInputs, assemble};
+pub use snapshot::{Ledgers, NodePoll, SimTotals, SnapshotError, StatusInputs, assemble};
 pub use status::{MAC_STATUS_VERSION, MacStatusParts, MacStatusV1};
 pub use usage::{NodeLedger, UsageReport, UserUsage};
