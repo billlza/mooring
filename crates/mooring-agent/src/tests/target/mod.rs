@@ -117,6 +117,11 @@ fn a_whole_check_installs_the_xray_and_measures_the_target() {
         );
     }
     let calls = node.calls();
+    assert_eq!(
+        calls.len(),
+        usize::try_from(crate::target::TOOLS).unwrap(),
+        "the tools the check's bound counts: {calls:#?}"
+    );
     assert!(
         calls[1].ends_with(&format!(
             "{} tls ping -ip 127.0.0.1 www.example.com",

@@ -2,21 +2,31 @@
 
 //! The handshake sampler (design §11.7) against servers on 127.0.0.1:
 //! the ClientHello it builds, the ServerHello that starts a flight, a
-//! sample timed to the flight's last byte and counting all of it, and the
-//! p95 by nearest rank; no sample from a target that refuses the
-//! connection, does not answer the hello, closes or resets it, or is still
-//! sending its flight at the deadline; and no connection at all without
-//! randomness.
+//! sample timed to the flight's last byte and counting all of it, however
+//! late or slowly a flight that ends by the deadline comes, and the p95
+//! by nearest rank; no sample from a target that refuses the connection,
+//! does not answer the hello by the deadline, closes or resets it, or is
+//! still sending its flight at the deadline; no connection at all without
+//! randomness; and the node's times, the design's. Tests that wait on a
+//! deadline give the sampler a short one.
 
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mooring_agent_proto::{AgentError, StderrTail, TargetTool};
 
 use super::world::{Server, closed_port, flight, host, serve};
-use crate::target::sampler::{self, RANDOM_BYTES};
+use crate::target::sampler::{self, NODE, RANDOM_BYTES, Timing};
 use crate::tests::EACCES;
+
+/// The node's timing with a 200 ms deadline and a quiet longer than it,
+/// so that only the deadline can end a flight.
+const SHORT_DEADLINE: Timing = Timing {
+    deadline: Duration::from_millis(200),
+    idle: Duration::from_secs(5),
+    ..NODE
+};
 
 fn random() -> [u8; RANDOM_BYTES] {
     let mut bytes = [0; RANDOM_BYTES];
@@ -89,42 +99,108 @@ fn a_sample_times_the_flight_to_its_last_byte_and_counts_all_of_it() {
         ),
         1,
     );
-    let sample = sampler::sample(address, &host(), &random()).unwrap();
+    let started = Instant::now();
+    let sample = sampler::sample(address, &host(), NODE, &random()).unwrap();
+    assert!(
+        started.elapsed() < NODE.deadline,
+        "the quiet, not the deadline, ended the flight"
+    );
     assert_eq!(usize::try_from(sample.bytes).unwrap(), whole.len());
     assert!(sample.micros >= 40_000, "{sample:?}");
     assert!(
-        u128::from(sample.micros) < sampler::IDLE.as_micros(),
+        u128::from(sample.micros) < NODE.idle.as_micros(),
         "the quiet after the flight is not counted: {sample:?}"
     );
 }
 
 #[test]
+fn a_flight_that_starts_after_a_quiet_but_by_the_deadline_is_measured() {
+    // The quiet ends a flight only once it began: before its first byte
+    // the target has until the deadline.
+    let late = Timing {
+        idle: Duration::from_millis(100),
+        deadline: Duration::from_secs(5),
+        ..NODE
+    };
+    let address = serve(
+        Server::Flight(Vec::new(), Duration::from_millis(300), flight(10)),
+        1,
+    );
+    let sample = sampler::sample(address, &host(), late, &random()).unwrap();
+    assert_eq!(usize::try_from(sample.bytes).unwrap(), flight(10).len());
+    assert!(sample.micros >= 300_000, "{sample:?}");
+}
+
+#[test]
+fn a_slow_flight_that_ends_by_the_deadline_is_measured_whole() {
+    // A byte every 20 ms for half a second, with a quiet of a second to
+    // end the flight and a deadline far past it.
+    let slow = Timing {
+        idle: Duration::from_secs(1),
+        deadline: Duration::from_secs(5),
+        ..NODE
+    };
+    let dripping = serve(Server::Drip(flight(0), Duration::from_millis(20), 25), 1);
+    let sample = sampler::sample(dripping, &host(), slow, &random()).unwrap();
+    assert_eq!(
+        usize::try_from(sample.bytes).unwrap(),
+        flight(0).len() + 25,
+        "{sample:?}"
+    );
+    assert!(sample.micros >= 400_000, "{sample:?}");
+}
+
+#[test]
 fn a_target_that_does_not_answer_a_hello_is_no_sample() {
     let silent = serve(Server::Silent, 1);
+    let started = Instant::now();
     assert_eq!(
-        sampler::sample(silent, &host(), &random()),
+        sampler::sample(silent, &host(), SHORT_DEADLINE, &random()),
         Err("the target sent nothing back".to_owned())
+    );
+    let waited = started.elapsed();
+    assert!(
+        waited >= SHORT_DEADLINE.deadline && waited < SHORT_DEADLINE.idle,
+        "it waited for the deadline, not a quiet: {waited:?}"
     );
     let closing = serve(Server::Close, 1);
     assert_eq!(
-        sampler::sample(closing, &host(), &random()),
+        sampler::sample(closing, &host(), SHORT_DEADLINE, &random()),
         Err("the target closed without an answer".to_owned())
     );
     let closed = SocketAddr::from((Ipv4Addr::LOCALHOST, closed_port()));
-    let refused = sampler::sample(closed, &host(), &random()).unwrap_err();
+    let refused = sampler::sample(closed, &host(), NODE, &random()).unwrap_err();
     assert!(refused.starts_with("connect:"), "{refused}");
 }
 
 #[test]
 fn a_flight_still_coming_at_the_deadline_is_no_sample() {
-    // A byte every 20 ms never leaves the 300 ms quiet that ends a
-    // flight; without a deadline the sampler would read 200 of them over
-    // 4 s, and a target dripping 64 KiB would hold it for hours.
-    let dripping = serve(Server::Drip(flight(0), Duration::from_millis(20), 200), 1);
+    // A byte every 20 ms for a second never leaves the quiet that ends a
+    // flight; without the deadline the sampler would read all of them,
+    // and a target dripping 64 KiB would hold it for hours.
+    let dripping = serve(Server::Drip(flight(0), Duration::from_millis(20), 50), 1);
+    let started = Instant::now();
     assert_eq!(
-        sampler::sample(dripping, &host(), &random()),
-        Err("the target was still sending its first flight 3 s after the hello".to_owned())
+        sampler::sample(dripping, &host(), SHORT_DEADLINE, &random()),
+        Err("the target's first flight had not ended 200 ms after the hello".to_owned())
     );
+    assert!(
+        started.elapsed() >= SHORT_DEADLINE.deadline,
+        "the flight was read until the deadline"
+    );
+}
+
+#[test]
+fn the_node_holds_a_handshake_to_the_designs_times() {
+    assert_eq!(
+        NODE,
+        Timing {
+            connect: Duration::from_secs(3),
+            idle: Duration::from_millis(300),
+            deadline: Duration::from_secs(3),
+        }
+    );
+    assert_eq!(NODE.bound(), Duration::from_millis(6300));
 }
 
 #[test]
@@ -142,7 +218,7 @@ fn randomness_the_sampler_cannot_have_ends_it_before_any_connection() {
     listener.set_nonblocking(true).unwrap();
     let denied = io::Error::from_raw_os_error(EACCES);
     assert_eq!(
-        sampler::measure(listener.local_addr().unwrap(), &host(), || {
+        sampler::measure(listener.local_addr().unwrap(), &host(), NODE, || {
             Err(io::Error::from_raw_os_error(EACCES))
         }),
         Err(AgentError::TargetFactsUnavailable {
@@ -167,7 +243,7 @@ fn a_target_that_resets_the_connection_is_no_sample() {
     let reset = probe.read(&mut [0; 16]).unwrap_err();
     assert_eq!(reset.kind(), io::ErrorKind::ConnectionReset);
     assert_eq!(
-        sampler::sample(serve(Server::Reset, 1), &host(), &random()),
+        sampler::sample(serve(Server::Reset, 1), &host(), NODE, &random()),
         Err(format!("receive: {reset}"))
     );
 }

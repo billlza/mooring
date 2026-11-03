@@ -9,8 +9,9 @@
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-use mooring_agent_proto::{LineRequest, RequestKind, Response, TargetHost};
+use mooring_agent_proto::{LineRequest, RequestKind, Response, TARGET_CHECK_BOUND, TargetHost};
 use mooring_model::dns::DnsName;
 use mooring_model::iface::BsdName;
 use mooring_model::node::NodeLifecycle;
@@ -24,10 +25,17 @@ use mooring_store::Store;
 use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::exit::confirm;
+use crate::node::dial::CONNECT_TIMEOUT;
 use crate::node::engines::Engines;
 use crate::node::session::{deployed_node, ops_session};
 use crate::node::{NodeError, upload_missing};
 use crate::state::{load, output, state_change};
+
+/// How long the Mac waits for a node's facts (design §13.2): what the node
+/// promises, `TARGET_CHECK_BOUND`, and the connection's own timeout to
+/// reach it. A node that takes longer, one whose agent was built before
+/// the promise included, is ended there as [`NodeError::PastDeadline`].
+const CHECK_WAIT: Duration = TARGET_CHECK_BOUND.saturating_add(CONNECT_TIMEOUT);
 
 /// What both target commands are given.
 #[derive(Debug, Clone)]
@@ -156,11 +164,15 @@ pub(crate) fn set(
 }
 
 /// Uploads the node's Xray if it lacks it, and has the node measure the
-/// host with it.
+/// host with it. The upload takes what the link needs; the measure is
+/// bounded on the node, so its session ends at [`CHECK_WAIT`].
 fn measure(
     env: &mut Env<'_>,
     args: &TargetArgs<'_>,
 ) -> Result<(StateV2, TargetFacts), CommandError> {
+    let host = TargetHost::new(args.host.as_str()).map_err(|_| LocalError::TargetHost {
+        host: args.host.clone(),
+    })?;
     let state = load(&Store::new(support_dir(env)?))?;
     let node = deployed_node(state.deployment.nodes(), args.node)?;
     let arch = match &node.lifecycle {
@@ -183,10 +195,8 @@ fn measure(
             .blob(sha256)?
             .ok_or(LocalError::EngineMissing { sha256: *sha256 })
     })?;
-    let host = TargetHost::new(args.host.as_str()).map_err(|_| LocalError::TargetHost {
-        host: args.host.clone(),
-    })?;
-    let reply = session.request(&LineRequest::TargetCheck { host, xray })?;
+    let mut checking = ops_session(env, node, args.interface, Some(Instant::now() + CHECK_WAIT))?;
+    let reply = checking.request(&LineRequest::TargetCheck { host, xray })?;
     let Response::TargetFacts(facts) = reply else {
         return Err(NodeError::Unexpected {
             request: RequestKind::TargetCheck,

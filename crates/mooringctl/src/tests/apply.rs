@@ -8,11 +8,12 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use mooring_agent_proto::{
     AgentError, CertName, Generation, HttpProbe, HttpStatus, HttpVersion, RequestKind, Response,
-    Sha256Hex, TargetFacts, TargetHost, TlsGroup, TlsProbe, TlsSession, TlsVersion, TxnStage,
-    TxnState,
+    Sha256Hex, TARGET_CHECK_BOUND, TargetFacts, TargetHost, TlsGroup, TlsProbe, TlsSession,
+    TlsVersion, TxnStage, TxnState,
 };
 use mooring_model::secret::SecretEntry;
 use mooring_model::{Deployment, NodeId, Sha256Digest};
@@ -21,6 +22,7 @@ use mooring_store::{InMemorySecretStore, SecretStore};
 use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
+use crate::node::dial::CONNECT_TIMEOUT;
 use crate::node::engines::{MAC_PINS, PINS};
 
 fn node_id(text: &str) -> NodeId {
@@ -133,6 +135,7 @@ fn target_check_uploads_xray_and_reports_the_rules_without_the_attestation() {
     let (mut harness, engines) = ready(fixture(|_| {}));
     let before = state_bytes(&harness);
     script_measure(&harness, false, good_facts());
+    let started = Instant::now();
     let outcome = harness.run(&[
         "node",
         "target",
@@ -166,6 +169,21 @@ fn target_check_uploads_xray_and_reports_the_rules_without_the_attestation() {
             pin_of(&harness, "linux-amd64/xray"),
             "stand-in for linux-amd64/xray".len()
         )
+    );
+    // The upload takes what it needs; the check ends at what the node
+    // promises and the connection's timeout.
+    assert_eq!(
+        seen.iter()
+            .map(|(target, _)| target.deadline.is_some())
+            .collect::<Vec<_>>(),
+        [false, false, true],
+        "{seen:?}"
+    );
+    let deadline = seen[2].0.deadline.unwrap();
+    assert!(
+        deadline > started + TARGET_CHECK_BOUND + CONNECT_TIMEOUT
+            && deadline <= Instant::now() + TARGET_CHECK_BOUND + CONNECT_TIMEOUT,
+        "{deadline:?}"
     );
     drop(seen);
     assert_eq!(state_bytes(&harness), before, "check stores nothing");

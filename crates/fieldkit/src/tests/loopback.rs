@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use mooring_model::Pairing;
 
+use crate::error::FieldkitError;
 use crate::measure::nat_behaviour::{Filtering, Mapping};
 use crate::measure::port_ceiling::Stop;
 use crate::measure::{nat_behaviour, nat_timeout, pooling, port_ceiling, public_ips, rtt, uplink};
@@ -110,6 +111,10 @@ fn the_servers_listen_and_stop() {
     );
     let counts = server.stop().unwrap();
     assert_eq!(counts.reflector_served, 1);
+    // The one connection to a freed port that is meant, since what it
+    // checks is that the port was freed: a test running beside this one
+    // could take the port in between, which fails this check, never
+    // passes it wrongly.
     assert!(
         TcpStream::connect(at(reflector)).is_err(),
         "the reflector still listens"
@@ -264,10 +269,7 @@ fn a_silent_echo_server_stops_a_measurement() {
     };
     let mut captured = Captured::default();
     let error = nat_timeout::run(&bind(), plan, &mut captured.output()).unwrap_err();
-    assert!(
-        matches!(error, crate::error::FieldkitError::Silent { .. }),
-        "{error}"
-    );
+    assert!(matches!(error, FieldkitError::Silent { .. }), "{error}");
     assert!(captured.stdout.is_empty());
 }
 
@@ -344,7 +346,18 @@ fn public_ips_stops_when_its_first_sample_fails() {
         interval: Duration::from_secs(1),
     };
     let mut captured = Captured::default();
-    assert!(public_ips::run(&bind(), plan, &mut captured.output()).is_err());
+    let error = public_ips::run(&bind(), plan, &mut captured.output()).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            FieldkitError::Peer {
+                peer,
+                what: "the first reflector sample",
+                ..
+            } if peer == closed()
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]

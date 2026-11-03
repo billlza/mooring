@@ -69,9 +69,11 @@ pub const TARGET_HANDSHAKE_SAMPLES: u8 = 20;
 
 /// The longest a node takes to answer `TargetCheck` (design §11.7): its
 /// tools each end under `timeout`, and each of the
-/// [`TARGET_HANDSHAKE_SAMPLES`] handshakes by its own deadline. The
-/// agent's build holds its collectors to this bound, so the operator
-/// waiting on `node target check` waits for the node at most this long.
+/// [`TARGET_HANDSHAKE_SAMPLES`] handshakes by its own deadline, with room
+/// for installing the Xray. The agent's build holds its collectors to this
+/// bound. The Mac waits this long and its connection's timeout, and ends a
+/// session that runs past that (§13.2): a node whose agent was built
+/// before the bound has no such promise.
 pub const TARGET_CHECK_BOUND: Duration = Duration::from_secs(180);
 
 closed_enum! {
