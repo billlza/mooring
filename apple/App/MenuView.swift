@@ -10,6 +10,7 @@ import SwiftUI
 struct MenuView: View {
     let model: ConsoleModel
     let daemon: DaemonService
+    let consoleFront: ConsoleWindowFront
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -21,7 +22,9 @@ struct MenuView: View {
         DaemonControls(daemon: daemon)
         Divider()
         Button("Open Console") {
-            openWindow(id: ConsoleWindow.id)
+            consoleFront.bringToFront { openWindow(id: ConsoleWindow.id) }
+            // A request: the window is raised either way, and takes the
+            // keyboard when the system lets the app become active.
             NSApp.activate()
         }
         .keyboardShortcut("o")
