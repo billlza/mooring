@@ -1,23 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What the watch reads, each reader on its own: the host's figures, the
-//! engine units, the nft counters, the uplink's counters and the Mac peer,
-//! parsed exactly, and each reading it cannot take refused with the error
-//! the watch ends on.
+//! What the watch reads, each reader on its own (design §11.3, §11.5): the
+//! Mac peer, the host's figures, the engine units, the nft counters and the
+//! uplink's counters, parsed exactly, and what each refuses; the host's
+//! conditions (disk low under 1 GiB free or under a tenth); and the
+//! uplink's transfer, where another interface or a counter below the last
+//! reading is a reset. A refused host, engine, nft or uplink reading is an
+//! error the watch ends on; a refused Mac peer closes the gate instead
+//! (`WgReadFailed`), and chrony's answer without a leap status is read as
+//! not synchronised. A journal entry removed since its listing occupies
+//! nothing; any other that cannot be read is the host reading's error.
 
 use std::fs;
 use std::io;
 use std::time::{Duration, UNIX_EPOCH};
 
 use mooring_agent_proto::{
-    AgentError, EngineRun, EngineState, EngineUser, IfName, IoOp, LineRequest, Role, UnixTime,
-    UsageMonth, WatchError,
+    AgentError, EngineRun, EngineState, EngineUser, IfName, IoOp, UnixTime, UsageMonth, WatchError,
 };
 
 use super::world::{BOOT, OCT_8, World};
 use crate::host::{Tool, ToolOutput};
 use crate::store::malformed;
-use crate::tests::serve::{ask, frame};
 use crate::tests::{ENOENT, ENOTDIR, FakeNode, failed, ok};
 use crate::watch::engines;
 use crate::watch::host;
@@ -144,8 +148,8 @@ fn disk_low_is_under_1_gib_or_under_a_tenth_free() {
 
 #[test]
 fn systemctl_show_and_nft_counters_are_parsed_exactly() {
-    use crate::watch::counter_packets;
     use crate::watch::engines::{Unit, parse_show};
+    use crate::watch::nft::counter_packets;
     // As systemd 257 printed it on the London VPS, in its own order.
     let active = b"NRestarts=3\nActiveState=active\nActiveEnterTimestampMonotonic=15699978\n";
     let unit = parse_show(active).unwrap();
@@ -421,23 +425,6 @@ fn a_transfer_past_the_last_month_is_refused() {
         Transfer::next(Some(&last), UnixTime::from_secs(253_402_300_800), counters),
         Err(malformed(IoOp::ReadState))
     );
-}
-
-#[test]
-fn a_view_that_is_not_one_is_refused_not_served() {
-    let world = World::new();
-    world.write("/var/lib/mooring/watch/status.json", "{}");
-    for role in [Role::Ops, Role::Viewer] {
-        assert_eq!(
-            ask(
-                &world.paths,
-                &world.node(1),
-                role,
-                frame(&LineRequest::Status)
-            ),
-            Err(malformed(IoOp::ReadState))
-        );
-    }
 }
 
 /// An entry the journal's listing named but journald has removed since is

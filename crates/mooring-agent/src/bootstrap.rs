@@ -55,7 +55,7 @@ pub(crate) fn bootstrap(
     accounts::converge(paths, node)?;
     layout::converge(paths, &HostProfile::CURRENT)?;
     crate::txn::activate::install(paths, &actual, &paths.own_executable())?;
-    crate::txn::replace_link(&paths.agent_current(), Path::new(&actual.to_string()))
+    crate::txn::links::replace_link(&paths.agent_current(), Path::new(&actual.to_string()))
         .map_err(|error| io_error(IoOp::WriteState, &error))?;
     host_profile(paths, node)?;
     authorize(paths, keys)?;

@@ -8,6 +8,7 @@
 use std::fs;
 use std::io;
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::time::Duration;
 
 use mooring_agent_proto::{
@@ -279,4 +280,73 @@ fn an_element_nft_will_not_change_ends_the_watch_with_the_gate_as_it_was() {
         GateState::Closed,
         "the view of the tick before"
     );
+}
+
+#[test]
+fn an_nft_failure_ends_the_watch_with_nft_failed_recorded() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(100_000);
+    world.traffic(&node, 1);
+    let net = Rc::clone(&world.net);
+    let node = node.on_sleep(move |slept| {
+        if slept == 10 {
+            net.nft_fails.set(true);
+        }
+        net.handshake.set(100_000 + slept);
+        net.rx.set(net.rx.get() + 1);
+    });
+    let mut stderr = Vec::new();
+    let code = watch::run(&world.paths, &node, &mut stderr);
+    assert_eq!(code, ExitCode::from(1));
+    let message = String::from_utf8(stderr).unwrap();
+    assert!(message.contains("nft failed"), "{message}");
+    assert!(message.contains("Operation not permitted"), "{message}");
+    assert_eq!(world.conditions(), vec![WatchErrorKind::NftFailed]);
+    assert_eq!(
+        world.events().last(),
+        Some(&AgentEventKind::ConditionRaised {
+            condition: WatchError::NftFailed
+        })
+    );
+    // `ExecStopPost` closes the gate; the restarted watch clears the
+    // condition once nft works again, and journals the closing it finds.
+    world.net.closed.set(true);
+    world.net.nft_fails.set(false);
+    let node = world.node(100_100);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    world.traffic(&node, 1);
+    tick(&mut watch, &world, &node);
+    assert!(world.conditions().is_empty());
+    let events = world.events();
+    assert_eq!(
+        events[events.len() - 2..],
+        [
+            AgentEventKind::ConditionCleared {
+                condition: WatchErrorKind::NftFailed
+            },
+            AgentEventKind::GateClosed,
+        ]
+    );
+}
+
+#[test]
+fn a_reading_the_watch_needs_ends_it() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(110_000);
+    fs::remove_file(world.paths.proc("uptime")).unwrap();
+    let mut watch = Watch::start(&world.paths).unwrap();
+    assert!(matches!(
+        watch.tick(&world.paths, &node),
+        Err(Fatal::Reading(AgentError::Io {
+            op: IoOp::ReadState,
+            ..
+        }))
+    ));
+    fs::remove_file(world.paths.watch_config()).unwrap();
+    assert!(matches!(
+        watch.tick(&world.paths, &node),
+        Err(Fatal::Reading(_))
+    ));
 }

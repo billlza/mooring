@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Staging (design §11.2 step 2) and the generation's layout.
+//! Staging (design §11.2 step 2) and the generation's layout: a
+//! generation's directory staged from the blob store, replacing one an
+//! earlier attempt left, and removed again by the pruning, by a change that
+//! fails or is cancelled before its swap, and as a revert's last step.
 //!
 //! A generation directory, `/etc/mooring/gen-<N>/` (0755 root, so sshd can
 //! read the viewer keys as `mooring-view`, §8.6), holds:
@@ -221,4 +224,13 @@ pub(crate) fn installed_header(
         return Ok(None);
     }
     crate::store::read_json(&paths.generation(generation).join(BUNDLE_FILE))
+}
+
+/// Removes generation `generation`'s directory, if it exists.
+pub(super) fn remove_generation(paths: &Paths, generation: Generation) -> Result<(), AgentError> {
+    match fs::remove_dir_all(paths.generation(generation)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(IoOp::WriteState, &error)),
+    }
 }

@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Validation (design §11.2 step 3) on the stand-in node: what it refuses
-//! besides a validator's own output, the warning level it gives the engine
-//! configurations it checks, and the copies holding the bundle's secrets,
-//! which it removes whatever happens.
+//! Validation (design §11.2 step 3) on the stand-in node. The host
+//! validators run on the staged generation, and a refusal by the kernel
+//! parameters, sshd or systemd-analyze fails the change, a warning or a
+//! failure without a word included. Xray's check refuses on a warning too,
+//! its output scrubbed of the bundle's secrets, every credential among
+//! them; its refusal is reported even when the staged directory cannot then
+//! be removed, which the next staging replaces. Validation also refuses an
+//! engine configuration that is not JSON, before any validator runs, or
+//! that cannot take a log level; fails when its scratch directory cannot be
+//! made, a copy cannot be written or a validator cannot be started; gives a
+//! configuration without a log section the warning level all the same
+//! (Xray's copy is checked); and removes the copies holding the bundle's
+//! secrets whatever happens.
 
 use std::fs;
 
@@ -12,9 +21,11 @@ use mooring_agent_proto::{
 };
 use serde_json::Value;
 
-use super::world::{World, same};
+use super::world::{WG_PRIVATE_KEY, World, index_of, same};
 use crate::host::Tool;
-use crate::tests::{EEXIST, ENOENT, ModeFault, occupy_temporary};
+use crate::tests::{EEXIST, ENOENT, FakeNode, ModeFault, occupy_temporary};
+use crate::txn;
+use crate::txn::record::pending;
 
 /// A bundle whose `file` reads `text`, the rest golden.
 fn with(world: &World, file: ManagedFile, text: &str) -> mooring_agent_proto::BundleHeader {
@@ -193,4 +204,180 @@ fn a_refusal_is_reported_even_when_the_staged_directory_stays() {
         TxnState::AwaitingConfirm,
         "the next staging replaces what was left"
     );
+}
+
+#[test]
+fn a_validator_warning_switches_nothing_and_its_output_is_scrubbed() {
+    let world = World::new();
+    world.faults.borrow_mut().xray_test = Some(format!(
+        "[Warning] infra/conf: privateKey {WG_PRIVATE_KEY} looks weak\nConfiguration OK.\n"
+    ));
+    let node = world.node(1000);
+    let state = world.apply_and_run(&node, world.bundle(1, same));
+    let TxnState::Failed {
+        error: AgentError::StageValidation { tool, stderr_tail },
+    } = state
+    else {
+        panic!("{state:?}");
+    };
+    assert_eq!(tool, ValidationTool::Xray);
+    assert!(
+        !stderr_tail.as_str().contains(WG_PRIVATE_KEY),
+        "{}",
+        stderr_tail.as_str()
+    );
+    assert!(stderr_tail.as_str().contains("<redacted>"));
+    assert_eq!(world.current(), None);
+    assert!(!world.paths.generation(Generation::new(1)).exists());
+    assert_eq!(pending(&world.paths).unwrap(), None);
+    assert!(
+        node.calls()
+            .iter()
+            .all(|call| !call.contains("--on-active")),
+        "armed although nothing was switched"
+    );
+    assert!(
+        node.calls()
+            .iter()
+            .all(|call| !call.contains("mooring-txn-revert")),
+        "no timer to stop"
+    );
+}
+
+#[test]
+fn every_credential_of_the_bundle_is_a_secret() {
+    let world = World::new();
+    let header = world.bundle(1, same);
+    let dir = txn::stage::stage(&world.paths, Generation::new(1), &header).unwrap();
+    let secrets: Vec<String> = txn::validate::secrets(&dir)
+        .unwrap()
+        .into_iter()
+        .map(|secret| String::from_utf8(secret).unwrap())
+        .collect();
+    for secret in [
+        WG_PRIVATE_KEY,
+        "qAr2x8Vah8WO2JdHLUnMUUjqHpzO0vbDn7gKWAh17E8",
+        "5f1e310100000001",
+        "5f1e320100000000",
+        "6d6f6f72-0101-4001-8000-000000010101",
+        "6d6f6f72-0201-4001-8000-000000020101",
+        "bW9vcmluZy1maXh0dXJlLXNlY3JldCEBAFpaWlpaWlo",
+        "bW9vcmluZy1maXh0dXJlLXNlY3JldAMBAVpaWlpaWlo",
+        "6d6f6f72-1201-4000-8000-000000120100",
+    ] {
+        assert!(
+            secrets.iter().any(|known| known == secret),
+            "{secret} is not a secret: {secrets:?}"
+        );
+    }
+    assert!(
+        !secrets.iter().any(|known| known.contains("harbour-target")),
+        "a server name is no secret"
+    );
+}
+
+#[test]
+fn the_host_validators_check_the_staged_generation() {
+    let world = World::new();
+    let node = world.node(1000);
+    world.commit(&node, world.bundle(1, same));
+    let generation = world.paths.generation(Generation::new(1));
+    let staged_dir = generation.display().to_string();
+    let faults = world.faults.borrow();
+    assert_eq!(
+        faults.sshd_config.borrow().as_deref(),
+        Some(
+            format!("Include {staged_dir}/host/sshd.conf\nInclude /etc/ssh/sshd_config\n").as_str()
+        )
+    );
+    let verified = faults.verified.borrow();
+    assert_eq!(verified.len(), 7);
+    let check = verified
+        .iter()
+        .find(|text| text.contains("target-watch"))
+        .unwrap();
+    assert!(check.contains(&format!("ConditionPathExists={staged_dir}/watch.json")));
+    let xray = verified
+        .iter()
+        .find(|text| text.contains("Description=Mooring Xray"))
+        .unwrap();
+    assert!(xray.contains(&format!(
+        "ExecStart={staged_dir}/engines/xray run -c {staged_dir}/xray.json"
+    )));
+    assert!(!xray.contains("/etc/mooring/current"), "{xray}");
+    assert!(
+        verified
+            .iter()
+            .all(|text| !text.contains("/etc/mooring/current"))
+    );
+    let calls = node.calls();
+    let order = [
+        "/usr/bin/wg-quick strip ",
+        "/usr/sbin/sshd -t -f ",
+        "/usr/bin/systemd-analyze verify ",
+        "txn-revert 1",
+    ];
+    let positions: Vec<usize> = order
+        .iter()
+        .map(|fragment| index_of(&calls, fragment))
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    // The scratch copies are gone.
+    assert!(!world.paths.validate_dir().join("sshd_config").exists());
+    assert!(!world.paths.validate_dir().join("units").exists());
+}
+
+/// A host validator's rejection, before anything is switched: the staged
+/// generation goes and no timer is armed.
+fn rejected(world: &World, node: &FakeNode) -> (ValidationTool, String) {
+    let state = world.apply_and_run(node, world.bundle(1, same));
+    let TxnState::Failed {
+        error: AgentError::StageValidation { tool, stderr_tail },
+    } = state
+    else {
+        panic!("not a validation failure: {state:?}");
+    };
+    assert_eq!(world.current(), None);
+    assert!(!world.paths.generation(Generation::new(1)).exists());
+    assert!(node.calls().iter().all(|call| !call.contains("txn-revert")));
+    (tool, stderr_tail.as_str().to_owned())
+}
+
+#[test]
+fn a_missing_kernel_parameter_is_rejected_by_name() {
+    let world = World::new();
+    fs::remove_file(world.paths.at("/proc/sys/net/ipv4/tcp_notsent_lowat")).unwrap();
+    let (tool, tail) = rejected(&world, &world.node(1000));
+    assert_eq!(tool, ValidationTool::SysctlKeys);
+    assert!(
+        tail.contains("/proc/sys/net/ipv4/tcp_notsent_lowat"),
+        "{tail}"
+    );
+}
+
+#[test]
+fn an_sshd_warning_is_rejected() {
+    let world = World::new();
+    world.faults.borrow_mut().sshd_warns = true;
+    let (tool, tail) = rejected(&world, &world.node(1000));
+    assert_eq!(tool, ValidationTool::Sshd);
+    assert!(tail.contains("Deprecated option"), "{tail}");
+}
+
+#[test]
+fn a_unit_systemd_complains_about_is_rejected_even_with_a_zero_exit() {
+    let world = World::new();
+    world.faults.borrow_mut().analyze_errors = true;
+    let (tool, tail) = rejected(&world, &world.node(1000));
+    assert_eq!(tool, ValidationTool::SystemdAnalyze);
+    assert!(tail.contains("Unknown key name"), "{tail}");
+}
+
+#[test]
+fn a_validator_that_fails_without_a_word_is_still_a_rejection() {
+    let world = World::new();
+    world.faults.borrow_mut().sshd_fails_silently = true;
+    let (tool, tail) = rejected(&world, &world.node(1000));
+    assert_eq!(tool, ValidationTool::Sshd);
+    assert_eq!(tail, "");
 }
