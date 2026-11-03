@@ -41,6 +41,14 @@ fn at(port: u16) -> SocketAddrV4 {
     SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)
 }
 
+/// An address on 127.0.0.1 that nothing listens on, nor can: binding port
+/// 0 takes another, so a connection to it always fails (refused on Linux,
+/// an address the system cannot assign on macOS), and no test running
+/// beside this one can take it, as it could a port freed for the purpose.
+fn closed() -> SocketAddrV4 {
+    at(0)
+}
+
 fn bind() -> Bind {
     Bind::interface(LOOPBACK).unwrap()
 }
@@ -244,11 +252,12 @@ fn nat_timeout_finds_no_timeout_on_loopback() {
 
 #[test]
 fn a_silent_echo_server_stops_a_measurement() {
-    let unused = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = unused.local_addr().unwrap().port();
-    drop(unused);
+    // A socket that takes the probes and never answers, held to the end:
+    // no test running beside this one can take its port, as it could a
+    // port freed for the purpose.
+    let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
     let plan = nat_timeout::Plan {
-        echo: at(port),
+        echo: at(silent.local_addr().unwrap().port()),
         min: Delay::new(Duration::from_secs(1)).unwrap(),
         max: Delay::new(Duration::from_secs(2)).unwrap(),
         resolution: Duration::from_secs(1),
@@ -329,11 +338,8 @@ fn a_peer_that_closes_before_the_connect_is_polled_is_still_connected() {
 
 #[test]
 fn public_ips_stops_when_its_first_sample_fails() {
-    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = closed.local_addr().unwrap().port();
-    drop(closed);
     let plan = public_ips::Plan {
-        reflector: at(port),
+        reflector: closed(),
         duration: Duration::from_secs(1),
         interval: Duration::from_secs(1),
     };
@@ -399,11 +405,8 @@ fn port_ceiling_tells_the_targets_limit_from_the_lines() {
     assert_eq!(summary.stopped_by, Stop::TargetRefused);
     assert!(summary.last_failure.is_some());
     server.stop().unwrap();
-    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = closed.local_addr().unwrap().port();
-    drop(closed);
     let plan = port_ceiling::Plan {
-        target: at(port),
+        target: closed(),
         max: 20,
         timeout: Duration::from_secs(1),
     };
@@ -462,11 +465,8 @@ fn uplink_measures_the_rate_the_rtt_and_the_bytes() {
 #[test]
 fn rtt_times_connects_and_counts_failures() {
     let server = server(16);
-    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = closed.local_addr().unwrap().port();
-    drop(closed);
     let plan = rtt::Plan {
-        targets: vec![at(server.ports().reflector), at(port)],
+        targets: vec![at(server.ports().reflector), closed()],
         count: 2,
         timeout: Duration::from_secs(1),
     };
