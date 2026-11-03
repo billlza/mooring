@@ -51,14 +51,14 @@
 //!
 //! # In-chain probes
 //!
-//! While the engine runs, `mooring-probe` runs beside it ([`in_chain`]):
-//! [`IN_CHAIN_FIRST`] after the engine starts, and then every
-//! `in_chain_every` (300 s), each applied node is probed through each
-//! protocol, bracketed by direct probes. A violation is latched as above; a
-//! probe that fails, or a carrier address that will not hold still,
-//! degrades the exit, naming the node and protocol; a round that verifies
-//! makes it `Serving`. `mooring-probe` failing only degrades: it never takes
-//! the exit down.
+//! While the engine runs, `mooring-probe` runs beside it
+//! ([`ExitPorts::start_prober`]): [`IN_CHAIN_FIRST`] after the engine
+//! starts, and then every `in_chain_every` (300 s), each applied node is
+//! probed through each protocol, bracketed by direct probes. A violation is
+//! latched as above; a probe that fails, or a carrier address that will not
+//! hold still, degrades the exit, naming the node and protocol; a round
+//! that verifies makes it `Serving`. `mooring-probe` failing only degrades:
+//! it never takes the exit down.
 //!
 //! # Sleep
 //!
