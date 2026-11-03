@@ -170,7 +170,8 @@ pub(crate) fn remove_durably(dir: &Path, name: &str, op: IoOp) -> Result<(), Sto
 /// when missing, and set back to it when found (a directory left open is
 /// closed again). Anything there that is not a directory, a link included,
 /// is `DirNotDirectory`, and nothing is written through it. `op` names the
-/// creation in an error.
+/// creation in an error. The reads and the prune find the directory with
+/// [`existing_private_dir`] instead.
 pub(crate) fn private_dir(parent: &Path, name: &str, op: IoOp) -> Result<PathBuf, StoreError> {
     let dir = parent.join(name);
     match DirBuilder::new().mode(DIR_MODE).create(&dir) {
@@ -184,6 +185,26 @@ pub(crate) fn private_dir(parent: &Path, name: &str, op: IoOp) -> Result<PathBuf
                 .map_err(io_error(op, &dir))?;
             Ok(dir)
         }
+        Err(error) => Err(io_error(op, &dir)(error)),
+    }
+}
+
+/// `parent/name`, one of the store's private directories, if it is there:
+/// `None` when nothing is. Anything there that is not a directory, a link
+/// included, is `DirNotDirectory`, as for [`private_dir`], so nothing is
+/// read, listed or removed through it. Nothing is created and no mode is
+/// changed: the reads and the prune leave the directory as they find it.
+/// `op` names the operation the look is part of in an error.
+pub(crate) fn existing_private_dir(
+    parent: &Path,
+    name: &str,
+    op: IoOp,
+) -> Result<Option<PathBuf>, StoreError> {
+    let dir = parent.join(name);
+    match fs::symlink_metadata(&dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(Some(dir)),
+        Ok(_) => Err(StoreError::DirNotDirectory { path: dir }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(io_error(op, &dir)(error)),
     }
 }
