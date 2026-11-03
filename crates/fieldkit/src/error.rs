@@ -67,6 +67,19 @@ pub(crate) enum FieldkitError {
         /// The limit needed.
         want: u64,
     },
+    /// The kernel's per-process maximum of descriptors is below what the
+    /// measurement needs, though the open-files limit is not: macOS
+    /// enforces the lower of the two.
+    #[cfg(target_os = "macos")]
+    #[error(
+        "the kernel lets a process hold {maximum} open files (kern.maxfilesperproc), below the {want} this measurement needs"
+    )]
+    OpenFilesKernelMaximum {
+        /// The kernel's maximum.
+        maximum: u64,
+        /// The descriptors needed.
+        want: u64,
+    },
     /// The open-files limit could not be read or raised.
     #[error("the open-files limit: {reason}")]
     Limit {

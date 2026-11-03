@@ -88,6 +88,11 @@ fn every_macsys_error_has_its_kind() {
             "setrlimit of the open-files limit failed with errno 22",
         ),
         (
+            MacsysError::DescriptorTableSizeInvalid { size: -1 },
+            MacsysErrorKind::DescriptorTableSizeInvalid,
+            "the kernel gives -1 as the descriptors this process may hold, below 0",
+        ),
+        (
             MacsysError::Terminal {
                 call: TerminalCall::SetAttributes,
                 errno: 25,

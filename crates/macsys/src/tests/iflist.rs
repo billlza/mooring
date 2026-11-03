@@ -443,6 +443,27 @@ fn an_empty_list_has_no_interface() {
     assert_eq!(interfaces_in(&[]), Ok(Vec::new()));
 }
 
+/// An address message that gives a netmask but no address adds nothing to
+/// its interface, and is no error.
+#[test]
+fn an_address_message_without_an_address_gives_none() {
+    let table = [
+        en9_message(),
+        addr_message(
+            libc::RTM_NEWADDR,
+            EN9.index,
+            &[(NETMASK, netmask(8, &[255, 255, 255]))],
+        ),
+    ]
+    .concat();
+    let list = interfaces_in(&table).unwrap();
+    let [en9] = list.as_slice() else {
+        panic!("one interface expected, got {}", list.len());
+    };
+    assert!(en9.ipv4.is_empty());
+    assert!(en9.ipv6.is_empty());
+}
+
 #[test]
 fn a_list_that_breaks_its_form_is_refused() {
     let mut unexpected = en9_message();
@@ -470,7 +491,13 @@ fn a_list_that_breaks_its_form_is_refused() {
         sockaddr[6] = 40;
         ifinfo(&EN9, sockaddr)
     };
-    let cases: [(&str, Vec<u8>, RouteFault); 14] = [
+    let unnamed_overrun = {
+        let mut sockaddr = link(EN9.index, b"", &EN9_LLADDR);
+        sockaddr[6] = 40;
+        ifinfo(&EN9, sockaddr)
+    };
+    let zero = Info { index: 0, ..EN9 };
+    let cases: [(&str, Vec<u8>, RouteFault); 18] = [
         (
             "a table of three bytes",
             vec![0, 0, 0],
@@ -500,6 +527,11 @@ fn a_list_that_breaks_its_form_is_refused() {
         (
             "no link socket address",
             ifinfo_of(5, &EN9, &[(IFA, inet([10, 0, 0, 1]))]),
+            RouteFault::MissingLink,
+        ),
+        (
+            "an IPv4 address where the link socket address belongs",
+            ifinfo_of(5, &EN9, &[(IFP, inet([10, 0, 0, 1]))]),
             RouteFault::MissingLink,
         ),
         (
@@ -535,6 +567,23 @@ fn a_list_that_breaks_its_form_is_refused() {
             "an interface twice",
             [en9_message(), en9_message()].concat(),
             RouteFault::DuplicateInterface,
+        ),
+        // An interface wrong twice is refused for the first fault met:
+        // the link, the index, the name, then the link-layer address.
+        (
+            "no link socket address and index 0",
+            ifinfo_of(5, &zero, &[(IFA, inet([10, 0, 0, 1]))]),
+            RouteFault::MissingLink,
+        ),
+        (
+            "index 0 and an empty name",
+            ifinfo(&zero, link(0, b"", &EN9_LLADDR)),
+            RouteFault::ZeroIndex,
+        ),
+        (
+            "an empty name and a link address past its socket address",
+            unnamed_overrun,
+            RouteFault::InvalidName,
         ),
         (
             "a netmask with a hole",
@@ -682,4 +731,9 @@ fn one_interface_is_read_by_index_and_its_counters_move() {
     );
     let absent = NonZeroU32::new(u32::from(u16::MAX)).unwrap();
     assert_eq!(interface(absent), Err(MacsysError::InterfaceAbsent));
+    // An index past the kernel's `int` names no interface either.
+    assert_eq!(
+        interface(NonZeroU32::MAX),
+        Err(MacsysError::InterfaceAbsent)
+    );
 }
