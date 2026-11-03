@@ -97,3 +97,25 @@ fn a_latch_that_cannot_be_read_is_an_error_not_no_latch() {
         io::ErrorKind::IsADirectory,
     );
 }
+
+/// A latch that cannot be removed is an error naming the removal, never a
+/// latch cleared: here a directory is where the latch belongs, which
+/// `unlink` refuses (`EISDIR` on Linux, `EPERM` on macOS).
+#[test]
+fn a_latch_that_cannot_be_removed_is_an_error_not_cleared() {
+    let run_dir = tempfile::tempdir().unwrap();
+    let path = run_dir.path().join(LATCH_FILE);
+    fs::create_dir(&path).unwrap();
+    let refused = if cfg!(target_os = "linux") {
+        io::ErrorKind::IsADirectory
+    } else {
+        io::ErrorKind::PermissionDenied
+    };
+    assert_io_error(
+        &clear_latch(run_dir.path()).unwrap_err(),
+        IoOp::RemoveLatch,
+        &path,
+        refused,
+    );
+    assert!(path.is_dir());
+}

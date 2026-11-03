@@ -21,10 +21,15 @@
 //! `O_NOFOLLOW` (a link is never followed) and `O_NONBLOCK` (a FIFO cannot
 //! hold the open), and checked on the open descriptor itself, so what is
 //! then read or written is what was checked, whatever is exchanged for the
-//! path between a look and the open. A name in `radio/` that is not a day
-//! file's is a stray: named, never removed, never fatal. These are Level 0
-//! data (the operator's own device's readings, on the operator's Mac); the
-//! faults guarded against are accidental.
+//! path between a look and the open. Only a directory is the radio
+//! directory: anything else where `radio/` belongs, a link included, is
+//! refused (`DirNotDirectory`) by the append, the read and the prune alike,
+//! and nothing is read, written or removed through it. A name in `radio/`
+//! that is not a day file's is a stray: named, never removed, never fatal.
+//! These are Level 0 data (the operator's own device's readings, on the
+//! operator's Mac); the faults guarded against are accidental, so the
+//! directory is looked at before a day file is opened, not checked on a
+//! descriptor of its own.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -33,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use mooring_model::CalendarDate;
 
-use crate::durable::{FILE_MODE, private_dir, remove_durably, sync_dir};
+use crate::durable::{FILE_MODE, existing_private_dir, private_dir, remove_durably, sync_dir};
 use crate::error::{IoOp, RadioHistoryFault, StoreError};
 
 /// The radio history's directory, in the support directory.
@@ -75,9 +80,12 @@ struct Listed {
 /// `radio/<date>.jsonl` under `support_dir`.
 #[must_use]
 pub fn radio_day_path(support_dir: &Path, date: CalendarDate) -> PathBuf {
-    support_dir
-        .join(RADIO_DIRECTORY)
-        .join(format!("{date}{RADIO_DAY_SUFFIX}"))
+    support_dir.join(RADIO_DIRECTORY).join(day_file_name(date))
+}
+
+/// The name of the day's file in `radio/`: `<date>.jsonl`.
+fn day_file_name(date: CalendarDate) -> String {
+    format!("{date}{RADIO_DAY_SUFFIX}")
 }
 
 fn io_error(op: IoOp, path: &Path) -> impl FnOnce(io::Error) -> StoreError {
@@ -133,7 +141,7 @@ pub fn append_radio_line(
     line: &[u8],
 ) -> Result<(), StoreError> {
     let dir = private_dir(support_dir, RADIO_DIRECTORY, IoOp::CreateRadioDir)?;
-    let path = dir.join(format!("{date}{RADIO_DAY_SUFFIX}"));
+    let path = dir.join(day_file_name(date));
     let mut options = OpenOptions::new();
     options.read(true).append(true);
     let (mut file, len, created) = match open_day(&path, &mut options)? {
@@ -208,14 +216,20 @@ fn whole_lines(bytes: &[u8]) -> usize {
         .map_or(0, |last| last + 1)
 }
 
-/// The day's whole lines, or `None` when there is no file for it. A file
-/// over [`MAX_RADIO_DAY_BYTES`] is `TooLarge`, never read as its first
-/// bytes; bytes after the last newline are reported as torn, not returned.
+/// The day's whole lines, or `None` when there is no file for it (or no
+/// radio directory at all). Anything but a directory where `radio/`
+/// belongs, a link included, is `DirNotDirectory`, as for the append and
+/// the prune, and nothing is read through it. A file over
+/// [`MAX_RADIO_DAY_BYTES`] is `TooLarge`, never read as its first bytes;
+/// bytes after the last newline are reported as torn, not returned.
 pub fn read_radio_day(
     support_dir: &Path,
     date: CalendarDate,
 ) -> Result<Option<RadioDay>, StoreError> {
-    let path = radio_day_path(support_dir, date);
+    let Some(dir) = existing_private_dir(support_dir, RADIO_DIRECTORY, IoOp::OpenRadioDay)? else {
+        return Ok(None);
+    };
+    let path = dir.join(day_file_name(date));
     let Some((file, _)) = open_day(&path, OpenOptions::new().read(true))? else {
         return Ok(None);
     };
@@ -237,21 +251,18 @@ pub fn read_radio_day(
 
 /// Removes the day files beyond the newest `keep`, by name, and flushes
 /// the directory after each; names the strays beside them, which it never
-/// touches. No `radio/` directory is nothing to prune, and none is made.
+/// touches. No `radio/` directory is nothing to prune, and none is made;
+/// anything but a directory there, a link included, is `DirNotDirectory`,
+/// and nothing is listed or removed through it.
 pub fn prune_radio_days(support_dir: &Path, keep: usize) -> Result<Pruned, StoreError> {
-    let dir = support_dir.join(RADIO_DIRECTORY);
-    let mut listed = match list(&dir)? {
-        Some(listed) => listed,
-        None => return Ok(Pruned::default()),
+    let Some(dir) = existing_private_dir(support_dir, RADIO_DIRECTORY, IoOp::ListRadioDays)? else {
+        return Ok(Pruned::default());
     };
+    let mut listed = list(&dir)?;
     let excess = listed.days.len().saturating_sub(keep);
     let removed: Vec<CalendarDate> = listed.days.drain(..excess).collect();
     for day in &removed {
-        remove_durably(
-            &dir,
-            &format!("{day}{RADIO_DAY_SUFFIX}"),
-            IoOp::RemoveRadioDay,
-        )?;
+        remove_durably(&dir, &day_file_name(*day), IoOp::RemoveRadioDay)?;
     }
     Ok(Pruned {
         removed,
@@ -259,20 +270,9 @@ pub fn prune_radio_days(support_dir: &Path, keep: usize) -> Result<Pruned, Store
     })
 }
 
-/// The day files in `dir`, oldest first, and the strays, sorted; `None`
-/// when there is no directory. Something other than a directory there is
-/// `DirNotDirectory`.
-fn list(dir: &Path) -> Result<Option<Listed>, StoreError> {
-    match fs::symlink_metadata(dir) {
-        Ok(metadata) if metadata.file_type().is_dir() => {}
-        Ok(_) => {
-            return Err(StoreError::DirNotDirectory {
-                path: dir.to_path_buf(),
-            });
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(io_error(IoOp::ListRadioDays, dir)(error)),
-    }
+/// The day files in the radio directory `dir`, oldest first, and the
+/// strays, sorted.
+fn list(dir: &Path) -> Result<Listed, StoreError> {
     let mut listed = Listed::default();
     for entry in fs::read_dir(dir).map_err(io_error(IoOp::ListRadioDays, dir))? {
         let entry = entry.map_err(io_error(IoOp::ListRadioDays, dir))?;
@@ -292,5 +292,5 @@ fn list(dir: &Path) -> Result<Option<Listed>, StoreError> {
     }
     listed.days.sort_unstable();
     listed.strays.sort_unstable();
-    Ok(Some(listed))
+    Ok(listed)
 }

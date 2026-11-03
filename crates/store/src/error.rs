@@ -75,21 +75,25 @@ io_ops! {
     ReadLatch => "read the exit's latch",
     /// Removing the exit's latch.
     RemoveLatch => "remove the exit's latch",
-    /// Opening or reading the SIM meter's document.
+    /// Opening or reading the SIM meter's document, or inspecting the
+    /// usage directory to read it.
     ReadSimMeter => "read the SIM meter",
-    /// Creating or inspecting the usage directory.
+    /// Creating or inspecting the usage directory, to write the meter.
     CreateUsageDir => "create the usage directory",
-    /// Creating or inspecting the radio history's directory.
+    /// Creating or inspecting the radio history's directory, to append to
+    /// a day file.
     CreateRadioDir => "create the radio directory",
     /// Inspecting a radio history day file.
     InspectRadioDay => "inspect a radio history day file",
-    /// Opening or creating a radio history day file.
+    /// Opening or creating a radio history day file, or inspecting the
+    /// radio directory to read one.
     OpenRadioDay => "open a radio history day file",
     /// Reading a radio history day file.
     ReadRadioDay => "read a radio history day file",
     /// Writing, truncating or flushing a radio history day file.
     WriteRadioDay => "write a radio history day file",
-    /// Listing the radio history's day files.
+    /// Inspecting the radio directory or listing its day files, to prune
+    /// them.
     ListRadioDays => "list the radio history's day files",
     /// Removing a radio history day file.
     RemoveRadioDay => "remove a radio history day file",
@@ -314,8 +318,9 @@ pub enum StoreError {
         source: SecretStoreError,
     },
     /// Something other than a directory (a link included) is where one of
-    /// the store's private directories (`usage/`, `radio/`) belongs;
-    /// nothing was written.
+    /// the store's private directories (`usage/`, `radio/`) belongs; the
+    /// writes, the reads and the prune refuse it alike, and nothing was
+    /// read, written or removed through it.
     #[error("{} is not a directory", path.display())]
     DirNotDirectory {
         /// The directory's path.

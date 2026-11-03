@@ -58,6 +58,22 @@ fn assert_io_error(
     );
 }
 
+/// `error` refuses `path`, where one of the store's private directories
+/// belongs, as not a directory: it names the path, and its kind and message
+/// say so.
+fn assert_dir_not_directory(error: &crate::error::StoreError, path: &Path) {
+    assert!(
+        matches!(error, crate::error::StoreError::DirNotDirectory { path: found }
+            if found == path),
+        "{error:?}"
+    );
+    assert_eq!(error.kind(), crate::error::StoreErrorKind::DirNotDirectory);
+    assert_eq!(
+        error.to_string(),
+        format!("{} is not a directory", path.display())
+    );
+}
+
 /// The store error inside `error`; fails the test on a refused change.
 fn store_error<E: std::fmt::Debug>(
     error: crate::error::ChangeError<E>,

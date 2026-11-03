@@ -3,8 +3,10 @@
 //! The radio history's day files (design §15.6 rule 11, §15.7): the private
 //! `radio/` directory, the append that heals a torn tail first, the bounded
 //! read of whole lines, the listing that names strays without failing, the
-//! count-based prune, and the refusal of anything that is not a regular
-//! file.
+//! count-based prune, the refusal of anything that is not a regular file
+//! where a day file belongs, and the refusal of anything that is not a
+//! directory where `radio/` belongs, by the read as by the append and the
+//! prune.
 
 use std::fs;
 use std::io;
@@ -14,7 +16,7 @@ use std::process::Command;
 
 use mooring_model::CalendarDate;
 
-use super::{assert_io_error, mode_of};
+use super::{assert_dir_not_directory, assert_io_error, mode_of};
 use crate::error::{IoOp, RadioHistoryFault, StoreError, StoreErrorKind};
 use crate::radio_history::{
     MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
@@ -277,6 +279,35 @@ fn a_fifo_where_a_day_file_belongs_is_refused_without_blocking() {
     assert!(fs::symlink_metadata(&path).unwrap().file_type().is_fifo());
 }
 
+/// A day file that cannot be opened is an error naming the open, never no
+/// day for the read and never a new file for the append: here it is mode
+/// 0000. (The tests run unprivileged, on the Mac and in CI; root would open
+/// it.)
+#[test]
+fn a_day_file_that_cannot_be_opened_is_an_error_not_no_day() {
+    let support = tempfile::tempdir().unwrap();
+    let day = date("2026-10-24");
+    append_radio_line(support.path(), day, b"a\n").unwrap();
+    let path = radio_day_path(support.path(), day);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(
+        fs::File::open(&path).is_err(),
+        "an unprivileged user cannot open a mode-0000 file"
+    );
+    let unopened = |error: StoreError| {
+        assert_io_error(
+            &error,
+            IoOp::OpenRadioDay,
+            &path,
+            io::ErrorKind::PermissionDenied,
+        );
+    };
+    unopened(read_radio_day(support.path(), day).unwrap_err());
+    unopened(append_radio_line(support.path(), day, b"b\n").unwrap_err());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(day_bytes(support.path(), "2026-10-24"), b"a\n");
+}
+
 /// The radio directory itself must be a directory: a link or a file where
 /// it belongs is refused and nothing is written through it (as the usage
 /// directory is).
@@ -304,20 +335,88 @@ fn a_radio_path_that_is_not_a_directory_is_refused() {
         prune_radio_days(support.path(), 1).unwrap_err().kind(),
         StoreErrorKind::DirNotDirectory
     );
-    // The read checks no directory of its own: a day it cannot open is an
-    // error naming the open, never no day.
-    assert_io_error(
-        &read_radio_day(support.path(), date("2026-10-24")).unwrap_err(),
-        IoOp::OpenRadioDay,
-        &radio_day_path(support.path(), date("2026-10-24")),
-        io::ErrorKind::NotADirectory,
-    );
-    // A listing that fails is an error naming it, never an empty listing.
+    // A prune that cannot look at the radio path is an error naming the
+    // listing, never an empty listing.
     let not_a_directory = support.path().join("not-a-directory");
     fs::write(&not_a_directory, b"").unwrap();
     assert_io_error(
         &prune_radio_days(&not_a_directory, 1).unwrap_err(),
         IoOp::ListRadioDays,
+        &radio_dir(&not_a_directory),
+        io::ErrorKind::NotADirectory,
+    );
+    // A directory that cannot be made is an error naming its creation,
+    // never a line written elsewhere: the support path is a file, or there
+    // is none (the store never makes the support directory).
+    assert_io_error(
+        &append_radio_line(&not_a_directory, date("2026-10-24"), b"a\n").unwrap_err(),
+        IoOp::CreateRadioDir,
+        &radio_dir(&not_a_directory),
+        io::ErrorKind::NotADirectory,
+    );
+    let absent = support.path().join("absent");
+    assert_io_error(
+        &append_radio_line(&absent, date("2026-10-24"), b"a\n").unwrap_err(),
+        IoOp::CreateRadioDir,
+        &radio_dir(&absent),
+        io::ErrorKind::NotFound,
+    );
+    assert!(!absent.exists());
+}
+
+/// The read checks the radio directory as the append and the prune do: a
+/// link where it belongs is `DirNotDirectory`, whether it leads to a
+/// directory holding the day's file, which is then never read (nor written
+/// or pruned), or to nothing, which is never read as no day. No directory
+/// at all is no day, and so is a directory without the day's file.
+#[test]
+fn the_read_refuses_a_radio_link_and_reads_nothing_through_it() {
+    let support = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let day = date("2026-10-24");
+    let radio = radio_dir(support.path());
+    assert_eq!(read_radio_day(support.path(), day).unwrap(), None);
+    assert!(!radio.exists());
+    append_radio_line(elsewhere.path(), day, b"a\n").unwrap();
+    assert_eq!(
+        read_radio_day(elsewhere.path(), date("2026-10-25")).unwrap(),
+        None
+    );
+    symlink(radio_dir(elsewhere.path()), &radio).unwrap();
+    assert_dir_not_directory(&read_radio_day(support.path(), day).unwrap_err(), &radio);
+    assert_dir_not_directory(
+        &append_radio_line(support.path(), day, b"b\n").unwrap_err(),
+        &radio,
+    );
+    assert_dir_not_directory(&prune_radio_days(support.path(), 0).unwrap_err(), &radio);
+    assert_eq!(day_bytes(elsewhere.path(), "2026-10-24"), b"a\n");
+    // A dangling link is not a missing directory either.
+    fs::remove_dir_all(radio_dir(elsewhere.path())).unwrap();
+    assert_dir_not_directory(&read_radio_day(support.path(), day).unwrap_err(), &radio);
+}
+
+/// A file where the radio directory belongs is refused by the read as by
+/// the append and the prune (`DirNotDirectory`), never read as no day; a
+/// radio path that cannot be looked at (the support path is a file) is an
+/// error naming the read's open, never no day either.
+#[test]
+fn the_read_refuses_a_radio_path_that_is_a_file() {
+    let support = tempfile::tempdir().unwrap();
+    let day = date("2026-10-24");
+    let radio = radio_dir(support.path());
+    fs::write(&radio, b"").unwrap();
+    assert_dir_not_directory(&read_radio_day(support.path(), day).unwrap_err(), &radio);
+    assert_dir_not_directory(
+        &append_radio_line(support.path(), day, b"a\n").unwrap_err(),
+        &radio,
+    );
+    assert_dir_not_directory(&prune_radio_days(support.path(), 0).unwrap_err(), &radio);
+    assert_eq!(fs::read(&radio).unwrap(), b"");
+    let not_a_directory = support.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"").unwrap();
+    assert_io_error(
+        &read_radio_day(&not_a_directory, day).unwrap_err(),
+        IoOp::OpenRadioDay,
         &radio_dir(&not_a_directory),
         io::ErrorKind::NotADirectory,
     );
