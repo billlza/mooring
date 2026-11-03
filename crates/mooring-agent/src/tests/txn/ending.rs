@@ -12,7 +12,7 @@
 
 use mooring_agent_proto::{AgentError, Generation, IoOp, SystemdOp, TxnState, UnitName};
 
-use super::world::{ToolFault, World, idle, index_of, same};
+use super::world::{ToolFault, World, awaiting_second, idle, index_of, same};
 use crate::tests::{EEXIST, ENOENT, occupy_temporary};
 use crate::txn::record::{Phase, pending};
 use crate::txn::{self, Launched, Why};
@@ -25,17 +25,6 @@ fn timer(generation: u64) -> UnitName {
 fn stopped(calls: &[String], generation: u64) -> bool {
     let stop = format!("/usr/bin/systemctl stop mooring-txn-revert-{generation}.timer");
     calls.contains(&stop)
-}
-
-/// Generation 1 committed and generation 2 awaiting its confirmation.
-fn awaiting_second() -> World {
-    let world = World::new();
-    world.commit(&world.node(1000), world.bundle(1, same));
-    assert_eq!(
-        world.apply_and_run(&world.node(2000), world.bundle(2, idle(301))),
-        TxnState::AwaitingConfirm
-    );
-    world
 }
 
 #[test]
@@ -110,7 +99,7 @@ fn a_timer_armed_whose_phase_cannot_be_recorded_is_stopped() {
 
 #[test]
 fn a_confirm_whose_timer_cannot_be_stopped_is_committed_and_says_so() {
-    let world = awaiting_second();
+    let world = awaiting_second(idle(301));
     let two = Generation::new(2);
     world.faults.borrow_mut().disarm = true;
     let node = world.node(2050);
@@ -134,7 +123,7 @@ fn a_confirm_whose_timer_cannot_be_stopped_is_committed_and_says_so() {
 
 #[test]
 fn a_rollback_whose_timer_cannot_be_stopped_is_reverted_and_says_so() {
-    let world = awaiting_second();
+    let world = awaiting_second(idle(301));
     world.faults.borrow_mut().disarm = true;
     let node = world.node(2050);
     assert_eq!(
@@ -154,7 +143,7 @@ fn a_rollback_whose_timer_cannot_be_stopped_is_reverted_and_says_so() {
 /// reverted.
 #[test]
 fn a_confirm_that_cannot_be_recorded_keeps_its_timer() {
-    let world = awaiting_second();
+    let world = awaiting_second(idle(301));
     let two = Generation::new(2);
     let blocker = occupy_temporary(&world.paths.txn_record(two));
     let node = world.node(2050);
@@ -181,7 +170,7 @@ fn a_confirm_that_cannot_be_recorded_keeps_its_timer() {
 /// its timer armed; a retry finds it switched back already and ends it.
 #[test]
 fn a_rollback_that_cannot_be_recorded_keeps_its_timer() {
-    let world = awaiting_second();
+    let world = awaiting_second(idle(301));
     let two = Generation::new(2);
     let blocker = occupy_temporary(&world.paths.txn_record(two));
     let node = world.node(2050);

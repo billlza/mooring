@@ -485,6 +485,18 @@ pub(super) fn index_of(calls: &[String], fragment: &str) -> usize {
         .unwrap_or_else(|| panic!("no call with {fragment:?} in {calls:#?}"))
 }
 
+/// Generation 1 committed and generation 2 (made by `edit`) awaiting its
+/// confirmation, as a `Confirm`, a `Rollback` or its timer finds them.
+pub(super) fn awaiting_second(edit: impl Fn(ManagedFile, String) -> String) -> World {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    assert_eq!(
+        world.apply_and_run(&world.node(2000), world.bundle(2, edit)),
+        TxnState::AwaitingConfirm
+    );
+    world
+}
+
 /// The transaction ended with `error` before the swap: nothing switched,
 /// nothing left staged or pending.
 pub(super) fn assert_unswitched(
