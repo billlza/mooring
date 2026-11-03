@@ -46,9 +46,13 @@ fn target() -> WatchTarget {
 }
 
 /// The hourly check with the name resolving to `resolved`, the ping
-/// printing `ping` and curl printing `curl`; returns its reading and the
-/// tools it ran.
-fn hourly(resolved: &'static [u8], ping: &'static str, curl: &'static [u8]) -> (bool, Vec<String>) {
+/// printing `ping` and curl printing `curl`; returns whether it found the
+/// target degraded, and the tools it ran.
+fn verdict(
+    resolved: &'static [u8],
+    ping: &'static str,
+    curl: &'static [u8],
+) -> (bool, Vec<String>) {
     let (_dir, paths) = configured();
     let node = node_answering(move |program, _| match program {
         "/usr/bin/getent" => exited(0, resolved, b""),
@@ -69,7 +73,7 @@ const AT_TARGET: &[u8] = b"198.51.100.7    STREAM www.example.com\n";
 
 #[test]
 fn the_hourly_check_passes_a_target_that_still_answers() {
-    let (degraded, calls) = hourly(AT_TARGET, PING_TLS13, b"200 2 ");
+    let (degraded, calls) = verdict(AT_TARGET, PING_TLS13, b"200 2 ");
     assert!(!degraded);
     assert!(
         calls[1].contains(
@@ -81,7 +85,7 @@ fn the_hourly_check_passes_a_target_that_still_answers() {
 
 #[test]
 fn the_hourly_check_degrades_a_target_that_moved_or_stopped_answering() {
-    let (moved, calls) = hourly(
+    let (moved, calls) = verdict(
         b"198.51.100.8    STREAM www.example.com\n",
         PING_TLS13,
         b"200 2 ",
@@ -89,9 +93,9 @@ fn the_hourly_check_degrades_a_target_that_moved_or_stopped_answering() {
     assert!(moved);
     assert_eq!(calls.len(), 1, "nothing is probed at another address");
     let failed_handshake = "Pinging with SNI\nHandshake failure:  EOF\n";
-    assert!(hourly(AT_TARGET, failed_handshake, b"200 2 ").0);
-    assert!(hourly(AT_TARGET, PING_TLS13, b"200 1.1 ").0, "not HTTP/2");
-    assert!(hourly(AT_TARGET, PING_TLS13, b"000 0 ").0, "no answer");
+    assert!(verdict(AT_TARGET, failed_handshake, b"200 2 ").0);
+    assert!(verdict(AT_TARGET, PING_TLS13, b"200 1.1 ").0, "not HTTP/2");
+    assert!(verdict(AT_TARGET, PING_TLS13, b"000 0 ").0, "no answer");
 }
 
 #[test]

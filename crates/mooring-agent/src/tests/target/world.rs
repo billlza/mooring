@@ -3,8 +3,9 @@
 //! The stand-ins the target tests share: the target's name, a node whose
 //! tools answer as a test says (each under `timeout`, as every target
 //! tool runs), a completed TLS 1.3 ping as Xray prints it and as it is
-//! read, and servers on 127.0.0.1 that answer a ClientHello with a canned
-//! first flight, silence, a close or a reset.
+//! read, servers on 127.0.0.1 that answer a ClientHello with a canned
+//! first flight, a flight dripped out byte by byte, silence, a close or a
+//! reset, and a port that no server can listen on.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
@@ -85,12 +86,24 @@ pub(super) fn flight(payload: usize) -> Vec<u8> {
     out
 }
 
+/// A port on 127.0.0.1 that nothing listens on, nor can: binding port 0
+/// takes another, so a connection to it always fails (refused on Linux, an
+/// address the system cannot assign on macOS), and no test running beside
+/// this one can take it, as it could a port freed for the purpose.
+pub(super) const fn closed_port() -> u16 {
+    0
+}
+
 /// What a test server does on each connection.
 #[derive(Clone)]
 pub(super) enum Server {
     /// Writes the first part, waits, writes the second, then keeps the
     /// connection open until the client closes it.
     Flight(Vec<u8>, Duration, Vec<u8>),
+    /// Writes the first part, then one more byte after each gap, as many
+    /// times as given, while the client is there to take them; then keeps
+    /// the connection open until the client closes it.
+    Drip(Vec<u8>, Duration, usize),
     /// Reads the hello and says nothing.
     Silent,
     /// Reads the hello and closes.
@@ -130,6 +143,18 @@ pub(super) fn serve(how: Server, connections: usize) -> SocketAddr {
                     // Wait for the client to give up, as a server waiting
                     // for its next flight would.
                     let _closed = stream.read(&mut [0; 1]);
+                }
+                Server::Drip(first, gap, count) => {
+                    stream.write_all(first).unwrap();
+                    // A client that hung up makes a write fail, which ends
+                    // the drip.
+                    let gone = (0..*count).any(|_| {
+                        thread::sleep(*gap);
+                        stream.write_all(&[0xaa]).is_err()
+                    });
+                    if !gone {
+                        let _closed = stream.read(&mut [0; 1]);
+                    }
                 }
                 Server::Silent => {
                     let _closed = stream.read(&mut [0; 1]);

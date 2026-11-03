@@ -11,13 +11,17 @@
 //! socket in the node's private directory, and this process splices the
 //! two.
 //!
-//! A target with a deadline (the sleep drain's, design §10.3) opens its
-//! connection within what is left of it, and runs each session in a
-//! process group of its own, which is killed when the deadline passes:
-//! ssh's own timeouts (`ConnectTimeout`, the server-alive probes) allow a
-//! session far longer than the drain's budget, and the group ends the
-//! ProxyCommand with ssh. A target without one runs as before, in the
-//! caller's group, so a terminal's Ctrl-C still ends ssh with `mooringctl`.
+//! A target with a deadline (the sleep drain's, design §10.3, and the
+//! target check's, §13.2) opens its connection within what is left of it,
+//! and runs each session in a process group of its own, which is killed
+//! when the deadline passes: ssh's own timeouts (`ConnectTimeout`, the
+//! server-alive probes) allow a session far longer than the drain's
+//! budget, and the group ends the ProxyCommand with ssh. A terminal's
+//! Ctrl-C then reaches `mooringctl` alone, which ends with the node's
+//! connection and the relay socket; ssh, left in its group, finds its
+//! connection gone at its next server-alive probe, within 15 s, and exits
+//! with its ProxyCommand. A target without one runs as before, in the
+//! caller's group, so a Ctrl-C ends ssh with `mooringctl`.
 
 use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};

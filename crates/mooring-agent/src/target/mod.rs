@@ -10,7 +10,9 @@
 //! the name once (`getent ahostsv4`) and sends every probe to the same
 //! IPv4: `xray tls ping -ip` and `curl --resolve`, which [`probes`] runs
 //! under `timeout` as it runs `getent`, and the handshake sampler
-//! ([`sampler`]).
+//! ([`sampler`]). Each of them is bounded, so the whole check is too, and
+//! the build holds that bound to `TARGET_CHECK_BOUND`, what the node
+//! promises the Mac.
 
 pub(crate) mod hourly;
 pub(crate) mod probes;
@@ -18,16 +20,36 @@ pub(crate) mod sampler;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use mooring_agent_proto::{
-    AgentError, HttpProbe, IoOp, Sha256Hex, TargetFacts, TargetHost, TlsProbe, TlsSession,
+    AgentError, HttpProbe, IoOp, Sha256Hex, TARGET_CHECK_BOUND, TARGET_HANDSHAKE_SAMPLES,
+    TargetFacts, TargetHost, TlsProbe, TlsSession,
 };
 
 use crate::host::Node;
 use crate::paths::Paths;
 use crate::store::io_error;
 use crate::txn::stage::{self, XRAY};
-use probes::{TLS_PORT, TlsPing, http_probe, resolve, tls_ping};
+use probes::{TLS_PORT, TOOL_BOUND, TlsPing, http_probe, resolve, tls_ping};
+
+/// The tools a whole check runs, each under `timeout`: `getent`,
+/// `xray tls ping` and curl.
+pub(crate) const TOOLS: u32 = 3;
+
+/// The longest [`check`] takes on a node: its [`TOOLS`], each ended by
+/// `timeout`, and the sampler's handshakes, each ended by its deadline.
+/// Installing the Xray, a copy on the node's own disk, is not counted.
+const CHECK_BOUND: Duration = TOOL_BOUND.saturating_mul(TOOLS).saturating_add(
+    sampler::NODE
+        .bound()
+        .saturating_mul(TARGET_HANDSHAKE_SAMPLES as u32),
+);
+
+// The node promises the Mac its facts within `TARGET_CHECK_BOUND` (design
+// §11.7), so a bound raised past it fails the build rather than the
+// promise.
+const _: () = assert!(CHECK_BOUND.as_millis() <= TARGET_CHECK_BOUND.as_millis());
 
 /// The Xray stored as blob `sha`, installed in the engine store (0755)
 /// unless an intact copy is there: a node is checked before its first
@@ -84,6 +106,7 @@ pub(crate) fn check_at(
             let measured = sampler::measure(
                 SocketAddr::new(address.into(), port),
                 &host,
+                sampler::NODE,
                 sampler::urandom,
             )?;
             TlsProbe::Completed(TlsSession {

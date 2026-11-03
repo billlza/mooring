@@ -128,8 +128,8 @@ pub use series::{
 pub use status::{AppliedGeneration, StatusV1};
 pub use stderr::{REDACTED, STDERR_TAIL_MAX_BYTES, StderrTail};
 pub use target::{
-    HttpProbe, HttpStatus, HttpVersion, TARGET_HANDSHAKE_SAMPLES, TargetFacts, TlsGroup, TlsProbe,
-    TlsSession, TlsVersion,
+    HttpProbe, HttpStatus, HttpVersion, TARGET_CHECK_BOUND, TARGET_HANDSHAKE_SAMPLES, TargetFacts,
+    TlsGroup, TlsProbe, TlsSession, TlsVersion,
 };
 pub use usage::{
     Inbound, InboundSet, OpaqueUserId, Principal, StatsEmail, Traffic, UsageMonth, UsageV1,

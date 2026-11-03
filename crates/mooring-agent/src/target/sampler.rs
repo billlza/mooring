@@ -8,8 +8,11 @@
 //! share, the name as SNI, ALPN `h2` and `http/1.1`), never completes the
 //! handshake, and times the target's answer: from the hello's last byte to
 //! the last byte of the server's first flight, which ends when the server
-//! goes quiet for [`IDLE`] waiting for the client's next flight. The
-//! flight's size counts every byte of it, record headers included.
+//! goes quiet waiting for the client's next flight. The flight's size
+//! counts every byte of it, record headers included. Each handshake is
+//! held to the [`Timing`] it is given, the node's being [`NODE`]: the
+//! flight must end by its deadline, so one handshake takes at most
+//! [`Timing::bound`].
 //!
 //! The hello offers no certificate compression, so a target that would
 //! compress its chain for a browser is measured at its larger size: the
@@ -23,17 +26,41 @@ use mooring_agent_proto::{
     AgentError, StderrTail, TARGET_HANDSHAKE_SAMPLES, TargetHost, TargetTool,
 };
 
-/// How long a connection may take.
-const CONNECT: Duration = Duration::from_secs(3);
+/// The times one handshake is held to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Timing {
+    /// How long the connection may take.
+    pub(crate) connect: Duration,
+    /// The quiet after its last byte that ends the server's first flight.
+    pub(crate) idle: Duration,
+    /// How long the server may take over its first flight, from the
+    /// hello's last byte to the flight's: one that has not started by
+    /// then, or is still coming, is no sample.
+    pub(crate) deadline: Duration,
+}
 
-/// The quiet that ends the server's first flight. A target that passes the
-/// 5 ms handshake rule is a neighbour of the node, so a flight spread over
-/// two round trips (more than the initial congestion window) never pauses
-/// this long.
-pub(crate) const IDLE: Duration = Duration::from_millis(300);
+impl Timing {
+    /// The longest one handshake takes: the connection, then a flight
+    /// whose last byte came before the deadline and the quiet after it.
+    pub(crate) const fn bound(self) -> Duration {
+        self.connect
+            .saturating_add(self.deadline)
+            .saturating_add(self.idle)
+    }
+}
 
-/// How long the server may take to start answering.
-const DEADLINE: Duration = Duration::from_secs(3);
+/// The node's timing (design §11.7). A target that passes the 5 ms
+/// handshake rule is a neighbour of the node, so a flight spread over two
+/// round trips (more than the initial congestion window) never pauses for
+/// the 300 ms quiet, and the whole of it comes within milliseconds, far
+/// inside the 3 s deadline. Without the deadline, a byte dripped out under
+/// every quiet would hold a sample until the flight reached
+/// [`MAX_FLIGHT`], for hours.
+pub(crate) const NODE: Timing = Timing {
+    connect: Duration::from_secs(3),
+    idle: Duration::from_millis(300),
+    deadline: Duration::from_secs(3),
+};
 
 /// The most of a flight read: far above REALITY's 16 KiB limit.
 const MAX_FLIGHT: usize = 64 * 1024;
@@ -75,17 +102,19 @@ fn unavailable(text: &str) -> AgentError {
 }
 
 /// Samples [`TARGET_HANDSHAKE_SAMPLES`] handshakes with the target at
-/// `address`, each hello with fresh bytes from `random`.
+/// `address`, each held to `timing` and its hello with fresh bytes from
+/// `random`.
 pub(crate) fn measure(
     address: SocketAddr,
     host: &TargetHost,
+    timing: Timing,
     mut random: impl FnMut() -> io::Result<[u8; RANDOM_BYTES]>,
 ) -> Result<Measured, AgentError> {
     let mut times = Vec::with_capacity(usize::from(TARGET_HANDSHAKE_SAMPLES));
     let mut largest = 0;
     for _ in 0..TARGET_HANDSHAKE_SAMPLES {
         let random = random().map_err(|error| unavailable(&format!("randomness: {error}")))?;
-        let sample = sample(address, host, &random).map_err(|text| unavailable(&text))?;
+        let sample = sample(address, host, timing, &random).map_err(|text| unavailable(&text))?;
         times.push(sample.micros);
         largest = largest.max(sample.bytes);
     }
@@ -103,57 +132,88 @@ pub(crate) fn p95(times: &mut [u64]) -> Option<u64> {
     times.get(rank.checked_sub(1)?).copied()
 }
 
-/// One handshake: the hello sent, the server's first flight read until it
-/// goes quiet, and its first record checked to be a ServerHello. A failure
-/// is described for the Mac.
+/// One handshake held to `timing`: the hello sent, the server's first
+/// flight read until it goes quiet, and its first record checked to be a
+/// ServerHello. A failure is described for the Mac.
 pub(crate) fn sample(
     address: SocketAddr,
     host: &TargetHost,
+    timing: Timing,
     random: &[u8; RANDOM_BYTES],
 ) -> Result<Sample, String> {
-    let mut stream = TcpStream::connect_timeout(&address, CONNECT)
+    let mut stream = TcpStream::connect_timeout(&address, timing.connect)
         .map_err(|error| format!("connect: {error}"))?;
     stream
         .set_nodelay(true)
-        .and_then(|()| stream.set_read_timeout(Some(IDLE)))
         .map_err(|error| format!("socket: {error}"))?;
     stream
         .write_all(&client_hello(host, random))
         .map_err(|error| format!("send: {error}"))?;
     let sent = Instant::now();
-    let mut flight = Vec::new();
-    let mut last = None;
-    let mut buffer = [0; 16 * 1024];
-    while flight.len() < MAX_FLIGHT {
-        match stream.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => {
-                flight.extend_from_slice(&buffer[..read]);
-                last = Some(Instant::now());
-            }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                if last.is_some() {
-                    break;
-                }
-                if sent.elapsed() >= DEADLINE {
-                    return Err("the target sent nothing back".to_owned());
-                }
-            }
-            Err(error) => return Err(format!("receive: {error}")),
-        }
-    }
-    let last = last.ok_or_else(|| "the target closed without an answer".to_owned())?;
+    let (flight, last) = first_flight(&mut stream, sent, timing)?;
     check_server_hello(&flight)?;
     Ok(Sample {
         micros: u64::try_from(last.duration_since(sent).as_micros()).unwrap_or(u64::MAX),
         bytes: u32::try_from(flight.len()).map_err(|_| "the flight is too large".to_owned())?,
     })
+}
+
+/// The server's first flight on `stream`, the hello having been `sent`,
+/// and when its last byte came. The first byte must come by the
+/// deadline, and the flight ends at the quiet after its last byte, which
+/// must also have come by the deadline. Each read waits only for what is
+/// left until the next of those, so nothing (a signal that interrupts a
+/// read included) holds the flight past [`Timing::bound`].
+fn first_flight(
+    stream: &mut TcpStream,
+    sent: Instant,
+    timing: Timing,
+) -> Result<(Vec<u8>, Instant), String> {
+    let mut flight = Vec::new();
+    let mut last = None;
+    let mut buffer = [0; 16 * 1024];
+    while flight.len() < MAX_FLIGHT {
+        let until = match last {
+            None => sent + timing.deadline,
+            Some(last) => last + timing.idle,
+        };
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            if last.is_none() {
+                return Err("the target sent nothing back".to_owned());
+            }
+            break;
+        }
+        stream
+            .set_read_timeout(Some(left))
+            .map_err(|error| format!("socket: {error}"))?;
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                let now = Instant::now();
+                if now.duration_since(sent) >= timing.deadline {
+                    return Err(format!(
+                        "the target's first flight had not ended {} ms after the hello",
+                        timing.deadline.as_millis()
+                    ));
+                }
+                flight.extend_from_slice(&buffer[..read]);
+                last = Some(now);
+            }
+            // Nothing came in time, or a signal cut the wait short: the
+            // clock decides at the top of the loop.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => return Err(format!("receive: {error}")),
+        }
+    }
+    let last = last.ok_or_else(|| "the target closed without an answer".to_owned())?;
+    Ok((flight, last))
 }
 
 /// `SHA-256("HelloRetryRequest")`, the random of a ServerHello that asks
