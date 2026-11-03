@@ -4,7 +4,8 @@
 // `mooringctl` inside its own bundle, reads `status --follow --json` and,
 // for the Router screen, `router history --json`, and never touches a
 // secret or a daemon file. It is a menu-bar app (LSUIElement); the console
-// window opens at launch and from the menu.
+// window opens at launch and from the menu, which raises it in front of
+// other apps' windows (ConsoleWindowFront).
 
 import MooringKit
 import SwiftUI
@@ -14,6 +15,7 @@ struct MooringApp: App {
     @State private var model: ConsoleModel
     @State private var history: HistoryModel
     @State private var daemon = DaemonService()
+    @State private var consoleFront = ConsoleWindowFront()
 
     /// The model reads from launch, whether or not the window is shown: the
     /// menu bar's summary needs it too. The history is read when the
@@ -29,11 +31,15 @@ struct MooringApp: App {
         Window("Mooring", id: ConsoleWindow.id) {
             ConsoleView(model: model, daemon: daemon, history: history)
                 .frame(minWidth: 780, minHeight: 540)
+                .background(
+                    HostingWindowReader { [consoleFront] window in
+                        consoleFront.attach(AppKitRaisableWindow(window: window))
+                    })
         }
         .defaultSize(width: 980, height: 680)
 
         MenuBarExtra {
-            MenuView(model: model, daemon: daemon)
+            MenuView(model: model, daemon: daemon, consoleFront: consoleFront)
         } label: {
             Image(systemName: model.menuSymbol)
         }

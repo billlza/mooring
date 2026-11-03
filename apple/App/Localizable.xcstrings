@@ -2216,6 +2216,16 @@
         }
       }
     },
+    "Quota %@; usage not read": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配额 %@；用量未读取"
+          }
+        }
+      }
+    },
     "Quota %@; usage unavailable": {
       "localizations": {
         "zh-Hans": {
@@ -3442,6 +3452,16 @@
         }
       }
     },
+    "Usage is not read by this build yet; status and activity are live.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个版本还不读取用量；状态和活动是实时的。"
+          }
+        }
+      }
+    },
     "Usage through %@, cycle from %@.": {
       "localizations": {
         "zh-Hans": {
@@ -4451,6 +4471,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "还没有轮询"
+          }
+        }
+      }
+    },
+    "not read": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未读取"
           }
         }
       }

@@ -96,7 +96,10 @@ pub(crate) fn attributes(fd: BorrowedFd<'_>) -> Result<libc::termios, MacsysErro
 
 /// Sets the terminal attributes of `fd` after discarding pending input
 /// (`tcsetattr` with `TCSAFLUSH`).
-fn set_attributes(fd: BorrowedFd<'_>, attributes: &libc::termios) -> Result<(), MacsysError> {
+pub(crate) fn set_attributes(
+    fd: BorrowedFd<'_>,
+    attributes: &libc::termios,
+) -> Result<(), MacsysError> {
     // SAFETY: `fd` is an open descriptor for the borrow's lifetime, and
     // `attributes` points to a whole `termios` that the call only reads.
     let status = unsafe { libc::tcsetattr(fd.as_raw_fd(), libc::TCSAFLUSH, attributes) };

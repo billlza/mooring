@@ -13,6 +13,7 @@
 
 use std::fs;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
@@ -54,7 +55,7 @@ pub(crate) fn bootstrap(
     accounts::converge(paths, node)?;
     layout::converge(paths, &HostProfile::CURRENT)?;
     crate::txn::activate::install(paths, &actual, &paths.own_executable())?;
-    crate::txn::replace_link(&paths.agent_current(), Path::new(&actual.to_string()))
+    crate::txn::links::replace_link(&paths.agent_current(), Path::new(&actual.to_string()))
         .map_err(|error| io_error(IoOp::WriteState, &error))?;
     host_profile(paths, node)?;
     authorize(paths, keys)?;
@@ -245,13 +246,13 @@ fn replace_host_key(paths: &Paths, node: &dyn Node) -> Result<(), AgentError> {
     fs::rename(&fresh, &key).map_err(fail)?;
     for entry in fs::read_dir(paths.ssh_dir()).map_err(fail)? {
         let entry = entry.map_err(fail)?;
+        // Compared as bytes: a name that is not UTF-8 is judged like any
+        // other.
         let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        let host_key =
-            name.starts_with("ssh_host_") && (name.ends_with("_key") || name.ends_with("_key.pub"));
-        if host_key && !name.starts_with("ssh_host_ed25519_key") {
+        let name = name.as_bytes();
+        let host_key = name.starts_with(b"ssh_host_")
+            && (name.ends_with(b"_key") || name.ends_with(b"_key.pub"));
+        if host_key && !name.starts_with(b"ssh_host_ed25519_key") {
             fs::remove_file(entry.path()).map_err(fail)?;
         }
     }

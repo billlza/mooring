@@ -185,5 +185,12 @@ import Testing
         #expect(throws: (any Error).self) {
             try JSONDecoder().decode(EngineRun.self, from: Data("\"inactive\"".utf8))
         }
+        for refused in ["{\"not_pulled\": null}", "{\"not_pulled\": {}}", "\"unavailable\""] {
+            #expect(throws: (any Error).self, "\(refused)") {
+                try JSONDecoder().decode(UsageView.self, from: Data(refused.utf8))
+            }
+        }
+        #expect(
+            try JSONDecoder().decode(UsageView.self, from: Data("\"not_pulled\"".utf8)) == .notPulled)
     }
 }

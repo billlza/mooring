@@ -11,7 +11,12 @@
 //! durable: a reader ignores it and the writer cuts it off before its next
 //! append. The journal is pruned from its oldest end only, never below its
 //! newest event (so the next number is never reused), of the events older
-//! than [`RETENTION_SECS`] and beyond [`MAX_KEPT`].
+//! than [`RETENTION_SECS`] and beyond [`MAX_KEPT`]: an append that prunes
+//! rewrites the journal atomically with its events, so a rewrite that fails
+//! before its rename leaves the journal as it was. A write that fails after
+//! its lines reached the file (its `fsync`, or the directory's sync after a
+//! rename) is reported as failed all the same, and the watch appends those
+//! changes again: each is recorded at least once.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -23,7 +28,7 @@ use mooring_agent_proto::{
 };
 
 use crate::paths::Paths;
-use crate::store::{ensure_dir, io_error, malformed, write_atomic};
+use crate::store::{append_json_line, ensure_dir, io_error, malformed, parent_of, write_atomic};
 
 /// How long an event is kept: 393 days, the shortest thirteen calendar
 /// months, so that no event outlives the thirteen months the user
@@ -64,13 +69,12 @@ impl Journal {
         };
         let complete = complete_len(&bytes);
         if complete < bytes.len() {
-            let file = OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .map_err(|error| io_error(IoOp::WriteState, &error))?;
-            file.set_len(complete as u64)
-                .and_then(|()| file.sync_all())
-                .map_err(|error| io_error(IoOp::WriteState, &error))?;
+            let cut = |path: &Path| -> io::Result<()> {
+                let file = OpenOptions::new().write(true).open(path)?;
+                file.set_len(complete as u64)?;
+                file.sync_all()
+            };
+            cut(&path).map_err(|error| io_error(IoOp::WriteState, &error))?;
         }
         let events = parse(&bytes[..complete])?;
         Ok(Self {
@@ -83,9 +87,12 @@ impl Journal {
         })
     }
 
-    /// Appends `kinds`, in order, recorded at `at`, then prunes if the
-    /// journal has grown past [`MAX_KEPT`] or holds an event older than
-    /// [`RETENTION_SECS`].
+    /// Appends `kinds`, in order, recorded at `at`. When the journal would
+    /// grow past [`MAX_KEPT`], or holds an event older than
+    /// [`RETENTION_SECS`], it is rewritten instead, pruned and with the new
+    /// events at its end. The numbers advance only when the write succeeds;
+    /// after an error the caller opens the journal anew before appending
+    /// again, which cuts off anything a failed append tore.
     pub(crate) fn append(
         &mut self,
         at: UnixTime,
@@ -94,35 +101,42 @@ impl Journal {
         if kinds.is_empty() {
             return Ok(());
         }
-        let mut lines = Vec::new();
         let mut seq = self.next;
+        let mut events = Vec::with_capacity(kinds.len());
         for &kind in kinds {
-            let event = AgentEvent { seq, at, kind };
-            serde_json::to_writer(&mut lines, &event).map_err(|_| malformed(IoOp::WriteState))?;
-            lines.push(b'\n');
+            events.push(AgentEvent { seq, at, kind });
             seq = EventSeq::new(seq.get() + 1);
         }
-        let write = |path: &Path| -> io::Result<()> {
-            let mut file = OpenOptions::new().append(true).open(path)?;
-            file.write_all(&lines)?;
-            file.sync_data()
-        };
-        write(&self.path).map_err(|error| io_error(IoOp::WriteState, &error))?;
-        self.next = seq;
-        self.len += kinds.len();
-        self.oldest.get_or_insert(at);
-        if beyond_bound(self.len) || self.oldest.is_some_and(|oldest| expired(at, oldest)) {
-            self.prune(at)?;
+        let len = self.len + events.len();
+        let oldest = self.oldest.unwrap_or(at);
+        if beyond_bound(len) || expired(at, oldest) {
+            self.rewrite(at, events)?;
+        } else {
+            let mut lines = Vec::new();
+            for event in &events {
+                append_json_line(&mut lines, event)?;
+            }
+            let write = |path: &Path| -> io::Result<()> {
+                let mut file = OpenOptions::new().append(true).open(path)?;
+                file.write_all(&lines)?;
+                file.sync_data()
+            };
+            write(&self.path).map_err(|error| io_error(IoOp::WriteState, &error))?;
+            self.len = len;
+            self.oldest = Some(oldest);
         }
+        self.next = seq;
         Ok(())
     }
 
-    /// Rewrites the journal without the events older than
-    /// [`RETENTION_SECS`] at `now`, and without the oldest beyond three
-    /// quarters of [`MAX_KEPT`] when it holds more than that. The newest
-    /// event is the one just appended at `now`, so it is always kept.
-    fn prune(&mut self, now: UnixTime) -> Result<(), AgentError> {
-        let events = read(&self.path)?;
+    /// Rewrites the journal atomically with `appended` after its events,
+    /// without those older than [`RETENTION_SECS`] at `now`, and without
+    /// the oldest beyond three quarters of [`MAX_KEPT`] when it would hold
+    /// more than that. The newest event is one appended at `now`, so it is
+    /// always kept.
+    fn rewrite(&mut self, now: UnixTime, appended: Vec<AgentEvent>) -> Result<(), AgentError> {
+        let mut events = read(&self.path)?;
+        events.extend(appended);
         let mut first = events
             .iter()
             .position(|event| !expired(now, event.at))
@@ -133,8 +147,7 @@ impl Journal {
         let kept = &events[first..];
         let mut bytes = Vec::new();
         for event in kept {
-            serde_json::to_writer(&mut bytes, event).map_err(|_| malformed(IoOp::WriteState))?;
-            bytes.push(b'\n');
+            append_json_line(&mut bytes, event)?;
         }
         write_atomic(&self.path, &bytes, MODE)
             .map_err(|error| io_error(IoOp::WriteState, &error))?;
@@ -157,9 +170,7 @@ const fn beyond_bound(len: usize) -> bool {
 
 /// Creates the journal empty, durably: the file, then its directory entry.
 fn create(path: &Path) -> io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+    let dir = parent_of(path)?;
     ensure_dir(dir)?;
     OpenOptions::new()
         .write(true)

@@ -7,14 +7,15 @@
 //! work, and the new agent must serve the `Confirm`.
 
 use std::fs;
-use std::io;
 use std::path::Path;
 
 use mooring_agent_proto::{AgentError, Generation, IoOp, PROTOCOL, Sha256Hex, StderrTail};
 
+use super::links::replace_link;
 use super::record::{Change, Pending, Phase, set_pending};
-use super::{abandon, arm_revert, exclusive, replace_link};
-use crate::blobs::digest_of;
+use super::stage::stored_intact;
+use super::timer::arm_revert;
+use super::{end, exclusive};
 use crate::gate;
 use crate::host::Node;
 use crate::paths::Paths;
@@ -67,7 +68,15 @@ pub(crate) fn activate(
             .map_err(|error| io_error(IoOp::WriteState, &error))
     });
     if let Err(error) = switched {
-        abandon(paths, node, generation, true)?;
+        // A switch that failed after its rename has switched: the change
+        // stays pending, and its timer puts the previous agent back unless
+        // it is confirmed. So does one whose link cannot be read. Only a
+        // link that does not name the new agent ends the change here.
+        let unswitched = fs::read_link(paths.agent_current())
+            .is_ok_and(|target| target != Path::new(&sha.to_string()));
+        if unswitched {
+            end(paths, node, generation, None, true)?;
+        }
         return Err(error);
     }
     Ok(generation)
@@ -91,12 +100,7 @@ pub(crate) fn install(
 ) -> Result<std::path::PathBuf, AgentError> {
     let dir = paths.agent_dir();
     let target = dir.join(sha.to_string());
-    let intact = match fs::File::open(&target) {
-        Ok(file) => digest_of(file).map_err(|error| io_error(IoOp::ReadBlob, &error))? == *sha,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => return Err(io_error(IoOp::ReadBlob, &error)),
-    };
-    if !intact {
+    if !stored_intact(&target, sha)? {
         ensure_dir(&dir).map_err(|error| io_error(IoOp::WriteBlob, &error))?;
         let bytes = fs::read(source).map_err(|error| io_error(IoOp::ReadBlob, &error))?;
         crate::store::write_atomic(&target, &bytes, 0o755)

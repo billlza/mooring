@@ -3,21 +3,27 @@
 //! The forced command end to end: one frame in, one reply out, the role
 //! checked before anything is done, and every request served.
 
+use std::fs;
 use std::io::Cursor;
+use std::os::unix::fs::symlink;
 
 use mooring_agent_proto::{
-    AgentError, AgentEvent, AgentEventKind, BlobLen, ClearableHold, EventSeq, GateReason, Holds,
-    LineRequest, Reply, Request, RequestKind, Response, Role, ShutdownReason, UnixTime, read_reply,
-    write_put_blob, write_request,
+    AgentError, AgentEvent, AgentEventKind, BlobLen, ClearableHold, EventSeq, GateReason,
+    Generation, Holds, IoOp, LineRequest, Reply, Request, RequestKind, Response, Role,
+    ShutdownReason, TxnStage, TxnState, UnixTime, read_reply, write_put_blob, write_request,
 };
 
-use super::{FakeNode, nft_set, ok, scratch};
-use crate::blobs::digest_of;
+use super::{ENOENT, FakeNode, header, nft_set, ok, scratch, sha};
+use crate::blobs::{digest_of, put};
 use crate::host::Tool;
 use crate::paths::Paths;
-use crate::serve::{Session, answer, serve};
+use crate::serve::{Session, answer, line_reply, serve};
+use crate::store::write_json;
+use crate::txn::record::{Change, Pending, Phase, set_pending};
+use crate::txn::stage::BUNDLE_FILE;
 
-const SSH: &str = "198.51.100.97 51234 203.0.113.203 22";
+/// `SSH_CONNECTION` as sshd sets it for the requests `ask` sends.
+pub(super) const SSH: &str = "198.51.100.97 51234 203.0.113.203 22";
 
 fn session(role: Role) -> Session<'static> {
     Session {
@@ -306,6 +312,246 @@ fn events_are_served_from_the_journal_to_ops_and_the_viewer() {
         Err(AgentError::RoleNotPermitted {
             role: Role::Bootstrap,
             request: RequestKind::Events,
+        })
+    );
+}
+
+/// The bootstrap key's role check is made twice: `authorize` refuses its
+/// `GateSet`, and the dispatch would refuse it again, so that no gate
+/// handler can run for that key even if `authorize` let one through.
+#[test]
+fn the_bootstrap_key_never_reaches_a_gate_handler() {
+    let (_dir, paths) = scratch();
+    let node = FakeNode::new(10);
+    for reason in GateReason::ALL {
+        assert_eq!(
+            line_reply(
+                &paths,
+                &node,
+                session(Role::Bootstrap),
+                LineRequest::GateSet { reason: *reason }
+            ),
+            Err(AgentError::RoleNotPermitted {
+                role: Role::Bootstrap,
+                request: RequestKind::GateSet,
+            })
+        );
+    }
+    assert!(node.calls().is_empty(), "{:#?}", node.calls());
+    assert!(!paths.gate_dir().exists());
+}
+
+#[test]
+fn the_transaction_requests_reach_their_handlers() {
+    let (_dir, paths) = scratch();
+    let node = FakeNode::new(1_000);
+    let one = Generation::new(1);
+    let apply = |generation| frame(&LineRequest::Apply(Box::new(header(generation))));
+    let status = frame(&LineRequest::TxnStatus { generation: one });
+    assert_eq!(
+        ask(&paths, &node, Role::Ops, apply(1)),
+        Ok(Response::TxnLaunched { generation: one })
+    );
+    assert_eq!(
+        node.calls(),
+        vec![
+            "/usr/bin/systemd-run --unit=mooring-txn-1 --collect --quiet \
+             /usr/local/lib/mooring/agent/current txn 1"
+                .to_owned()
+        ]
+    );
+    assert_eq!(
+        ask(&paths, &node, Role::Ops, status.clone()),
+        Ok(Response::TxnStatus {
+            generation: one,
+            state: TxnState::Running {
+                stage: TxnStage::Preconditions
+            },
+        })
+    );
+    // Launched but never run: the rollback has switched nothing to undo.
+    assert_eq!(
+        ask(&paths, &node, Role::Ops, frame(&LineRequest::Rollback)),
+        Ok(Response::Reverted { generation: one })
+    );
+    assert_eq!(
+        ask(&paths, &node, Role::Ops, status.clone()),
+        Ok(Response::TxnStatus {
+            generation: one,
+            state: TxnState::Reverted,
+        })
+    );
+    // As the transaction's unit leaves a change it ran through.
+    assert_eq!(
+        ask(&paths, &node, Role::Ops, apply(2)),
+        Ok(Response::TxnLaunched {
+            generation: Generation::new(2)
+        })
+    );
+    set_pending(
+        &paths,
+        &Pending {
+            generation: Generation::new(2),
+            change: Change::Apply {
+                previous: Generation::ZERO,
+            },
+            phase: Phase::AwaitingConfirm,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        ask(
+            &paths,
+            &node,
+            Role::Ops,
+            frame(&LineRequest::Confirm {
+                generation: Generation::new(2)
+            })
+        ),
+        Ok(Response::Confirmed {
+            generation: Generation::new(2)
+        })
+    );
+    assert_eq!(
+        node.calls().last().map(String::as_str),
+        Some("/usr/bin/systemctl stop mooring-txn-revert-2.timer")
+    );
+    assert_eq!(
+        ask(
+            &paths,
+            &node,
+            Role::Ops,
+            frame(&LineRequest::TxnStatus {
+                generation: Generation::new(2)
+            })
+        ),
+        Ok(Response::TxnStatus {
+            generation: Generation::new(2),
+            state: TxnState::Committed,
+        })
+    );
+    // The viewer may ask none of them.
+    for (request, kind) in [
+        (apply(3), RequestKind::Apply),
+        (status, RequestKind::TxnStatus),
+        (frame(&LineRequest::Rollback), RequestKind::Rollback),
+    ] {
+        assert_eq!(
+            ask(&paths, &node, Role::Viewer, request),
+            Err(AgentError::RoleNotPermitted {
+                role: Role::Viewer,
+                request: kind,
+            })
+        );
+    }
+}
+
+#[test]
+fn an_apply_of_the_bundle_the_node_runs_is_unchanged() {
+    let (_dir, paths) = scratch();
+    let node = FakeNode::new(1_000);
+    let four = Generation::new(4);
+    let dir = paths.generation(four);
+    write_json(&dir.join(BUNDLE_FILE), &header(4), 0o644).unwrap();
+    symlink("gen-4", paths.current()).unwrap();
+    assert_eq!(
+        ask(
+            &paths,
+            &node,
+            Role::Ops,
+            frame(&LineRequest::Apply(Box::new(header(4))))
+        ),
+        Ok(Response::Unchanged { generation: four })
+    );
+    assert!(node.calls().is_empty(), "{:#?}", node.calls());
+}
+
+#[test]
+fn an_activation_and_a_resume_reach_their_handlers() {
+    let (_dir, paths) = scratch();
+    let node = FakeNode::new(1_000).programs(Box::new(|_, args| {
+        Ok(match args {
+            ["self-test"] => ok(b"1\n"),
+            _ => ok(b""),
+        })
+    }));
+    let binary = b"new agent binary";
+    let agent = sha("new agent binary");
+    put(
+        &paths,
+        agent,
+        BlobLen::new(binary.len() as u64).unwrap(),
+        &mut Cursor::new(binary.to_vec()),
+    )
+    .unwrap();
+    fs::create_dir_all(paths.agent_dir()).unwrap();
+    symlink("old-agent", paths.agent_current()).unwrap();
+    assert_eq!(
+        ask(
+            &paths,
+            &node,
+            Role::Ops,
+            frame(&LineRequest::ActivateAgent { sha: agent })
+        ),
+        Ok(Response::AwaitingConfirm {
+            generation: Generation::ZERO
+        })
+    );
+    assert_eq!(
+        fs::read_link(paths.agent_current()).unwrap(),
+        std::path::Path::new(&agent.to_string())
+    );
+    // `Resume` reaches its handler, which resumes only a halted node.
+    assert_eq!(
+        ask(
+            &paths,
+            &node,
+            Role::Ops,
+            frame(&LineRequest::Resume {
+                config_generation: Generation::ZERO
+            })
+        ),
+        Err(AgentError::Busy {
+            generation: Generation::ZERO
+        }),
+        "the activation awaits its confirmation"
+    );
+    assert_eq!(
+        ask(
+            &paths,
+            &node,
+            Role::Ops,
+            frame(&LineRequest::Confirm {
+                generation: Generation::ZERO
+            })
+        ),
+        Ok(Response::Confirmed {
+            generation: Generation::ZERO
+        })
+    );
+    assert_eq!(
+        ask(
+            &paths,
+            &node,
+            Role::Ops,
+            frame(&LineRequest::Resume {
+                config_generation: Generation::ZERO
+            })
+        ),
+        Err(AgentError::NotHalted)
+    );
+}
+
+/// A `Hello` the node cannot answer is the reply's error.
+#[test]
+fn a_hello_the_node_cannot_answer_is_its_error() {
+    let (_dir, paths) = scratch();
+    let node = FakeNode::new(0);
+    assert_eq!(
+        ask(&paths, &node, Role::Ops, frame(&LineRequest::Hello)),
+        Err(AgentError::Io {
+            op: IoOp::ReadBlob,
+            errno: Some(ENOENT),
         })
     );
 }

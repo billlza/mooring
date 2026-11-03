@@ -5,8 +5,9 @@
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
-use mooring_agent_proto::EngineUser;
+use mooring_agent_proto::{AgentError, EngineUser, IoOp};
 
+use super::ENOENT;
 use crate::txn::health::{Listener, all_listening, expected_listeners, owner_guards_present};
 use crate::txn::validate::has_warning;
 
@@ -171,4 +172,109 @@ fn any_warning_or_error_word_fails_validation() {
         !has_warning(b"errors=0 warnings_total=0"),
         "not the words themselves"
     );
+}
+
+/// A generation's three configurations, in a directory of their own.
+fn configs(xray: &str, hy2: &str, wg: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("xray.json"), xray).unwrap();
+    std::fs::write(dir.path().join("hy2.json"), hy2).unwrap();
+    std::fs::write(dir.path().join("wgexit.conf"), wg).unwrap();
+    dir
+}
+
+const XRAY_ON: &str = r#"{"inbounds":[{"listen":"1.2.3.4","port":443}]}"#;
+const HY2_ON: &str = r#"{"inbounds":[{"listen":"1.2.3.4","listen_port":443}]}"#;
+const WG_ON: &str = "[Interface]\nListenPort = 27820\n";
+
+#[test]
+fn an_inbound_that_names_no_address_listens_on_every_address() {
+    let dir = configs(
+        r#"{"inbounds":[{"port":80,"settings":{"network":"tcp, udp"}}]}"#,
+        r#"{"inbounds":[{"listen_port":443}]}"#,
+        WG_ON,
+    );
+    assert_eq!(
+        expected_listeners(dir.path()).unwrap(),
+        BTreeSet::from([
+            listener(false, None, 80),
+            listener(true, None, 80),
+            listener(true, None, 443),
+            listener(true, None, 27820),
+        ])
+    );
+}
+
+/// A configuration whose listeners cannot be told is malformed, never an
+/// empty set the health gate would pass.
+#[test]
+fn configurations_that_do_not_say_their_listeners_are_malformed() {
+    let malformed = AgentError::Io {
+        op: IoOp::ReadState,
+        errno: None,
+    };
+    for (xray, hy2, wg) in [
+        ("not json", HY2_ON, WG_ON),
+        (r#"{"inbounds":{}}"#, HY2_ON, WG_ON),
+        (
+            r#"{"inbounds":[{"port":443,"settings":{"network":1}}]}"#,
+            HY2_ON,
+            WG_ON,
+        ),
+        (
+            r#"{"inbounds":[{"port":443,"settings":{"network":"quic"}}]}"#,
+            HY2_ON,
+            WG_ON,
+        ),
+        (r#"{"inbounds":[{"listen":1,"port":443}]}"#, HY2_ON, WG_ON),
+        (
+            r#"{"inbounds":[{"listen":"vps","port":443}]}"#,
+            HY2_ON,
+            WG_ON,
+        ),
+        (
+            r#"{"inbounds":[{"listen":"1.2.3.4","port":70000}]}"#,
+            HY2_ON,
+            WG_ON,
+        ),
+        (r#"{"inbounds":[{"listen":"1.2.3.4"}]}"#, HY2_ON, WG_ON),
+        (XRAY_ON, r#"{"inbounds":null}"#, WG_ON),
+        (XRAY_ON, r#"{"inbounds":[{"listen":"1.2.3.4"}]}"#, WG_ON),
+        (XRAY_ON, HY2_ON, "[Interface]\nPrivateKey = x\n"),
+        (XRAY_ON, HY2_ON, "[Interface]\nListenPort = every\n"),
+    ] {
+        let dir = configs(xray, hy2, wg);
+        assert_eq!(
+            expected_listeners(dir.path()),
+            Err(malformed.clone()),
+            "{xray} {hy2} {wg:?}"
+        );
+    }
+}
+
+#[test]
+fn configurations_that_cannot_be_read_say_why() {
+    for file in ["xray.json", "wgexit.conf"] {
+        let dir = configs(XRAY_ON, HY2_ON, WG_ON);
+        std::fs::remove_file(dir.path().join(file)).unwrap();
+        assert_eq!(
+            expected_listeners(dir.path()),
+            Err(AgentError::Io {
+                op: IoOp::ReadState,
+                errno: Some(ENOENT),
+            }),
+            "{file}"
+        );
+    }
+}
+
+#[test]
+fn lines_of_other_protocols_are_no_listeners() {
+    let want = BTreeSet::from([listener(true, None, 27820)]);
+    let ss = "raw UNCONN 0 0 0.0.0.0:255 0.0.0.0:*\nudp UNCONN 0 0 0.0.0.0:27820 0.0.0.0:*\n";
+    assert!(all_listening(ss, &want));
+    assert!(!all_listening(
+        "raw UNCONN 0 0 0.0.0.0:27820 0.0.0.0:*\n",
+        &want
+    ));
 }

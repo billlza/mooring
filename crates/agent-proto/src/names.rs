@@ -8,6 +8,8 @@
 //! can be mistaken for a command-line option where it becomes an argument.
 
 use crate::macros::text_newtype;
+use crate::profile::TUNNEL_UNIT;
+use crate::{EngineUser, Generation};
 
 text_newtype!(
     /// A Linux network interface name, as the kernel accepts it
@@ -57,6 +59,44 @@ text_newtype!(
     UnitName,
     is_unit_name
 );
+
+/// The units the agent runs and names in its errors, valid by
+/// construction (a test checks each against [`UnitName::new`]'s rule), so
+/// that no conversion of a fixed name can fail.
+impl UnitName {
+    /// An engine's service, `mooring-xray.service` or
+    /// `mooring-hy2.service` (design §5.2).
+    pub fn engine(engine: EngineUser) -> Self {
+        Self(format!("{}.service", engine.name()))
+    }
+
+    /// The tunnel's service, `wg-quick@wgexit.service`, as the host
+    /// profile enables it.
+    pub fn tunnel() -> Self {
+        Self(TUNNEL_UNIT.to_owned())
+    }
+
+    /// The transient service a transaction for `generation` runs as,
+    /// `mooring-txn-<N>.service` (design §11.2).
+    pub fn transaction(generation: Generation) -> Self {
+        Self(format!("mooring-txn-{}.service", generation.get()))
+    }
+
+    /// The transient timer that reverts the change under `generation`
+    /// unless it is confirmed, `mooring-txn-revert-<N>.timer` (design
+    /// §11.2 step 7).
+    pub fn confirm_timer(generation: Generation) -> Self {
+        Self(format!("mooring-txn-revert-{}.timer", generation.get()))
+    }
+
+    /// The name without its type suffix, as `systemd-run --unit` takes
+    /// it: `mooring-txn-7` for `mooring-txn-7.service`.
+    pub fn stem(&self) -> &str {
+        self.0
+            .rsplit_once('.')
+            .map_or(self.as_str(), |(stem, _)| stem)
+    }
+}
 
 text_newtype!(
     /// A DNS name taken from a certificate's subject alternative names, as
@@ -196,7 +236,7 @@ fn is_ssh_ed25519_key(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ValueError;
+    use crate::{ENABLED_UNITS, HostFile, ValueError};
 
     #[test]
     fn interface_names_follow_the_kernel_rule() {
@@ -374,6 +414,68 @@ mod tests {
             &"u".repeat(256),
         ] {
             assert_eq!(UnitName::new(bad), Err(ValueError::UnitName), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_agents_units_are_valid_names_by_construction() {
+        let mut units = vec![UnitName::tunnel()];
+        units.extend(
+            EngineUser::ALL
+                .iter()
+                .map(|engine| UnitName::engine(*engine)),
+        );
+        for generation in [0, 1, 7, u64::MAX] {
+            units.push(UnitName::transaction(Generation::new(generation)));
+            units.push(UnitName::confirm_timer(Generation::new(generation)));
+        }
+        for unit in &units {
+            assert_eq!(UnitName::new(unit.as_str()).as_ref(), Ok(unit), "{unit}");
+        }
+        assert_eq!(
+            [
+                UnitName::engine(EngineUser::Xray).as_str(),
+                UnitName::engine(EngineUser::Hy2).as_str(),
+                UnitName::tunnel().as_str(),
+                UnitName::transaction(Generation::new(7)).as_str(),
+                UnitName::confirm_timer(Generation::new(7)).as_str(),
+            ],
+            [
+                "mooring-xray.service",
+                "mooring-hy2.service",
+                "wg-quick@wgexit.service",
+                "mooring-txn-7.service",
+                "mooring-txn-revert-7.timer",
+            ]
+        );
+        assert_eq!(
+            UnitName::transaction(Generation::new(7)).stem(),
+            "mooring-txn-7"
+        );
+        assert_eq!(
+            UnitName::confirm_timer(Generation::new(7)).stem(),
+            "mooring-txn-revert-7"
+        );
+        assert_eq!(UnitName::new("no-suffix").unwrap().stem(), "no-suffix");
+        // The same names as the host profile's units, which it enables.
+        assert_eq!(
+            [
+                HostFile::XrayUnit.unit(),
+                HostFile::Hy2Unit.unit(),
+                Some(UnitName::tunnel().as_str()),
+            ],
+            [
+                Some(UnitName::engine(EngineUser::Xray).as_str()),
+                Some(UnitName::engine(EngineUser::Hy2).as_str()),
+                Some(format!("wg-quick@{}.service", crate::WG_INTERFACE).as_str()),
+            ]
+        );
+        for unit in [
+            UnitName::engine(EngineUser::Xray),
+            UnitName::engine(EngineUser::Hy2),
+            UnitName::tunnel(),
+        ] {
+            assert!(ENABLED_UNITS.contains(&unit.as_str()), "{unit}");
         }
     }
 

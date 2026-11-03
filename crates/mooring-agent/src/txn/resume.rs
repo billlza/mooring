@@ -4,10 +4,10 @@
 //! generation clears the halt marker; the engines are then started and the
 //! local health gate must pass.
 
-use mooring_agent_proto::{AgentError, EngineUser, Generation, SystemdOp};
+use mooring_agent_proto::{AgentError, EngineUser, Generation, SystemdOp, UnitName};
 
 use super::{exclusive, health};
-use crate::gate::{self, engine_unit};
+use crate::gate;
 use crate::host::{Node, Tool, run_ok};
 use crate::paths::Paths;
 
@@ -26,8 +26,8 @@ pub(crate) fn resume(
         return Err(AgentError::GenerationMismatch { current });
     }
     crate::store::remove(&paths.halted())?;
-    for engine in [EngineUser::Xray, EngineUser::Hy2] {
-        let unit = engine_unit(engine)?;
+    for engine in EngineUser::ALL {
+        let unit = UnitName::engine(*engine);
         if run_ok(node, Tool::Systemctl, &["start", unit.as_str()])?.is_err() {
             return Err(AgentError::Systemd {
                 unit,

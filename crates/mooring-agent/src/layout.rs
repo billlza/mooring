@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The agent's directories ([`HostProfile::directories`], design §11.3):
+//! The agent's directories ([`HostProfile::directories`], design §8.6):
 //! `Bootstrap` creates each where it is missing and then sets its owner,
 //! group and mode, so a second run repairs whatever was changed since.
 

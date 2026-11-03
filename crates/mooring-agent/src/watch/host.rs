@@ -91,14 +91,11 @@ pub(crate) fn load_milli(text: &str) -> Result<u32, AgentError> {
     if !digits(whole) || !digits(fraction) || fraction.len() > 3 {
         return Err(malformed(IoOp::ReadState));
     }
-    let whole: u32 = whole.parse().map_err(|_| malformed(IoOp::ReadState))?;
-    let fraction: u32 = format!("{fraction:0<3}")
+    // The thousandths are the digits with the fraction padded to three; a
+    // load beyond `u32` thousandths does not parse.
+    format!("{whole}{fraction:0<3}")
         .parse()
-        .map_err(|_| malformed(IoOp::ReadState))?;
-    whole
-        .checked_mul(1000)
-        .and_then(|milli| milli.checked_add(fraction))
-        .ok_or(malformed(IoOp::ReadState))
+        .map_err(|_| malformed(IoOp::ReadState))
 }
 
 /// `MemAvailable` in bytes, from `/proc/meminfo` (in kB).
@@ -142,27 +139,34 @@ fn tree_bytes(root: &Path) -> Result<u64, AgentError> {
     let mut total = 0_u64;
     for entry in entries {
         let entry = entry.map_err(|error| io_error(IoOp::ReadState, &error))?;
-        let meta = fs::symlink_metadata(entry.path())
-            .map_err(|error| io_error(IoOp::ReadState, &error))?;
-        let bytes = if meta.is_dir() {
-            tree_bytes(&entry.path())?
-        } else if meta.is_file() {
-            meta.len()
-        } else {
-            0
-        };
-        total = total.saturating_add(bytes);
+        total = total.saturating_add(entry_bytes(&entry.path())?);
     }
     Ok(total)
 }
 
+/// The bytes one listed entry occupies: a regular file's length, a
+/// directory's tree, nothing for anything else. An entry gone since it was
+/// listed occupies nothing: journald removes its files while the watch
+/// reads them, and that is no failed reading.
+pub(crate) fn entry_bytes(path: &Path) -> Result<u64, AgentError> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(io_error(IoOp::ReadState, &error)),
+    };
+    if meta.is_dir() {
+        tree_bytes(path)
+    } else if meta.is_file() {
+        Ok(meta.len())
+    } else {
+        Ok(0)
+    }
+}
+
 /// When `path` was last modified; `None` if it does not exist.
 fn modified(path: &Path) -> Result<Option<UnixTime>, AgentError> {
-    match fs::metadata(path) {
-        Ok(meta) => {
-            let modified = meta
-                .modified()
-                .map_err(|error| io_error(IoOp::ReadState, &error))?;
+    match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(modified) => {
             let since = modified
                 .duration_since(UNIX_EPOCH)
                 .map_err(|_| malformed(IoOp::ReadState))?;

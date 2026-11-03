@@ -309,6 +309,7 @@ fn served_line(status: &MacStatusV1) -> String {
             format!("Served this cycle {}", amount(served))
         }
         UsageView::Unavailable { .. } => "Served this cycle unavailable".to_owned(),
+        UsageView::NotPulled => "Served this cycle not read".to_owned(),
     }
 }
 

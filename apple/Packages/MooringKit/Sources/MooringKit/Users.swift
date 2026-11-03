@@ -47,11 +47,13 @@ public enum UsageErrorKind: String, Decodable, Sendable, CaseIterable {
     case model = "Model"
 }
 
-/// Whether the user rows carry usage: a report over these periods, or why
-/// none does. Usage is never shown as zeros.
+/// Whether the user rows carry usage: a report over these periods, why
+/// none does, or that the daemon pulled no ledger from any node, so none
+/// is read. Usage is never shown as zeros.
 public enum UsageView: Decodable, Hashable, Sendable {
     case report(periods: UsagePeriods)
     case unavailable(reason: UsageErrorKind)
+    case notPulled
 
     public init(from decoder: any Decoder) throws {
         let (tag, value) = try decoder.variant()
@@ -60,6 +62,8 @@ public enum UsageView: Decodable, Hashable, Sendable {
             self = .report(periods: try value.fields("periods").field(UsagePeriods.self, "periods"))
         case ("unavailable", let value?):
             self = .unavailable(reason: try value.fields("reason").field(UsageErrorKind.self, "reason"))
+        case ("not_pulled", nil):
+            self = .notPulled
         default:
             throw decoder.unknownVariant(tag)
         }

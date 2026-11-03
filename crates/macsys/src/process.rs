@@ -10,44 +10,38 @@
 //! daemon's own standard error pointed at its log (`dup2`).
 
 use std::ffi::OsStr;
-use std::mem::size_of;
+use std::mem::{offset_of, size_of};
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::ptr;
 
 use crate::error::{MacsysError, ProcessCall, last_errno};
+use crate::sysctl;
+
+/// The bytes of a `timeval`, as `kern.boottime` gives one.
+const TIMEVAL_LEN: usize = size_of::<libc::timeval>();
+
+/// Where a `timeval`'s whole seconds lie in it, and how long they are.
+const TV_SEC_AT: usize = offset_of!(libc::timeval, tv_sec);
+const TV_SEC_LEN: usize = size_of::<libc::time_t>();
 
 /// When the kernel booted, in whole seconds since the epoch.
 pub fn boot_time() -> Result<u64, MacsysError> {
-    let mut name = [libc::CTL_KERN, libc::KERN_BOOTTIME];
-    let mut boot = libc::timeval {
-        tv_sec: 0,
-        tv_usec: 0,
-    };
-    let mut size: libc::size_t = size_of::<libc::timeval>();
-    // SAFETY: `name` holds two integers and the length says so; `boot` is
-    // a writable `timeval` of `size` bytes, which the kernel writes, storing
-    // the count in `size`; no new value is set.
-    let status = unsafe {
-        libc::sysctl(
-            name.as_mut_ptr(),
-            2,
-            (&raw mut boot).cast(),
-            &mut size,
-            ptr::null_mut(),
-            0,
-        )
-    };
-    if status != 0 {
-        return Err(MacsysError::Sysctl {
-            errno: last_errno(),
-        });
-    }
-    if size != size_of::<libc::timeval>() {
+    let mut boot = [0_u8; TIMEVAL_LEN];
+    let written = sysctl::read([libc::CTL_KERN, libc::KERN_BOOTTIME], Some(&mut boot))
+        .map_err(|errno| MacsysError::Sysctl { errno })?;
+    boot_seconds(boot.get(..written).ok_or(MacsysError::BootTimeInvalid)?)
+}
+
+/// The whole seconds of a `kern.boottime` value: one `timeval`, at or after
+/// the epoch, else `BootTimeInvalid`.
+pub(crate) fn boot_seconds(value: &[u8]) -> Result<u64, MacsysError> {
+    if value.len() != TIMEVAL_LEN {
         return Err(MacsysError::BootTimeInvalid);
     }
-    u64::try_from(boot.tv_sec).map_err(|_| MacsysError::BootTimeInvalid)
+    let mut seconds = [0_u8; TV_SEC_LEN];
+    seconds.copy_from_slice(&value[TV_SEC_AT..TV_SEC_AT + TV_SEC_LEN]);
+    u64::try_from(libc::time_t::from_ne_bytes(seconds)).map_err(|_| MacsysError::BootTimeInvalid)
 }
 
 /// The executable of process `pid`, or `None` when there is no such

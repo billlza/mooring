@@ -42,7 +42,7 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
         ListWithObjects(DownReason.self, "down_reason", count: 19),
         ListWithObjects(ProcessEnd.self, "process_end", count: 2),
         ListWithObjects(ForecastView.self, "forecast_view", count: 2),
-        ListWithObjects(UsageView.self, "usage_view", count: 2),
+        ListWithObjects(UsageView.self, "usage_view", count: 3),
         ListWithObjects(InChainOutcome.self, "in_chain_outcome", count: 3),
         ListWithObjects(NodeAgentState.self, "node_agent_state", count: 3),
         ListWithObjects(AlertCondition.self, "alert_condition", count: 39),
@@ -173,6 +173,12 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
         let listed = Set(Self.listsWithObjects.map(\.key))
         #expect(listed.count == Self.listsWithObjects.count)
         #expect(Set(withObjects) == listed)
+    }
+
+    /// The usage view's third value, the bare `not_pulled` string, reads as
+    /// its own case rather than as unavailable.
+    @Test func theUsageViewReadsNotPulledAsItsOwnCase() throws {
+        #expect(try decode(UsageView.self, "usage_view").last == .notPulled)
     }
 
     /// The fixture lists every group the mirror reads, and no other.

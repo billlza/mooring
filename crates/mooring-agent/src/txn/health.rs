@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use mooring_agent_proto::{
-    AgentError, EngineUser, HealthCheck, IoOp, ManagedFile, NFT_TABLE, NftCounter,
+    AgentError, EngineUser, HealthCheck, IoOp, ManagedFile, NFT_TABLE, NftCounter, UnitName,
 };
 use serde_json::Value;
 
@@ -25,13 +25,6 @@ use crate::store::io_error;
 
 /// The health gate's budget (design §11.2 step 6).
 pub(crate) const BUDGET: Duration = Duration::from_secs(20);
-
-/// The units that must be active: both engines and the tunnel.
-pub(crate) const UNITS: [&str; 3] = [
-    "mooring-xray.service",
-    "mooring-hy2.service",
-    "wg-quick@wgexit.service",
-];
 
 /// A listener the generation's configuration opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -199,15 +192,17 @@ fn guards(rule: &Value, uid: u32, counter: NftCounter) -> bool {
 fn passes(paths: &Paths, node: &dyn Node, dir: &Path, check: HealthCheck) -> bool {
     match check {
         HealthCheck::UnitsActive => {
+            // Both engines and the tunnel must be active.
+            let units = super::generation_units();
             let mut args = vec!["is-active"];
-            args.extend(UNITS);
+            args.extend(units.iter().map(UnitName::as_str));
             node.run(Tool::Systemctl, &args).is_ok_and(|output| {
                 output.success
                     && String::from_utf8_lossy(&output.stdout)
                         .lines()
                         .filter(|line| *line == "active")
                         .count()
-                        == UNITS.len()
+                        == units.len()
             })
         }
         HealthCheck::Listeners => {

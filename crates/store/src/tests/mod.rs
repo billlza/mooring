@@ -37,6 +37,27 @@ fn mode_of(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
+/// `error` is the failure of `op` on `path` with the operating system's
+/// error of kind `cause`: it names the operation and the path, and keeps
+/// the system's error as its source.
+fn assert_io_error(
+    error: &crate::error::StoreError,
+    op: crate::error::IoOp,
+    path: &Path,
+    cause: std::io::ErrorKind,
+) {
+    assert!(
+        matches!(error, crate::error::StoreError::Io { op: found, path: at, source }
+            if *found == op && at == path && source.kind() == cause),
+        "{error:?}"
+    );
+    assert_eq!(error.kind(), crate::error::StoreErrorKind::Io);
+    assert_eq!(
+        error.to_string(),
+        format!("failed to {op} at {}", path.display())
+    );
+}
+
 /// The store error inside `error`; fails the test on a refused change.
 fn store_error<E: std::fmt::Debug>(
     error: crate::error::ChangeError<E>,

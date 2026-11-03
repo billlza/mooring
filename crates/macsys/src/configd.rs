@@ -55,9 +55,13 @@ pub struct Ipv4Service {
     /// (`ARPResolvedHardwareAddress`); none until it has.
     pub router_lladdr: Option<[u8; 6]>,
     /// The DNS domain the network publishes (`DomainName` of the service's
-    /// `/DNS` key, DHCP option 15); none when it publishes none.
+    /// `/DNS` key, DHCP option 15); none when it publishes none, or an
+    /// empty one.
     pub domain: Option<String>,
 }
+
+/// A dictionary of configd's, keyed by strings.
+pub(crate) type Dictionary = CFDictionary<CFString, CFType>;
 
 /// An opaque `SCDynamicStore` session.
 #[repr(C)]
@@ -90,7 +94,7 @@ unsafe extern "C" {
 }
 
 /// An open dynamic store session, released when dropped.
-struct Store(SCDynamicStoreRef);
+pub(crate) struct Store(SCDynamicStoreRef);
 
 impl Drop for Store {
     fn drop(&mut self) {
@@ -105,7 +109,8 @@ fn configd(fault: ConfigdFault) -> MacsysError {
     MacsysError::Configd { fault }
 }
 
-fn open() -> Result<Store, MacsysError> {
+/// A new session with configd's dynamic store.
+pub(crate) fn open() -> Result<Store, MacsysError> {
     let name = CFString::from_static_string("mooring");
     // SAFETY: `name` is a live CFString for the whole call, which only
     // reads it; no callout and a null context ask for no notifications.
@@ -124,7 +129,7 @@ fn open() -> Result<Store, MacsysError> {
 }
 
 /// The keys matching `pattern`, each checked to be a string when read.
-fn keys(store: &Store, pattern: &'static str) -> Result<CFArray<CFType>, MacsysError> {
+pub(crate) fn keys(store: &Store, pattern: &'static str) -> Result<CFArray<CFType>, MacsysError> {
     let pattern = CFString::from_static_string(pattern);
     // SAFETY: `store.0` is an open session and `pattern` a live CFString
     // for the whole call, which only reads them.
@@ -138,10 +143,7 @@ fn keys(store: &Store, pattern: &'static str) -> Result<CFArray<CFType>, MacsysE
 }
 
 /// The dictionary stored under `key`, or `None` when the key is absent.
-fn dictionary(
-    store: &Store,
-    key: &CFString,
-) -> Result<Option<CFDictionary<CFString, CFType>>, MacsysError> {
+pub(crate) fn dictionary(store: &Store, key: &CFString) -> Result<Option<Dictionary>, MacsysError> {
     // SAFETY: `store.0` is an open session and `key` a live CFString for
     // the whole call, which only reads them.
     let value = unsafe { SCDynamicStoreCopyValue(store.0, key.as_concrete_TypeRef()) };
@@ -151,42 +153,93 @@ fn dictionary(
     // SAFETY: `value` is a non-null CFType owned by this process under the
     // Copy rule; the wrapper releases it when dropped.
     let value = unsafe { CFType::wrap_under_create_rule(value) };
+    as_dictionary(&value).map(Some)
+}
+
+/// `value` as a dictionary: `NotADictionary` when it is anything else.
+pub(crate) fn as_dictionary(value: &CFType) -> Result<Dictionary, MacsysError> {
     if !value.instance_of::<CFDictionary>() {
         return Err(configd(ConfigdFault::NotADictionary));
     }
-    // SAFETY: the value's type was checked to be a dictionary just above;
-    // under the Get rule this wrapper retains a reference of its own and
-    // releases it when dropped, while `value` releases the Copy rule's.
-    let dictionary = unsafe {
-        CFDictionary::<CFString, CFType>::wrap_under_get_rule(value.as_CFTypeRef().cast())
-    };
-    Ok(Some(dictionary))
+    // SAFETY: the value's type was checked to be a dictionary just above,
+    // and the wrapper's key and value types claim nothing it must hold: a
+    // lookup compares its `CFString` with the keys by `CFEqual`, whatever
+    // their type, and each value, a CoreFoundation object as every value of
+    // a property list is, is read as a `CFType` and checked again before it
+    // is used. Under the Get rule the wrapper retains a reference of its
+    // own and releases it when dropped, while `value` keeps its own.
+    Ok(unsafe { Dictionary::wrap_under_get_rule(value.as_CFTypeRef().cast()) })
+}
+
+/// `value` as a string: `NotAString` when it is anything else.
+pub(crate) fn as_string(value: &CFType) -> Result<CFString, MacsysError> {
+    value
+        .downcast::<CFString>()
+        .ok_or(configd(ConfigdFault::NotAString))
 }
 
 /// The string under `key`, or `None` when the key is absent.
-fn text(
-    dictionary: &CFDictionary<CFString, CFType>,
-    key: &'static str,
-) -> Result<Option<String>, MacsysError> {
-    let Some(value) = dictionary.find(CFString::from_static_string(key)) else {
-        return Ok(None);
+fn text(dictionary: &Dictionary, key: &'static str) -> Result<Option<String>, MacsysError> {
+    dictionary
+        .find(CFString::from_static_string(key))
+        .map(|value| as_string(&value).map(|text| text.to_string()))
+        .transpose()
+}
+
+/// The key of the DNS settings of the service whose IPv4 key is `key`
+/// (`…/IPv4` becomes `…/DNS`): `UnexpectedKey` for a key of another form.
+pub(crate) fn dns_key(key: &CFString) -> Result<CFString, MacsysError> {
+    let key = key.to_string();
+    let service = key
+        .strip_suffix(IPV4_SUFFIX)
+        .ok_or(configd(ConfigdFault::UnexpectedKey))?;
+    Ok(CFString::new(&format!("{service}/DNS")))
+}
+
+/// The service an IPv4 dictionary and, when the store holds one, its DNS
+/// dictionary describe. An interface name is required, and an empty one
+/// names none; a router, its link-layer address and the DNS domain are read
+/// when present, each checked to be what configd documents, and an empty
+/// domain is none.
+pub(crate) fn service(
+    ipv4: &Dictionary,
+    dns: Option<&Dictionary>,
+) -> Result<Ipv4Service, MacsysError> {
+    let interface = text(ipv4, "InterfaceName")?
+        .filter(|name| !name.is_empty())
+        .ok_or(configd(ConfigdFault::InterfaceNameMissing))?;
+    let router = text(ipv4, "Router")?
+        .map(|text| {
+            text.parse::<Ipv4Addr>()
+                .map_err(|_| configd(ConfigdFault::Router))
+        })
+        .transpose()?;
+    let router_lladdr = text(ipv4, "ARPResolvedHardwareAddress")?
+        .map(|text| link_layer_address(&text).ok_or(configd(ConfigdFault::HardwareAddress)))
+        .transpose()?;
+    let domain = match dns {
+        Some(dns) => text(dns, "DomainName")?.filter(|domain| !domain.is_empty()),
+        None => None,
     };
-    let text = value
-        .downcast::<CFString>()
-        .ok_or(configd(ConfigdFault::NotAString))?;
-    Ok(Some(text.to_string()))
+    Ok(Ipv4Service {
+        interface,
+        router,
+        router_lladdr,
+        domain,
+    })
 }
 
 /// Parses a link-layer address as configd prints it: six hexadecimal
 /// octets of one or two digits each, in either case, separated by colons.
+/// A digit is an ASCII hexadecimal digit and nothing else: `from_str_radix`
+/// alone would also take a leading `+`.
 pub(crate) fn link_layer_address(text: &str) -> Option<[u8; 6]> {
     let octets: Vec<u8> = text
         .split(':')
         .map(|octet| {
-            if octet.is_empty() || octet.len() > 2 {
-                return None;
-            }
-            u8::from_str_radix(octet, 16).ok()
+            let digits = (1..=2).contains(&octet.len())
+                && octet.bytes().all(|byte| byte.is_ascii_hexdigit());
+            digits.then(|| u8::from_str_radix(octet, 16).ok()).flatten()
         })
         .collect::<Option<_>>()?;
     <[u8; 6]>::try_from(octets).ok()
@@ -198,39 +251,26 @@ pub(crate) fn link_layer_address(text: &str) -> Option<[u8; 6]> {
 /// `Configd{fault}`, so no service is read as something it is not.
 pub fn ipv4_services() -> Result<Vec<Ipv4Service>, MacsysError> {
     let store = open()?;
+    services_in(&keys(&store, IPV4_SERVICE_KEYS)?, |key| {
+        dictionary(&store, key)
+    })
+}
+
+/// The services whose IPv4 keys are `keys`, each key's dictionary read
+/// through `read` (the store's [`dictionary`], or a test's): a key whose
+/// dictionary is gone is left out, and its DNS key is not read.
+pub(crate) fn services_in(
+    keys: &CFArray<CFType>,
+    mut read: impl FnMut(&CFString) -> Result<Option<Dictionary>, MacsysError>,
+) -> Result<Vec<Ipv4Service>, MacsysError> {
     let mut services = Vec::new();
-    for key in keys(&store, IPV4_SERVICE_KEYS)?.iter() {
-        let key = key
-            .downcast::<CFString>()
-            .ok_or(configd(ConfigdFault::NotAString))?;
-        let Some(service) = dictionary(&store, &key)? else {
+    for key in keys.iter() {
+        let key = as_string(&key)?;
+        let Some(ipv4) = read(&key)? else {
             continue;
         };
-        let interface =
-            text(&service, "InterfaceName")?.ok_or(configd(ConfigdFault::InterfaceNameMissing))?;
-        let router = text(&service, "Router")?
-            .map(|text| {
-                text.parse::<Ipv4Addr>()
-                    .map_err(|_| configd(ConfigdFault::Router))
-            })
-            .transpose()?;
-        let router_lladdr = text(&service, "ARPResolvedHardwareAddress")?
-            .map(|text| link_layer_address(&text).ok_or(configd(ConfigdFault::HardwareAddress)))
-            .transpose()?;
-        let key_text = key.to_string();
-        let service_prefix = key_text
-            .strip_suffix(IPV4_SUFFIX)
-            .ok_or(configd(ConfigdFault::UnexpectedKey))?;
-        let domain = match dictionary(&store, &CFString::new(&format!("{service_prefix}/DNS")))? {
-            Some(dns) => text(&dns, "DomainName")?,
-            None => None,
-        };
-        services.push(Ipv4Service {
-            interface,
-            router,
-            router_lladdr,
-            domain,
-        });
+        let dns = read(&dns_key(&key)?)?;
+        services.push(service(&ipv4, dns.as_ref())?);
     }
     Ok(services)
 }

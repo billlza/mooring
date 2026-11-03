@@ -158,6 +158,30 @@ fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV2) {
     (dir, store, secrets, next)
 }
 
+/// Adopts lon1 at its site from `from`, then starts retiring it: the state
+/// a record of its shutdown starts from.
+fn retiring_lon1(store: &Store, secrets: &mut Observer, from: &StateV2) -> StateV2 {
+    let adopted_state = update_config_with_secrets(
+        store,
+        secrets,
+        from.deployment.config_generation(),
+        Vec::new(),
+        |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", adopted([45, 67, 89, 10]))),
+    )
+    .unwrap();
+    store
+        .update_config(adopted_state.deployment.config_generation(), |parts| {
+            Ok::<_, Infallible>(with_lifecycle(
+                parts,
+                "lon1",
+                NodeLifecycle::Retiring {
+                    site: site([45, 67, 89, 10]),
+                },
+            ))
+        })
+        .unwrap()
+}
+
 /// Every secret the state references is readable from `secrets`.
 fn assert_references_resolve(state: &StateV2, secrets: &impl SecretStore) {
     for secret_ref in state.deployment.required_secrets() {
@@ -453,6 +477,64 @@ fn failed_deletions_are_reported_after_the_commit() {
     assert_eq!(secrets.inner.refs(), stuck);
 }
 
+/// A record that stops referencing secrets is committed even when their
+/// deletions fail, as an update is: the failures are reported with the
+/// generation the record kept, and only the failed secrets remain.
+#[test]
+fn a_records_failed_deletions_are_reported_after_the_commit() {
+    let (_dir, store, mut secrets, state) = with_planned_lon1();
+    let retiring = retiring_lon1(&store, &mut secrets, &state);
+    let held = retiring.deployment.required_secrets();
+    let stuck: BTreeSet<SecretRef> = held.iter().take(2).cloned().collect();
+    secrets.fail_delete = stuck.clone();
+    secrets.log.clear();
+
+    let error = record_with_secrets(
+        &store,
+        &mut secrets,
+        retiring.deployment.config_generation(),
+        Bookkeeping::RetirementShutDown {
+            node: node_id("lon1"),
+        },
+    )
+    .unwrap_err();
+    let StoreError::SecretCleanup {
+        committed,
+        failures,
+    } = &error
+    else {
+        panic!("expected SecretCleanup, got {error:?}");
+    };
+    assert_eq!(*committed, retiring.deployment.config_generation());
+    let failed: BTreeSet<SecretRef> = failures
+        .iter()
+        .map(|failure| failure.secret_ref.clone())
+        .collect();
+    assert_eq!(failed, stuck);
+
+    // The record is on disk, every secret it dropped was deleted under the
+    // lock once the state no longer named it, and only the failed remain.
+    let on_disk = store.load().unwrap();
+    assert!(matches!(
+        on_disk.deployment.node(&node_id("lon1")).unwrap().lifecycle,
+        NodeLifecycle::RetiredPendingProviderDeletion { .. }
+    ));
+    assert_eq!(
+        on_disk.deployment.config_generation(),
+        retiring.deployment.config_generation()
+    );
+    assert!(on_disk.deployment.required_secrets().is_empty());
+    let deletes = secrets.ops(SecretOp::Delete);
+    assert_eq!(deletes.len(), held.len());
+    assert!(
+        deletes
+            .iter()
+            .all(|seen| !seen.referenced_on_disk && seen.lock_held),
+        "{deletes:?}"
+    );
+    assert_eq!(secrets.inner.refs(), stuck);
+}
+
 #[test]
 fn plain_writes_refuse_to_drop_secret_references() {
     let (_dir, store, _secrets, state) = with_planned_lon1();
@@ -593,27 +675,7 @@ fn alert_channel_secrets_follow_their_node() {
 
     // Adopt lon1, start retiring it, then shut it down: the record drops
     // its channels, and their secrets are deleted after the commit.
-    let adopted_state = update_config_with_secrets(
-        &store,
-        &mut secrets,
-        set_up.deployment.config_generation(),
-        Vec::new(),
-        |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", adopted([45, 67, 89, 10]))),
-    )
-    .unwrap();
-    let retiring = store
-        .update_config(adopted_state.deployment.config_generation(), |parts| {
-            let site = match &parts.nodes[0].lifecycle {
-                NodeLifecycle::Adopted { site } => site.clone(),
-                other => panic!("lon1 is {other:?}"),
-            };
-            Ok::<_, Infallible>(with_lifecycle(
-                parts,
-                "lon1",
-                NodeLifecycle::Retiring { site },
-            ))
-        })
-        .unwrap();
+    let retiring = retiring_lon1(&store, &mut secrets, &set_up);
     assert!(
         retiring
             .deployment
@@ -730,25 +792,7 @@ fn the_alert_topic_is_shared_and_outlives_one_channel_node() {
     secrets.log.clear();
 
     // Adopt lon1, start retiring it, then shut it down.
-    let adopted_state = update_config_with_secrets(
-        &store,
-        &mut secrets,
-        two_channels.deployment.config_generation(),
-        Vec::new(),
-        |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", adopted([45, 67, 89, 10]))),
-    )
-    .unwrap();
-    let retiring = store
-        .update_config(adopted_state.deployment.config_generation(), |parts| {
-            Ok::<_, Infallible>(with_lifecycle(
-                parts,
-                "lon1",
-                NodeLifecycle::Retiring {
-                    site: site([45, 67, 89, 10]),
-                },
-            ))
-        })
-        .unwrap();
+    let retiring = retiring_lon1(&store, &mut secrets, &two_channels);
     secrets.log.clear();
     let retired = record_with_secrets(
         &store,

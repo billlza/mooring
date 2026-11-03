@@ -810,7 +810,7 @@ impl HostProfile {
 }
 
 /// The tunnel's unit, Debian's `wg-quick@.service` for [`crate::WG_INTERFACE`].
-const TUNNEL_UNIT: &str = "wg-quick@wgexit.service";
+pub(crate) const TUNNEL_UNIT: &str = "wg-quick@wgexit.service";
 
 /// The sandbox of the engine, watch and reflector units (design §5.2).
 fn hardening() -> Vec<String> {

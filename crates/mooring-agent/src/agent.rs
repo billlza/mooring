@@ -2,7 +2,8 @@
 
 //! The command line and what each command does.
 
-use std::io::{self, Write};
+use std::ffi::OsString;
+use std::io::{BufRead, Write};
 use std::net::{SocketAddrV4, TcpListener};
 use std::process::ExitCode;
 
@@ -15,6 +16,22 @@ use crate::{fail, gate, reflect, serve, store, target, txn, watch};
 
 /// The reflector's port (design §5.3).
 const REFLECTOR_PORT: u16 = 27900;
+
+/// The answer to arguments that name no command.
+const USAGE: &str = "usage: mooring-agent serve-ssh --role <bootstrap|ops|viewer> | reflect [--port <port>] | halted-check | gate-close | self-test | txn <N> | txn-revert <N> | txn-recover | watch | target-watch";
+
+/// What the process was started with: its standard streams, and the
+/// `SSH_CONNECTION` sshd set for the forced command.
+pub(crate) struct Process<'a> {
+    /// `SSH_CONNECTION`, when it is set and is text.
+    pub(crate) ssh_connection: Option<&'a str>,
+    /// Standard input, which only `serve-ssh` reads.
+    pub(crate) stdin: &'a mut dyn BufRead,
+    /// Standard output: `serve-ssh`'s reply, `self-test`'s protocol.
+    pub(crate) stdout: &'a mut dyn Write,
+    /// Standard error, where a failure is reported.
+    pub(crate) stderr: &'a mut dyn Write,
+}
 
 /// A command line, parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +79,29 @@ pub(crate) fn parse(args: &[String]) -> Result<Invocation, String> {
         ["txn-recover"] => Ok(Invocation::TxnRecover),
         ["watch"] => Ok(Invocation::Watch),
         ["target-watch"] => Ok(Invocation::TargetWatch),
-        _ => Err("usage: mooring-agent serve-ssh --role <bootstrap|ops|viewer> | reflect [--port <port>] | halted-check | gate-close | self-test | txn <N> | txn-revert <N> | txn-recover | watch | target-watch".to_owned()),
+        _ => Err(USAGE.to_owned()),
+    }
+}
+
+/// Runs the command that `args`, the arguments after the program name,
+/// name. Arguments that name no command, or are not text, are exit 1 and
+/// a message.
+pub(crate) fn entry(
+    args: &[OsString],
+    paths: &Paths,
+    node: &dyn Node,
+    process: &mut Process<'_>,
+) -> ExitCode {
+    let words: Option<Vec<String>> = args
+        .iter()
+        .map(|arg| arg.to_str().map(str::to_owned))
+        .collect();
+    match words
+        .ok_or_else(|| USAGE.to_owned())
+        .and_then(|words| parse(&words))
+    {
+        Ok(invocation) => run(invocation, paths, node, process),
+        Err(usage) => fail(process.stderr, &usage),
     }
 }
 
@@ -77,23 +116,28 @@ fn generation_arg(text: &str) -> Result<Generation, String> {
         .ok_or_else(|| format!("{text:?} is not a generation"))
 }
 
-/// Runs one invocation against `paths` and `node`.
+/// Runs one invocation against `paths` and `node`, with `process`'s
+/// streams.
 pub(crate) fn run(
     invocation: Invocation,
     paths: &Paths,
     node: &dyn Node,
-    stderr: &mut dyn Write,
+    process: &mut Process<'_>,
 ) -> ExitCode {
+    let stderr = &mut *process.stderr;
     match invocation {
         Invocation::ServeSsh(role) => {
-            let connection = std::env::var("SSH_CONNECTION").ok();
             let session = Session {
                 role,
-                ssh_connection: connection.as_deref(),
+                ssh_connection: process.ssh_connection,
             };
-            let mut input = io::stdin().lock();
-            let mut output = io::stdout().lock();
-            match serve::serve(paths, node, session, &mut input, &mut output) {
+            match serve::serve(
+                paths,
+                node,
+                session,
+                &mut process.stdin,
+                &mut process.stdout,
+            ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => fail(stderr, &format!("writing the reply failed: {error}")),
             }
@@ -109,9 +153,15 @@ pub(crate) fn run(
                     return fail(stderr, &format!("the uplink's address is unknown: {error}"));
                 }
             };
-            match TcpListener::bind(address).and_then(|listener| reflect::serve(&listener)) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => fail(stderr, &format!("the reflector stopped: {error}")),
+            match TcpListener::bind(address) {
+                Ok(listener) => {
+                    let error = reflect::serve(&listener);
+                    fail(stderr, &format!("the reflector stopped: {error}"))
+                }
+                Err(error) => fail(
+                    stderr,
+                    &format!("the reflector cannot listen on {address}: {error}"),
+                ),
             }
         }
         Invocation::HaltedCheck => {
@@ -147,7 +197,7 @@ pub(crate) fn run(
             }
         }
         Invocation::Watch => watch::run(paths, node, stderr),
-        Invocation::TargetWatch => match target::watch(paths, node) {
+        Invocation::TargetWatch => match target::hourly::watch(paths, node) {
             Ok(_) => ExitCode::SUCCESS,
             Err(error) => fail(stderr, &format!("the target check failed: {error}")),
         },
@@ -161,11 +211,9 @@ pub(crate) fn run(
         },
         Invocation::SelfTest => match self_test(paths) {
             Ok(()) => {
-                let printed = writeln!(io::stdout().lock(), "{PROTOCOL}");
-                if printed.is_ok() {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::from(1)
+                match writeln!(process.stdout, "{PROTOCOL}").and_then(|()| process.stdout.flush()) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => fail(stderr, &format!("printing the protocol failed: {error}")),
                 }
             }
             Err(error) => fail(stderr, &format!("self-test failed: {error}")),

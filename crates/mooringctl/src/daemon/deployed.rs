@@ -32,7 +32,7 @@ use mooring_daemon_core::network::NetworkCheck;
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::power::{HelperCommand, HelperEvent};
 use mooring_daemon_core::router::RouterReading;
-use mooring_daemon_core::snapshot::{NodePoll, SimTotals, StatusInputs, assemble};
+use mooring_daemon_core::snapshot::{Ledgers, NodePoll, SimTotals, StatusInputs, assemble};
 use mooring_daemon_core::status::{
     AgentUnreachable, DegradedReason, DrainRecord, ExitState, NodeAgentState, OwnNetworkInput,
     PowerSource, PowerStatus,
@@ -378,7 +378,8 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 },
                 router,
                 capacity: None,
-                ledgers: &[],
+                // This build pulls no `UsageSeries` (design §15.2, M5).
+                ledgers: Ledgers::NotPulled,
                 through: now,
                 polls: &self.polls,
                 unreachable: &self.unreachable,

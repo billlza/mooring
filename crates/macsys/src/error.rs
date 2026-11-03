@@ -63,6 +63,14 @@ pub enum MacsysError {
         /// The `errno` value.
         errno: i32,
     },
+    /// The size of this process's descriptor table (`getdtablesize`, the
+    /// descriptors the kernel lets it hold) was below 0, as it is when
+    /// `kern.maxfilesperproc` is set below 0 *(read from xnu's source, not
+    /// measured)*.
+    DescriptorTableSizeInvalid {
+        /// The size the kernel gave.
+        size: i32,
+    },
     /// A terminal attribute call failed with this `errno`.
     Terminal {
         /// The call.
@@ -128,6 +136,10 @@ impl fmt::Display for MacsysError {
                     "{call} of the open-files limit failed with errno {errno}"
                 )
             }
+            Self::DescriptorTableSizeInvalid { size } => write!(
+                f,
+                "the kernel gives {size} as the descriptors this process may hold, below 0"
+            ),
             Self::Terminal { call, errno } => write!(f, "{call} failed with errno {errno}"),
             Self::BootTimeInvalid => {
                 f.write_str("the kernel's boot time is not one time at or after the epoch")
@@ -154,7 +166,7 @@ pub enum ConfigdFault {
     NotADictionary,
     /// A key, or a value read as text, is not a string.
     NotAString,
-    /// A service names no interface.
+    /// A service names no interface (no `InterfaceName`, or an empty one).
     InterfaceNameMissing,
     /// A service's router is not an IPv4 address.
     Router,
@@ -210,6 +222,8 @@ pub enum MacsysErrorKind {
     AmbiguousNeighbour,
     /// See [`MacsysError::Rlimit`].
     Rlimit,
+    /// See [`MacsysError::DescriptorTableSizeInvalid`].
+    DescriptorTableSizeInvalid,
     /// See [`MacsysError::Terminal`].
     Terminal,
     /// See [`MacsysError::BootTimeInvalid`].
@@ -237,6 +251,7 @@ impl MacsysErrorKind {
         Self::NotEthernet,
         Self::AmbiguousNeighbour,
         Self::Rlimit,
+        Self::DescriptorTableSizeInvalid,
         Self::Terminal,
         Self::BootTimeInvalid,
         Self::Process,
@@ -261,6 +276,7 @@ impl MacsysErrorKind {
             Self::NotEthernet => "NotEthernet",
             Self::AmbiguousNeighbour => "AmbiguousNeighbour",
             Self::Rlimit => "Rlimit",
+            Self::DescriptorTableSizeInvalid => "DescriptorTableSizeInvalid",
             Self::Terminal => "Terminal",
             Self::BootTimeInvalid => "BootTimeInvalid",
             Self::Process => "Process",
@@ -294,6 +310,7 @@ impl MacsysError {
             Self::NotEthernet { .. } => MacsysErrorKind::NotEthernet,
             Self::AmbiguousNeighbour => MacsysErrorKind::AmbiguousNeighbour,
             Self::Rlimit { .. } => MacsysErrorKind::Rlimit,
+            Self::DescriptorTableSizeInvalid { .. } => MacsysErrorKind::DescriptorTableSizeInvalid,
             Self::Terminal { .. } => MacsysErrorKind::Terminal,
             Self::BootTimeInvalid => MacsysErrorKind::BootTimeInvalid,
             Self::Process { .. } => MacsysErrorKind::Process,

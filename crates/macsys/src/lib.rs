@@ -16,7 +16,7 @@
 //!   [`MacsysError::NeighbourTableEmpty`], and whether the kernel hid the
 //!   table from this process is the caller's judgement (design §15.6
 //!   rule 10);
-//! - [`interfaces`] and [`interface`]: the kernel's interface list
+//! - [`interfaces`] and [`interface`](fn@interface): the kernel's interface list
 //!   (`NET_RT_IFLIST2`), each interface's name, own link-layer address,
 //!   flags, MTU, 64-bit byte counters and IPv4 and IPv6 addresses
 //!   (`fieldkit env`, the uplink measurement's byte counts, design §22 M2,
@@ -29,7 +29,8 @@
 //!   identify the operator's own networks (design §10.2, P0-2);
 //! - [`open_files_limit`] and [`raise_open_files`]: the open-files limit
 //!   (`RLIMIT_NOFILE`), which `fieldkit port-ceiling` raises before it
-//!   holds thousands of connections;
+//!   holds thousands of connections, and the descriptors in force, which
+//!   the kernel's per-process maximum can hold below the soft limit;
 //! - [`controlling_terminal`] and [`EchoOff`]: the process's terminal, and
 //!   its echo switched off while a password is typed;
 //! - [`kill_group`]: a process group ended, for an ssh session past its
@@ -41,7 +42,11 @@
 //! code that checks every length against the buffer; `unsafe` is confined
 //! to the system calls and the three SystemConfiguration calls themselves,
 //! one call per block, and every CoreFoundation object those return is
-//! owned and released by `core-foundation`'s wrappers.
+//! owned and released by `core-foundation`'s wrappers. Every `sysctl` goes
+//! through one call; what is decided about the answers (a table's bound
+//! and retries, a boot time's form, what a service's dictionaries hold, how
+//! far a limit is raised) is kept apart from the calls, so the tests drive
+//! it with answers of their own as well as with the live system's.
 //!
 //! The crate has no workspace dependency: it returns std types
 //! (`NonZeroU32`, `Ipv4Addr`, `[u8; 6]`, `String`), which `mooringctl`
@@ -60,6 +65,7 @@ mod interface;
 mod limits;
 mod process;
 mod route;
+mod sysctl;
 mod terminal;
 #[cfg(test)]
 mod tests;

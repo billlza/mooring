@@ -9,24 +9,11 @@ pub(crate) mod messages;
 
 use std::net::Ipv4Addr;
 use std::num::NonZeroU32;
-use std::ptr;
 
-use crate::error::{MacsysError, last_errno};
+use crate::error::MacsysError;
+use crate::sysctl::{Mib, dump};
 
 use messages::{DST, GATEWAY, NETMASK, RouteMessage, parse_table};
-
-/// The largest table read, in bytes.
-const MAX_TABLE_BYTES: usize = 16 << 20;
-
-/// How often a read that found the table grown since it was sized
-/// (`ENOMEM`) is retried before `TableChanged`.
-const GROWTH_RETRIES: usize = 3;
-
-/// A PF_ROUTE `sysctl` name: six integers.
-pub(crate) type Mib = [libc::c_int; 6];
-
-/// The length of a [`Mib`], as `sysctl` takes it.
-const MIB_LEN: libc::c_uint = 6;
 
 /// The kernel's IPv4 routing table (`NET_RT_DUMP`).
 const ROUTE_DUMP: Mib = [
@@ -47,64 +34,6 @@ const NEIGHBOUR_DUMP: Mib = [
     libc::NET_RT_FLAGS,
     libc::RTF_LLINFO,
 ];
-
-/// Reads one PF_ROUTE table: its size first, then the table into a buffer
-/// with a quarter more room, retrying when it grew past even that.
-pub(crate) fn dump(mib: Mib) -> Result<Vec<u8>, MacsysError> {
-    let mut name = mib;
-    for _attempt in 0..=GROWTH_RETRIES {
-        let mut size: libc::size_t = 0;
-        // SAFETY: `name` holds `MIB_LEN` integers; a null `oldp` asks only
-        // for the size, which the kernel writes to `size`; no new value is
-        // set.
-        let sized = unsafe {
-            libc::sysctl(
-                name.as_mut_ptr(),
-                MIB_LEN,
-                ptr::null_mut(),
-                &mut size,
-                ptr::null_mut(),
-                0,
-            )
-        };
-        if sized != 0 {
-            return Err(MacsysError::Sysctl {
-                errno: last_errno(),
-            });
-        }
-        if size > MAX_TABLE_BYTES {
-            return Err(MacsysError::TableTooLarge);
-        }
-        if size == 0 {
-            return Ok(Vec::new());
-        }
-        let room = (size + size / 4).min(MAX_TABLE_BYTES);
-        let mut table = vec![0_u8; room];
-        let mut filled: libc::size_t = room;
-        // SAFETY: `table` is `room` writable bytes and `filled` says so;
-        // the kernel writes at most that many and stores the count in
-        // `filled`; no new value is set.
-        let read = unsafe {
-            libc::sysctl(
-                name.as_mut_ptr(),
-                MIB_LEN,
-                table.as_mut_ptr().cast(),
-                &mut filled,
-                ptr::null_mut(),
-                0,
-            )
-        };
-        if read == 0 {
-            table.truncate(filled);
-            return Ok(table);
-        }
-        let errno = last_errno();
-        if errno != libc::ENOMEM {
-            return Err(MacsysError::Sysctl { errno });
-        }
-    }
-    Err(MacsysError::TableChanged)
-}
 
 /// One IPv4 default route through a gateway. The M7's identity is still
 /// asked through [`default_gateway_v4`] and [`neighbour_v4`], which keep

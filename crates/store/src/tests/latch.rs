@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The exit's latch (design §10.2): its exact format and mode, its removal,
-//! and the typed refusal of anything that is not a version-1 latch.
+//! the typed refusal of anything that is not a version-1 latch, and a read
+//! that fails reported as such.
 
 use std::fs;
+use std::io;
 use std::net::Ipv4Addr;
 
 use mooring_model::counters::ConfigGeneration;
@@ -11,8 +13,8 @@ use mooring_model::iface::{BsdName, EgressIdentity, MacAddr};
 use mooring_model::time::UnixTime;
 use mooring_model::verdict::{LatchRecord, Violation};
 
-use super::mode_of;
-use crate::error::{StoreError, StoreErrorKind};
+use super::{assert_io_error, mode_of};
+use crate::error::{IoOp, StoreError, StoreErrorKind};
 use crate::latch::{LATCH_FILE, clear_latch, read_latch, write_latch};
 
 fn latch() -> LatchRecord {
@@ -68,4 +70,30 @@ fn anything_but_a_version_one_latch_is_corrupt() {
         assert_eq!(error.kind(), StoreErrorKind::LatchCorrupt, "{bad:.40}");
         assert!(matches!(error, StoreError::LatchCorrupt { path: ref found } if *found == path));
     }
+}
+
+/// A latch that cannot be read is an error naming the read, never "no
+/// latch", on which the exit would serve again past a latched violation:
+/// here the open fails (the run path is a file), then the read does (the
+/// latch path is a directory).
+#[test]
+fn a_latch_that_cannot_be_read_is_an_error_not_no_latch() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_file = dir.path().join("run");
+    fs::write(&run_file, b"").unwrap();
+    assert_io_error(
+        &read_latch(&run_file).unwrap_err(),
+        IoOp::ReadLatch,
+        &run_file.join(LATCH_FILE),
+        io::ErrorKind::NotADirectory,
+    );
+    let run_dir = tempfile::tempdir().unwrap();
+    let path = run_dir.path().join(LATCH_FILE);
+    fs::create_dir(&path).unwrap();
+    assert_io_error(
+        &read_latch(run_dir.path()).unwrap_err(),
+        IoOp::ReadLatch,
+        &path,
+        io::ErrorKind::IsADirectory,
+    );
 }

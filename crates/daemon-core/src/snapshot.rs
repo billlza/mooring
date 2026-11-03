@@ -3,9 +3,10 @@
 //! The status line the daemon publishes (design §15.2), assembled from what
 //! it holds at one instant with the core's own logic: usage aggregation and
 //! activity, the SIM forecast, and quota and expiry evaluation. The daemon
-//! gathers the inputs; nothing here invents what it lacks: no ledger makes
-//! the usage view unavailable with its reason, a node never polled is
-//! `NotPolled`, and a forecast that cannot be made says why.
+//! gathers the inputs; nothing here invents what it lacks: ledgers it has
+//! not pulled make the usage view `NotPulled`, a missing ledger makes it
+//! unavailable with its reason, a node never polled is `NotPolled`, and a
+//! forecast that cannot be made says why.
 
 use std::collections::BTreeMap;
 
@@ -47,6 +48,20 @@ pub struct NodePoll {
     pub status: StatusV1,
 }
 
+/// The nodes' accounting ledgers, or that none were pulled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ledgers<'a> {
+    /// The daemon pulled no `UsageSeries`: this build does not read the
+    /// nodes' usage (design §15.2, M5), so the usage view is
+    /// [`UsageView::NotPulled`] and no row carries usage, never zeros. M5's
+    /// pull passes `Pulled` instead and removes this variant.
+    NotPulled,
+    /// Every ledger the daemon holds, one per node that may have counted
+    /// traffic; a node without one makes the usage view unavailable
+    /// (`MissingLedger`).
+    Pulled(&'a [NodeLedger]),
+}
+
 /// Everything one status line is made of.
 #[derive(Debug, Clone)]
 pub struct StatusInputs<'a> {
@@ -62,8 +77,8 @@ pub struct StatusInputs<'a> {
     pub router: RouterReading,
     /// The latest capacity view, if any.
     pub capacity: Option<CapacityStatus>,
-    /// The nodes' accounting ledgers.
-    pub ledgers: &'a [NodeLedger],
+    /// The nodes' accounting ledgers, or that none were pulled.
+    pub ledgers: Ledgers<'a>,
     /// The end of the usage report's periods.
     pub through: UnixTime,
     /// The nodes' latest polls.
@@ -113,26 +128,28 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV1, SnapshotError> 
             reason: error.kind(),
         },
     };
-    let report = aggregate(deployment, inputs.ledgers, inputs.through);
     let statuses: BTreeMap<NodeId, StatusV1> = inputs
         .polls
         .iter()
         .map(|(node, poll)| (node.clone(), poll.status.clone()))
         .collect();
     let mut activity = activity(users, &statuses, inputs.at).map_err(SnapshotError::Activity)?;
-    let (usage, mut by_user) = match report {
-        Ok(report) => (
-            UsageView::Report {
-                periods: report.periods,
-            },
-            Some(report.users),
-        ),
-        Err(error) => (
-            UsageView::Unavailable {
-                reason: error.kind(),
-            },
-            None,
-        ),
+    let (usage, mut by_user) = match inputs.ledgers {
+        Ledgers::NotPulled => (UsageView::NotPulled, None),
+        Ledgers::Pulled(ledgers) => match aggregate(deployment, ledgers, inputs.through) {
+            Ok(report) => (
+                UsageView::Report {
+                    periods: report.periods,
+                },
+                Some(report.users),
+            ),
+            Err(error) => (
+                UsageView::Unavailable {
+                    reason: error.kind(),
+                },
+                None,
+            ),
+        },
     };
     let automatic = automatic_quota(deployment, inputs.at).map_err(SnapshotError::Quota)?;
     let mut rows = BTreeMap::new();
