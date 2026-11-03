@@ -18,7 +18,7 @@ use mooring_agent_proto::{
     StderrTail, TxnState,
 };
 
-use super::world::{ENGINE_RESTART_FAILED, World, idle, index_of, same};
+use super::world::{ENGINE_RESTART_FAILED, World, awaiting_second, idle, index_of, same};
 use crate::host::Tool;
 use crate::tests::{EACCES, EEXIST, EISDIR, ENOENT, ModeFault, occupy_temporary};
 use crate::txn::record::pending;
@@ -64,18 +64,6 @@ fn peers_only(file: ManagedFile, text: String) -> String {
     } else {
         text
     }
-}
-
-/// Generation 1 committed and generation 2 (made by `edit`) awaiting its
-/// confirmation, as a `Rollback` finds them.
-fn awaiting_second(edit: impl Fn(ManagedFile, String) -> String) -> World {
-    let world = World::new();
-    world.commit(&world.node(1000), world.bundle(1, same));
-    assert_eq!(
-        world.apply_and_run(&world.node(2000), world.bundle(2, edit)),
-        TxnState::AwaitingConfirm
-    );
-    world
 }
 
 #[test]

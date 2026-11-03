@@ -21,7 +21,7 @@ use crate::host::Tool;
 use crate::paths::Paths;
 use crate::store::write_json;
 use crate::tests::{
-    ENOENT, FakeNode, failed, nft_set, occupy_temporary, ok, scratch, temporary_of,
+    ENOENT, FakeNode, exited, failed, nft_set, occupy_temporary, ok, scratch, temporary_of,
 };
 use crate::txn::record::pending;
 use crate::txn::{self, Launched};
@@ -114,6 +114,13 @@ pub(super) struct Faults {
     pub(super) wg_down_fails: bool,
     /// Validator output that fails validation (Xray's `-test`).
     pub(super) xray_test: Option<String>,
+    /// Hy2's `check` fails, printing this on stderr.
+    pub(super) hy2_check: Option<String>,
+    /// `nft -c` fails, printing this on stderr.
+    pub(super) nft_check: Option<String>,
+    /// `wg-quick strip` prints this warning on stderr, and the stripped
+    /// configuration on stdout as ever, and exits 0.
+    pub(super) wg_strip_warns: Option<String>,
     /// `nft -f` fails.
     pub(super) nft_load: bool,
     /// The listeners are missing for this many health checks.
@@ -287,7 +294,17 @@ impl World {
                             ok(SS_ALL.as_bytes())
                         }
                     }
-                    (Tool::WgQuick, ["strip", ..]) => ok(format!("[Interface]\nPrivateKey = {WG_PRIVATE_KEY}\n").as_bytes()),
+                    (Tool::WgQuick, ["strip", ..]) => {
+                        let stripped = format!("[Interface]\nPrivateKey = {WG_PRIVATE_KEY}\n");
+                        match &faults.wg_strip_warns {
+                            Some(warning) => exited(0, stripped.as_bytes(), warning.as_bytes()),
+                            None => ok(stripped.as_bytes()),
+                        }
+                    }
+                    (Tool::Nft, ["-c", "-f", _]) => match &faults.nft_check {
+                        Some(error) => failed(error.as_bytes()),
+                        None => ok(b""),
+                    },
                     // The stripped copy holds the tunnel's private key: root's
                     // alone, and there while `wg syncconf` reads it.
                     (Tool::Wg, ["syncconf", "wgexit", file]) => {
@@ -355,6 +372,10 @@ impl World {
                 ("xray", ["run", "-test", ..]) => match &faults.xray_test {
                     Some(output) => ok(output.as_bytes()),
                     None => ok(b"Xray 26.9.30\nConfiguration OK.\n"),
+                },
+                ("mooring-hy2", ["check", ..]) => match &faults.hy2_check {
+                    Some(error) => failed(error.as_bytes()),
+                    None => ok(b""),
                 },
                 (_, ["self-test"]) => match &faults.self_test {
                     Some(output) => ok(output.as_bytes()),
@@ -483,6 +504,18 @@ pub(super) fn index_of(calls: &[String], fragment: &str) -> usize {
         .iter()
         .position(|call| call.contains(fragment))
         .unwrap_or_else(|| panic!("no call with {fragment:?} in {calls:#?}"))
+}
+
+/// Generation 1 committed and generation 2 (made by `edit`) awaiting its
+/// confirmation, as a `Confirm`, a `Rollback` or its timer finds them.
+pub(super) fn awaiting_second(edit: impl Fn(ManagedFile, String) -> String) -> World {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    assert_eq!(
+        world.apply_and_run(&world.node(2000), world.bundle(2, edit)),
+        TxnState::AwaitingConfirm
+    );
+    world
 }
 
 /// The transaction ended with `error` before the swap: nothing switched,

@@ -2,17 +2,20 @@
 
 //! The agent's directories (design §8.6), which bootstrap lays out after
 //! the accounts: each gets its group; a link where a directory belongs is
-//! refused rather than followed; a directory under a file is a state write
-//! that fails; and a missing state group is the watch's missing account.
-//! The paths the agent and the watch write are checked here too, against
-//! the profile's directories and the ones the watch's unit lets it write.
+//! refused rather than followed; a directory under a file, one that
+//! cannot be made (which stops bootstrap before the agent is installed)
+//! and one that cannot be given its group are each a state write that
+//! fails; an owner whose database cannot be read is a state read that
+//! fails; and a missing state group is the watch's missing account. The
+//! paths the agent and the watch write are checked here too, against the
+//! profile's directories and the ones the watch's unit lets it write.
 
 use std::fs;
 
 use mooring_agent_proto::{AgentError, HostAccount, HostProfile, IoOp};
 
 use super::world::{Host, write};
-use crate::tests::{ENOTDIR, bootstrapped, own_ids, scratch};
+use crate::tests::{EACCES, EISDIR, ENOTDIR, EPERM, ModeFault, bootstrapped, own_ids, scratch};
 
 #[test]
 fn the_layout_refuses_a_link_where_a_directory_belongs() {
@@ -94,6 +97,91 @@ fn a_layout_directory_under_a_file_is_a_state_write() {
             errno: Some(ENOTDIR)
         })
     );
+}
+
+/// A layout directory that cannot be made stops bootstrap after the
+/// accounts and before the agent is installed.
+#[test]
+fn a_layout_directory_that_cannot_be_made_stops_bootstrap_before_the_agent() {
+    let host = Host::new();
+    let var_lib = host.paths.at("/var/lib");
+    fs::create_dir_all(&var_lib).unwrap();
+    let read_only = ModeFault::set(&var_lib, 0o555);
+    let node = host.node();
+    let outcome = host.bootstrap(&node);
+    drop(read_only);
+    assert_eq!(
+        outcome,
+        Err(AgentError::Io {
+            op: IoOp::WriteState,
+            errno: Some(EACCES)
+        })
+    );
+    assert!(!host.paths.var_lib().exists());
+    assert!(!host.paths.agent_dir().exists(), "no agent installed");
+    assert!(
+        crate::accounts::user(&host.paths, HostAccount::Watch.name())
+            .unwrap()
+            .is_some(),
+        "the accounts made"
+    );
+    let calls = node.calls();
+    assert!(
+        calls.last().unwrap().starts_with("/usr/sbin/useradd "),
+        "nothing after the accounts: {calls:#?}"
+    );
+}
+
+/// A directory that cannot be given its group is a state write that
+/// fails: here the state group is one this user is not in, which a user
+/// other than root may not give a directory (root may give any).
+#[test]
+fn a_layout_directory_that_cannot_be_given_its_group_is_a_state_write() {
+    let host = Host::new();
+    bootstrapped(&host.paths);
+    let (uid, gid) = own_ids(&host.paths);
+    assert_ne!(
+        uid, 0,
+        "needs a user other than root: root may give any group"
+    );
+    write(
+        &host.paths,
+        "/etc/group",
+        &format!(
+            "root:x:{gid}:\nmooring:x:4000000000:\nmooring-xray:x:{gid}:\nmooring-hy2:x:{gid}:\n"
+        ),
+    );
+    assert_eq!(
+        crate::layout::converge(&host.paths, &HostProfile::CURRENT),
+        Err(AgentError::Io {
+            op: IoOp::WriteState,
+            errno: Some(EPERM)
+        })
+    );
+    assert!(!host.paths.blobs().exists(), "nothing after it");
+}
+
+/// The layout looks each directory's owner and group up: an account
+/// database that cannot be read is the read that failed, and nothing is
+/// laid out after it.
+#[test]
+fn a_layout_whose_owners_cannot_be_looked_up_is_a_state_read() {
+    for database in ["/etc/passwd", "/etc/group"] {
+        let host = Host::new();
+        bootstrapped(&host.paths);
+        let path = host.paths.at(database);
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(
+            crate::layout::converge(&host.paths, &HostProfile::CURRENT),
+            Err(AgentError::Io {
+                op: IoOp::ReadState,
+                errno: Some(EISDIR)
+            }),
+            "{database}"
+        );
+        assert!(!host.paths.blobs().exists(), "{database}");
+    }
 }
 
 /// Every directory the agent and the watch write is one the layout sets,

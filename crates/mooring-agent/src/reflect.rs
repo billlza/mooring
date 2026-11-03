@@ -33,18 +33,21 @@ pub(crate) fn serve(listener: &TcpListener) -> io::Error {
     serve_with(
         &mut || listener.accept(),
         &Slots::new(MAX_CONNECTIONS),
+        answer,
         &mut pause,
     )
 }
 
-/// Serves the connections `accept` gives, answering each on a thread of
-/// its own while `slots` has one free, until `accept` fails for good;
-/// returns that failure. A connection over the limit, or from a peer that
-/// is not IPv4, is closed unanswered; one whose thread cannot be started
-/// is dropped, and its slot with it.
+/// Serves the connections `accept` gives until it fails for good, and
+/// returns that failure. Each connection is answered with `answer` on a
+/// thread of its own while `slots` has one free, and holds its slot until
+/// `answer` returns. A connection over the limit, or from a peer that is
+/// not IPv4, is closed unanswered; one whose thread cannot be started is
+/// dropped, and its slot with it.
 pub(crate) fn serve_with(
     accept: &mut dyn FnMut() -> io::Result<(TcpStream, SocketAddr)>,
     slots: &Slots,
+    answer: fn(TcpStream, SocketAddrV4),
     pause: &mut dyn FnMut(),
 ) -> io::Error {
     loop {
@@ -79,7 +82,9 @@ pub(crate) fn pause() {
     thread::sleep(PAUSE);
 }
 
-fn answer(mut stream: TcpStream, peer: SocketAddrV4) {
+/// Writes `peer`'s line to `stream` within [`WRITE_TIMEOUT`], then closes
+/// it.
+pub(crate) fn answer(mut stream: TcpStream, peer: SocketAddrV4) {
     // A peer that cannot be written to within the timeout gets nothing;
     // the reflector keeps no record of it.
     let _unanswered = stream

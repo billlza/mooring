@@ -13,8 +13,8 @@ use std::fs;
 
 use mooring_agent_proto::{AgentError, Generation, IoOp, RollbackCause, TxnState};
 
-use super::{assert_rollback_failed, assert_stopped_safe, awaiting_second};
-use crate::tests::txn::world::{World, idle, index_of, same};
+use super::{assert_rollback_failed, assert_stopped_safe};
+use crate::tests::txn::world::{World, awaiting_second, idle, index_of, same};
 use crate::tests::{
     EACCES, EEXIST, ENOTDIR, FakeNode, ModeFault, header, occupy_temporary, scratch,
 };

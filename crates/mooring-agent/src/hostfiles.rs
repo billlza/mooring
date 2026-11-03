@@ -5,7 +5,8 @@
 //! installed, and applied by the steps their change needs. A transaction
 //! stages them with its generation (`gen-<N>/host/`), so a rollback puts
 //! back the previous generation's; `Bootstrap` stages them in a scratch
-//! directory of its own.
+//! directory of its own, and applies every file, changed or not, until one
+//! of its runs has finished.
 
 use std::collections::BTreeSet;
 use std::fs;

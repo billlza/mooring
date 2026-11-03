@@ -6,7 +6,11 @@
 //! failure without a word included. Xray's check refuses on a warning too,
 //! its output scrubbed of the bundle's secrets, every credential among
 //! them; its refusal is reported even when the staged directory cannot then
-//! be removed, which the next staging replaces. Validation also refuses an
+//! be removed, which the next staging replaces. Each bundle validator after
+//! it refuses in its turn, and none after the one that refused runs:
+//! Hy2's check, scrubbed the same way; nft's check of the staged ruleset;
+//! and `wg-quick strip`, which prints the configuration itself, so only
+//! its stderr is judged and kept. Validation also refuses an
 //! engine configuration that is not JSON, before any validator runs, or
 //! that cannot take a log level; fails when its scratch directory cannot be
 //! made, a copy cannot be written or a validator cannot be started; gives a
@@ -241,6 +245,127 @@ fn a_validator_warning_switches_nothing_and_its_output_is_scrubbed() {
             .iter()
             .all(|call| !call.contains("mooring-txn-revert")),
         "no timer to stop"
+    );
+}
+
+/// The golden Hy2 user's password, one of the bundle's secrets.
+const HY2_USER_PASSWORD: &str = "bW9vcmluZy1maXh0dXJlLXNlY3JldAMBAVpaWlpaWlo";
+
+/// Which validators ran, in the order they run: the bundle's four, then
+/// sshd, the first host validator that runs a tool.
+fn validators_run(calls: &[String]) -> [bool; 5] {
+    [
+        "/engines/xray run -test -c ",
+        "/engines/mooring-hy2 check -c ",
+        "/usr/sbin/nft -c -f ",
+        "/usr/bin/wg-quick strip ",
+        "/usr/sbin/sshd -t -f ",
+    ]
+    .map(|fragment| calls.iter().any(|call| call.contains(fragment)))
+}
+
+/// A bundle validator refused generation 1 with `error`: nothing was
+/// switched, armed or left pending, no copy of the engine configurations
+/// is left, and of the validators only those up to it ran.
+fn assert_refused_by(world: &World, node: &FakeNode, error: AgentError, ran: [bool; 5]) {
+    assert_refused(world, error);
+    assert_eq!(pending(&world.paths).unwrap(), None);
+    let calls = node.calls();
+    assert_eq!(validators_run(&calls), ran, "{calls:#?}");
+    assert!(
+        calls.iter().all(|call| !call.contains("--on-active")),
+        "armed although nothing was switched: {calls:#?}"
+    );
+}
+
+/// Hy2's check refuses what it cannot load, and what it printed is
+/// scrubbed of the bundle's secrets as Xray's output is.
+#[test]
+fn hy2s_check_refuses_with_its_output_scrubbed() {
+    let world = World::new();
+    world.faults.borrow_mut().hy2_check = Some(format!(
+        "FATAL[0000] start service: initialize inbound[0]: password {HY2_USER_PASSWORD}: too short\n"
+    ));
+    let node = world.node(1000);
+    world.apply_and_run(&node, world.bundle(1, same));
+    assert_refused_by(
+        &world,
+        &node,
+        AgentError::StageValidation {
+            tool: ValidationTool::Hy2,
+            stderr_tail: StderrTail::scrubbed(
+                b"FATAL[0000] start service: initialize inbound[0]: password <redacted>: too short\n",
+                &[],
+            ),
+        },
+        [true, true, false, false, false],
+    );
+    let staged = world.paths.generation(Generation::new(1));
+    index_of(
+        &node.calls(),
+        &format!(
+            "{} check -c {}",
+            staged.join("engines/mooring-hy2").display(),
+            world.paths.validate_dir().join("hy2.json").display()
+        ),
+    );
+}
+
+/// nft checks the staged ruleset, not the one loaded, and its refusal
+/// ends validation before the tunnel's.
+#[test]
+fn nfts_check_of_the_staged_ruleset_refuses_it() {
+    let world = World::new();
+    let error = "/etc/mooring/gen-1/nftables.conf:9:3-9: Error: syntax error, unexpected counter\n";
+    world.faults.borrow_mut().nft_check = Some(error.to_owned());
+    let node = world.node(1000);
+    world.apply_and_run(&node, world.bundle(1, same));
+    assert_refused_by(
+        &world,
+        &node,
+        AgentError::StageValidation {
+            tool: ValidationTool::Nft,
+            stderr_tail: StderrTail::scrubbed(error.as_bytes(), &[]),
+        },
+        [true, true, true, false, false],
+    );
+    let staged = world.paths.generation(Generation::new(1));
+    index_of(
+        &node.calls(),
+        &format!(
+            "/usr/sbin/nft -c -f {}",
+            staged.join("nftables.conf").display()
+        ),
+    );
+}
+
+/// `wg-quick strip` prints the staged configuration, private key
+/// included, on stdout: a warning on its stderr (here the one it gives for
+/// a configuration others may read) refuses the change, and only that
+/// stderr is kept.
+#[test]
+fn a_wg_quick_warning_refuses_and_only_its_stderr_is_kept() {
+    let world = World::new();
+    let staged = world
+        .paths
+        .generation(Generation::new(1))
+        .join("wgexit.conf");
+    let warning = format!("Warning: `{}' is world accessible\n", staged.display());
+    world.faults.borrow_mut().wg_strip_warns = Some(warning.clone());
+    let node = world.node(1000);
+    world.apply_and_run(&node, world.bundle(1, same));
+    assert_refused_by(
+        &world,
+        &node,
+        AgentError::StageValidation {
+            tool: ValidationTool::WgQuick,
+            stderr_tail: StderrTail::scrubbed(warning.as_bytes(), &[]),
+        },
+        [true, true, true, true, false],
+    );
+    index_of(
+        &node.calls(),
+        &format!("/usr/bin/wg-quick strip {}", staged.display()),
     );
 }
 

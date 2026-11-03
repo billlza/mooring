@@ -301,8 +301,9 @@ impl Paths {
         self.ssh_dir().join("ssh_host_ed25519_key")
     }
 
-    /// The host key `Bootstrap` made, `/var/lib/mooring/host-key.json`:
-    /// once it is recorded, a second `Bootstrap` keeps the key.
+    /// The host key `Bootstrap` made, `/var/lib/mooring/host-key.json`,
+    /// recorded as its last step: once it is, a second `Bootstrap` keeps
+    /// the key and applies only what changed in the host profile.
     pub(crate) fn host_key_record(&self) -> PathBuf {
         self.var_lib().join("host-key.json")
     }

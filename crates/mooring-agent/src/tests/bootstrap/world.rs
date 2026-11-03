@@ -31,7 +31,7 @@ pub(super) const NEW_HOST_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /// The host key the user-data injected.
-const INJECTED_HOST_KEY: &str =
+pub(super) const INJECTED_HOST_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /// How the stand-in host misbehaves, and what it saw.
@@ -43,22 +43,42 @@ pub(super) struct Faults {
     pub(super) apt_fails: bool,
     /// `useradd` fails.
     pub(super) useradd_fails: bool,
-    /// `usermod` succeeds but changes nothing.
-    pub(super) usermod_ignored: bool,
+    /// This tool succeeds but does nothing.
+    pub(super) ignored: Option<Tool>,
     /// `dpkg-query` lists every package, the last as removed (`rc`).
     pub(super) last_package_removed: bool,
     /// `ssh-keygen` fails.
     pub(super) keygen_fails: bool,
+    /// `ssh-keygen` writes this half of the new key only.
+    pub(super) keygen_writes_only: Option<KeyHalf>,
     /// `sshd -t` warns.
     pub(super) sshd_warns: bool,
-    /// `dpkg-query` cannot be started.
-    pub(super) dpkg_unstartable: bool,
-    /// `apt-get` cannot be started.
-    pub(super) apt_unstartable: bool,
+    /// This tool cannot be started.
+    pub(super) unstartable: Option<Tool>,
+    /// A call that fails.
+    pub(super) failing: Option<Failing>,
     /// `systemctl reload ssh.service` fails.
     pub(super) reload_fails: bool,
     /// Whether `authorized_keys` held the ops line when sshd was reloaded.
     pub(super) keys_at_reload: Option<bool>,
+}
+
+/// One half of a key pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyHalf {
+    /// The private key.
+    Private,
+    /// The public key, `<private key>.pub`.
+    Public,
+}
+
+/// A call of `tool` with `argument` among its arguments, which exits 1
+/// printing `stderr`.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Failing {
+    pub(super) tool: Tool,
+    pub(super) argument: &'static str,
+    pub(super) stderr: &'static str,
 }
 
 pub(super) struct Host {
@@ -138,6 +158,18 @@ impl Host {
             0,
             Box::new(move |tool, args| {
                 let mut faults = faults.borrow_mut();
+                if faults.unstartable == Some(tool) {
+                    return Err(io::Error::from_raw_os_error(ENOENT));
+                }
+                if let Some(failing) = faults.failing
+                    && failing.tool == tool
+                    && args.contains(&failing.argument)
+                {
+                    return Ok(failed(failing.stderr.as_bytes()));
+                }
+                if faults.ignored == Some(tool) {
+                    return Ok(ok(b""));
+                }
                 let append = |path: std::path::PathBuf, line: String| {
                     let mut text = fs::read_to_string(&path).unwrap();
                     text.push_str(&line);
@@ -149,9 +181,6 @@ impl Host {
                         .map(|index| args[index + 1].to_owned())
                 };
                 Ok(match tool {
-                    Tool::DpkgQuery if faults.dpkg_unstartable => {
-                        return Err(io::Error::from_raw_os_error(ENOENT));
-                    }
                     Tool::DpkgQuery => {
                         let listed = if faults.missing_packages { 2 } else { 5 };
                         let text: String = args[2..2 + listed]
@@ -187,7 +216,6 @@ impl Host {
                         );
                         ok(b"")
                     }
-                    Tool::Usermod if faults.usermod_ignored => ok(b""),
                     Tool::Usermod => {
                         let name = args.last().unwrap();
                         let text: String = fs::read_to_string(paths.passwd())
@@ -215,8 +243,12 @@ impl Host {
                     }
                     Tool::SshKeygen => {
                         let path = after("-f").unwrap();
-                        fs::write(&path, "fresh private").unwrap();
-                        fs::write(format!("{path}.pub"), format!("{NEW_HOST_KEY} \n")).unwrap();
+                        if faults.keygen_writes_only != Some(KeyHalf::Public) {
+                            fs::write(&path, "fresh private").unwrap();
+                        }
+                        if faults.keygen_writes_only != Some(KeyHalf::Private) {
+                            fs::write(format!("{path}.pub"), format!("{NEW_HOST_KEY} \n")).unwrap();
+                        }
                         ok(b"")
                     }
                     Tool::Sshd if faults.sshd_warns => {
@@ -235,9 +267,12 @@ impl Host {
                 })
             }),
         )
-        .programs(Box::new(move |_, args| {
+        .programs(Box::new(move |program, args| {
             let faults = apt.borrow();
-            if faults.apt_unstartable {
+            if faults
+                .unstartable
+                .is_some_and(|tool| std::path::Path::new(tool.path()) == program)
+            {
                 return Err(io::Error::from_raw_os_error(ENOENT));
             }
             Ok(if faults.apt_fails && args.first() == Some(&"install") {
