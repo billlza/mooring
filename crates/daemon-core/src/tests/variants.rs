@@ -565,6 +565,7 @@ fn watch_errors() -> Vec<WatchError> {
         WatchError::NftFailed,
         WatchError::StatsQueryFailed,
         WatchError::TargetDegraded,
+        WatchError::TargetReadFailed { errno: Some(13) },
         WatchError::ExitFlowCapHit { count: 14 },
         WatchError::StateWrite { errno: Some(28) },
         WatchError::MacSilent {

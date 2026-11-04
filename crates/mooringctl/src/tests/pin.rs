@@ -9,7 +9,7 @@
 //! pinned.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 
 use mooring_macsys::MacsysError;
 use mooring_model::iface::BsdName;
@@ -460,4 +460,33 @@ fn the_interface_is_recorded_with_the_same_address_without_asking() {
             .ends_with("already pinned; nothing was written\n")
     );
     assert_eq!(fs::read(&file).unwrap(), before);
+}
+
+/// A link where the pin belongs, even one to nothing, is neither a pin nor
+/// "no pin" (design §15.6 rule 4): `router status` fails on the Mac (exit
+/// 1), naming the file, before any connection, and `router pin` refuses
+/// to record over it, leaving the link, and where it leads, as they are.
+/// Until 2026-11-03 the status read a link to nothing as no pin (exit 3),
+/// and the pin wrote over it.
+#[test]
+fn a_link_where_the_pin_belongs_is_refused() {
+    let stub = Stub::start(Vec::new());
+    let mut harness = Harness::new(stub.port());
+    let dir = harness.support_dir();
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(ROUTER_PIN_FILE);
+    symlink(dir.join("moved.json"), &file).unwrap();
+    let refused = format!(
+        "mooringctl: the router identity file failed\n  caused by: {} is not a regular file\n",
+        file.display()
+    );
+    let outcome = harness.run(&["router", "status", "--interface", "lo0"]);
+    assert_eq!(outcome.code, 1, "{}", outcome.stderr);
+    assert_eq!(outcome.stderr, refused);
+    let outcome = harness.run(PIN_YES);
+    assert_eq!(outcome.code, 1, "{}", outcome.stderr);
+    assert_eq!(outcome.stderr, refused);
+    assert!(fs::symlink_metadata(&file).unwrap().is_symlink());
+    assert!(!dir.join("moved.json").exists());
+    assert!(stub.finish().is_empty(), "nothing was sent");
 }

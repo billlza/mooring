@@ -450,6 +450,11 @@
         "node": "lon1"
       }
     },
+    {
+      "target_read_failed": {
+        "node": "lon1"
+      }
+    },
     "router_no_service",
     "router_on_lte",
     "router_thermal_step_down",
@@ -998,6 +1003,11 @@
     "NftFailed",
     "StatsQueryFailed",
     "TargetDegraded",
+    {
+      "TargetReadFailed": {
+        "errno": 13
+      }
+    },
     {
       "ExitFlowCapHit": {
         "count": 14

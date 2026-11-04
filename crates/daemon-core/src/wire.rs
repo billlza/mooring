@@ -99,6 +99,7 @@ pub(crate) const fn mac_alert_kind(kind: AlertConditionKind) -> MacAlertKind {
         K::ForeignNetworkAttached => MacAlertKind::ForeignNetworkAttached,
         K::ReachabilitySuspect => MacAlertKind::ReachabilitySuspect,
         K::TargetDegraded => MacAlertKind::TargetDegraded,
+        K::TargetReadFailed => MacAlertKind::TargetReadFailed,
         K::RouterNoService => MacAlertKind::RouterNoService,
         K::RouterOnLte => MacAlertKind::RouterOnLte,
         K::RouterThermalStepDown => MacAlertKind::RouterThermalStepDown,

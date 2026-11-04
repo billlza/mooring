@@ -211,6 +211,7 @@ fn payload(condition: &AlertCondition) -> Result<Option<String>, NotifyError> {
         | AlertCondition::SimWarn { .. }
         | AlertCondition::ReachabilitySuspect { .. }
         | AlertCondition::TargetDegraded { .. }
+        | AlertCondition::TargetReadFailed { .. }
         | AlertCondition::RouterNoService
         | AlertCondition::RouterOnLte
         | AlertCondition::RouterThermalStepDown

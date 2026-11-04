@@ -5,8 +5,9 @@
 //! installed, and applied by the steps their change needs. A transaction
 //! stages them with its generation (`gen-<N>/host/`), so a rollback puts
 //! back the previous generation's; `Bootstrap` stages them in a scratch
-//! directory of its own, and applies every file, changed or not, until one
-//! of its runs has finished.
+//! directory of its own. Which installed files are applied is [`Applied`]:
+//! every one until a `Bootstrap` has finished, and for a node's first
+//! generation; then only those that changed.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -162,6 +163,35 @@ fn judge(
             tool,
             stderr_tail: StderrTail::scrubbed(&judged, &[]),
         })
+    }
+}
+
+/// Which of the host profile's files a run applies once it has installed
+/// them. Installing comes first, and a run that stops after it leaves the
+/// installed text ahead of what was applied, which the next run would take
+/// for nothing to do; so a run applies every file until it knows that all
+/// installed were applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Applied {
+    /// Every file: no `Bootstrap` has finished on this host (none has
+    /// recorded the host key), or the transaction is the node's first,
+    /// whose retry after a rollback to nothing finds the files the failed
+    /// attempt installed (design §11.2 step 5).
+    Every,
+    /// Only the files whose text changed: a `Bootstrap` has finished, or a
+    /// generation was in place, and applied all it installed. A run that
+    /// installs a changed file and then fails to apply it leaves it so for
+    /// its retry, unless a rollback puts the previous generation's back.
+    Changed,
+}
+
+impl Applied {
+    /// The files to apply, of those `changed` by the install.
+    pub(crate) fn files(self, changed: BTreeSet<HostFile>) -> BTreeSet<HostFile> {
+        match self {
+            Self::Every => HostFile::ALL.iter().copied().collect(),
+            Self::Changed => changed,
+        }
     }
 }
 

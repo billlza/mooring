@@ -2,22 +2,24 @@
 
 //! The exit's latch (design §10.2): its exact format and mode, its removal,
 //! the typed refusal of anything that is not a version-1 latch, and a read
-//! that fails reported as such.
+//! that fails reported as such. (`tests::regular_files` refuses a link,
+//! and anything else but a regular file, where the latch belongs.)
 
 use std::fs;
 use std::io;
 use std::net::Ipv4Addr;
+use std::os::unix::fs::PermissionsExt;
 
 use mooring_model::counters::ConfigGeneration;
 use mooring_model::iface::{BsdName, EgressIdentity, MacAddr};
 use mooring_model::time::UnixTime;
 use mooring_model::verdict::{LatchRecord, Violation};
 
-use super::{assert_io_error, mode_of};
+use super::{assert_io_error, assert_not_regular, mode_of};
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 use crate::latch::{LATCH_FILE, clear_latch, read_latch, write_latch};
 
-fn latch() -> LatchRecord {
+pub(super) fn latch() -> LatchRecord {
     LatchRecord {
         violation: Violation::OutsideCarrierPrefixes {
             ip: Ipv4Addr::new(46, 78, 90, 99),
@@ -74,8 +76,10 @@ fn anything_but_a_version_one_latch_is_corrupt() {
 
 /// A latch that cannot be read is an error naming the read, never "no
 /// latch", on which the exit would serve again past a latched violation:
-/// here the open fails (the run path is a file), then the read does (the
-/// latch path is a directory).
+/// here the open fails, as the run path is a file, or as the latch is mode
+/// 0000 (the tests run unprivileged, on the Mac and in CI; root would open
+/// it). A directory where the latch belongs is no latch either: it is not
+/// a regular file.
 #[test]
 fn a_latch_that_cannot_be_read_is_an_error_not_no_latch() {
     let dir = tempfile::tempdir().unwrap();
@@ -88,14 +92,18 @@ fn a_latch_that_cannot_be_read_is_an_error_not_no_latch() {
         io::ErrorKind::NotADirectory,
     );
     let run_dir = tempfile::tempdir().unwrap();
+    write_latch(run_dir.path(), &latch()).unwrap();
     let path = run_dir.path().join(LATCH_FILE);
-    fs::create_dir(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
     assert_io_error(
         &read_latch(run_dir.path()).unwrap_err(),
         IoOp::ReadLatch,
         &path,
-        io::ErrorKind::IsADirectory,
+        io::ErrorKind::PermissionDenied,
     );
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert_not_regular(&read_latch(run_dir.path()).unwrap_err(), &path);
 }
 
 /// A latch that cannot be removed is an error naming the removal, never a

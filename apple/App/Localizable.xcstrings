@@ -41,6 +41,16 @@
         }
       }
     },
+    "%@ cannot read its hourly target check's result": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 无法读取每小时目标检查的结果"
+          }
+        }
+      }
+    },
     "%@ carries an IPv4 default route": {
       "localizations": {
         "zh-Hans": {
@@ -2279,6 +2289,16 @@
         }
       }
     },
+    "Reading the hourly target check's result failed (errno %d)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取每小时目标检查的结果失败（errno %d）"
+          }
+        }
+      }
+    },
     "Received": {
       "localizations": {
         "zh-Hans": {
@@ -3198,6 +3218,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "历史记录超过 4 MiB，应用已停止读取。"
+          }
+        }
+      }
+    },
+    "The hourly target check's result could not be decoded": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法解码每小时目标检查的结果"
           }
         }
       }

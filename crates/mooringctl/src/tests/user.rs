@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::num::NonZeroU16;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 
 use mooring_model::{
     AgreementRecord, AgreementVersion, CalendarDate, Deployment, DeploymentParts, RuntimeIntent,
@@ -177,6 +177,42 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
         );
         assert_eq!(state_bytes(&harness), before);
     }
+}
+
+/// A link where the state belongs, even one to nothing, is not "no
+/// deployment": every user command fails naming the file, nothing is read
+/// through the link and nothing is made where it leads. Until 2026-11-03 a
+/// link to nothing read as no state, and the commands said there was no
+/// deployment yet.
+#[test]
+fn a_link_where_the_state_belongs_is_not_no_deployment() {
+    let mut harness = Harness::new(0);
+    let dir = harness.support_dir();
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .unwrap();
+    let state = dir.join("state.json");
+    symlink(dir.join("moved.json"), &state).unwrap();
+    for args in [
+        &["user", "agree", "abcdefghij"][..],
+        &["user", "alias", "abcdefghij"][..],
+        &["user", "add"][..],
+    ] {
+        let outcome = harness.run(args);
+        assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
+        assert_eq!(outcome.stdout, "");
+        assert_eq!(
+            outcome.stderr,
+            format!(
+                "mooringctl: the state could not be read\n  caused by: {} is not a regular file\n",
+                state.display()
+            ),
+            "{args:?}"
+        );
+    }
+    assert!(!dir.join("moved.json").exists());
 }
 
 /// Without a state there is nothing to record into, whether the support

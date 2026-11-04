@@ -40,6 +40,7 @@ use mooring_agent_proto::{
 use crate::gate;
 use crate::hello;
 use crate::host::{Node, Tool, run_ok};
+use crate::hostfiles::Applied;
 use crate::paths::Paths;
 use crate::store::{Lock, errno};
 use changes::{apply_changes, install_host};
@@ -329,7 +330,14 @@ fn switch(
     swap(paths, generation).map_err(|error| RollbackCause::Swap {
         errno: error.raw_os_error(),
     })?;
-    let host = install_host(paths, dir)?;
+    // A node's first generation applies its whole profile: one rolled back
+    // to nothing left the files it installed, never applied.
+    let applied = if before.is_none() {
+        Applied::Every
+    } else {
+        Applied::Changed
+    };
+    let host = install_host(paths, dir, applied)?;
     progress(paths, generation, TxnStage::Apply)?;
     apply_changes(paths, node, before, header, dir, &host)?;
     progress(paths, generation, TxnStage::HealthGate)?;

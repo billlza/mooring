@@ -14,8 +14,12 @@
 //! figures, the engine units, the uplink's counters). Its unit restarts it
 //! without limit, and `ExecStopPost` closes the gate meanwhile.
 //! A WireGuard reading that fails closes the gate (`WgReadFailed`); Xray's
-//! API failing is `StatsQueryFailed`. A state write, journal append or
-//! usage file that fails is reported (`StateWrite`) and retried at the next
+//! API failing is `StatsQueryFailed`. The hourly target check's result
+//! that cannot be read is `TargetReadFailed`, read again at the next tick:
+//! it says nothing of the watch's own work (2026-11-03; it used to end the
+//! watch, which then failed at every restart, the gate closed, until the
+//! check next wrote its result). A state write, journal append or usage
+//! file that fails is reported (`StateWrite`) and retried at the next
 //! tick or reading; until the journal records them, changes stay in the
 //! view's difference from what it last recorded, so each is journaled at
 //! least once (twice when an append fails after its lines reached the file).
@@ -162,12 +166,9 @@ impl Watch {
         } else {
             previous_committed
         };
-        let installed = match &config {
-            Some(config) => Some(Installed {
-                target_degraded: crate::target::hourly::degraded(paths, &config.target)?,
-            }),
-            None => None,
-        };
+        let installed = config.as_ref().map(|config| Installed {
+            target: crate::target::hourly::verdict(paths, &config.target),
+        });
         let conditions = self.conditions(
             now,
             installed,

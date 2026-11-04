@@ -71,22 +71,22 @@ ipnet = { version = "2.12.2", features = ["serde"] }
 # P-256 self-signed Hysteria2 certificate (ring backend: C and assembly, no C++).
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-sha2 = "0.11.0"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
 thiserror = "2.0.21"
-uuid = "1.27.0"
+uuid = "1.28.0"
 x25519-dalek = { version = "3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
 x509-parser = "0.18.1"
 zeroize = { version = "1.9.1", features = ["derive"] }
 
-# Revision 7, checked on crates.io on 2026-10-13: each is the newest stable
-# release at least 14 days old.
+# Checked against crates.io on 2026-11-04; keep the newest compatible
+# stable releases at least 14 days old (design §6.2).
 # mooringctl and fieldkit: typed subcommands, so no secret is ever an
 # argument. No colour and no suggestions, so no terminal-detection crates.
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
-# macsys only: sysctl, if_nametoindex, termios. Held at 0.2.189 in the lock:
-# 0.2.190 was published on 2026-10-02.
-libc = "0.2.189"
+# macsys: sysctl, if_nametoindex, termios. Store: no-follow and nonblocking
+# file-open constants; no additional unsafe code.
+libc = "0.2.191"
 # mooringctl only: the legacy login keychain (SecItem generic passwords).
 # The default features only raise the minimum macOS and TLS versions.
 security-framework = { version = "3.7.0", default-features = false }
@@ -104,12 +104,12 @@ core-foundation = "0.10.1"
 socket2 = { version = "0.6.5", features = ["all"] }
 
 # xtask only: reads deny.toml and the contract/*.toml files into serde types.
-# 1.1.6 is the newest release at least 14 days old (1.1.7 was published on
-# 2026-10-08); parse + serde is all deserialising needs.
-toml = { version = "1.1.6", default-features = false, features = ["parse", "serde"] }
+# parse + serde is all deserialising needs. The 1.2 release is still
+# within the 14-day observation period on 2026-11-04.
+toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
 
 # Development and test only.
 insta = { version = "1.49.0", features = ["json"] }
-proptest = "1.11.0"
-saphyr = "0.1.0"
+proptest = "1.12.0"
+saphyr = "0.2.2"
 tempfile = "3.27.0"

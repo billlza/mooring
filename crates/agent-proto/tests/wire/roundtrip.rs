@@ -262,6 +262,7 @@ fn watch_error() -> impl Strategy<Value = WatchError> {
         Just(WatchError::NftFailed),
         Just(WatchError::StatsQueryFailed),
         Just(WatchError::TargetDegraded),
+        errno().prop_map(|errno| WatchError::TargetReadFailed { errno }),
         any::<u64>().prop_map(|count| WatchError::ExitFlowCapHit { count }),
         errno().prop_map(|errno| WatchError::StateWrite { errno }),
         option::of(unix_time()).prop_map(|since| WatchError::MacSilent { since }),

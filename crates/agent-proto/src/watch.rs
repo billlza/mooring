@@ -96,6 +96,21 @@ pub enum WatchError {
     /// The hourly target check failed or the target's address changed.
     #[error("the REALITY target is degraded")]
     TargetDegraded,
+    /// The hourly target check's latest result cannot be read, so whether
+    /// the target is degraded is unknown: neither `TargetDegraded` nor its
+    /// absence stands in for it. The watch goes on and reads the result
+    /// again at the next tick; a result not written yet is no check, which
+    /// is no news.
+    #[error(
+        "reading the hourly target check's result failed ({})",
+        crate::error::describe_errno(.errno)
+    )]
+    TargetReadFailed {
+        /// The OS error number, when reading failed; `None` when the file
+        /// holds no result the watch can read.
+        #[serde(deserialize_with = "Option::deserialize")]
+        errno: Option<i32>,
+    },
     /// The exit flow cap rejected new flows.
     #[error("the exit flow cap has rejected {count} flows")]
     ExitFlowCapHit {
@@ -175,6 +190,8 @@ closed_enum! {
         StatsQueryFailed,
         /// [`WatchError::TargetDegraded`].
         TargetDegraded,
+        /// [`WatchError::TargetReadFailed`].
+        TargetReadFailed,
         /// [`WatchError::ExitFlowCapHit`].
         ExitFlowCapHit,
         /// [`WatchError::StateWrite`].
@@ -200,6 +217,7 @@ impl WatchError {
             Self::NftFailed => WatchErrorKind::NftFailed,
             Self::StatsQueryFailed => WatchErrorKind::StatsQueryFailed,
             Self::TargetDegraded => WatchErrorKind::TargetDegraded,
+            Self::TargetReadFailed { .. } => WatchErrorKind::TargetReadFailed,
             Self::ExitFlowCapHit { .. } => WatchErrorKind::ExitFlowCapHit,
             Self::StateWrite { .. } => WatchErrorKind::StateWrite,
             Self::MacSilent { .. } => WatchErrorKind::MacSilent,

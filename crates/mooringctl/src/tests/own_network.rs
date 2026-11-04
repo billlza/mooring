@@ -8,7 +8,7 @@
 use std::fs;
 use std::net::Ipv4Addr;
 use std::num::NonZeroU32;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 
 use clap::Parser;
 use mooring_macsys::{ConfigdFault, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
@@ -387,6 +387,24 @@ fn allow_network_records_nothing_without_a_yes() {
     assert!(outcome.stderr.contains("is corrupt"), "{}", outcome.stderr);
     assert!(corrupt.console.asked.is_empty());
     assert_eq!(fs::read(&path).unwrap(), b"{}");
+    // A link where the file belongs, even one to nothing, is named too:
+    // never read as no declaration, and never replaced by a declaration.
+    let mut linked = joined(hotspot());
+    let path = linked.support_dir().join(ALLOWED_NETWORKS_FILE);
+    let moved = linked.support_dir().join("moved.json");
+    symlink(&moved, &path).unwrap();
+    let refused = format!(
+        "mooringctl: the allowed-networks file failed\n  caused by: {} is not a regular file\n",
+        path.display()
+    );
+    for args in [&["exit", "allowed-networks"][..], &ALLOW[..]] {
+        let outcome = linked.run(args);
+        assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
+        assert_eq!(outcome.stderr, refused, "{args:?}");
+    }
+    assert!(linked.console.asked.is_empty());
+    assert!(fs::symlink_metadata(&path).unwrap().is_symlink());
+    assert!(!moved.exists());
 }
 
 /// A declarations file that cannot hold another network refuses the

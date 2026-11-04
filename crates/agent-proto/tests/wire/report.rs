@@ -614,6 +614,7 @@ fn mac_alert_kinds_travel_as_their_names() {
         ),
         (MacAlertKind::ReachabilitySuspect, "ReachabilitySuspect"),
         (MacAlertKind::TargetDegraded, "TargetDegraded"),
+        (MacAlertKind::TargetReadFailed, "TargetReadFailed"),
         (MacAlertKind::RouterNoService, "RouterNoService"),
         (MacAlertKind::RouterOnLte, "RouterOnLte"),
         (MacAlertKind::RouterThermalStepDown, "RouterThermalStepDown"),

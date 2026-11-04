@@ -125,6 +125,9 @@ fn longest_kinds() -> Vec<AgentEventKind> {
             WatchErrorKind::NftFailed => WatchError::NftFailed,
             WatchErrorKind::StatsQueryFailed => WatchError::StatsQueryFailed,
             WatchErrorKind::TargetDegraded => WatchError::TargetDegraded,
+            WatchErrorKind::TargetReadFailed => WatchError::TargetReadFailed {
+                errno: Some(i32::MIN),
+            },
             WatchErrorKind::ExitFlowCapHit => WatchError::ExitFlowCapHit { count: u64::MAX },
             WatchErrorKind::StateWrite => WatchError::StateWrite {
                 errno: Some(i32::MIN),

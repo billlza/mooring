@@ -215,6 +215,9 @@ public enum WatchError: Decodable, Hashable, Sendable {
     case nftFailed
     case statsQueryFailed
     case targetDegraded
+    /// The hourly target check's result cannot be read: the OS error
+    /// number, or `nil` when the file holds no result the watch can read.
+    case targetReadFailed(errno: Int32?)
     case exitFlowCapHit(count: UInt64)
     case stateWrite(errno: Int32?)
     case macSilent(since: UnixTime?)
@@ -230,6 +233,8 @@ public enum WatchError: Decodable, Hashable, Sendable {
         case ("NftFailed", nil): self = .nftFailed
         case ("StatsQueryFailed", nil): self = .statsQueryFailed
         case ("TargetDegraded", nil): self = .targetDegraded
+        case ("TargetReadFailed", let value?):
+            self = .targetReadFailed(errno: try value.fields("errno").nullableField(Int32.self, "errno"))
         case ("ExitFlowCapHit", let value?):
             self = .exitFlowCapHit(count: try value.fields("count").field(UInt64.self, "count"))
         case ("StateWrite", let value?):

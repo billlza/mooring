@@ -26,7 +26,10 @@ closed_enum! {
 /// has stopped, so the node must stop pinging [`DeadManCheck::Node`]: it
 /// cannot read WireGuard, drive nftables or record its state. Every other
 /// condition leaves the watch working and is reported by a push notice
-/// instead. The match names every kind, so a new condition cannot be added
+/// instead: a target check's result the watch cannot read
+/// (`TargetReadFailed`, 2026-11-03) among them, since the watch still
+/// gates, counts and records its state, and only the target's verdict is
+/// unknown. The match names every kind, so a new condition cannot be added
 /// without deciding it here.
 const fn stops_the_watch(kind: WatchErrorKind) -> bool {
     match kind {
@@ -35,6 +38,7 @@ const fn stops_the_watch(kind: WatchErrorKind) -> bool {
         }
         WatchErrorKind::StatsQueryFailed
         | WatchErrorKind::TargetDegraded
+        | WatchErrorKind::TargetReadFailed
         | WatchErrorKind::ExitFlowCapHit
         | WatchErrorKind::MacSilent
         | WatchErrorKind::DiskLow

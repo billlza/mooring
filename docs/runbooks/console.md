@@ -107,6 +107,42 @@ The same status is available in Terminal:
 - `… status --follow --json` prints each new status as one JSON line, as the app reads it (the app adds `--until-parent-exits`, so its follower ends with it);
 - `… router history` prints yesterday's and today's radio samples (UTC) as a summary: a header per day, the changes between polls, and the hourly signal; `--since <day>` and `--until <day>` choose the days (at most 90), `--json` prints the document the app reads. It reads the daemon's files and never the M7, so it works while the daemon is stopped.
 
+### Layout regression preview
+
+`apple/LayoutPreview` is a separate, Debug-only app that compiles the real
+console views and decodes the repository's `serving.json` fixture. Its bundle
+identifier and preferences are separate. It runs no `mooringctl`, reads no
+deployment or Keychain, and replaces the daemon controls with an explicit
+unavailable result. It is not a deployment or a live-service acceptance test.
+
+Build it without stopping the serving daemon:
+
+```sh
+xcodegen generate --quiet --spec apple/LayoutPreview/project.yml
+xcrun xcodebuild -quiet -project apple/LayoutPreview/MooringLayoutPreview.xcodeproj \
+  -scheme MooringLayoutPreview -configuration Debug \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath target/layout-preview \
+  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES build
+open target/layout-preview/Build/Products/Debug/MooringLayoutPreview.app
+```
+
+Use the fixture picker for unavailable usage, a usage report, no users and a
+retry countdown (a simulated command exit; the preview runs no command).
+Check the column titles and first row on screen, select a user, switch pages,
+and change to **No users** while its inspector is open. The inspector must
+close, and restoring the users must not restore a stale selection. Check both
+the ordinary and zoomed window. An accessibility tree that contains the text
+does not establish that the pixels are visible.
+
+On macOS 27.2 (2026-11-04), the former table-local `.inspector` reproducibly
+created an additional titlebar background at the table's origin, covering the
+header and first row. A one-point inset and hiding the table's scroll-edge
+effect did not fix it. `ConsoleView` now owns the selection and attaches the
+inspector to the whole detail pane, including its banners. This placement was
+checked on screen with the real views and fixture data; the shipped daemon and
+app bundle were not replaced. The stream banner schedules a per-second update
+only for a retry countdown; live status is updated by the model.
+
 ## 4. Stop
 
 **Stop the Daemon** in the app's menu or the console's **Daemon** menu: launchd stops it and no longer starts it at login. Quitting the app does not stop the daemon.

@@ -139,7 +139,8 @@ struct PinVersion {
 }
 
 /// Reads the router identity recorded in `dir`: `Ok(None)` only when the
-/// file does not exist; any other read failure is `Io`, and a file that is
+/// file does not exist; anything but a regular file there, a link included,
+/// is `NotRegularFile`, any other read failure is `Io`, and a file that is
 /// not a router identity of version 1 or 2 is `RouterPinCorrupt`.
 pub fn read_router_pin(dir: &Path) -> Result<Option<StoredPin>, StoreError> {
     let path = dir.join(ROUTER_PIN_FILE);

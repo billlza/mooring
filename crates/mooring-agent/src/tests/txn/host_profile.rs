@@ -4,11 +4,13 @@
 //! with the generation, installed with the swap, what each needs once
 //! installed (`sysctl --system`, a daemon reload, its service restarted or
 //! reloaded), and the previous generation's files put back by a rollback.
+//! A node's first generation applies the whole profile, its retry after a
+//! rollback to nothing included; a later one only what changed.
 
 use std::fs;
 
 use mooring_agent_proto::{
-    AgentError, Generation, HostFile, HostProfile, ManagedFile, RollbackCause, TxnState,
+    AgentError, ApplyStep, Generation, HostFile, HostProfile, ManagedFile, RollbackCause, TxnState,
 };
 
 use super::world::{World, idle, index_of, same};
@@ -23,19 +25,20 @@ fn drift(world: &World, file: HostFile, text: &str) {
 fn a_transaction_converges_the_host_profile_and_applies_what_it_needs() {
     let world = World::new();
     let node = world.node(1000);
-    // A node bootstrapped to the profile: nothing of it to do.
+    // A node's first generation applies its whole profile, though
+    // Bootstrap installed the same text.
     world.commit(&node, world.bundle(1, same));
-    for absent in [
-        "daemon-reload",
-        "sysctl",
-        "reload ssh",
-        "journald",
-        "tmpfiles",
+    let calls = node.calls();
+    for step in [
+        "/usr/bin/systemd-tmpfiles --create",
+        "/usr/sbin/sysctl --system",
+        "/usr/bin/systemctl daemon-reload",
+        "/usr/bin/systemctl restart mooring-watch.service",
+        "/usr/bin/systemctl restart mooring-reflect.service",
+        "/usr/bin/systemctl restart systemd-journald.service",
+        "/usr/bin/systemctl reload ssh.service",
     ] {
-        assert!(
-            node.calls().iter().all(|call| !call.contains(absent)),
-            "{absent}"
-        );
+        index_of(&calls, step);
     }
     // Local changes since, and an older recorded version.
     drift(&world, HostFile::Sysctl, "net.ipv4.ip_forward = 1\n");
@@ -98,6 +101,26 @@ fn a_transaction_converges_the_host_profile_and_applies_what_it_needs() {
         assert_eq!(
             fs::read_to_string(staged.join(file.staged_name())).unwrap(),
             text
+        );
+    }
+}
+
+#[test]
+fn a_later_generation_applies_none_of_an_unchanged_profile() {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    let node = world.node(2000);
+    world.commit(&node, world.bundle(2, idle(100)));
+    for absent in [
+        "daemon-reload",
+        "sysctl",
+        "reload ssh",
+        "journald",
+        "tmpfiles",
+    ] {
+        assert!(
+            node.calls().iter().all(|call| !call.contains(absent)),
+            "{absent}"
         );
     }
 }
@@ -182,4 +205,56 @@ fn a_rollback_puts_the_previous_generations_profile_files_back() {
         .filter(|call| call.as_str() == "/usr/sbin/sysctl --system")
         .count();
     assert_eq!(applied, 2, "once forward, once back");
+}
+
+/// A first generation rolled back to nothing leaves the profile files it
+/// installed in place, never applied: here the tunnel's start failed
+/// before any of the profile's steps ran. Its retry applies the whole
+/// profile, though the files' text is unchanged by then.
+#[test]
+fn a_retried_first_generation_applies_the_whole_profile() {
+    let world = World::new();
+    // Bootstrap installed an older profile's kernel parameters.
+    drift(&world, HostFile::Sysctl, "# an older profile\n");
+    world.faults.borrow_mut().restart = true;
+    let node = world.node(1000);
+    assert!(matches!(
+        world.apply_and_run(&node, world.bundle(1, same)),
+        TxnState::Failed {
+            error: AgentError::RolledBack {
+                cause: RollbackCause::Apply {
+                    step: ApplyStep::WireGuard,
+                    ..
+                },
+                ..
+            }
+        }
+    ));
+    assert!(
+        node.calls().iter().all(|call| !call.contains("sysctl")),
+        "the attempt stopped before the profile's steps"
+    );
+    let (_, text) = HostProfile::CURRENT
+        .files()
+        .into_iter()
+        .find(|(file, _)| *file == HostFile::Sysctl)
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(world.paths.host_file(HostFile::Sysctl)).unwrap(),
+        text,
+        "installed, never applied"
+    );
+    world.faults.borrow_mut().restart = false;
+    let retry = world.node(2000);
+    world.commit(&retry, world.bundle(1, same));
+    let calls = retry.calls();
+    for step in [
+        "/usr/bin/systemd-tmpfiles --create",
+        "/usr/sbin/sysctl --system",
+        "/usr/bin/systemctl daemon-reload",
+        "/usr/bin/systemctl restart systemd-journald.service",
+        "/usr/bin/systemctl reload ssh.service",
+    ] {
+        index_of(&calls, step);
+    }
 }

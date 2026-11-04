@@ -7,7 +7,8 @@
 //! address, not the first of the set the name resolves to, through the
 //! current generation's Xray and without the handshake sampler, and
 //! records its verdict, which the watch reads at every tick through
-//! [`degraded`].
+//! [`verdict`]. A result the watch cannot read is [`Verdict::Unreadable`]:
+//! a verdict neither way, and no reason for the watch to stop.
 
 use mooring_agent_proto::{
     AgentError, HttpProbe, HttpVersion, IoOp, UnixTime, WatchConfig, WatchTarget,
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::probes::{TlsPing, http_probe, resolve, tls_ping};
 use crate::host::Node;
 use crate::paths::Paths;
-use crate::store::{read_json, write_json};
+use crate::store::{errno, read_json, write_json};
 use crate::txn::stage::{self, XRAY};
 
 /// The hourly check's latest result (`/var/lib/mooring/watch/target.json`),
@@ -71,9 +72,34 @@ pub(crate) fn watch(paths: &Paths, node: &dyn Node) -> Result<TargetReading, Age
     Ok(reading)
 }
 
-/// Whether the latest hourly check found `target` degraded; no check of it
-/// yet is no news.
-pub(crate) fn degraded(paths: &Paths, target: &WatchTarget) -> Result<bool, AgentError> {
-    Ok(read_json::<TargetReading>(&paths.target_reading())?
-        .is_some_and(|reading| reading.target == *target && reading.degraded))
+/// What the hourly check's latest result says of the configured target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// No check of it yet: no result, or one about another target. No
+    /// news.
+    Unchecked,
+    /// The latest check of it passed.
+    Passed,
+    /// The latest check of it failed (`TargetDegraded`).
+    Degraded,
+    /// The result cannot be read (`TargetReadFailed`), so whether the
+    /// target is degraded is unknown.
+    Unreadable {
+        /// The OS error number, when reading failed; `None` when the file
+        /// holds no result this agent reads.
+        errno: Option<i32>,
+    },
+}
+
+/// The latest hourly check's verdict on `target`.
+pub(crate) fn verdict(paths: &Paths, target: &WatchTarget) -> Verdict {
+    match read_json::<TargetReading>(&paths.target_reading()) {
+        Ok(None) => Verdict::Unchecked,
+        Ok(Some(reading)) if reading.target != *target => Verdict::Unchecked,
+        Ok(Some(reading)) if reading.degraded => Verdict::Degraded,
+        Ok(Some(_)) => Verdict::Passed,
+        Err(error) => Verdict::Unreadable {
+            errno: errno(&error),
+        },
+    }
 }

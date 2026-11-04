@@ -22,6 +22,17 @@
 //!   mode 0600, so `state.json` is never partially written;
 //! - the CLI is the only writer.
 //!
+//! # Only regular files
+//!
+//! Every file the store opens by its path, to read it, to append to it or
+//! to lock it, is opened with `O_NOFOLLOW` and `O_NONBLOCK` and checked on
+//! the open descriptor: a link where a store file belongs, dangling or not,
+//! a directory, a FIFO, a socket or a device is refused as
+//! [`StoreError::NotRegularFile`], never followed, never waited on and never
+//! read as no file, and `state.lock` is never made where a link leads. A
+//! missing file is still no file. The writes rename a new file over the
+//! path, which follows nothing (design §7).
+//!
 //! # Migrations
 //!
 //! `state.json` carries `{"version": N, …}`; this build writes version 2

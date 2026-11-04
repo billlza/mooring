@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Development-only host for the real console views, using contract fixtures.
+name: MooringLayoutPreview
+options:
+  deploymentTarget:
+    macOS: "15.0"
+packages:
+  MooringKit:
+    path: ../Packages/MooringKit
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+targets:
+  MooringLayoutPreview:
+    type: application
+    platform: macOS
+    sources:
+      - path: ../App
+        excludes:
+          - MooringApp.swift
+          - DaemonService.swift
+          - Info.plist
+          - InfoPlist.xcstrings
+          - "*.license"
+          - LaunchAgents
+      - path: LayoutPreviewApp.swift
+      - path: PreviewDaemon.swift
+      - path: ../../contract/status-fixtures/serving.json
+        buildPhase: resources
+      - path: ../../contract/status-fixtures/serving.json.license
+        buildPhase: resources
+    dependencies:
+      - package: MooringKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bill.mooring.layout-preview
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Mooring Layout Preview
+        INFOPLIST_KEY_LSUIElement: NO
+schemes:
+  MooringLayoutPreview:
+    build:
+      targets:
+        MooringLayoutPreview: all
