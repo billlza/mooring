@@ -115,9 +115,10 @@ struct Version {
     version: u32,
 }
 
-/// Reads the declarations in `dir`: none when the file does not exist; any
-/// other read failure is `Io`, and a file that is not a version-1
-/// declaration document is `AllowedNetworksCorrupt`.
+/// Reads the declarations in `dir`: none when the file does not exist;
+/// anything but a regular file there, a link included, is
+/// `NotRegularFile`, any other read failure is `Io`, and a file that is not
+/// a version-1 declaration document is `AllowedNetworksCorrupt`.
 pub fn read_allowed_networks(dir: &Path) -> Result<OwnNetworks, StoreError> {
     let path = dir.join(ALLOWED_NETWORKS_FILE);
     let corrupt = |fault| StoreError::AllowedNetworksCorrupt {

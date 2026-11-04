@@ -267,6 +267,12 @@ pub enum AlertCondition {
         /// The node.
         node: NodeId,
     },
+    /// A node's watch cannot read its hourly target check's result (agent
+    /// `TargetReadFailed`), so a degraded target would go unreported.
+    TargetReadFailed {
+        /// The node.
+        node: NodeId,
+    },
     /// The M7 has no service.
     RouterNoService,
     /// The M7 fell back to LTE.
@@ -406,6 +412,8 @@ kinds! {
         ReachabilitySuspect,
         /// See [`AlertCondition::TargetDegraded`].
         TargetDegraded,
+        /// See [`AlertCondition::TargetReadFailed`].
+        TargetReadFailed,
         /// See [`AlertCondition::RouterNoService`].
         RouterNoService,
         /// See [`AlertCondition::RouterOnLte`].
@@ -482,6 +490,7 @@ impl AlertConditionKind {
             | Self::ForeignNetworkAttached
             | Self::ReachabilitySuspect
             | Self::TargetDegraded
+            | Self::TargetReadFailed
             | Self::RouterNoService
             | Self::RouterOnLte
             | Self::RouterThermalStepDown
@@ -623,6 +632,7 @@ impl AlertCondition {
             Self::ForeignNetworkAttached { .. } => AlertConditionKind::ForeignNetworkAttached,
             Self::ReachabilitySuspect { .. } => AlertConditionKind::ReachabilitySuspect,
             Self::TargetDegraded { .. } => AlertConditionKind::TargetDegraded,
+            Self::TargetReadFailed { .. } => AlertConditionKind::TargetReadFailed,
             Self::RouterNoService => AlertConditionKind::RouterNoService,
             Self::RouterOnLte => AlertConditionKind::RouterOnLte,
             Self::RouterThermalStepDown => AlertConditionKind::RouterThermalStepDown,
@@ -661,6 +671,7 @@ impl AlertCondition {
             | Self::NodeDiskLow { node, .. }
             | Self::ReachabilitySuspect { node }
             | Self::TargetDegraded { node }
+            | Self::TargetReadFailed { node }
             | Self::ExitFlowCapHit { node, .. }
             | Self::NodeClockUnsynced { node }
             | Self::NodeRebootPending { node, .. }
@@ -748,6 +759,7 @@ impl AlertCondition {
             | Self::NodeDiskLow { node, .. }
             | Self::ReachabilitySuspect { node }
             | Self::TargetDegraded { node }
+            | Self::TargetReadFailed { node }
             | Self::ExitFlowCapHit { node, .. }
             | Self::NodeClockUnsynced { node }
             | Self::NodeRebootPending { node, .. }

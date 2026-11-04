@@ -139,8 +139,14 @@ fn a_halt_that_arrives_mid_transaction_stops_engine_restarts() {
     );
     let calls = node.calls();
     index_of(&calls, "/usr/sbin/nft -f ");
-    assert!(
-        calls.iter().all(|call| !call.contains("restart mooring-")),
-        "an engine was restarted on a halted node: {calls:#?}"
-    );
+    // The watch and the reflector restart with the first generation's
+    // profile: neither serves anyone, and the watch keeps the gate closed.
+    for engine in ["mooring-xray.service", "mooring-hy2.service"] {
+        assert!(
+            calls
+                .iter()
+                .all(|call| !call.contains(&format!("restart {engine}"))),
+            "an engine was restarted on a halted node: {calls:#?}"
+        );
+    }
 }

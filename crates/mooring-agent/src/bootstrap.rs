@@ -15,7 +15,6 @@
 //! bootstrap key to its forced command, and sshd, which enforces the
 //! profile's drop-in, is reloaded only once both are in place.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
@@ -23,12 +22,12 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
 use mooring_agent_proto::{
-    AgentError, BootstrapStep, ENABLED_UNITS, HostFile, HostProfile, IoOp, PACKAGES, Role,
-    Sha256Hex, SshEd25519Key, StderrTail,
+    AgentError, BootstrapStep, ENABLED_UNITS, HostProfile, IoOp, PACKAGES, Role, Sha256Hex,
+    SshEd25519Key, StderrTail,
 };
 
 use crate::host::{Node, Tool, run_ok};
-use crate::hostfiles::{self, HostStep, SSHD_UNIT};
+use crate::hostfiles::{self, Applied, HostStep, SSHD_UNIT};
 use crate::paths::Paths;
 use crate::store::{io_error, malformed, read_json, write_atomic, write_json};
 use crate::{accounts, layout};
@@ -166,20 +165,6 @@ fn packages(node: &dyn Node) -> Result<(), AgentError> {
     Ok(())
 }
 
-/// Which of the host profile's files a run of `Bootstrap` applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Applied {
-    /// Every file: no run has finished on this host (none has recorded
-    /// the host key), and one that stopped may have installed files it
-    /// did not apply.
-    Every,
-    /// Only the files whose text changed: a run has finished, and applied
-    /// all it installed. A later run that installs a changed file and
-    /// then fails to apply it leaves it so for its retry too, until a
-    /// reboot reads it.
-    Changed,
-}
-
 /// The host profile: staged in scratch space, validated (the units that
 /// run a generation's programs wait for the first transaction), installed,
 /// and applied as `applied` says, sshd's reload aside, which comes once
@@ -192,12 +177,7 @@ fn host_profile(paths: &Paths, node: &dyn Node, applied: Applied) -> Result<(), 
     hostfiles::validate(paths, node, &staged, None)?;
     let changed = hostfiles::install(paths, &staged);
     let _absent = fs::remove_dir_all(&staged);
-    let changed = changed?;
-    let applying: BTreeSet<HostFile> = match applied {
-        Applied::Every => HostFile::ALL.iter().copied().collect(),
-        Applied::Changed => changed,
-    };
-    for command in hostfiles::commands(&applying) {
+    for command in hostfiles::commands(&applied.files(changed?)) {
         if command.step == HostStep::SshdReload {
             continue;
         }

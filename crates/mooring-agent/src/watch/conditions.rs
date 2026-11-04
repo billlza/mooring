@@ -12,14 +12,15 @@ use mooring_agent_proto::{
 use super::reading::Reading;
 use super::{Watch, host};
 use crate::store::malformed;
+use crate::target::hourly::Verdict;
 use crate::wg::Peer;
 
 /// What a tick knows of the installed generation.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Installed {
-    /// The hourly target check's latest result about the configured target
-    /// was a failure (design §11.3).
-    pub(super) target_degraded: bool,
+    /// The hourly target check's verdict on the configured target (design
+    /// §11.3), a result it cannot read included.
+    pub(super) target: Verdict,
 }
 
 impl Watch {
@@ -38,8 +39,12 @@ impl Watch {
         if let Some(Err(_)) = peer {
             conditions.push(WatchError::WgReadFailed);
         }
-        if installed.is_some_and(|installed| installed.target_degraded) {
-            conditions.push(WatchError::TargetDegraded);
+        match installed.map(|installed| installed.target) {
+            None | Some(Verdict::Unchecked | Verdict::Passed) => {}
+            Some(Verdict::Degraded) => conditions.push(WatchError::TargetDegraded),
+            Some(Verdict::Unreadable { errno }) => {
+                conditions.push(WatchError::TargetReadFailed { errno });
+            }
         }
         let installed = installed.is_some();
         if installed && reading.accounting.query_failed {

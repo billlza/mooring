@@ -2,16 +2,20 @@
 
 //! The conditions a tick raises (design §11.3): MacSilent after 600 s unless
 //! an Operator hold explains it, the host's figures read every minute, the
-//! exit flow cap hit, and the hourly target check's TargetDegraded.
+//! exit flow cap hit, the hourly target check's TargetDegraded, and its
+//! result that cannot be read, TargetReadFailed.
+
+use std::fs;
 
 use mooring_agent_proto::{
-    AgentEventKind, GateReason, TargetHost, TxnState, UnixTime, WatchError, WatchErrorKind,
-    WatchTarget,
+    AgentEventKind, GateReason, GateState, TargetHost, TxnState, UnixTime, WatchError,
+    WatchErrorKind, WatchTarget,
 };
 
 use super::world::{OCT_8, World, tick};
 use crate::host::Node;
 use crate::store::write_json;
+use crate::tests::EISDIR;
 use crate::watch::{HOST_READING_SECS, Watch};
 
 #[test]
@@ -239,4 +243,104 @@ fn the_hourly_target_check_raises_target_degraded_for_the_configured_target_only
         .filter(|event| *event == raised || *event == cleared)
         .collect();
     assert_eq!(target_events, vec![raised, cleared, raised, cleared]);
+}
+
+/// A result of the hourly target check that the watch cannot read is
+/// reported at every tick (`TargetReadFailed`): with the OS error, or
+/// without one for a file that holds no result this agent reads, and
+/// never as `TargetDegraded` or as nothing. The watch goes on, its gate
+/// opening as before, and the condition clears once the result can be
+/// read again (2026-11-03: the tick ended the watch with `Fatal::Reading`).
+#[test]
+fn a_target_result_the_watch_cannot_read_is_reported_and_the_watch_goes_on() {
+    use crate::target::hourly::TargetReading;
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    let target = |world: &World| {
+        let conditions = world.status().observed.conditions;
+        [
+            WatchErrorKind::TargetReadFailed,
+            WatchErrorKind::TargetDegraded,
+        ]
+        .map(|kind| conditions.get(kind).copied())
+    };
+    let unreadable = |errno| [Some(WatchError::TargetReadFailed { errno }), None];
+    // A directory where the result belongs: reading it is EISDIR.
+    fs::create_dir_all(world.paths.target_reading()).unwrap();
+    for _ in 0..2 {
+        world.traffic(&node, 1);
+        tick(&mut watch, &world, &node);
+        assert_eq!(target(&world), unreadable(Some(EISDIR)));
+    }
+    assert_eq!(
+        world.status().observed.gate,
+        GateState::Open,
+        "the watch gates as before"
+    );
+    // A file that holds no result this agent reads: garbled, or a result
+    // with a field it does not know, as another agent's could be.
+    let result = TargetReading {
+        at: UnixTime::from_secs(OCT_8),
+        target: WatchTarget {
+            host: TargetHost::new("www.example.com").unwrap(),
+            ipv4: "198.51.100.7".parse().unwrap(),
+        },
+        degraded: true,
+    };
+    let mut unknown = serde_json::to_value(&result).unwrap();
+    unknown["checked_by"] = serde_json::json!(2);
+    fs::remove_dir(world.paths.target_reading()).unwrap();
+    for text in ["garbled".to_owned(), unknown.to_string()] {
+        fs::write(world.paths.target_reading(), &text).unwrap();
+        world.traffic(&node, 1);
+        tick(&mut watch, &world, &node);
+        assert_eq!(target(&world), unreadable(None), "{text}");
+        assert_eq!(world.status().observed.gate, GateState::Open);
+    }
+    // Readable again: its verdict, and no news once it is gone.
+    write_json(&world.paths.target_reading(), &result, 0o640).unwrap();
+    world.traffic(&node, 1);
+    tick(&mut watch, &world, &node);
+    assert_eq!(target(&world), [None, Some(WatchError::TargetDegraded)]);
+    fs::remove_file(world.paths.target_reading()).unwrap();
+    world.traffic(&node, 1);
+    tick(&mut watch, &world, &node);
+    assert_eq!(target(&world), [None, None]);
+    // Raised once: a change in its errno is no event.
+    let target_events: Vec<AgentEventKind> = world
+        .events()
+        .into_iter()
+        .filter(|event| match event {
+            AgentEventKind::ConditionRaised { condition } => matches!(
+                condition,
+                WatchError::TargetReadFailed { .. } | WatchError::TargetDegraded
+            ),
+            AgentEventKind::ConditionCleared { condition } => matches!(
+                condition,
+                WatchErrorKind::TargetReadFailed | WatchErrorKind::TargetDegraded
+            ),
+            _ => false,
+        })
+        .collect();
+    assert_eq!(
+        target_events,
+        vec![
+            AgentEventKind::ConditionRaised {
+                condition: WatchError::TargetReadFailed {
+                    errno: Some(EISDIR)
+                }
+            },
+            AgentEventKind::ConditionRaised {
+                condition: WatchError::TargetDegraded
+            },
+            AgentEventKind::ConditionCleared {
+                condition: WatchErrorKind::TargetReadFailed
+            },
+            AgentEventKind::ConditionCleared {
+                condition: WatchErrorKind::TargetDegraded
+            },
+        ]
+    );
 }

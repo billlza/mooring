@@ -100,29 +100,3 @@ fn a_failed_write_leaves_the_state_untouched() {
     assert_eq!(state_bytes(&store), before);
     assert_eq!(store.load().unwrap(), state);
 }
-
-#[cfg(target_os = "macos")]
-#[test]
-fn a_lock_that_cannot_be_taken_is_a_typed_error() {
-    use std::process::Command;
-
-    let (_dir, store, state) = initialised();
-    // macOS refuses flock(2) on a FIFO with EOPNOTSUPP.
-    fs::remove_file(store.lock_path()).unwrap();
-    let status = Command::new("/usr/bin/mkfifo")
-        .arg(store.lock_path())
-        .status()
-        .unwrap();
-    assert!(status.success());
-
-    let error = store.load().unwrap_err();
-    assert_eq!(error.kind(), StoreErrorKind::Lock);
-    assert!(
-        matches!(&error, StoreError::Lock { path, .. } if *path == store.lock_path()),
-        "{error:?}"
-    );
-    let error = store
-        .set_exit_enabled(state.runtime.revision, true)
-        .unwrap_err();
-    assert_eq!(error.kind(), StoreErrorKind::Lock);
-}

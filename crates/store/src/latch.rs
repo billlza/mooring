@@ -34,8 +34,9 @@ struct LatchDocument {
 }
 
 /// The latch in `run_dir`, or `None` when there is none. A file that is not
-/// a version-1 latch is `LatchCorrupt`: the daemon then keeps the exit down
-/// rather than read it as no latch.
+/// a version-1 latch is `LatchCorrupt`, and anything but a regular file
+/// where the latch belongs, a link included, is `NotRegularFile`: the
+/// daemon then keeps the exit down rather than read either as no latch.
 pub fn read_latch(run_dir: &Path) -> Result<Option<LatchRecord>, StoreError> {
     let path = run_dir.join(LATCH_FILE);
     let bytes = match read_bounded(&path, MAX_LATCH_BYTES, IoOp::ReadLatch)? {

@@ -6,7 +6,8 @@
 //! that the command never writes.
 
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, symlink};
+use std::os::unix::net::UnixListener;
 use std::path::Path;
 
 use clap::Parser;
@@ -348,6 +349,40 @@ fn a_corrupt_line_is_a_typed_error_naming_file_and_line() {
     );
     // The file was left as it was.
     assert_eq!(fs::read(&path).unwrap(), newer);
+}
+
+/// A day file that is not a regular file is a local failure naming it,
+/// never an empty day: a link to nothing, and a socket, which until
+/// 2026-11-03 was the open's own failure rather than this refusal. Nothing
+/// is printed, and the file is left as it is.
+#[test]
+fn a_day_file_that_is_not_a_regular_file_is_a_local_failure() {
+    let mut harness = Harness::new(0);
+    let support = harness.support_dir();
+    plant(&support, day("2026-10-12"), &today()[..1], false);
+    let path = radio_day_path(&support, day("2026-10-13"));
+    symlink(support.join("moved.jsonl"), &path).unwrap();
+    let refused = |harness: &mut Harness| {
+        let outcome = harness.run(&["router", "history", "--json"]);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        assert_eq!(outcome.stdout, "");
+        assert_eq!(
+            outcome.stderr,
+            format!(
+                "mooringctl: the radio history's files failed\n  caused by: {} is not a regular file\n",
+                path.display()
+            )
+        );
+    };
+    refused(&mut harness);
+    fs::remove_file(&path).unwrap();
+    // Bound under a short name in the home (a socket's path is short),
+    // then moved into place.
+    let bound = harness.home.path().join("s");
+    drop(UnixListener::bind(&bound).unwrap());
+    fs::rename(&bound, &path).unwrap();
+    refused(&mut harness);
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_socket());
 }
 
 /// The human summary: a header per day with its counts and the torn note,

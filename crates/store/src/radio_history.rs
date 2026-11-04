@@ -15,9 +15,10 @@
 //! reads the files while the daemon may be appending: a reader ignores a
 //! last line without its newline, which may be a write in progress.
 //!
-//! Only a regular file is a day file: a link, a directory, a FIFO or
-//! anything else where one belongs is refused (`NotRegularFile`), and
-//! nothing is read or written through it. The files are opened with
+//! Only a regular file is a day file: a link, a directory, a FIFO, a
+//! socket or anything else where one belongs is refused (`NotRegularFile`),
+//! and nothing is read or written through it. The files are opened as
+//! every store file is (`durable`'s [`existing_regular_file`]): with
 //! `O_NOFOLLOW` (a link is never followed) and `O_NONBLOCK` (a FIFO cannot
 //! hold the open), and checked on the open descriptor itself, so what is
 //! then read or written is what was checked, whatever is exchanged for the
@@ -38,7 +39,10 @@ use std::path::{Path, PathBuf};
 
 use mooring_model::CalendarDate;
 
-use crate::durable::{FILE_MODE, existing_private_dir, private_dir, remove_durably, sync_dir};
+use crate::durable::{
+    FILE_MODE, RegularFile, existing_private_dir, existing_regular_file, private_dir,
+    remove_durably, sync_dir,
+};
 use crate::error::{IoOp, RadioHistoryFault, StoreError};
 
 /// The radio history's directory, in the support directory.
@@ -93,48 +97,14 @@ fn io_error(op: IoOp, path: &Path) -> impl FnOnce(io::Error) -> StoreError {
     move |source| StoreError::Io { op, path, source }
 }
 
-fn not_regular(path: &Path) -> StoreError {
-    StoreError::RadioHistoryCorrupt {
-        path: path.to_path_buf(),
-        fault: RadioHistoryFault::NotRegularFile,
-    }
-}
-
-/// Opens the day file at `path` as `options` say, with `O_NOFOLLOW` (a
-/// link is never followed) and `O_NONBLOCK` (a FIFO cannot hold the open),
-/// and checks it on the open descriptor itself, so what is then read or
-/// written is what was checked, whatever is exchanged for the path in
-/// between: the file and its length, or `None` when there is no file.
-/// Anything but a regular file is `NotRegularFile`, whether the open says
-/// so (a link, `ELOOP`; a directory opened for writing, `EISDIR`) or the
-/// check does (a directory opened for reading, a FIFO).
-fn open_day(path: &Path, options: &mut OpenOptions) -> Result<Option<(File, u64)>, StoreError> {
-    let file = match options
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) if matches!(error.raw_os_error(), Some(libc::ELOOP | libc::EISDIR)) => {
-            return Err(not_regular(path));
-        }
-        Err(error) => return Err(io_error(IoOp::OpenRadioDay, path)(error)),
-    };
-    let metadata = file
-        .metadata()
-        .map_err(io_error(IoOp::InspectRadioDay, path))?;
-    if !metadata.file_type().is_file() {
-        return Err(not_regular(path));
-    }
-    Ok(Some((file, metadata.len())))
-}
-
 /// Appends `line` (one whole line, its newline included) to the day's
 /// file, creating the directory (mode 0700) and the file (mode 0600) when
 /// missing. A torn last line is cut back to the last newline first. An
 /// append that would take the file past [`MAX_RADIO_DAY_BYTES`] is refused
-/// (`TooLarge`) with the file unchanged. The line is flushed to stable
-/// storage, and the directory too when the file was created.
+/// (`TooLarge`) with the file unchanged. Anything but a regular file where
+/// the day file belongs is `NotRegularFile`, and nothing is written through
+/// it. The line is flushed to stable storage, and the directory too when
+/// the file was created.
 pub fn append_radio_line(
     support_dir: &Path,
     date: CalendarDate,
@@ -144,19 +114,20 @@ pub fn append_radio_line(
     let path = dir.join(day_file_name(date));
     let mut options = OpenOptions::new();
     options.read(true).append(true);
-    let (mut file, len, created) = match open_day(&path, &mut options)? {
-        Some((file, len)) => (file, len, false),
-        // Nothing there: made new, mode 0600, and never a file put there
-        // since (`O_EXCL`: that append fails, and the next finds the file).
-        None => {
-            let file = options
-                .create_new(true)
-                .mode(FILE_MODE)
-                .open(&path)
-                .map_err(io_error(IoOp::OpenRadioDay, &path))?;
-            (file, 0, true)
-        }
-    };
+    let (mut file, len, created) =
+        match existing_regular_file(&path, &mut options, IoOp::OpenRadioDay)? {
+            Some(RegularFile { file, len }) => (file, len, false),
+            // Nothing there: made new, mode 0600, and never a file put there
+            // since (`O_EXCL`: that append fails, and the next finds the file).
+            None => {
+                let file = options
+                    .create_new(true)
+                    .mode(FILE_MODE)
+                    .open(&path)
+                    .map_err(io_error(IoOp::OpenRadioDay, &path))?;
+                (file, 0, true)
+            }
+        };
     let complete = complete_len(&mut file, len, &path)?;
     if complete < len {
         file.set_len(complete)
@@ -219,9 +190,11 @@ fn whole_lines(bytes: &[u8]) -> usize {
 /// The day's whole lines, or `None` when there is no file for it (or no
 /// radio directory at all). Anything but a directory where `radio/`
 /// belongs, a link included, is `DirNotDirectory`, as for the append and
-/// the prune, and nothing is read through it. A file over
-/// [`MAX_RADIO_DAY_BYTES`] is `TooLarge`, never read as its first bytes;
-/// bytes after the last newline are reported as torn, not returned.
+/// the prune, and nothing is read through it; anything but a regular file
+/// where the day file belongs, a link included, is `NotRegularFile`, as for
+/// the append. A file over [`MAX_RADIO_DAY_BYTES`] is `TooLarge`, never
+/// read as its first bytes; bytes after the last newline are reported as
+/// torn, not returned.
 pub fn read_radio_day(
     support_dir: &Path,
     date: CalendarDate,
@@ -230,7 +203,9 @@ pub fn read_radio_day(
         return Ok(None);
     };
     let path = dir.join(day_file_name(date));
-    let Some((file, _)) = open_day(&path, OpenOptions::new().read(true))? else {
+    let Some(RegularFile { file, .. }) =
+        existing_regular_file(&path, OpenOptions::new().read(true), IoOp::OpenRadioDay)?
+    else {
         return Ok(None);
     };
     let mut bytes = Vec::new();

@@ -285,6 +285,7 @@ pub(crate) fn watch_error(kind: WatchErrorKind) -> WatchError {
         WatchErrorKind::NftFailed => WatchError::NftFailed,
         WatchErrorKind::StatsQueryFailed => WatchError::StatsQueryFailed,
         WatchErrorKind::TargetDegraded => WatchError::TargetDegraded,
+        WatchErrorKind::TargetReadFailed => WatchError::TargetReadFailed { errno: Some(13) },
         WatchErrorKind::ExitFlowCapHit => WatchError::ExitFlowCapHit { count: 1 },
         WatchErrorKind::StateWrite => WatchError::StateWrite { errno: None },
         WatchErrorKind::MacSilent => WatchError::MacSilent {

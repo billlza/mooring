@@ -5,16 +5,21 @@
 //! `SimMeter` encodes and decodes it; this module keeps the file: the
 //! `usage/` directory (mode 0700, created by the write when missing, and
 //! refused by the write and the read alike when anything else is there, a
-//! link included), the durable write, and a read bounded by the caller.
+//! link included), the durable write, and a read bounded by the caller,
+//! which refuses anything but a regular file where the meter belongs, a
+//! link included (`NotRegularFile`), so that a meter is never read through
+//! a link nor a link to nothing read as no meter.
 //!
 //! Only the daemon writes it, and only one daemon runs at a time (it holds
 //! its instance lock), so the write takes no state lock.
 
-use std::fs::File;
-use std::io::{self, Read};
+use std::fs::OpenOptions;
+use std::io::Read;
 use std::path::Path;
 
-use crate::durable::{existing_private_dir, private_dir, write_durably};
+use crate::durable::{
+    RegularFile, existing_private_dir, existing_regular_file, private_dir, write_durably,
+};
 use crate::error::{IoOp, StoreError};
 
 /// The usage directory's name, in the support directory.
@@ -27,22 +32,18 @@ pub const SIM_METER_FILE: &str = "sim-meter.json";
 /// longer file reads as its first `limit` bytes, which the decoder then
 /// refuses), or `None` when there is none (or no usage directory at all).
 /// A usage path that is not a directory (a link included) is
-/// `DirNotDirectory`, as for the write, and nothing is read through it.
+/// `DirNotDirectory`, as for the write, and nothing is read through it;
+/// anything but a regular file where the meter belongs, a link included,
+/// is `NotRegularFile`, and nothing is read through it either.
 pub fn read_sim_meter(support_dir: &Path, limit: usize) -> Result<Option<Vec<u8>>, StoreError> {
     let Some(dir) = existing_private_dir(support_dir, USAGE_DIRECTORY, IoOp::ReadSimMeter)? else {
         return Ok(None);
     };
     let path = dir.join(SIM_METER_FILE);
-    let file = match File::open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(StoreError::Io {
-                op: IoOp::ReadSimMeter,
-                path,
-                source,
-            });
-        }
+    let Some(RegularFile { file, .. }) =
+        existing_regular_file(&path, OpenOptions::new().read(true), IoOp::ReadSimMeter)?
+    else {
+        return Ok(None);
     };
     let mut bytes = Vec::new();
     file.take(u64::try_from(limit).unwrap_or(u64::MAX))

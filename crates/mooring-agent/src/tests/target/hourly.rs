@@ -4,7 +4,8 @@
 //! target: it passes a target that still answers at the configured
 //! address through the current generation's Xray, and degrades one that
 //! moved, failed the handshake, did not answer over HTTP/2 or could not
-//! be resolved; its reading is the state group's to read.
+//! be resolved; its reading is the state group's to read, and the watch
+//! reads it as its verdict on the configured target, or as unreadable.
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
@@ -15,8 +16,8 @@ use mooring_agent_proto::{Generation, UnixTime, WatchConfig, WatchTarget};
 use super::world::{PING_TLS13, host, node_answering};
 use crate::paths::Paths;
 use crate::store::{read_json, write_json};
-use crate::target::hourly::TargetReading;
-use crate::tests::{exited, scratch};
+use crate::target::hourly::{TargetReading, Verdict};
+use crate::tests::{EACCES, EISDIR, ModeFault, exited, scratch};
 
 /// A node with generation 1 installed, configured for `www.example.com` at
 /// 198.51.100.7.
@@ -125,4 +126,57 @@ fn a_reading_is_the_state_groups_to_read() {
         0o640
     );
     let _: TargetReading = read_json(&paths.target_reading()).unwrap().unwrap();
+}
+
+/// No result, or one about another target, is no check yet; a result
+/// about the configured target is its verdict; a result that cannot be
+/// read is unreadable, with the OS error, or without one for a file that
+/// holds no result, and never a verdict either way.
+#[test]
+fn the_watch_reads_each_result_as_its_verdict_or_as_unreadable() {
+    let (_dir, paths) = configured();
+    let verdict = || crate::target::hourly::verdict(&paths, &target());
+    let write = |target: WatchTarget, degraded: bool| {
+        let reading = TargetReading {
+            at: UnixTime::from_secs(1000),
+            target,
+            degraded,
+        };
+        write_json(&paths.target_reading(), &reading, 0o640).unwrap();
+    };
+    assert_eq!(verdict(), Verdict::Unchecked, "no result yet");
+    let moved = WatchTarget {
+        ipv4: Ipv4Addr::new(198, 51, 100, 8),
+        ..target()
+    };
+    write(moved, true);
+    assert_eq!(
+        verdict(),
+        Verdict::Unchecked,
+        "a result about another target"
+    );
+    write(target(), false);
+    assert_eq!(verdict(), Verdict::Passed);
+    write(target(), true);
+    assert_eq!(verdict(), Verdict::Degraded);
+    {
+        let _unreadable = ModeFault::set(&paths.target_reading(), 0o000);
+        assert_eq!(
+            verdict(),
+            Verdict::Unreadable {
+                errno: Some(EACCES)
+            }
+        );
+    }
+    assert_eq!(verdict(), Verdict::Degraded, "readable again");
+    std::fs::write(paths.target_reading(), "garbled").unwrap();
+    assert_eq!(verdict(), Verdict::Unreadable { errno: None });
+    std::fs::remove_file(paths.target_reading()).unwrap();
+    std::fs::create_dir(paths.target_reading()).unwrap();
+    assert_eq!(
+        verdict(),
+        Verdict::Unreadable {
+            errno: Some(EISDIR)
+        }
+    );
 }

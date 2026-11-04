@@ -6,11 +6,12 @@
 
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::time::UnixTime;
 
-use super::{assert_io_error, mode_of};
+use super::{assert_io_error, assert_not_regular, mode_of};
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 use crate::router_pin::{
     MAX_ROUTER_PIN_BYTES, ROUTER_PIN_FILE, RouterPin, RouterPinFault, StoredPin, read_router_pin,
@@ -18,7 +19,7 @@ use crate::router_pin::{
 };
 
 /// A made-up, locally administered unicast address (not a real device).
-fn pin() -> RouterPin {
+pub(super) fn pin() -> RouterPin {
     RouterPin {
         gateway_lladdr: MacAddr::parse("02:00:5e:10:20:30").unwrap(),
         interface: BsdName::parse("en9").unwrap(),
@@ -195,17 +196,24 @@ fn a_version_1_pin_is_read_without_an_interface() {
 }
 
 /// A pin that cannot be read is an I/O error naming the file, never "no
-/// pin"; the store never creates the directory it is given.
+/// pin" (here it is mode 0000; the tests run unprivileged), and a directory
+/// where the pin belongs is no pin either: it is not a regular file. The
+/// store never creates the directory it is given.
 #[test]
 fn unreadable_pins_and_missing_directories_are_io_errors() {
     let dir = tempfile::tempdir().unwrap();
-    fs::create_dir(dir.path().join(ROUTER_PIN_FILE)).unwrap();
+    let path = dir.path().join(ROUTER_PIN_FILE);
+    write_router_pin(dir.path(), &pin()).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
     assert_io_error(
         &read_router_pin(dir.path()).unwrap_err(),
         IoOp::ReadRouterPin,
-        &dir.path().join(ROUTER_PIN_FILE),
-        io::ErrorKind::IsADirectory,
+        &path,
+        io::ErrorKind::PermissionDenied,
     );
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert_not_regular(&read_router_pin(dir.path()).unwrap_err(), &path);
     let missing = dir.path().join("absent");
     let error = write_router_pin(&missing, &pin()).unwrap_err();
     assert_eq!(error.kind(), StoreErrorKind::Io);

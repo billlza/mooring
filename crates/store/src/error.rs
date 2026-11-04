@@ -83,10 +83,8 @@ io_ops! {
     /// Creating or inspecting the radio history's directory, to append to
     /// a day file.
     CreateRadioDir => "create the radio directory",
-    /// Inspecting a radio history day file.
-    InspectRadioDay => "inspect a radio history day file",
-    /// Opening or creating a radio history day file, or inspecting the
-    /// radio directory to read one.
+    /// Opening, inspecting or creating a radio history day file, or
+    /// inspecting the radio directory to read one.
     OpenRadioDay => "open a radio history day file",
     /// Reading a radio history day file.
     ReadRadioDay => "read a radio history day file",
@@ -100,14 +98,13 @@ io_ops! {
 }
 
 /// What is wrong with a radio history day file. `Copy`: no fault holds a
-/// byte of the file.
+/// byte of the file. (Something other than a regular file where a day file
+/// belongs is no fault of a day file: it is [`StoreError::NotRegularFile`],
+/// as for every store file.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RadioHistoryFault {
     /// The file is, or an append would make it, larger than the day bound.
     TooLarge,
-    /// Something other than a regular file (a link, a directory) is where
-    /// the day file belongs; nothing was read or written through it.
-    NotRegularFile,
 }
 
 impl fmt::Display for RadioHistoryFault {
@@ -118,7 +115,6 @@ impl fmt::Display for RadioHistoryFault {
                 "it is larger than {} bytes",
                 crate::radio_history::MAX_RADIO_DAY_BYTES
             ),
-            Self::NotRegularFile => f.write_str("it is not a regular file"),
         }
     }
 }
@@ -326,6 +322,16 @@ pub enum StoreError {
         /// The directory's path.
         path: PathBuf,
     },
+    /// Something other than a regular file is where one of the store's
+    /// files belongs: a link, dangling or not, a directory, a FIFO, a
+    /// socket or a device. Every open of a store file refuses it, the
+    /// lock's included; nothing was read, written or locked through it,
+    /// and it is never read as no file.
+    #[error("{} is not a regular file", path.display())]
+    NotRegularFile {
+        /// The file's path.
+        path: PathBuf,
+    },
     /// A radio history day file cannot be used as one: see
     /// [`RadioHistoryFault`]. Nothing was read or written through it.
     #[error("radio history file {} is corrupt: {fault}", path.display())]
@@ -426,6 +432,8 @@ kinds! {
         LatchCorrupt,
         /// See [`StoreError::DirNotDirectory`].
         DirNotDirectory,
+        /// See [`StoreError::NotRegularFile`].
+        NotRegularFile,
         /// See [`StoreError::RadioHistoryCorrupt`].
         RadioHistoryCorrupt,
     }
@@ -460,6 +468,7 @@ impl StoreError {
             Self::AllowedNetworksCorrupt { .. } => StoreErrorKind::AllowedNetworksCorrupt,
             Self::LatchCorrupt { .. } => StoreErrorKind::LatchCorrupt,
             Self::DirNotDirectory { .. } => StoreErrorKind::DirNotDirectory,
+            Self::NotRegularFile { .. } => StoreErrorKind::NotRegularFile,
             Self::RadioHistoryCorrupt { .. } => StoreErrorKind::RadioHistoryCorrupt,
         }
     }

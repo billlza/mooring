@@ -122,6 +122,18 @@ fn an_operator_hold_and_a_silent_mac_stop_only_what_they_should() {
     );
 }
 
+/// A target check's result the watch cannot read leaves the watch working:
+/// it still gates, counts and records its state, so the node check keeps
+/// pinging, and the condition is reported by a push notice instead.
+#[test]
+fn an_unreadable_target_result_keeps_the_node_check_pinging() {
+    let unreadable = status(NOW - 5, Some(NOW - 20), &[WatchErrorKind::TargetReadFailed]);
+    assert_eq!(
+        dead_man_pings(&unreadable),
+        BTreeSet::from([DeadManCheck::Node, DeadManCheck::MacAlive])
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1024))]
 

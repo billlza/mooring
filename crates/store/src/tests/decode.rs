@@ -6,9 +6,10 @@
 use std::convert::Infallible;
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 
 use super::builders::{applied_record, deployment_init, empty_store, initialised};
-use super::{assert_io_error, state_bytes, store_error};
+use super::{assert_io_error, assert_not_regular, state_bytes, store_error};
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 use crate::store::Store;
 
@@ -47,18 +48,24 @@ fn a_missing_state_is_not_initialised() {
 
 /// A state file that cannot be read is an error naming the read, never
 /// `NotInitialized`, which would hide the fault behind the advice to
-/// initialise the store; every operation reads it first, and fails so.
+/// initialise the store; every operation reads it first, and fails so:
+/// here it is mode 0000 (the tests run unprivileged), then a directory,
+/// which is no regular file (`tests::regular_files` refuses the rest).
 #[test]
 fn a_state_file_that_cannot_be_read_is_an_error_not_uninitialised() {
-    let (_dir, store) = empty_store();
-    fs::create_dir(store.state_path()).unwrap();
+    let (_dir, store, _) = initialised();
+    fs::set_permissions(store.state_path(), fs::Permissions::from_mode(0o000)).unwrap();
     assert_every_operation_fails(&store, StoreErrorKind::Io);
     assert_io_error(
         &store.load().unwrap_err(),
         IoOp::ReadState,
         &store.state_path(),
-        io::ErrorKind::IsADirectory,
+        io::ErrorKind::PermissionDenied,
     );
+    fs::remove_file(store.state_path()).unwrap();
+    fs::create_dir(store.state_path()).unwrap();
+    assert_every_operation_fails(&store, StoreErrorKind::NotRegularFile);
+    assert_not_regular(&store.load().unwrap_err(), &store.state_path());
 }
 
 #[test]

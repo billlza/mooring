@@ -45,7 +45,7 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
         ListWithObjects(UsageView.self, "usage_view", count: 3),
         ListWithObjects(InChainOutcome.self, "in_chain_outcome", count: 3),
         ListWithObjects(NodeAgentState.self, "node_agent_state", count: 3),
-        ListWithObjects(AlertCondition.self, "alert_condition", count: 39),
+        ListWithObjects(AlertCondition.self, "alert_condition", count: 40),
         ListWithObjects(EngineHost.self, "engine_host", count: 2),
         ListWithObjects(Crossing.self, "crossing", count: 3),
         ListWithObjects(UplinkUse.self, "uplink_use", count: 2),
@@ -58,7 +58,7 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
         ListWithObjects(SuspendReason.self, "suspend_reason", count: 4),
         ListWithObjects(Violation.self, "violation", count: 4),
         ListWithObjects(StopPolicy.self, "stop_policy", count: 2),
-        ListWithObjects(WatchError.self, "watch_error", count: 11),
+        ListWithObjects(WatchError.self, "watch_error", count: 12),
         ListWithObjects(EngineRun.self, "engine_run", count: 2),
         ListWithObjects(RouterReading.self, "router_reading", count: 2),
         ListWithObjects(RadioState.self, "radio_state", count: 2),
@@ -179,6 +179,23 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
     /// its own case rather than as unavailable.
     @Test func theUsageViewReadsNotPulledAsItsOwnCase() throws {
         #expect(try decode(UsageView.self, "usage_view").last == .notPulled)
+    }
+
+    /// Each watch condition reads as its own case with its data: a target
+    /// check's result the watch cannot read keeps its errno, and reads as
+    /// neither a failed state write nor a degraded target.
+    @Test func everyWatchConditionReadsAsItsOwnCase() throws {
+        #expect(
+            try decode(WatchError.self, "watch_error") == [
+                .wgReadFailed, .nftFailed, .statsQueryFailed, .targetDegraded,
+                .targetReadFailed(errno: 13), .exitFlowCapHit(count: 14), .stateWrite(errno: 28),
+                .macSilent(since: UnixTime(seconds: 1_791_416_400)), .diskLow(free: 950_000_000),
+                .clockUnsynced, .rebootPending(since: UnixTime(seconds: 1_791_331_200)),
+                .accountingCanaryMissing(inbounds: [.reality, .hy2]),
+            ])
+        let undecodable = try JSONDecoder().decode(
+            WatchError.self, from: Data(#"{"TargetReadFailed":{"errno":null}}"#.utf8))
+        #expect(undecodable == .targetReadFailed(errno: nil))
     }
 
     /// The fixture lists every group the mirror reads, and no other.

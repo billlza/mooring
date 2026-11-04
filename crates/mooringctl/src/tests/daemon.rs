@@ -9,7 +9,7 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -44,8 +44,8 @@ use crate::daemon::log::LOG_FILE;
 use crate::daemon::radio::RADIO_HISTORY_DAYS;
 use crate::daemon::serve::{End, Limits, accept, serve};
 use crate::daemon::{
-    Control, LoopState, PollOutcome, Polled, RunPaths, Waited, after_poll, poll_once, poll_router,
-    start, unavailable_reason, wait_for_next_poll,
+    Control, LoopState, PollOutcome, Polled, RunPaths, Waited, after_poll, chain, poll_once,
+    poll_router, start, unavailable_reason, wait_for_next_poll,
 };
 use crate::error::{CommandError, EXIT_LOCAL, LocalError};
 use crate::router::error::{Missing, RouterError, UnreachableCause};
@@ -233,7 +233,7 @@ fn the_run_directory_is_a_directory_of_mode_0700() {
     fs::create_dir_all(&support).unwrap();
     let elsewhere = dir.path().join("elsewhere");
     fs::create_dir(&elsewhere).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, support.join("run")).unwrap();
+    symlink(&elsewhere, support.join("run")).unwrap();
     let error = start(&support).unwrap_err();
     assert!(
         matches!(&error, LocalError::RunDirNotDirectory { path } if *path == support.join("run")),
@@ -821,6 +821,35 @@ fn the_daemon_polls_on_the_interface_the_pin_records() {
         "the identity did not change"
     );
     assert_eq!(missing(poll(&mut harness)), Missing::Password);
+}
+
+/// A link where the pin belongs, even one to nothing, is not "no pin": the
+/// router console's poll fails on the Mac (`LocalFailure`), naming the
+/// file, so the panel says so rather than that the adapter is not set up;
+/// the console keeps polling, as after any failed poll. Until 2026-11-03 a
+/// link to nothing read as no pin.
+#[test]
+fn a_link_where_the_pin_belongs_is_a_local_failure_not_no_pin() {
+    let mut harness = harness();
+    let support = harness.support_dir();
+    fs::create_dir_all(&support).unwrap();
+    let file = support.join(ROUTER_PIN_FILE);
+    symlink(support.join("moved.json"), &file).unwrap();
+    let error = harness
+        .with_env(|env| poll_router(env, &support))
+        .unwrap_err();
+    assert_eq!(
+        unavailable_reason(&error),
+        RouterUnavailableReason::LocalFailure
+    );
+    assert_eq!(
+        chain(&error),
+        format!(
+            "the router identity file failed: {} is not a regular file",
+            file.display()
+        )
+    );
+    assert!(!support.join("moved.json").exists());
 }
 
 /// The wait for the next poll ends early when the acceptor ends, or when
@@ -1822,4 +1851,27 @@ fn the_daemon_stops_on_a_state_it_cannot_read() {
     );
     assert_eq!(redirected, 1);
     assert_eq!(log_mode, 0o600);
+}
+
+/// A link where the state belongs, even one to nothing, is something
+/// there, so the daemon serves a deployment, and its state cannot be read:
+/// the daemon stops, naming the file, and never reads a state through the
+/// link nor takes it for none.
+#[test]
+fn the_daemon_stops_on_a_link_where_the_state_belongs() {
+    let mut harness = harness();
+    let support = harness.support_dir();
+    fs::create_dir_all(&support).unwrap();
+    let state = support.join(STATE_FILE);
+    symlink(support.join("moved.json"), &state).unwrap();
+    let outcome = Running::start(move || harness.run(&["daemon"])).result();
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: the state could not be read\n  caused by: {} is not a regular file\n",
+            state.display()
+        )
+    );
+    assert!(!support.join("moved.json").exists());
 }

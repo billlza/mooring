@@ -459,6 +459,8 @@ named_enum! {
         ReachabilitySuspect,
         /// A node's REALITY target is degraded.
         TargetDegraded,
+        /// A node's watch cannot read its hourly target check's result.
+        TargetReadFailed,
         /// The router has no service.
         RouterNoService,
         /// The router is on LTE.

@@ -9,3 +9,4 @@
 # The Xcode project XcodeGen generates from apple/project.yml
 # (`cargo xtask app`); the spec is the source.
 /apple/Mooring.xcodeproj/
+/apple/LayoutPreview/MooringLayoutPreview.xcodeproj/

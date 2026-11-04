@@ -12,7 +12,7 @@
 use std::fs;
 use std::net::Ipv4Addr;
 use std::num::NonZeroU32;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::process::ExitStatusExt;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
@@ -24,6 +24,7 @@ use mooring_daemon_core::alert::MacEngine;
 use mooring_daemon_core::console::ConsoleStatus;
 use mooring_daemon_core::control::{DaemonReply, decode_reply};
 use mooring_daemon_core::exit::EgressFault;
+use mooring_daemon_core::meter::SimMeter;
 use mooring_daemon_core::network::{AllowedNetwork, ForeignNetworkFinding, IpFamily};
 use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::radio_history::{RadioPoll, RadioSample, decode_line};
@@ -40,15 +41,17 @@ use mooring_macsys::{
 use mooring_model::CalendarDate;
 use mooring_model::Sha256Digest;
 use mooring_model::collections::NonEmpty;
+use mooring_model::counters::ConfigGeneration;
 use mooring_model::ids::LocalLabel;
-use mooring_model::iface::{BsdName, MacAddr, RouterIdentity};
+use mooring_model::iface::{BsdName, EgressIdentity, MacAddr, RouterIdentity};
 use mooring_model::own_network::{OwnNetwork, OwnNetworkKind, PERSONAL_HOTSPOT_ROUTER};
 use mooring_model::secret::SecretEntry;
-use mooring_model::verdict::Violation;
+use mooring_model::verdict::{LatchRecord, Violation};
 use mooring_store::{
     ALLOWED_NETWORKS_FILE, Declaration, LATCH_FILE, RADIO_DIRECTORY, SIM_METER_FILE,
-    STATUS_SNAPSHOT_FILE, SecretStore, Store, USAGE_DIRECTORY, declare_allowed_network,
-    read_allowed_networks, read_latch, read_radio_day, revoke_allowed_network,
+    STATUS_SNAPSHOT_FILE, SecretStore, Store, StoreError, USAGE_DIRECTORY, declare_allowed_network,
+    read_allowed_networks, read_latch, read_radio_day, revoke_allowed_network, write_latch,
+    write_sim_meter,
 };
 
 use super::runtime::STAND_IN;
@@ -62,7 +65,7 @@ use crate::daemon::deployed::{
 };
 use crate::daemon::hub::Hub;
 use crate::daemon::radio::RadioHistoryWriter;
-use crate::daemon::{Control, LoopState, RunPaths};
+use crate::daemon::{Control, LoopState, RunPaths, chain};
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::runtime::ports::{ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE};
@@ -884,9 +887,11 @@ fn an_absent_or_empty_declaration_file_is_none_declared_not_a_read_failure() {
 
 /// The inputs of the own-network match that `network` reports unreadable:
 /// none for a declaration file that is absent or holds no declaration,
-/// the declarations for one that cannot be read. The set reaches the
-/// status only as a degraded reason once the engine has run for its start
-/// grace, which these tests do not wait for, so it is read at its source.
+/// the declarations for one that cannot be read, a link where the file
+/// belongs included, even a link to nothing, which is never taken for an
+/// absent file. The set reaches the status only as a degraded reason once
+/// the engine has run for its start grace, which these tests do not wait
+/// for, so it is read at its source.
 #[test]
 fn the_unreadable_inputs_name_the_file_that_cannot_be_read_never_an_empty_one() {
     let mut harness = deployed();
@@ -915,6 +920,14 @@ fn the_unreadable_inputs_name_the_file_that_cannot_be_read_never_an_empty_one() 
             unreadable,
             std::collections::BTreeSet::from([OwnNetworkInput::Declarations])
         );
+        fs::remove_file(&file).unwrap();
+        symlink(support.join("nowhere"), &file).unwrap();
+        let (_, unreadable) = exit.network(log, now, &egress).unwrap();
+        assert_eq!(
+            unreadable,
+            std::collections::BTreeSet::from([OwnNetworkInput::Declarations])
+        );
+        assert!(!support.join("nowhere").exists());
     });
 }
 
@@ -1083,6 +1096,159 @@ fn a_corrupt_latch_or_meter_stops_the_daemon_at_its_start() {
         };
         assert_eq!(found, kind);
     }
+}
+
+/// A latch the daemon could have written: a violation latched on the
+/// fixture's egress.
+fn latched() -> LatchRecord {
+    LatchRecord {
+        violation: Violation::OutsideCarrierPrefixes { ip: OUTSIDE },
+        at: mooring_model::UnixTime::from_secs(NOW),
+        config_generation: ConfigGeneration::new(1).unwrap(),
+        egress: EgressIdentity {
+            bsd_name: BsdName::parse("lo0").unwrap(),
+            lladdr: MacAddr::from_bytes([0x02, 0x6d, 0x6f, 0x6f, 0x72, 0x01]).unwrap(),
+        },
+    }
+}
+
+/// The start of the exit on `harness`, which must fail, and its error.
+fn refused_start(harness: &mut Harness) -> CommandError {
+    let support = harness.support_dir();
+    harness.with_env(|env| {
+        Deployed::open(env, &support, &mut Vec::new(), LoopState::default()).unwrap_err()
+    })
+}
+
+/// Anything but a regular file where the latch or the SIM meter belongs
+/// stops the daemon at its start, as a corrupt one does, before the meter
+/// counts or the power helper starts (design §10.1): a link to a good file
+/// elsewhere is never read through, and a link to nothing is never read as
+/// no latch, on which the exit would serve past a latched violation, nor as
+/// no meter, on which a fresh meter would lose the cycle's usage. (A FIFO
+/// there is refused without waiting on it: `mooring-store`'s
+/// `tests::regular_files`.)
+#[test]
+fn a_latch_or_meter_that_is_not_a_regular_file_stops_the_daemon_at_its_start() {
+    for file in ["latch", "meter"] {
+        for entry in ["link to a good file", "link to nothing", "directory"] {
+            let mut harness = deployed();
+            let support = harness.support_dir();
+            let run = RunPaths::under(&support).dir;
+            fs::create_dir_all(&run).unwrap();
+            fs::create_dir_all(support.join(USAGE_DIRECTORY)).unwrap();
+            let elsewhere = tempfile::tempdir().unwrap();
+            let path = if file == "latch" {
+                write_latch(elsewhere.path(), &latched()).unwrap();
+                run.join(LATCH_FILE)
+            } else {
+                write_sim_meter(elsewhere.path(), &SimMeter::new().encode().unwrap()).unwrap();
+                support.join(USAGE_DIRECTORY).join(SIM_METER_FILE)
+            };
+            let good = if file == "latch" {
+                elsewhere.path().join(LATCH_FILE)
+            } else {
+                elsewhere.path().join(USAGE_DIRECTORY).join(SIM_METER_FILE)
+            };
+            match entry {
+                "link to a good file" => symlink(&good, &path).unwrap(),
+                "link to nothing" => symlink(elsewhere.path().join("nowhere"), &path).unwrap(),
+                _ => fs::create_dir(&path).unwrap(),
+            }
+            let error = refused_start(&mut harness);
+            let refused = match (file, &error) {
+                ("latch", CommandError::Local(LocalError::Latch(refused)))
+                | ("meter", CommandError::Local(LocalError::MeterFile(refused))) => refused,
+                _ => panic!("{file}, {entry}: {error:?}"),
+            };
+            assert!(
+                matches!(&**refused, StoreError::NotRegularFile { path: found } if *found == path),
+                "{file}, {entry}: {refused:?}"
+            );
+            assert_eq!(harness.helper.starts.get(), 0, "{file}, {entry}");
+            assert!(!elsewhere.path().join("nowhere").exists());
+        }
+    }
+}
+
+/// The case that matters most: a link to nothing where the latch belongs,
+/// which the daemon read as no latch until 2026-11-03, so that the exit
+/// would have started, and served, past a latched violation. Refused, the
+/// daemon stops at its start, with the latch's file named, and launchd
+/// starts it again a minute later to the same refusal until the operator
+/// removes the link. With the link removed, the same daemon starts the
+/// exit at its first tick: the refusal is what kept it down.
+#[test]
+fn a_link_to_nothing_where_the_latch_belongs_keeps_the_exit_from_starting() {
+    let mut harness = deployed();
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
+    let support = harness.support_dir();
+    let run = RunPaths::under(&support).dir;
+    fs::create_dir_all(&run).unwrap();
+    let latch = run.join(LATCH_FILE);
+    symlink(run.join("moved.json"), &latch).unwrap();
+    let error = refused_start(&mut harness);
+    assert_eq!(
+        chain(&error),
+        format!(
+            "the exit's latch file failed: {} is not a regular file",
+            latch.display()
+        )
+    );
+    assert_eq!(harness.helper.starts.get(), 0);
+    assert!(!run.join(ENGINE_PID_FILE).exists());
+    assert!(!run.join("moved.json").exists());
+    fs::remove_file(&latch).unwrap();
+    let (control, _retries) = shared();
+    with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            ExitState::Starting
+        );
+    });
+}
+
+/// A link where the own-network declarations belong is an unreadable
+/// input, as a corrupt file is: the declarations are taken as none, so the
+/// declared hotspot is foreign and the exit goes down (fail closed), the
+/// log names the file once, and the daemon keeps ticking. A link to the
+/// declarations themselves, elsewhere, is never read through: it would
+/// have allowed the hotspot. Until 2026-11-03 it was read, and a link to
+/// nothing was read as no declaration and reported as nothing unreadable.
+#[test]
+fn a_link_where_the_declarations_belong_fails_closed() {
+    let mut harness = joined_to_the_declared_hotspot();
+    let support = harness.support_dir();
+    let file = support.join(ALLOWED_NETWORKS_FILE);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let moved = elsewhere.path().join(ALLOWED_NETWORKS_FILE);
+    fs::rename(&file, &moved).unwrap();
+    symlink(&moved, &file).unwrap();
+    statuses(&harness);
+    let (control, _retries) = shared();
+    let log = with_exit(&mut harness, |exit, log| {
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            down_on_the_hotspot()
+        );
+        assert_eq!(
+            exit.tick(&control, log, false).unwrap(),
+            down_on_the_hotspot()
+        );
+        assert!(published(&control).parts().exit.allowed_networks.is_empty());
+        String::from_utf8(log.clone()).unwrap()
+    });
+    let unreadable = format!(
+        "the own-network declarations were not read: {} is not a regular file; no declared network can match\n",
+        file.display()
+    );
+    assert_eq!(log.matches(&unreadable).count(), 1, "{log}");
+    assert_eq!(
+        read_allowed_networks(elsewhere.path()).unwrap().len(),
+        1,
+        "the declarations the link leads to are still there"
+    );
 }
 
 /// The exit's own poll of the M7 at its start is recorded in the radio

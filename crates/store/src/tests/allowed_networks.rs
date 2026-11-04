@@ -9,20 +9,21 @@
 use std::fs;
 use std::io;
 use std::net::Ipv4Addr;
+use std::os::unix::fs::PermissionsExt;
 
 use mooring_model::ids::LocalLabel;
 use mooring_model::iface::{MacAddr, RouterIdentity};
 use mooring_model::own_network::{OwnNetwork, OwnNetworkKind, OwnNetworks};
 use mooring_model::time::UnixTime;
 
-use super::{assert_io_error, mode_of};
+use super::{assert_io_error, assert_not_regular, mode_of};
 use crate::allowed_networks::{
     ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
     allowed_networks_fit, declare_allowed_network, read_allowed_networks, revoke_allowed_network,
 };
 use crate::error::{IoOp, StoreError, StoreErrorKind};
 
-fn label(text: &str) -> LocalLabel {
+pub(super) fn label(text: &str) -> LocalLabel {
     LocalLabel::parse(text).unwrap()
 }
 
@@ -31,7 +32,7 @@ fn router(addr: [u8; 4], lladdr: &str) -> RouterIdentity {
     RouterIdentity::new(Ipv4Addr::from(addr), MacAddr::parse(lladdr).unwrap()).unwrap()
 }
 
-fn home() -> OwnNetwork {
+pub(super) fn home() -> OwnNetwork {
     OwnNetwork {
         kind: OwnNetworkKind::Broadband,
         router: router([192, 168, 0, 1], "02:00:5e:10:20:40"),
@@ -309,13 +310,28 @@ fn a_corrupt_declarations_file_is_typed_and_read_as_nothing() {
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), text);
     }
-    // A directory in place of the file is an I/O failure, not corruption.
-    fs::remove_file(&path).unwrap();
-    fs::create_dir(&path).unwrap();
+    // A file that cannot be opened (mode 0000; the tests run unprivileged)
+    // is an I/O failure, not corruption, and so not repaired either.
+    fs::write(&path, TEXT).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
     assert_io_error(
         &read_allowed_networks(dir.path()).unwrap_err(),
         IoOp::ReadAllowedNetworks,
         &path,
-        io::ErrorKind::IsADirectory,
+        io::ErrorKind::PermissionDenied,
+    );
+    assert_eq!(
+        declare_allowed_network(dir.path(), label("office"), home())
+            .unwrap_err()
+            .kind(),
+        StoreErrorKind::Io
+    );
+    // A directory in place of the file is no regular file, not corruption.
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert_not_regular(&read_allowed_networks(dir.path()).unwrap_err(), &path);
+    assert_not_regular(
+        &declare_allowed_network(dir.path(), label("office"), home()).unwrap_err(),
+        &path,
     );
 }

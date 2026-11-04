@@ -164,6 +164,11 @@ pub(crate) fn every_condition() -> Vec<(AlertConditionKind, AlertCondition, Aler
             on_lon1(),
         ),
         (
+            K::TargetReadFailed,
+            AlertCondition::TargetReadFailed { node: lon1() },
+            on_lon1(),
+        ),
+        (
             K::RouterNoService,
             AlertCondition::RouterNoService,
             AlertSubject::Router,

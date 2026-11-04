@@ -21,6 +21,7 @@ use super::{generation_units, health};
 use crate::gate;
 use crate::hello;
 use crate::host::{Node, Tool, run_ok};
+use crate::hostfiles::Applied;
 use crate::paths::Paths;
 use crate::store::{Lock, errno};
 
@@ -100,7 +101,7 @@ fn to_previous(
             errno: errno(&error),
         })?
         .ok_or(RollbackCause::Swap { errno: None })?;
-    let host = install_host(paths, &dir)?;
+    let host = install_host(paths, &dir, Applied::Changed)?;
     apply_changes(paths, node, failed, &header, &dir, &host)?;
     health::wait(paths, node, &dir, health::BUDGET)
         .map_err(|failed| RollbackCause::HealthGate { failed })

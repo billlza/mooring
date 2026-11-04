@@ -20,7 +20,7 @@ use mooring_agent_proto::{
 use super::validate;
 use crate::gate;
 use crate::host::{Node, Tool, run_ok};
-use crate::hostfiles;
+use crate::hostfiles::{self, Applied};
 use crate::paths::Paths;
 use crate::store::{Scratch, errno, io_error};
 
@@ -33,23 +33,29 @@ fn wg_value(conf: &str, key: &str) -> Option<String> {
 }
 
 /// Installs the host profile's files staged with the generation in `dir`
-/// (the swap's last part, design §11.2 step 4) and returns those that
-/// changed. A generation an older agent staged has none, and changes none.
-pub(super) fn install_host(paths: &Paths, dir: &Path) -> Result<BTreeSet<HostFile>, RollbackCause> {
+/// (the swap's last part, design §11.2 step 4) and returns those to apply,
+/// as `applied` says. A generation an older agent staged has none, and
+/// changes none.
+pub(super) fn install_host(
+    paths: &Paths,
+    dir: &Path,
+    applied: Applied,
+) -> Result<BTreeSet<HostFile>, RollbackCause> {
     let staged = dir.join(hostfiles::HOST_DIR);
     if !staged.is_dir() {
         return Ok(BTreeSet::new());
     }
-    hostfiles::install(paths, &staged).map_err(|error| RollbackCause::Swap {
+    let changed = hostfiles::install(paths, &staged).map_err(|error| RollbackCause::Swap {
         errno: errno(&error),
-    })
+    })?;
+    Ok(applied.files(changed))
 }
 
 /// Applies only what changed (design §11.2 step 5) from `before` to the
 /// generation now current, in `dir`: the ruleset, the tunnel (a restart if
 /// its address or MTU changed, else `wg syncconf`), what the host profile
 /// files in `host` need, and the engines whose configuration, artifacts or
-/// unit changed. Nothing is restarted while the node is halted. Tool
+/// unit changed. No engine is restarted while the node is halted. Tool
 /// output is scrubbed of the generation's secrets; if they cannot be read,
 /// nothing is run.
 pub(super) fn apply_changes(

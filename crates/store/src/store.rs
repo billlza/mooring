@@ -23,7 +23,10 @@ use crate::migrate;
 /// The state document's file name.
 pub const STATE_FILE: &str = "state.json";
 
-/// The lock file's file name. It is created on first use and never removed.
+/// The lock file's file name. It is created on first use and never removed,
+/// and only a regular file there is opened and locked: anything else, a
+/// link included, is `NotRegularFile`, and no lock is made where a link
+/// leads.
 pub const LOCK_FILE: &str = "state.lock";
 
 /// The non-secret state of one Mooring installation, kept in one directory

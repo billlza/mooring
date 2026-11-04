@@ -85,6 +85,7 @@ public enum AlertCondition: Decodable, Hashable, Sendable {
     case foreignNetworkAttached(findings: UInt64)
     case reachabilitySuspect(node: NodeId)
     case targetDegraded(node: NodeId)
+    case targetReadFailed(node: NodeId)
     case routerNoService
     case routerOnLte
     case routerThermalStepDown
@@ -152,6 +153,7 @@ public enum AlertCondition: Decodable, Hashable, Sendable {
         case ("reachability_suspect", let value?):
             self = .reachabilitySuspect(node: try Self.node(value))
         case ("target_degraded", let value?): self = .targetDegraded(node: try Self.node(value))
+        case ("target_read_failed", let value?): self = .targetReadFailed(node: try Self.node(value))
         case ("router_no_service", nil): self = .routerNoService
         case ("router_on_lte", nil): self = .routerOnLte
         case ("router_thermal_step_down", nil): self = .routerThermalStepDown

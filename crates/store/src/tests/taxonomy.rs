@@ -5,6 +5,8 @@
 
 use std::collections::BTreeSet;
 use std::fmt::Display;
+use std::io;
+use std::path::PathBuf;
 
 use mooring_model::collections::NonEmpty;
 use mooring_model::counters::ConfigGeneration;
@@ -32,7 +34,7 @@ fn assert_complete<K: Copy + Ord + Display>(
 
 #[test]
 fn kind_lists_are_complete() {
-    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 25);
+    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 26);
     assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 3);
     assert_complete(SnapshotReadErrorKind::ALL, SnapshotReadErrorKind::name, 2);
     assert_complete(ChangeErrorKind::ALL, ChangeErrorKind::name, 2);
@@ -43,14 +45,23 @@ fn kind_lists_are_complete() {
 }
 
 /// `Encode` guards serde_json's fallible API and cannot occur in this build,
-/// so its mapping is checked on a constructed value. (`MigrationFailed` has
-/// a real path: `tests::migration`.)
+/// and `Lock` needs `flock(2)` to fail on a regular file, which no test can
+/// make it do (since 2026-11-03 a FIFO, which macOS refuses to lock, is
+/// refused before any lock is tried, as `NotRegularFile`), so their
+/// mappings are checked on constructed values. (`MigrationFailed` has a
+/// real path: `tests::migration`.)
 #[test]
 fn kinds_without_a_reachable_path_still_map() {
     let encode = StoreError::Encode {
         source: serde_json::from_str::<u8>("x").unwrap_err(),
     };
     assert_eq!(encode.kind(), StoreErrorKind::Encode);
+    let lock = StoreError::Lock {
+        path: PathBuf::from("/x/state.lock"),
+        source: io::Error::from_raw_os_error(libc::ENOLCK),
+    };
+    assert_eq!(lock.kind(), StoreErrorKind::Lock);
+    assert_eq!(lock.to_string(), "failed to lock /x/state.lock");
 }
 
 #[test]

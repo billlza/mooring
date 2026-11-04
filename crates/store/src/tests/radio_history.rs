@@ -12,11 +12,13 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 use std::path::Path;
-use std::process::Command;
 
 use mooring_model::CalendarDate;
 
-use super::{assert_dir_not_directory, assert_io_error, mode_of};
+use super::{
+    assert_dir_not_directory, assert_io_error, assert_not_regular, make_fifo, make_socket, mode_of,
+    without_blocking,
+};
 use crate::error::{IoOp, RadioHistoryFault, StoreError, StoreErrorKind};
 use crate::radio_history::{
     MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
@@ -33,27 +35,6 @@ fn radio_dir(support: &Path) -> std::path::PathBuf {
 
 fn day_bytes(support: &Path, day: &str) -> Vec<u8> {
     fs::read(radio_day_path(support, date(day))).unwrap()
-}
-
-/// `error` refuses the day file at `path` as not a regular file.
-fn assert_not_regular(error: &StoreError, path: &Path) {
-    assert!(
-        matches!(
-            error,
-            StoreError::RadioHistoryCorrupt {
-                path: found,
-                fault: RadioHistoryFault::NotRegularFile
-            } if found == path
-        ),
-        "{error:?}"
-    );
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "radio history file {} is corrupt: it is not a regular file",
-            path.display()
-        )
-    );
 }
 
 #[test]
@@ -230,9 +211,10 @@ fn a_torn_day_file_is_healed_within_the_bound_and_refused_past_it() {
     assert_eq!(&after[..4], b"a\nb\n");
 }
 
-/// Only a regular file is a day file: a link or a directory where one
-/// belongs is refused, on append and on read, and nothing is written
-/// through it.
+/// Only a regular file is a day file: a link, a directory or a socket
+/// where one belongs is refused, on append and on read, and nothing is
+/// written through it. (Until 2026-11-03 a socket, which no open accepts,
+/// was the open's own failure, `Io{OpenRadioDay}`.)
 #[test]
 fn a_day_path_that_is_not_a_regular_file_is_refused() {
     let support = tempfile::tempdir().unwrap();
@@ -256,6 +238,11 @@ fn a_day_path_that_is_not_a_regular_file_is_refused() {
     fs::create_dir(&path).unwrap();
     refused(append_radio_line(support.path(), day, b"b\n").unwrap_err());
     refused(read_radio_day(support.path(), day).unwrap_err());
+    fs::remove_dir(&path).unwrap();
+    make_socket(&path);
+    refused(append_radio_line(support.path(), day, b"b\n").unwrap_err());
+    refused(read_radio_day(support.path(), day).unwrap_err());
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_socket());
 }
 
 /// A FIFO where a day file belongs is refused too, and holds neither the
@@ -269,13 +256,13 @@ fn a_fifo_where_a_day_file_belongs_is_refused_without_blocking() {
     let day = date("2026-10-24");
     append_radio_line(support.path(), date("2026-10-23"), b"a\n").unwrap();
     let path = radio_day_path(support.path(), day);
-    let made = Command::new("/usr/bin/mkfifo").arg(&path).status().unwrap();
-    assert!(made.success(), "{made}");
-    assert_not_regular(
-        &append_radio_line(support.path(), day, b"b\n").unwrap_err(),
-        &path,
-    );
-    assert_not_regular(&read_radio_day(support.path(), day).unwrap_err(), &path);
+    make_fifo(&path);
+    let at = support.path().to_path_buf();
+    let appended = without_blocking(&path, move || append_radio_line(&at, day, b"b\n"));
+    assert_not_regular(&appended.unwrap_err(), &path);
+    let at = support.path().to_path_buf();
+    let read = without_blocking(&path, move || read_radio_day(&at, day));
+    assert_not_regular(&read.unwrap_err(), &path);
     assert!(fs::symlink_metadata(&path).unwrap().file_type().is_fifo());
 }
 
@@ -504,13 +491,8 @@ fn radio_history_texts_are_fixed() {
         RadioHistoryFault::TooLarge.to_string(),
         "it is larger than 4194304 bytes"
     );
-    assert_eq!(
-        RadioHistoryFault::NotRegularFile.to_string(),
-        "it is not a regular file"
-    );
     for (op, text) in [
         (IoOp::CreateRadioDir, "create the radio directory"),
-        (IoOp::InspectRadioDay, "inspect a radio history day file"),
         (IoOp::OpenRadioDay, "open a radio history day file"),
         (IoOp::ReadRadioDay, "read a radio history day file"),
         (IoOp::WriteRadioDay, "write a radio history day file"),

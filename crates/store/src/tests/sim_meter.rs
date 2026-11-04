@@ -4,14 +4,15 @@
 //! with mode 0700 (and set back to it when found open), the document with
 //! mode 0600, the bounded read, the refusal of a usage path that is not a
 //! directory by the write and the read alike, and a read that fails
-//! reported as such.
+//! reported as such. (`tests::regular_files` refuses a link, and anything
+//! else but a regular file, where the meter belongs.)
 
 use std::fs;
 use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
-use super::{assert_dir_not_directory, assert_io_error, mode_of};
-use crate::error::{IoOp, StoreError, StoreErrorKind};
+use super::{assert_dir_not_directory, assert_io_error, assert_not_regular, mode_of};
+use crate::error::{IoOp, StoreErrorKind};
 use crate::sim_meter::{SIM_METER_FILE, USAGE_DIRECTORY, read_sim_meter, write_sim_meter};
 
 #[test]
@@ -128,33 +129,30 @@ fn the_read_refuses_a_usage_path_that_is_a_file() {
 
 /// A meter that cannot be read is an error naming the read, never "no
 /// meter", on which the daemon would start a fresh meter and lose the
-/// cycle's usage: here the open fails (the meter is a link to itself), then
-/// the read does (the meter path is a directory).
+/// cycle's usage: here the open fails (the meter is mode 0000; the tests
+/// run unprivileged). A link to itself or a directory where the meter
+/// belongs is no meter either: neither is a regular file.
 #[test]
 fn a_meter_that_cannot_be_read_is_an_error_not_a_fresh_meter() {
     let support = tempfile::tempdir().unwrap();
-    fs::create_dir(support.path().join(USAGE_DIRECTORY)).unwrap();
+    write_sim_meter(support.path(), b"{\"version\": 1}\n").unwrap();
     let path = support.path().join(USAGE_DIRECTORY).join(SIM_METER_FILE);
-    symlink(SIM_METER_FILE, &path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
     let error = read_sim_meter(support.path(), 64).unwrap_err();
-    // (`io::ErrorKind::FilesystemLoop` is unstable, so the system's error
-    // is checked by its number.)
-    assert!(
-        matches!(&error, StoreError::Io { op: IoOp::ReadSimMeter, path: found, source }
-            if *found == path && source.raw_os_error() == Some(libc::ELOOP)),
-        "{error:?}"
+    assert_io_error(
+        &error,
+        IoOp::ReadSimMeter,
+        &path,
+        io::ErrorKind::PermissionDenied,
     );
     assert_eq!(
         error.to_string(),
         format!("failed to read the SIM meter at {}", path.display())
     );
-    let support = tempfile::tempdir().unwrap();
-    let path = support.path().join(USAGE_DIRECTORY).join(SIM_METER_FILE);
-    fs::create_dir_all(&path).unwrap();
-    assert_io_error(
-        &read_sim_meter(support.path(), 64).unwrap_err(),
-        IoOp::ReadSimMeter,
-        &path,
-        io::ErrorKind::IsADirectory,
-    );
+    fs::remove_file(&path).unwrap();
+    symlink(SIM_METER_FILE, &path).unwrap();
+    assert_not_regular(&read_sim_meter(support.path(), 64).unwrap_err(), &path);
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert_not_regular(&read_sim_meter(support.path(), 64).unwrap_err(), &path);
 }

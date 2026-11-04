@@ -164,6 +164,10 @@ fn errno_must_be_spelled_out() {
         &WatchError::StateWrite { errno: None },
         &["StateWrite", "errno"],
     );
+    assert_required(
+        &WatchError::TargetReadFailed { errno: None },
+        &["TargetReadFailed", "errno"],
+    );
 }
 
 #[test]
@@ -185,5 +189,13 @@ fn errno_reads_plainly_in_messages() {
     assert_eq!(
         without.to_string(),
         "writing watch state failed (not an OS error)"
+    );
+    assert_eq!(
+        WatchError::TargetReadFailed { errno: Some(21) }.to_string(),
+        "reading the hourly target check's result failed (errno 21)"
+    );
+    assert_eq!(
+        WatchError::TargetReadFailed { errno: None }.to_string(),
+        "reading the hourly target check's result failed (not an OS error)"
     );
 }
