@@ -195,8 +195,8 @@ fn a_poll_a_crash_kept_out_of_its_month_is_taken_in_once_at_the_next_poll() {
     );
     assert_eq!(
         usage(&paths, start + 240, 2026, 10).unwrap().updated_at,
-        UnixTime::from_secs(start + 180),
-        "nor is the file rewritten when nothing grew"
+        UnixTime::from_secs(start + 240),
+        "an idle poll advances coverage without adding any bytes"
     );
 }
 

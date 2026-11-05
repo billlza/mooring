@@ -256,8 +256,9 @@ fn take_in(paths: &Paths, poll: &Poll) -> Result<(), AgentError> {
     let path = paths.usage_month(month);
     let file: Option<MonthFile> = read_json(&path)?;
     let mut usage = match file {
-        // Taken in already, or nothing to add.
-        Some(file) if file.poll == poll.id || poll.added.is_empty() => return Ok(()),
+        // A replay is already committed. An idle *new* poll must still
+        // advance the durable coverage time, without adding any bytes.
+        Some(file) if file.poll == poll.id => return Ok(()),
         Some(file) => file.usage,
         None => UsageV1 {
             month,

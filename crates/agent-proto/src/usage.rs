@@ -318,7 +318,7 @@ pub struct Traffic {
 pub struct UsageV1 {
     /// The month.
     pub month: UsageMonth,
-    /// When the watch last added to the file.
+    /// Latest accounting poll committed to this month, including idle polls.
     pub updated_at: UnixTime,
     /// Totals per accounting email.
     pub traffic: BTreeMap<StatsEmail, Traffic>,
