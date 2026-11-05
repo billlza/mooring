@@ -7,7 +7,7 @@ use std::io::{BufRead, Write};
 use std::net::{SocketAddrV4, TcpListener};
 use std::process::ExitCode;
 
-use mooring_agent_proto::{AgentError, Generation, HostProfile, PROTOCOL, Role};
+use mooring_agent_proto::{AgentError, Generation, HostProfile, Role, UPGRADE_SELF_TEST};
 
 use crate::host::Node;
 use crate::paths::Paths;
@@ -27,7 +27,7 @@ pub(crate) struct Process<'a> {
     pub(crate) ssh_connection: Option<&'a str>,
     /// Standard input, which only `serve-ssh` reads.
     pub(crate) stdin: &'a mut dyn BufRead,
-    /// Standard output: `serve-ssh`'s reply, `self-test`'s protocol.
+    /// Standard output: `serve-ssh`'s reply, `self-test`'s frozen success marker.
     pub(crate) stdout: &'a mut dyn Write,
     /// Standard error, where a failure is reported.
     pub(crate) stderr: &'a mut dyn Write,
@@ -211,7 +211,9 @@ pub(crate) fn run(
         },
         Invocation::SelfTest => match self_test(paths) {
             Ok(()) => {
-                match writeln!(process.stdout, "{PROTOCOL}").and_then(|()| process.stdout.flush()) {
+                match writeln!(process.stdout, "{UPGRADE_SELF_TEST}")
+                    .and_then(|()| process.stdout.flush())
+                {
                     Ok(()) => ExitCode::SUCCESS,
                     Err(error) => fail(stderr, &format!("printing the protocol failed: {error}")),
                 }

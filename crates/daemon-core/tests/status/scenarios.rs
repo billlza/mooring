@@ -14,7 +14,7 @@ use std::num::NonZeroU64;
 use mooring_agent_proto::{
     EgressViolationHold, GateState, Generation, Holds, Inbound, Resolution, StatusV1, WatchError,
 };
-use mooring_daemon_core::MacStatusV1;
+use mooring_daemon_core::MacStatusV2;
 use mooring_daemon_core::alert::{AlertCondition, AlertMachine, AlertTiming, OpenAlert};
 use mooring_daemon_core::capacity::{
     CapacityMonitor, CapacitySample, CapacityStatus, CapacityThresholds, RttSample,
@@ -57,7 +57,7 @@ use crate::support::{
 };
 
 /// A scenario's name (its fixture file's stem) and its status.
-pub(crate) fn all() -> Vec<(&'static str, MacStatusV1)> {
+pub(crate) fn all() -> Vec<(&'static str, MacStatusV2)> {
     vec![
         ("serving", serving()),
         ("degraded", degraded()),
@@ -83,7 +83,7 @@ struct Inputs {
     alerts: Vec<OpenAlert>,
 }
 
-fn assemble(inputs: Inputs) -> MacStatusV1 {
+fn assemble(inputs: Inputs) -> MacStatusV2 {
     let used: u64 = inputs.sim_daily.iter().map(|day| day.bytes).sum();
     // Each node is polled a second after its status's own time.
     let polls: BTreeMap<NodeId, NodePoll> = inputs
@@ -385,7 +385,7 @@ fn fixture_users(fixture: &Fixture) -> Vec<UserId> {
 }
 
 /// Two nodes and three users on an ordinary morning: serving, nothing open.
-pub(crate) fn serving() -> MacStatusV1 {
+pub(crate) fn serving() -> MacStatusV2 {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
     let ids = fixture_users(&fixture);
     let (u1, u2, u3) = (&ids[0], &ids[1], &ids[2]);
@@ -659,7 +659,7 @@ fn quota(gb: u64, warn: u8, action: QuotaAction) -> UserQuota {
 /// pilot's cap of 5 (decision F3), which the operator may raise. With 18
 /// users on 300 GB the SIM runs short within the cycle, which is what the
 /// forecast alert says.
-fn degraded() -> MacStatusV1 {
+fn degraded() -> MacStatusV2 {
     let fixture = mooring_fixtures::two_nodes_twenty_users().unwrap();
     let now = at("2026-10-08", 13 * HOUR + 30);
     let through = at("2026-10-08", 12 * HOUR);
@@ -837,7 +837,7 @@ fn degraded() -> MacStatusV1 {
     };
     // The policy actions the next apply window would take, and the alerts.
     let report = aggregate(&deployment, &ledgers, through).unwrap();
-    let actions = evaluate(&deployment, &report.cycle_usage(), now).unwrap();
+    let actions = evaluate(&deployment, &report.cycle_usage().unwrap(), now).unwrap();
     let sim_daily = daily(
         "2026-10-01",
         &[
@@ -968,7 +968,7 @@ fn degraded() -> MacStatusV1 {
 
 /// One node and one user, minutes after a paired-mode egress mismatch:
 /// down and latched, the router unreachable, and the meter missing a day.
-fn down() -> MacStatusV1 {
+fn down() -> MacStatusV2 {
     let fixture = mooring_fixtures::one_node_one_user().unwrap();
     let now = at("2026-10-08", 16 * HOUR + 45 * MINUTE);
     let latched_at = before(now, 5 * MINUTE);

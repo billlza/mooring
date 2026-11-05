@@ -25,6 +25,8 @@ const TABLE: &[(RequestKind, bool, bool, bool)] = &[
     (RequestKind::TxnStatus, false, true, false),
     (RequestKind::Rollback, false, true, false),
     (RequestKind::Status, false, true, true),
+    (RequestKind::WatchRuntime, false, true, false),
+    (RequestKind::RefreshWatch, false, true, false),
     (RequestKind::Usage, false, true, true),
     (RequestKind::UsageSeries, false, true, true),
     (RequestKind::Events, false, true, true),

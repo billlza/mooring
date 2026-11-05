@@ -11,6 +11,9 @@ import SwiftUI
 extension UsageErrorKind {
     var text: String {
         switch self {
+        case .ledgerCorrupt: String(localized: "the collected usage ledger is invalid")
+        case .monthlyInconsistent: String(localized: "monthly usage contradicts an earlier sample or its detailed bins")
+        case .storeUnavailable: String(localized: "the collected usage store could not be read or written")
         case .ledgerGap: String(localized: "a node's usage ledger has a gap or overlap")
         case .duplicateLedger: String(localized: "two usage ledgers are for one node")
         case .missingLedger: String(localized: "a node may have counted traffic, but no usage ledger is given for it")

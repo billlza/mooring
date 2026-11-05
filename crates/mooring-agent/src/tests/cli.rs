@@ -270,11 +270,11 @@ fn gate_close_closes_and_reports_a_failure() {
     );
 }
 
-/// The self-test prints the protocol on stdout, which `ActivateAgent`
+/// The self-test prints the frozen upgrade marker on stdout, which `ActivateAgent`
 /// compares; damaged state, or a stdout that refuses the line, is exit 1
 /// with the reason.
 #[test]
-fn the_self_test_prints_the_protocol_and_refuses_damaged_state() {
+fn the_self_test_keeps_the_v1_upgrade_marker_and_refuses_damaged_state() {
     let (_dir, paths) = scratch();
     let node = FakeNode::new(0);
     let passed = ran(Invocation::SelfTest, &paths, &node, b"");

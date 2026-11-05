@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The remote viewer's report (design §15.9, decision F5, 2026-10-08): the
-//! projection of a [`MacStatusV1`] onto agent-proto's `MacReportV1`, which
+//! projection of a [`MacStatusV2`] onto agent-proto's `MacReportV1`, which
 //! the Mac sends a node with `PutMacReport` and the operator's phone reads
 //! back with `MacReport`.
 //!
@@ -27,7 +27,7 @@
 //! node sets,
 //! quota and expiry states, per-node activity, day, month and lifetime
 //! figures and shares; revoked users; and the node rows (a viewer reads a
-//! node's own `Status`). Labels never reach a [`MacStatusV1`] at all.
+//! node's own `Status`). Labels never reach a [`MacStatusV2`] at all.
 
 use mooring_agent_proto::{
     ExitPhase, MacReportParts, MacReportV1, ReportAccuracy, ReportAlert, ReportBand,
@@ -43,7 +43,7 @@ use crate::capacity::{CapacityStatus, Saturation};
 use crate::error::ReportError;
 use crate::router::{Band, RadioState, RouterReading};
 use crate::status::{
-    ExitState, ForecastView, MacStatusV1, MeterAccuracy, SimMeterStatus, UsageView, UserRow,
+    ExitState, ForecastView, MacStatusV2, MeterAccuracy, SimMeterStatus, UsageView, UserRow,
 };
 use crate::wire::{
     mac_alert_kind, node_name, report_band_number, report_data_service, report_user, wire_time,
@@ -52,12 +52,23 @@ use crate::wire::{
 /// The report of `status`. `Wire` when the projection breaks a report rule:
 /// more than the report's user or alert bound (the ids and the band number
 /// always convert, their rules being the model's and the router's).
-pub fn project(status: &MacStatusV1) -> Result<MacReportV1, ReportError> {
+pub fn project(status: &MacStatusV2) -> Result<MacReportV1, ReportError> {
     let parts = status.parts();
+    let complete_cycle = parts
+        .users
+        .values()
+        .all(|row| row.usage.as_ref().and_then(|usage| usage.cycle()).is_some());
     let users = parts
         .users
         .iter()
-        .filter_map(|(id, row)| report_user_row(row).map(|user| Ok((report_user(id)?, user))))
+        .filter_map(|(id, row)| {
+            report_user_row(row).map(|mut user| {
+                if !complete_cycle {
+                    user.cycle = None;
+                }
+                Ok((report_user(id)?, user))
+            })
+        })
         .collect::<Result<_, ReportError>>()?;
     let alerts = parts
         .alerts
@@ -73,14 +84,23 @@ pub fn project(status: &MacStatusV1) -> Result<MacReportV1, ReportError> {
         sim: report_sim(&parts.sim),
         router: report_router(&parts.router)?,
         capacity: parts.capacity.as_ref().map(report_capacity),
-        usage: match parts.usage {
-            UsageView::Report { periods } => ReportUsage::Available {
-                through: wire_time(periods.through),
-            },
+        usage: match &parts.usage {
+            UsageView::Report { periods, .. }
+                if parts
+                    .users
+                    .values()
+                    .all(|row| row.usage.as_ref().and_then(|usage| usage.cycle()).is_some()) =>
+            {
+                ReportUsage::Available {
+                    through: wire_time(periods.through),
+                }
+            }
             // The report has no third state: a viewer reads not-pulled as
             // unavailable, which matters only once `PutMacReport` lands,
             // with the pull (M5, design §15.2).
-            UsageView::Unavailable { .. } | UsageView::NotPulled => ReportUsage::Unavailable,
+            UsageView::Unavailable { .. } | UsageView::NotPulled | UsageView::Report { .. } => {
+                ReportUsage::Unavailable
+            }
         },
         users,
         alerts,
@@ -208,7 +228,7 @@ fn report_user_row(row: &UserRow) -> Option<ReportUser> {
     };
     Some(ReportUser {
         status,
-        cycle: row.usage.as_ref().map(|usage| usage.cycle()),
+        cycle: row.usage.as_ref().and_then(|usage| usage.cycle()),
         last_seen: row.activity.last_seen.map(wire_time),
     })
 }

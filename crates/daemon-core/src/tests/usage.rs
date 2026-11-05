@@ -155,20 +155,20 @@ fn each_period_counts_exactly_the_bins_that_start_in_it() {
     assert_eq!(report.periods.utc_month_start, date("2026-10-01"));
 
     let first = &report.users[u1];
-    assert_eq!(first.lifetime(), traffic(1196, 2327));
-    assert_eq!(first.cycle(), traffic(186, 307));
-    assert_eq!(first.month(), traffic(36, 47));
-    assert_eq!(first.today(), traffic(5, 6));
-    assert_eq!(first.cycle_served_bytes(), 493);
+    assert_eq!(first.lifetime().unwrap(), traffic(1196, 2327));
+    assert_eq!(first.cycle().unwrap(), traffic(186, 307));
+    assert_eq!(first.month().unwrap(), traffic(36, 47));
+    assert_eq!(first.today().unwrap(), traffic(5, 6));
+    assert_eq!(first.cycle_served_bytes().unwrap(), 493);
     assert_eq!(
-        *first.cycle_by_node(),
+        *first.cycle_by_node().unwrap(),
         BTreeMap::from([
             (node("ams1"), traffic(50, 60)),
             (node("lon1"), traffic(136, 247))
         ])
     );
     assert_eq!(
-        first.cycle_by_protocol(),
+        first.cycle_by_protocol().unwrap(),
         ProtocolTraffic {
             reality: traffic(106, 207),
             hy2: traffic(80, 100)
@@ -182,10 +182,10 @@ fn each_period_counts_exactly_the_bins_that_start_in_it() {
     assert_eq!(points(shares.by_protocol().hy2), 3651);
 
     let second = &report.users[u2];
-    assert_eq!(second.lifetime(), traffic(1, 1));
-    assert_eq!(second.cycle(), traffic(1, 1));
-    assert_eq!(second.month(), Traffic::default());
-    assert_eq!(second.today(), Traffic::default());
+    assert_eq!(second.lifetime().unwrap(), traffic(1, 1));
+    assert_eq!(second.cycle().unwrap(), traffic(1, 1));
+    assert_eq!(second.month().unwrap(), Traffic::default());
+    assert_eq!(second.today().unwrap(), Traffic::default());
     assert_eq!(
         points(second.cycle_shares().unwrap().by_protocol().hy2),
         10_000
@@ -193,10 +193,10 @@ fn each_period_counts_exactly_the_bins_that_start_in_it() {
 
     let third = &report.users[u3];
     for period in [
-        third.today(),
-        third.month(),
-        third.cycle(),
-        third.lifetime(),
+        third.today().unwrap(),
+        third.month().unwrap(),
+        third.cycle().unwrap(),
+        third.lifetime().unwrap(),
     ] {
         assert_eq!(period, traffic(9, 9));
     }
@@ -205,14 +205,14 @@ fn each_period_counts_exactly_the_bins_that_start_in_it() {
         report.probe_cycle,
         BTreeMap::from([(
             node("lon1"),
-            ProtocolTraffic {
+            Some(ProtocolTraffic {
                 reality: traffic(7, 8),
                 hy2: Traffic::default()
-            }
+            })
         )])
     );
     // The quota input is the cycle's served bytes per user.
-    let cycle = report.cycle_usage();
+    let cycle = report.cycle_usage().unwrap();
     assert_eq!(cycle.cycle, report.periods.cycle);
     assert_eq!(cycle.through, through);
     assert_eq!(cycle.served[u1], 493);
@@ -248,12 +248,12 @@ fn a_user_without_traffic_has_a_zero_row_and_no_shares() {
     .unwrap();
     assert_eq!(report.users.len(), 3);
     let idle = &report.users[&ids[1]];
-    assert_eq!(idle.lifetime(), Traffic::default());
-    assert_eq!(idle.cycle_served_bytes(), 0);
+    assert_eq!(idle.lifetime().unwrap(), Traffic::default());
+    assert_eq!(idle.cycle_served_bytes().unwrap(), 0);
     assert_eq!(idle.cycle_shares(), None);
     // At midnight, today has no time in it yet.
-    assert_eq!(report.users[&ids[0]].today(), Traffic::default());
-    assert_eq!(report.users[&ids[0]].cycle(), traffic(1, 0));
+    assert_eq!(report.users[&ids[0]].today().unwrap(), Traffic::default());
+    assert_eq!(report.users[&ids[0]].cycle().unwrap(), traffic(1, 0));
 }
 
 #[test]
@@ -323,7 +323,10 @@ fn ledgers_must_be_contiguous_from_their_base() {
         through,
     )
     .unwrap();
-    assert_eq!(report.users[&ids[0]].lifetime(), Traffic::default());
+    assert_eq!(
+        report.users[&ids[0]].lifetime().unwrap(),
+        Traffic::default()
+    );
     // A retired node whose whole history was folded into its base still
     // counts toward the lifetime, and toward no period.
     let folded = NodeLedger::new(
@@ -342,8 +345,8 @@ fn ledgers_must_be_contiguous_from_their_base() {
         through,
     )
     .unwrap();
-    assert_eq!(report.users[&ids[0]].lifetime(), traffic(3, 4));
-    assert_eq!(report.users[&ids[0]].cycle(), Traffic::default());
+    assert_eq!(report.users[&ids[0]].lifetime().unwrap(), traffic(3, 4));
+    assert_eq!(report.users[&ids[0]].cycle().unwrap(), Traffic::default());
 }
 
 /// Every refusal, each with the node and instants at fault.
@@ -429,7 +432,7 @@ fn aggregation_refuses_what_it_cannot_count_exactly() {
         early,
     )
     .unwrap();
-    assert_eq!(report.users[u1].today(), Traffic::default());
+    assert_eq!(report.users[u1].today().unwrap(), Traffic::default());
     // Accounting names Mooring never renders.
     let stranger = StatsEmail {
         principal: Principal::User(OpaqueUserId::new("u01").unwrap()),
@@ -511,6 +514,20 @@ fn aggregation_refuses_what_it_cannot_count_exactly() {
 fn every_usage_error_kind_is_named_once() {
     let ids = user_ids();
     let errors = [
+        (
+            UsageErrorKind::LedgerCorrupt,
+            UsageError::LedgerCorrupt {
+                message: "bad stored index".to_owned(),
+            },
+        ),
+        (
+            UsageErrorKind::MonthlyInconsistent,
+            UsageError::MonthlyInconsistent { node: node("lon1") },
+        ),
+        (
+            UsageErrorKind::StoreUnavailable,
+            UsageError::StoreUnavailable,
+        ),
         (
             UsageErrorKind::LedgerGap,
             UsageError::LedgerGap {
@@ -646,7 +663,7 @@ fn every_node_that_may_have_counted_traffic_needs_a_ledger() {
         ams1.lifecycle = NodeLifecycle::Planned;
     });
     let report = aggregate(&planned, &[lon1(u1, u2, u3)], through).unwrap();
-    assert_eq!(report.users[u1].cycle_by_node().len(), 1);
+    assert_eq!(report.users[u1].cycle_by_node().unwrap().len(), 1);
 }
 
 /// A node first served during a period is covered from then: nothing was
@@ -695,11 +712,11 @@ fn a_node_first_served_mid_period_is_covered_from_then() {
     .unwrap();
     let report = aggregate(&deployment, &[lon1.clone(), ams1], through).unwrap();
     let row = &report.users[u1];
-    assert_eq!(row.cycle(), traffic(4, 6));
-    assert_eq!(row.month(), traffic(4, 6));
-    assert_eq!(row.lifetime(), traffic(4, 6));
+    assert_eq!(row.cycle().unwrap(), traffic(4, 6));
+    assert_eq!(row.month().unwrap(), traffic(4, 6));
+    assert_eq!(row.lifetime().unwrap(), traffic(4, 6));
     assert_eq!(
-        *row.cycle_by_node(),
+        *row.cycle_by_node().unwrap(),
         BTreeMap::from([(node("ams1"), traffic(4, 6))])
     );
     // The same bins as a continuation would hide what came before them.
@@ -1153,24 +1170,24 @@ proptest! {
         let periods = report.periods;
         for user in &ids {
             let row = &report.users[user];
-            prop_assert_eq!(row.lifetime(), sum(&recorded, user, UnixTime::from_secs(0), through));
-            prop_assert_eq!(row.cycle(), sum(&recorded, user, periods.cycle.starts_at(), through));
-            prop_assert_eq!(row.month(), sum(&recorded, user, periods.utc_month_start.utc_start(), through));
-            prop_assert_eq!(row.today(), sum(&recorded, user, periods.utc_day.utc_start(), through));
+            prop_assert_eq!(row.lifetime().unwrap(), sum(&recorded, user, UnixTime::from_secs(0), through));
+            prop_assert_eq!(row.cycle().unwrap(), sum(&recorded, user, periods.cycle.starts_at(), through));
+            prop_assert_eq!(row.month().unwrap(), sum(&recorded, user, periods.utc_month_start.utc_start(), through));
+            prop_assert_eq!(row.today().unwrap(), sum(&recorded, user, periods.utc_day.utc_start(), through));
             let mut by_node = Traffic::default();
-            for traffic in row.cycle_by_node().values() {
+            for traffic in row.cycle_by_node().unwrap().values() {
                 by_node.uplink += traffic.uplink;
                 by_node.downlink += traffic.downlink;
             }
-            prop_assert_eq!(by_node, row.cycle());
-            let protocols = row.cycle_by_protocol();
+            prop_assert_eq!(by_node, row.cycle().unwrap());
+            let protocols = row.cycle_by_protocol().unwrap();
             prop_assert_eq!(
                 traffic(protocols.reality.uplink + protocols.hy2.uplink, protocols.reality.downlink + protocols.hy2.downlink),
-                row.cycle()
+                row.cycle().unwrap()
             );
-            prop_assert_eq!(row.cycle_served_bytes(), row.cycle().uplink + row.cycle().downlink);
+            prop_assert_eq!(row.cycle_served_bytes().unwrap(), row.cycle().unwrap().uplink + row.cycle().unwrap().downlink);
             match row.cycle_shares() {
-                None => prop_assert_eq!(row.cycle_served_bytes(), 0),
+                None => prop_assert_eq!(row.cycle_served_bytes().unwrap(), 0),
                 Some(shares) => {
                     prop_assert_eq!(shares.by_node().values().map(|share| u32::from(share.get())).sum::<u32>(), 10_000);
                     prop_assert_eq!(u32::from(shares.by_protocol().reality.get()) + u32::from(shares.by_protocol().hy2.get()), 10_000);

@@ -517,6 +517,10 @@ pub(crate) fn line_request(kind: RequestKind) -> LineRequest {
         },
         RequestKind::Rollback => LineRequest::Rollback,
         RequestKind::Status => LineRequest::Status,
+        RequestKind::WatchRuntime => LineRequest::WatchRuntime,
+        RequestKind::RefreshWatch => LineRequest::RefreshWatch {
+            expected_agent_sha: digest(4),
+        },
         RequestKind::Usage => LineRequest::Usage {
             month: UsageMonth::new(2026, 10).unwrap(),
         },
@@ -578,6 +582,8 @@ pub(crate) fn response(kind: ResponseKind) -> Response {
             generation: Generation::new(8),
         },
         ResponseKind::Status => Response::Status(Box::new(status())),
+        ResponseKind::WatchRuntime => Response::WatchRuntime(watch_runtime()),
+        ResponseKind::WatchRefreshed => Response::WatchRefreshed(watch_runtime()),
         ResponseKind::Usage => Response::Usage(Box::new(usage())),
         ResponseKind::UsageSeries => Response::UsageSeries(Box::new(usage_series())),
         ResponseKind::Events => Response::Events(Box::new(events())),
@@ -614,6 +620,9 @@ pub(crate) fn txn_states() -> Vec<TxnState> {
 
 pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
     match kind {
+        AgentErrorKind::WatchNotUpdated => AgentError::WatchNotUpdated {
+            expected: digest(4),
+        },
         AgentErrorKind::BlobHash => AgentError::BlobHash {
             expected: digest(3),
             actual: digest(9),
@@ -736,5 +745,17 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         },
         AgentErrorKind::UnknownRequest => AgentError::UnknownRequest,
         AgentErrorKind::RequestTooLarge => AgentError::RequestTooLarge,
+    }
+}
+
+fn watch_runtime() -> mooring_agent_proto::WatchRuntime {
+    mooring_agent_proto::WatchRuntime {
+        at: UnixTime::from_secs(1000),
+        agent_sha: digest(4),
+        watch: Some(mooring_agent_proto::WatchProcess {
+            pid: std::num::NonZeroU32::new(42).unwrap(),
+            start_ticks: 100,
+            executable_sha: digest(4),
+        }),
     }
 }

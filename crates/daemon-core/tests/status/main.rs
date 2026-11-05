@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MacStatusV1` and `ConsoleStatus`: the contract fixtures Mooring.app
+//! `MacStatusV2` and `ConsoleStatus`: the contract fixtures Mooring.app
 //! decodes, the status document's invariants, and what leaves the Mac from
 //! it (the push notices and the remote viewer's report), through the
 //! public API only.

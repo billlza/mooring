@@ -15,6 +15,7 @@ mod hello;
 mod hostfiles;
 mod journal;
 mod reflect;
+mod runtime;
 mod serve;
 mod store;
 mod target;

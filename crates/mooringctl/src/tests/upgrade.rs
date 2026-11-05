@@ -98,13 +98,19 @@ fn an_upgrade_uploads_activates_and_confirms_the_new_agent() {
         Ok(Response::Confirmed { generation }),
     );
     expect(&harness, RequestKind::Hello, Ok(hello_running(sha)));
+    expect(
+        &harness,
+        RequestKind::WatchRuntime,
+        Ok(watch_inspected(OLD)),
+    );
+    expect(&harness, RequestKind::RefreshWatch, Ok(watch_running(sha)));
     let outcome = run(&mut harness, &agent);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     assert!(harness.nodes.script.borrow().is_empty());
     assert_eq!(
         outcome.stdout,
         format!(
-            "lon1: runs agent {OLD}; agent {sha}, 1 blob(s) uploaded\nupgraded: lon1 runs agent {sha} (node generation 0)\n"
+            "lon1: runs agent {OLD}; agent {sha}, 1 blob(s) uploaded\nupgraded: lon1 runs agent {sha} (node generation 0)\nbefore refresh: lon1 watch {OLD} (pid 42, start ticks 1000)\nverified: lon1 watch runs {sha} (pid 42, start ticks 1000)\n"
         )
     );
     let seen = harness.nodes.seen.borrow();
@@ -126,10 +132,21 @@ fn an_upgrade_uploads_activates_and_confirms_the_new_agent() {
 fn an_agent_the_node_runs_already_is_not_activated_again() {
     let (mut harness, agent, sha) = ready();
     expect(&harness, RequestKind::Hello, Ok(hello_running(sha)));
+    expect(
+        &harness,
+        RequestKind::WatchRuntime,
+        Ok(watch_inspected(OLD)),
+    );
+    expect(&harness, RequestKind::RefreshWatch, Ok(watch_running(sha)));
     let outcome = run(&mut harness, &agent);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     assert!(harness.nodes.script.borrow().is_empty());
-    assert_eq!(outcome.stdout, format!("lon1 already runs agent {sha}\n"));
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "lon1 already runs agent {sha}\nbefore refresh: lon1 watch {OLD} (pid 42, start ticks 1000)\nverified: lon1 watch runs {sha} (pid 42, start ticks 1000)\n"
+        )
+    );
 }
 
 /// A new agent that fails its self-test stays inactive, and the node's
@@ -274,4 +291,103 @@ fn only_a_deployed_node_is_upgraded() {
         "mooringctl: node lon1 is Planned; it must be adopted first\n"
     );
     assert!(planned.nodes.seen.borrow().is_empty());
+}
+
+fn watch_running(sha: Sha256Hex) -> Response {
+    Response::WatchRefreshed(mooring_agent_proto::WatchRuntime {
+        at: mooring_agent_proto::UnixTime::from_secs(1000),
+        agent_sha: sha,
+        watch: Some(mooring_agent_proto::WatchProcess {
+            pid: std::num::NonZeroU32::new(42).unwrap(),
+            start_ticks: 1000,
+            executable_sha: sha,
+        }),
+    })
+}
+
+#[test]
+fn an_already_updated_agent_with_an_old_watch_is_not_a_success() {
+    let (mut harness, agent, sha) = ready();
+    expect(&harness, RequestKind::Hello, Ok(hello_running(sha)));
+    expect(
+        &harness,
+        RequestKind::WatchRuntime,
+        Ok(watch_inspected(OLD)),
+    );
+    expect(&harness, RequestKind::RefreshWatch, Ok(watch_running(OLD)));
+    let outcome = run(&mut harness, &agent);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(outcome.stderr.contains("watch executable"));
+    assert!(!outcome.stdout.contains("verified:"));
+    assert!(harness.nodes.script.borrow().is_empty());
+}
+
+#[test]
+fn a_refused_watch_restart_is_reported_after_the_control_upgrade() {
+    let (mut harness, agent, sha) = ready();
+    expect(&harness, RequestKind::Hello, Ok(hello_running(sha)));
+    expect(
+        &harness,
+        RequestKind::WatchRuntime,
+        Ok(watch_inspected(OLD)),
+    );
+    expect(
+        &harness,
+        RequestKind::RefreshWatch,
+        Err(NodeError::Agent(AgentError::WatchNotUpdated {
+            expected: sha,
+        })),
+    );
+    let outcome = run(&mut harness, &agent);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(outcome.stderr.contains("watch did not run"));
+    assert!(!outcome.stdout.contains("verified:"));
+}
+
+fn watch_inspected(sha: Sha256Hex) -> Response {
+    let Response::WatchRefreshed(runtime) = watch_running(sha) else {
+        unreachable!()
+    };
+    Response::WatchRuntime(runtime)
+}
+
+#[test]
+fn runtime_inspection_prints_actual_process_evidence_or_explicit_absence() {
+    let (mut harness, _, _) = ready();
+    expect(
+        &harness,
+        RequestKind::WatchRuntime,
+        Ok(watch_inspected(OLD)),
+    );
+    let outcome = harness.run(&["node", "runtime", "lon1", "--interface", "lo0", "--json"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let runtime: mooring_agent_proto::WatchRuntime = serde_json::from_str(&outcome.stdout).unwrap();
+    assert_eq!(runtime.watch.unwrap().executable_sha, OLD);
+    let Response::WatchRuntime(mut runtime) = watch_inspected(OLD) else {
+        unreachable!()
+    };
+    runtime.watch = None;
+    expect(
+        &harness,
+        RequestKind::WatchRuntime,
+        Ok(Response::WatchRuntime(runtime)),
+    );
+    let outcome = harness.run(&["node", "runtime", "lon1", "--interface", "lo0"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        format!("lon1: control agent {OLD}\nwatch: no main process\n")
+    );
+    expect(
+        &harness,
+        RequestKind::WatchRuntime,
+        Ok(watch_inspected(OLD)),
+    );
+    let outcome = harness.run(&["node", "runtime", "lon1", "--interface", "lo0"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(outcome.stdout.contains("pid 42, start ticks 1000"));
+    expect(&harness, RequestKind::WatchRuntime, Ok(watch_running(OLD)));
+    let outcome = harness.run(&["node", "runtime", "lon1", "--interface", "lo0"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(outcome.stderr.contains("WatchRuntime with WatchRefreshed"));
 }

@@ -21,7 +21,7 @@ use crate::period::BillingCycle;
 use crate::policy::{ExpiryState, QuotaState, automatic_quota, effective_quota};
 use crate::router::RouterReading;
 use crate::status::{
-    ExitSection, ForecastView, MacStatusParts, MacStatusV1, MeterAccuracy, NodeAgentState,
+    ExitSection, ForecastView, MacStatusParts, MacStatusV2, MeterAccuracy, NodeAgentState,
     NodeReport, NodeRow, ProtocolVerdicts, SimMeterStatus, UsageView, UserRow,
 };
 use crate::usage::{NodeLedger, UsageAccuracy, activity, aggregate};
@@ -56,6 +56,10 @@ pub enum Ledgers<'a> {
     /// [`UsageView::NotPulled`] and no row carries usage, never zeros. M5's
     /// pull passes `Pulled` instead and removes this variant.
     NotPulled,
+    /// Persisted incremental node accounting, including explicit historical gaps.
+    Collected(&'a crate::usage::CollectedUsage),
+    /// An owning I/O boundary could not safely read or persist the ledger.
+    Unavailable(crate::error::UsageErrorKind),
     /// Every ledger the daemon holds, one per node that may have counted
     /// traffic; a node without one makes the usage view unavailable
     /// (`MissingLedger`).
@@ -118,7 +122,7 @@ pub enum SnapshotError {
 }
 
 /// The status line of `inputs`.
-pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV1, SnapshotError> {
+pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV2, SnapshotError> {
     let deployment = inputs.deployment;
     let sim = &deployment.exit().sim;
     let users = deployment.users();
@@ -134,22 +138,28 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV1, SnapshotError> 
         .map(|(node, poll)| (node.clone(), poll.status.clone()))
         .collect();
     let mut activity = activity(users, &statuses, inputs.at).map_err(SnapshotError::Activity)?;
-    let (usage, mut by_user) = match inputs.ledgers {
-        Ledgers::NotPulled => (UsageView::NotPulled, None),
-        Ledgers::Pulled(ledgers) => match aggregate(deployment, ledgers, inputs.through) {
-            Ok(report) => (
-                UsageView::Report {
-                    periods: report.periods,
-                },
-                Some(report.users),
-            ),
-            Err(error) => (
-                UsageView::Unavailable {
-                    reason: error.kind(),
-                },
-                None,
-            ),
-        },
+    let report = match inputs.ledgers {
+        Ledgers::NotPulled => None,
+        Ledgers::Pulled(ledgers) => {
+            Some(aggregate(deployment, ledgers, inputs.through).map_err(|error| error.kind()))
+        }
+        Ledgers::Collected(history) => Some(
+            history
+                .aggregate(deployment, inputs.at)
+                .map_err(|error| error.kind()),
+        ),
+        Ledgers::Unavailable(reason) => Some(Err(reason)),
+    };
+    let (usage, mut by_user) = match report {
+        None => (UsageView::NotPulled, None),
+        Some(Ok(report)) => (
+            UsageView::Report {
+                periods: report.periods,
+                sampled_at: report.sampled_at,
+            },
+            Some(report.users),
+        ),
+        Some(Err(reason)) => (UsageView::Unavailable { reason }, None),
     };
     let automatic = automatic_quota(deployment, inputs.at).map_err(SnapshotError::Quota)?;
     let mut rows = BTreeMap::new();
@@ -161,8 +171,8 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV1, SnapshotError> 
         };
         let activity = activity.remove(id).ok_or_else(missing)?;
         let quota = effective_quota(user, automatic);
-        let quota = match &usage {
-            Some(usage) => QuotaState::of(quota, usage.cycle_served_bytes()),
+        let quota = match usage.as_ref().and_then(|usage| usage.cycle_served_bytes()) {
+            Some(bytes) => QuotaState::of(quota, bytes),
             None => QuotaState::without_usage(quota),
         };
         rows.insert(
@@ -213,7 +223,7 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV1, SnapshotError> 
             )
         })
         .collect();
-    MacStatusV1::new(MacStatusParts {
+    MacStatusV2::new(MacStatusParts {
         at: inputs.at,
         exit: inputs.exit,
         sim: SimMeterStatus {

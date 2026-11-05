@@ -10,7 +10,7 @@ use mooring_daemon_core::alert::{AlertCondition, OpenAlert, Severity};
 use mooring_daemon_core::router::{RouterAdvisory, RouterReading, RouterStatus};
 use mooring_daemon_core::status::{DegradedReason, DownReason, ExitState, Latch, UsageView};
 use mooring_daemon_core::{
-    MacStatusParts, MacStatusV1, StatusError, StatusErrorKind, UsageErrorKind,
+    MacStatusParts, MacStatusV2, StatusError, StatusErrorKind, UsageErrorKind,
 };
 use mooring_model::collections::NonEmpty;
 use mooring_model::verdict::Violation;
@@ -33,7 +33,7 @@ fn ghost() -> NodeId {
 
 fn unknown_node(parts: MacStatusParts) {
     assert_eq!(
-        MacStatusV1::new(parts),
+        MacStatusV2::new(parts),
         Err(StatusError::UnknownNode { node: ghost() })
     );
 }
@@ -41,7 +41,7 @@ fn unknown_node(parts: MacStatusParts) {
 /// Each place a status names a node, pointed at a node with no row.
 #[test]
 fn every_node_named_has_a_row() {
-    assert!(MacStatusV1::new(serving()).is_ok());
+    assert!(MacStatusV2::new(serving()).is_ok());
     let first_user = |parts: &mut MacStatusParts| parts.users.values_mut().next().unwrap().clone();
     let mut parts = serving();
     parts
@@ -122,7 +122,7 @@ fn every_node_named_has_a_row() {
     let mut parts = serving();
     parts.nodes.remove(&node("ams1"));
     assert_eq!(
-        MacStatusV1::new(parts),
+        MacStatusV2::new(parts),
         Err(StatusError::UnknownNode { node: node("ams1") })
     );
 }
@@ -133,7 +133,7 @@ fn user_rows_carry_usage_exactly_when_the_view_is_a_report() {
     let user = parts.users.keys().nth(1).unwrap().clone();
     parts.users.get_mut(&user).unwrap().usage = None;
     assert_eq!(
-        MacStatusV1::new(parts),
+        MacStatusV2::new(parts),
         Err(StatusError::UsageMismatch { user })
     );
     for view in [
@@ -146,13 +146,13 @@ fn user_rows_carry_usage_exactly_when_the_view_is_a_report() {
         parts.usage = view;
         let first = parts.users.keys().next().unwrap().clone();
         assert_eq!(
-            MacStatusV1::new(parts.clone()),
+            MacStatusV2::new(parts.clone()),
             Err(StatusError::UsageMismatch { user: first })
         );
         for row in parts.users.values_mut() {
             row.usage = None;
         }
-        assert!(MacStatusV1::new(parts).is_ok());
+        assert!(MacStatusV2::new(parts).is_ok());
     }
 }
 
@@ -167,30 +167,30 @@ fn open_alerts_are_listed_once_in_key_order() {
     let again = repeated.alerts[1].clone();
     repeated.alerts.insert(2, again.clone());
     assert_eq!(
-        MacStatusV1::new(repeated),
+        MacStatusV2::new(repeated),
         Err(StatusError::AlertsNotOrdered { key: again.key() })
     );
     let mut swapped = parts;
     swapped.alerts.swap(0, 1);
     let out_of_place = swapped.alerts[1].key();
     assert_eq!(
-        MacStatusV1::new(swapped),
+        MacStatusV2::new(swapped),
         Err(StatusError::AlertsNotOrdered { key: out_of_place })
     );
 }
 
 fn json(parts: MacStatusParts) -> serde_json::Value {
-    serde_json::to_value(MacStatusV1::new(parts).unwrap()).unwrap()
+    serde_json::to_value(MacStatusV2::new(parts).unwrap()).unwrap()
 }
 
 #[test]
-fn the_document_is_version_1_with_every_key_required_and_known() {
+fn the_document_is_version_2_with_every_key_required_and_known() {
     let document = json(serving());
-    assert_eq!(document["version"], 1);
-    for version in [0, 2, u32::MAX] {
+    assert_eq!(document["version"], 2);
+    for version in [0, 1, 3, u32::MAX] {
         let mut other = document.clone();
         other["version"] = version.into();
-        let error = serde_json::from_value::<MacStatusV1>(other).unwrap_err();
+        let error = serde_json::from_value::<MacStatusV2>(other).unwrap_err();
         assert!(
             error.to_string().contains(&format!("not {version}")),
             "{error}"
@@ -198,7 +198,7 @@ fn the_document_is_version_1_with_every_key_required_and_known() {
     }
     let mut extra = document.clone();
     extra["labels"] = serde_json::json!({});
-    assert!(serde_json::from_value::<MacStatusV1>(extra).is_err());
+    assert!(serde_json::from_value::<MacStatusV2>(extra).is_err());
     // Every top-level key, and the optional ones inside, are required.
     for key in [
         "version",
@@ -216,7 +216,7 @@ fn the_document_is_version_1_with_every_key_required_and_known() {
         let mut missing = document.clone();
         missing.as_object_mut().unwrap().remove(key);
         assert!(
-            serde_json::from_value::<MacStatusV1>(missing).is_err(),
+            serde_json::from_value::<MacStatusV2>(missing).is_err(),
             "{key}"
         );
     }
@@ -228,14 +228,14 @@ fn the_document_is_version_1_with_every_key_required_and_known() {
         let mut missing = document.clone();
         missing[path[0]].as_object_mut().unwrap().remove(path[1]);
         assert!(
-            serde_json::from_value::<MacStatusV1>(missing).is_err(),
+            serde_json::from_value::<MacStatusV2>(missing).is_err(),
             "{path:?}"
         );
     }
     let mut no_capacity = document.clone();
     no_capacity["capacity"] = serde_json::Value::Null;
     assert!(
-        serde_json::from_value::<MacStatusV1>(no_capacity).is_ok(),
+        serde_json::from_value::<MacStatusV2>(no_capacity).is_ok(),
         "null is no sample yet"
     );
     let user = document["users"]
@@ -249,14 +249,14 @@ fn the_document_is_version_1_with_every_key_required_and_known() {
         let mut missing = document.clone();
         missing["users"][&user].as_object_mut().unwrap().remove(key);
         assert!(
-            serde_json::from_value::<MacStatusV1>(missing).is_err(),
+            serde_json::from_value::<MacStatusV2>(missing).is_err(),
             "users.*.{key}"
         );
     }
     // A decoded document is checked like a built one.
     let mut ghost_row = document;
     ghost_row["users"][&user]["nodes"] = serde_json::json!(["ghost1"]);
-    let error = serde_json::from_value::<MacStatusV1>(ghost_row).unwrap_err();
+    let error = serde_json::from_value::<MacStatusV2>(ghost_row).unwrap_err();
     assert!(error.to_string().contains("ghost1"), "{error}");
 }
 
@@ -266,8 +266,12 @@ fn every_status_error_kind_is_named_once() {
     let key = degraded().alerts[0].key();
     let errors = [
         (
+            StatusErrorKind::UsageSampleInvalid,
+            StatusError::UsageSampleInvalid { node: ghost() },
+        ),
+        (
             StatusErrorKind::UnsupportedVersion,
-            StatusError::UnsupportedVersion { found: 2 },
+            StatusError::UnsupportedVersion { found: 1 },
         ),
         (
             StatusErrorKind::UnknownNode,
@@ -296,6 +300,41 @@ fn every_status_error_kind_is_named_once() {
     );
 }
 
+#[test]
+fn usage_sources_must_exist_and_not_postdate_their_publication_or_monthly_sample() {
+    let original = serving();
+    let node = original.nodes.keys().next().unwrap().clone();
+    for (id, monthly, detail) in [
+        (ghost(), original.at, None),
+        (
+            node.clone(),
+            UnixTime::from_secs(original.at.as_secs() + 1),
+            None,
+        ),
+        (
+            node.clone(),
+            original.at,
+            Some(UnixTime::from_secs(original.at.as_secs() + 1)),
+        ),
+    ] {
+        let mut parts = original.clone();
+        let UsageView::Report { sampled_at, .. } = &mut parts.usage else {
+            panic!("no report")
+        };
+        sampled_at.insert(
+            id.clone(),
+            mooring_daemon_core::usage::UsageSampleTimes {
+                monthly_at: monthly,
+                detail_through: detail,
+            },
+        );
+        assert_eq!(
+            MacStatusV2::new(parts).unwrap_err(),
+            StatusError::UsageSampleInvalid { node: id }
+        );
+    }
+}
+
 /// The advisories follow from the router panel, as in the undeployed
 /// document: the document carries them, and refuses any others.
 #[test]
@@ -312,7 +351,7 @@ fn the_advisories_follow_from_the_router_panel() {
         status: Box::new(RouterStatus::new(router).unwrap()),
     };
     let mut cases = scenarios::all();
-    cases.push(("settings on", MacStatusV1::new(with_settings_on).unwrap()));
+    cases.push(("settings on", MacStatusV2::new(with_settings_on).unwrap()));
     for (name, status) in cases {
         let document = serde_json::to_value(&status).unwrap();
         let expected = status.parts().router.advisories();
@@ -322,7 +361,7 @@ fn the_advisories_follow_from_the_router_panel() {
             "{name}"
         );
         assert_eq!(
-            serde_json::from_value::<MacStatusV1>(document.clone()).unwrap(),
+            serde_json::from_value::<MacStatusV2>(document.clone()).unwrap(),
             status,
             "{name}"
         );
@@ -340,7 +379,7 @@ fn the_advisories_follow_from_the_router_panel() {
             }
             let mut changed = document.clone();
             changed["advisories"] = serde_json::to_value(&others).unwrap();
-            let error = serde_json::from_value::<MacStatusV1>(changed).unwrap_err();
+            let error = serde_json::from_value::<MacStatusV2>(changed).unwrap_err();
             assert!(
                 error
                     .to_string()
@@ -350,7 +389,7 @@ fn the_advisories_follow_from_the_router_panel() {
         }
     }
     assert_eq!(
-        MacStatusV1::new(serving())
+        MacStatusV2::new(serving())
             .unwrap()
             .parts()
             .router

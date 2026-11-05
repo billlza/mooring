@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::Path;
 
-use mooring_agent_proto::{AgentError, Generation, IoOp, PROTOCOL, Sha256Hex, StderrTail};
+use mooring_agent_proto::{AgentError, Generation, IoOp, Sha256Hex, StderrTail, UPGRADE_SELF_TEST};
 
 use super::links::replace_link;
 use super::record::{Change, Pending, Phase, set_pending};
@@ -48,7 +48,7 @@ pub(crate) fn activate(
     let output = node
         .run_program(&installed, &["self-test"], &[])
         .map_err(|error| io_error(IoOp::SpawnProcess, &error))?;
-    if !output.success || output.stdout != format!("{PROTOCOL}\n").into_bytes() {
+    if !output.success || output.stdout != format!("{UPGRADE_SELF_TEST}\n").into_bytes() {
         return Err(AgentError::AgentSelfTestFailed {
             stderr_tail: StderrTail::scrubbed(&output.stderr, &[]),
         });

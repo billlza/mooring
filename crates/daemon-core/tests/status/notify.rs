@@ -10,7 +10,7 @@ use std::num::NonZeroU64;
 use std::str::FromStr;
 
 use mooring_agent_proto::{NoticeBody, NoticeTitle, NtfyMessage, NtfyPriority, NtfyTag};
-use mooring_daemon_core::MacStatusV1;
+use mooring_daemon_core::MacStatusV2;
 use mooring_daemon_core::alert::{AlertNotice, NoticeEvent};
 use mooring_daemon_core::notify::{alert_message, digest_message};
 use mooring_daemon_core::router::{CarrierName, RadioState, RouterReading, RouterStatus};
@@ -22,7 +22,7 @@ use serde_json::Value;
 use crate::scenarios;
 use crate::support::GRAMMAR_SHAPED_LABEL;
 
-fn scenario(name: &str) -> MacStatusV1 {
+fn scenario(name: &str) -> MacStatusV2 {
     scenarios::all()
         .into_iter()
         .find(|(found, _)| *found == name)
@@ -105,7 +105,7 @@ fn a_digest_without_pulled_usage_says_it_is_not_read() {
     for row in parts.users.values_mut() {
         row.usage = None;
     }
-    let message = digest_message(&MacStatusV1::new(parts).unwrap()).unwrap();
+    let message = digest_message(&MacStatusV2::new(parts).unwrap()).unwrap();
     let lines: Vec<&str> = message.body.as_str().lines().collect();
     assert_eq!(lines[4], "Served this cycle not read");
 }
@@ -125,7 +125,7 @@ fn a_digest_without_a_hard_stop_names_the_fair_use_line() {
         }),
     )
     .unwrap();
-    let digest = digest_message(&MacStatusV1::new(status).unwrap()).unwrap();
+    let digest = digest_message(&MacStatusV2::new(status).unwrap()).unwrap();
     assert_eq!(
         digest.body.as_str().lines().nth(1).unwrap(),
         "SIM 14 GB used with no hard stop, fair-use line 644 GB, warning at 10 GB, \
@@ -135,7 +135,7 @@ fn a_digest_without_a_hard_stop_names_the_fair_use_line() {
 
 /// Every message the scenarios produce: the digest, and each open alert's
 /// notice for every event.
-fn messages(status: &MacStatusV1) -> Vec<NtfyMessage> {
+fn messages(status: &MacStatusV2) -> Vec<NtfyMessage> {
     let mut messages = vec![digest_message(status).unwrap()];
     for alert in &status.parts().alerts {
         for event in [
@@ -173,11 +173,11 @@ fn strings(value: &Value, found: &mut Vec<String>) {
 
 /// The identifiers a status holds that must never reach a notice: user ids,
 /// aliases, IPv4 and link-layer addresses, and the router's SIM and network
-/// names and its firmware and web app versions. Labels never reach a `MacStatusV1` (it has no field for one);
+/// names and its firmware and web app versions. Labels never reach a `MacStatusV2` (it has no field for one);
 /// every fixture label and the degraded scenario's grammar-shaped label are
 /// scanned for all the same, so a status that ever gained one would be
 /// caught leaking it.
-fn forbidden(status: &MacStatusV1) -> Vec<String> {
+fn forbidden(status: &MacStatusV2) -> Vec<String> {
     let parts = status.parts();
     let mut words: Vec<String> = Vec::new();
     for (id, row) in &parts.users {
@@ -272,14 +272,14 @@ const SIM_NAME: &str = "SPN canary";
 /// `status` with its router reading, if it has one, naming the SIM
 /// [`SIM_NAME`]: the SMARTY SIM the scenarios carry reports no name
 /// (2026-10-16), so the scan would otherwise have no SIM name to look for.
-fn with_sim_name(status: MacStatusV1) -> MacStatusV1 {
+fn with_sim_name(status: MacStatusV2) -> MacStatusV2 {
     let mut parts = status.into_parts();
     if let RouterReading::Available { status: router, .. } = &mut parts.router {
         let mut named = router.as_ref().clone().into_parts();
         named.sim_spn = Some(CarrierName::parse(SIM_NAME).unwrap());
         **router = RouterStatus::new(named).unwrap();
     }
-    MacStatusV1::new(parts).unwrap()
+    MacStatusV2::new(parts).unwrap()
 }
 
 #[test]

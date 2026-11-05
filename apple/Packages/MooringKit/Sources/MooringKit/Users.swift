@@ -10,7 +10,7 @@ import Foundation
 
 /// The periods every user row's usage covers.
 public struct UsagePeriods: Decodable, Hashable, Sendable {
-    /// The end of the period counted.
+    /// Publication's calendar boundary; UsageSampleTimes gives source freshness.
     public let through: UnixTime
     public let utcDay: CalendarDate
     public let cycle: BillingCycle
@@ -32,8 +32,31 @@ public struct UsagePeriods: Decodable, Hashable, Sendable {
     }
 }
 
+/// Source sampling times; refreshing the UI does not refresh accounting.
+public struct UsageSampleTimes: Decodable, Hashable, Sendable {
+    public let detailThrough: UnixTime?
+    public let monthlyAt: UnixTime
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case detailThrough = "detail_through"
+        case monthlyAt = "monthly_at"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let object = try decoder.strictContainer(keyedBy: CodingKeys.self)
+        detailThrough = try object.decodeNullable(UnixTime.self, forKey: .detailThrough)
+        monthlyAt = try object.decode(UnixTime.self, forKey: .monthlyAt)
+        guard detailThrough.map({ $0 <= monthlyAt }) ?? true else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "detail ends after the monthly sample"))
+        }
+    }
+}
+
 /// Why the users' usage figures are unavailable.
 public enum UsageErrorKind: String, Decodable, Sendable, CaseIterable {
+    case ledgerCorrupt = "LedgerCorrupt"
+    case monthlyInconsistent = "MonthlyInconsistent"
+    case storeUnavailable = "StoreUnavailable"
     case ledgerGap = "LedgerGap"
     case duplicateLedger = "DuplicateLedger"
     case missingLedger = "MissingLedger"
@@ -51,7 +74,7 @@ public enum UsageErrorKind: String, Decodable, Sendable, CaseIterable {
 /// none does, or that the daemon pulled no ledger from any node, so none
 /// is read. Usage is never shown as zeros.
 public enum UsageView: Decodable, Hashable, Sendable {
-    case report(periods: UsagePeriods)
+    case report(periods: UsagePeriods, sampledAt: [NodeId: UsageSampleTimes])
     case unavailable(reason: UsageErrorKind)
     case notPulled
 
@@ -59,7 +82,10 @@ public enum UsageView: Decodable, Hashable, Sendable {
         let (tag, value) = try decoder.variant()
         switch (tag, value) {
         case ("report", let value?):
-            self = .report(periods: try value.fields("periods").field(UsagePeriods.self, "periods"))
+            let object = try value.fields("periods", "sampled_at")
+            self = .report(
+                periods: try object.field(UsagePeriods.self, "periods"),
+                sampledAt: try object.field([NodeId: UsageSampleTimes].self, "sampled_at"))
         case ("unavailable", let value?):
             self = .unavailable(reason: try value.fields("reason").field(UsageErrorKind.self, "reason"))
         case ("not_pulled", nil):
@@ -228,15 +254,20 @@ public struct CycleShares: Decodable, Hashable, Sendable {
 
 /// A user's usage over the report's periods.
 public struct UserUsage: Decodable, Hashable, Sendable {
-    public let today: Traffic
-    public let cycle: Traffic
-    public let month: Traffic
-    public let lifetime: Traffic
-    public let cycleServedBytes: UInt64
-    public let cycleByNode: [NodeId: Traffic]
-    public let cycleByProtocol: ProtocolTraffic
-    /// `nil` when the user used nothing this cycle.
+    public let today: Traffic?
+    public let cycle: Traffic?
+    public let month: Traffic?
+    public let lifetime: Traffic?
+    public let cycleServedBytes: UInt64?
+    public let cycleByNode: [NodeId: Traffic]?
+    public let cycleByProtocol: ProtocolTraffic?
+    /// `nil` when the cycle is unavailable or has no traffic.
     public let cycleShares: CycleShares?
+
+    /// A missing historical split is unavailable, not a zero count.
+    public var hasIncompleteHistory: Bool {
+        today == nil || cycle == nil || month == nil || lifetime == nil
+    }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case today, cycle, month, lifetime
@@ -248,14 +279,18 @@ public struct UserUsage: Decodable, Hashable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let object = try decoder.strictContainer(keyedBy: CodingKeys.self)
-        today = try object.decode(Traffic.self, forKey: .today)
-        cycle = try object.decode(Traffic.self, forKey: .cycle)
-        month = try object.decode(Traffic.self, forKey: .month)
-        lifetime = try object.decode(Traffic.self, forKey: .lifetime)
-        cycleServedBytes = try object.decode(UInt64.self, forKey: .cycleServedBytes)
-        cycleByNode = try object.decode([NodeId: Traffic].self, forKey: .cycleByNode)
-        cycleByProtocol = try object.decode(ProtocolTraffic.self, forKey: .cycleByProtocol)
+        today = try object.decodeNullable(Traffic.self, forKey: .today)
+        cycle = try object.decodeNullable(Traffic.self, forKey: .cycle)
+        month = try object.decodeNullable(Traffic.self, forKey: .month)
+        lifetime = try object.decodeNullable(Traffic.self, forKey: .lifetime)
+        cycleServedBytes = try object.decodeNullable(UInt64.self, forKey: .cycleServedBytes)
+        cycleByNode = try object.decodeNullable([NodeId: Traffic].self, forKey: .cycleByNode)
+        cycleByProtocol = try object.decodeNullable(ProtocolTraffic.self, forKey: .cycleByProtocol)
         cycleShares = try object.decodeNullable(CycleShares.self, forKey: .cycleShares)
+        let present = [cycle != nil, cycleServedBytes != nil, cycleByNode != nil, cycleByProtocol != nil]
+        guard present.allSatisfy({ $0 }) || (present.allSatisfy({ !$0 }) && cycleShares == nil) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "cycle figures must be present together or unavailable together"))
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `contract/status-fixtures/variants.json`: one value of every variant of
-//! every enum a `MacStatusV1` carries, the model's and agent-proto's
+//! every enum a `MacStatusV2` carries, the model's and agent-proto's
 //! included, and of the console document's `RouterAdvisory`; and, for the
 //! records no scenario fills, one filled value: a plan's line of each
 //! kind, and a reported node that the operator halted after every hold
@@ -18,6 +18,8 @@
 //! The same module checks that every JSON object of every status fixture,
 //! and of this document, refuses an unknown key, as `deny_unknown_fields`
 //! promises.
+
+use std::collections::BTreeMap;
 
 use std::net::Ipv4Addr;
 use std::num::NonZeroU64;
@@ -59,7 +61,7 @@ use crate::router::{
 };
 use crate::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, ForecastView,
-    InChainOutcome, MacStatusV1, MeterAccuracy, NodeAgentState, NodeReport, OwnNetworkInput,
+    InChainOutcome, MacStatusV2, MeterAccuracy, NodeAgentState, NodeReport, OwnNetworkInput,
     PowerSource, ProbeStage, ProcessEnd, UsageView,
 };
 use crate::usage::ActiveNow;
@@ -352,6 +354,7 @@ fn variants() -> Variants {
         ],
         usage_view: vec![
             UsageView::Report {
+                sampled_at: BTreeMap::new(),
                 periods: UsagePeriods::ending(sim.cycle(), now).unwrap(),
             },
             UsageView::Unavailable {
@@ -1197,7 +1200,7 @@ fn every_object_of_every_status_document_denies_unknown_keys() {
         include_bytes!("../../../../contract/status-fixtures/degraded.json"),
         include_bytes!("../../../../contract/status-fixtures/down.json"),
     ] {
-        counts.push(each_object_denies_unknown_keys::<MacStatusV1>(bytes));
+        counts.push(each_object_denies_unknown_keys::<MacStatusV2>(bytes));
     }
     counts.push(each_object_denies_unknown_keys::<Variants>(FIXTURE));
     // Each document is many objects deep; a count this low would mean the

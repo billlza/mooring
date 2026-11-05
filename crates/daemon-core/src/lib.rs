@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The console core of the exit Mac (design §15, console spec B.1-B.9): the
-//! data model of `mooringctl status --follow --json` ([`MacStatusV1`]) and
+//! data model of `mooringctl status --follow --json` ([`MacStatusV2`]) and
 //! the pure logic the daemon (M5) and Mooring.app (M7) build on.
 //!
 //! - [`exit`]: the exit's state machine: preflight, supervision of
@@ -21,8 +21,8 @@
 //! - [`radio_history`]: the sample each poll of the M7 leaves, its line in
 //!   the day files the store keeps, and the events and hourly statistics
 //!   `router history` prints.
-//! - [`status`]: [`MacStatusV1`] itself.
-//! - [`snapshot`]: a [`MacStatusV1`] assembled from what the daemon holds
+//! - [`status`]: [`MacStatusV2`] itself.
+//! - [`snapshot`]: a [`MacStatusV2`] assembled from what the daemon holds
 //!   at one instant.
 //! - [`console`]: [`ConsoleStatus`], the console's document: the
 //!   deployment's status, or the router alone before `exit init`.
@@ -105,5 +105,5 @@ pub use policy::{ExpiryState, PolicyAction, QuotaState, UserAction};
 pub use radio_history::{RadioHistory, RadioSample};
 pub use router::{RouterReading, RouterStatus};
 pub use snapshot::{Ledgers, NodePoll, SimTotals, SnapshotError, StatusInputs, assemble};
-pub use status::{MAC_STATUS_VERSION, MacStatusParts, MacStatusV1};
+pub use status::{MAC_STATUS_VERSION, MacStatusParts, MacStatusV2};
 pub use usage::{NodeLedger, UsageReport, UserUsage};

@@ -4,7 +4,7 @@
 //! decodes from `mooringctl status --json`, generated here and pinned byte
 //! for byte like the status fixtures. Before a deployment exists the
 //! document carries the router alone; once it exists, the deployment's
-//! `MacStatusV1`.
+//! `MacStatusV2`.
 //!
 //! To change one, change its builder, write [`encode`]'s output over the
 //! file, and review the diff.

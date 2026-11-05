@@ -26,7 +26,7 @@ use mooring_daemon_core::router::{
 };
 use mooring_daemon_core::status::{DegradedReason, DownReason, ExitState, ForecastView, UsageView};
 use mooring_daemon_core::{
-    AllowedNetwork, ForeignNetworkFinding, MacStatusParts, MacStatusV1, ReportError,
+    AllowedNetwork, ForeignNetworkFinding, MacStatusParts, MacStatusV2, ReportError,
     ReportErrorKind,
 };
 use mooring_model::collections::NonEmpty;
@@ -49,7 +49,7 @@ fn scenario(name: &str) -> MacStatusParts {
 }
 
 fn report(parts: MacStatusParts) -> MacReportV1 {
-    project(&MacStatusV1::new(parts).unwrap()).unwrap()
+    project(&MacStatusV2::new(parts).unwrap()).unwrap()
 }
 
 fn secs(time: UnixTime) -> u64 {
@@ -218,7 +218,7 @@ fn the_serving_report_keeps_the_allowlisted_values() {
     assert_eq!(reported.saturation, ReportSaturation::Clear);
     assert_eq!(capacity.saturation, Saturation::Clear);
 
-    let UsageView::Report { periods } = status.usage else {
+    let UsageView::Report { periods, .. } = status.usage else {
         panic!("the serving scenario has usage");
     };
     assert_eq!(
@@ -231,7 +231,7 @@ fn the_serving_report_keeps_the_allowlisted_values() {
     for (id, row) in &status.users {
         let user = &parts.users[&ReportUserId::new(id.as_str()).unwrap()];
         assert_eq!(user.status, ReportUserStatus::Active);
-        assert_eq!(user.cycle, Some(row.usage.as_ref().unwrap().cycle()));
+        assert_eq!(user.cycle, row.usage.as_ref().unwrap().cycle());
         assert_eq!(
             user.last_seen.map(|time| time.as_secs()),
             row.activity.last_seen.map(secs)
@@ -326,6 +326,34 @@ fn a_report_without_pulled_usage_keeps_it_unavailable() {
     assert!(parts.users.values().all(|user| user.cycle.is_none()));
 }
 
+#[test]
+fn a_partial_cycle_never_projects_as_a_complete_total_or_zero() {
+    let mut parts = scenario("serving");
+    let first = parts.users.values_mut().next().unwrap();
+    let mut partial = serde_json::to_value(first.usage.as_ref().unwrap()).unwrap();
+    for field in [
+        "cycle",
+        "cycle_served_bytes",
+        "cycle_by_node",
+        "cycle_by_protocol",
+        "cycle_shares",
+    ] {
+        partial[field] = Value::Null;
+    }
+    first.usage = Some(serde_json::from_value(partial).unwrap());
+    let status = MacStatusV2::new(parts).unwrap();
+    let report = project(&status).unwrap().into_parts();
+    assert_eq!(report.usage, ReportUsage::Unavailable);
+    assert!(report.users.values().all(|user| user.cycle.is_none()));
+    let digest = digest_message(&status).unwrap();
+    assert!(
+        digest
+            .body
+            .as_str()
+            .contains("Served this cycle unavailable")
+    );
+}
+
 /// A down exit with the router unreachable, no capacity sample, no
 /// forecast and no usage reports each as absent, never as zero.
 #[test]
@@ -390,7 +418,7 @@ fn every_exit_state_reports_its_own_phase() {
     for (state, phase) in states {
         let mut status = serving.clone();
         status.exit.state = state;
-        let checked = MacStatusV1::new(status).unwrap();
+        let checked = MacStatusV2::new(status).unwrap();
         assert_eq!(project(&checked).unwrap().parts().exit.phase, phase);
         let digest = digest_message(&checked).unwrap();
         let first = digest.body.as_str().lines().next().unwrap();
@@ -653,11 +681,11 @@ fn revoked_users_are_left_out() {
 /// address, link-layer address and interface name in it, the router's SIM
 /// and network names and its firmware and web app versions, and the users'
 /// aliases. Labels never reach a
-/// `MacStatusV1` (it has no field for one); every label of every fixture
+/// `MacStatusV2` (it has no field for one); every label of every fixture
 /// deployment, and the grammar-shaped label the degraded scenario gives a
 /// user, are scanned for all the same, so a status that ever gained one
 /// would be caught leaking it.
-fn identifiers(status: &MacStatusV1) -> Vec<String> {
+fn identifiers(status: &MacStatusV2) -> Vec<String> {
     fn leaves(value: &Value, found: &mut Vec<String>) {
         match value {
             Value::String(text) => found.push(text.clone()),
@@ -777,7 +805,7 @@ fn a_status_too_large_for_a_report_is_refused() {
     status.users = (0..=1024_u64)
         .map(|bits| (UserId::from_low_bits(bits), row.clone()))
         .collect();
-    let status = MacStatusV1::new(status).unwrap();
+    let status = MacStatusV2::new(status).unwrap();
     let error = project(&status).unwrap_err();
     assert_eq!(
         error,

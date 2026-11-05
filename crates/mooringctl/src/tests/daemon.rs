@@ -1705,8 +1705,8 @@ fn a_daemon_of_no_or_another_protocol_is_refused_before_its_replies() {
             "mooringctl: the daemon did not name its control protocol on its first line, as a daemon built before this mooringctl may not: restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
         ),
         (
-            vec![b"{\"control_protocol\":2}\n".to_vec(), available_line(NOW)],
-            "mooringctl: the daemon speaks control protocol 2 and this mooringctl speaks 1: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+            vec![b"{\"control_protocol\":1}\n".to_vec(), available_line(NOW)],
+            "mooringctl: the daemon speaks control protocol 1 and this mooringctl speaks 2: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
         ),
         (
             vec![

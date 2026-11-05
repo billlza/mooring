@@ -139,6 +139,22 @@ impl CapacityError {
 /// bytes.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UsageError {
+    /// The persisted usage document has an unsupported version or invalid shape.
+    #[error("the collected usage ledger is invalid: {message}")]
+    LedgerCorrupt {
+        /// The bounded decoder's diagnostic, without usage payloads.
+        message: String,
+    },
+    /// Monthly totals decreased or contradict verified detailed bins.
+    #[error("{node}'s monthly usage contradicts an earlier reading or its detailed bins")]
+    MonthlyInconsistent {
+        /// The node whose inputs disagree.
+        node: NodeId,
+    },
+    /// A failed usage-store operation prevents publishing durable figures.
+    #[error("the collected usage store is unavailable")]
+    StoreUnavailable,
+
     /// A node's series do not follow on from its lifetime base and from one
     /// another without a gap or an overlap.
     #[error(
@@ -237,6 +253,12 @@ kinds! {
     /// usage can be shown, so it is serialised as its name.
     #[derive(Serialize, Deserialize)]
     pub enum UsageErrorKind {
+        /// See [`UsageError::LedgerCorrupt`].
+        LedgerCorrupt,
+        /// See [`UsageError::MonthlyInconsistent`].
+        MonthlyInconsistent,
+        /// See [`UsageError::StoreUnavailable`].
+        StoreUnavailable,
         /// See [`UsageError::LedgerGap`].
         LedgerGap,
         /// See [`UsageError::DuplicateLedger`].
@@ -267,6 +289,9 @@ impl UsageError {
     #[must_use]
     pub const fn kind(&self) -> UsageErrorKind {
         match self {
+            Self::LedgerCorrupt { .. } => UsageErrorKind::LedgerCorrupt,
+            Self::MonthlyInconsistent { .. } => UsageErrorKind::MonthlyInconsistent,
+            Self::StoreUnavailable => UsageErrorKind::StoreUnavailable,
             Self::LedgerGap { .. } => UsageErrorKind::LedgerGap,
             Self::DuplicateLedger { .. } => UsageErrorKind::DuplicateLedger,
             Self::MissingLedger { .. } => UsageErrorKind::MissingLedger,
@@ -763,11 +788,18 @@ impl CarrierFaultKind {
     }
 }
 
-/// A [`crate::status::MacStatusV1`] is inconsistent.
+/// A [`crate::status::MacStatusV2`] is inconsistent.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StatusError {
-    /// The document is not version 1.
-    #[error("a MacStatusV1 document has version 1, not {found}")]
+    /// A sample is from a node missing from the status, from the future,
+    /// or its detailed range ends after its monthly sample.
+    #[error("usage sample times for {node} are inconsistent")]
+    UsageSampleInvalid {
+        /// The source node.
+        node: NodeId,
+    },
+    /// The document is not version 2.
+    #[error("a MacStatusV2 document has version 2, not {found}")]
     UnsupportedVersion {
         /// The version found.
         found: u32,
@@ -794,13 +826,15 @@ pub enum StatusError {
     },
     /// The document's advisories are not the ones its router panel calls
     /// for.
-    #[error("a MacStatusV1 document's advisories do not follow from its router panel")]
+    #[error("a MacStatusV2 document's advisories do not follow from its router panel")]
     AdvisoriesMismatch,
 }
 
 kinds! {
     /// The kind of a [`StatusError`].
     pub enum StatusErrorKind {
+        /// See [`StatusError::UsageSampleInvalid`].
+        UsageSampleInvalid,
         /// See [`StatusError::UnsupportedVersion`].
         UnsupportedVersion,
         /// See [`StatusError::UnknownNode`].
@@ -819,6 +853,7 @@ impl StatusError {
     #[must_use]
     pub const fn kind(&self) -> StatusErrorKind {
         match self {
+            Self::UsageSampleInvalid { .. } => StatusErrorKind::UsageSampleInvalid,
             Self::UnsupportedVersion { .. } => StatusErrorKind::UnsupportedVersion,
             Self::UnknownNode { .. } => StatusErrorKind::UnknownNode,
             Self::UsageMismatch { .. } => StatusErrorKind::UsageMismatch,

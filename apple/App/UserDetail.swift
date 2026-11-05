@@ -45,15 +45,20 @@ struct UserDetail: View {
                     LabeledContent("This cycle", value: figure(usage.cycle))
                     LabeledContent("This month", value: figure(usage.month))
                     LabeledContent("Lifetime", value: figure(usage.lifetime))
-                    LabeledContent("Served this cycle", value: bytes(usage.cycleServedBytes))
-                    LabeledContent("REALITY this cycle", value: figure(usage.cycleByProtocol.reality))
-                    LabeledContent("Hysteria2 this cycle", value: figure(usage.cycleByProtocol.hy2))
-                    ForEach(usage.cycleByNode.sorted { $0.key < $1.key }, id: \.key) { node, traffic in
-                        LabeledContent(String(localized: "On \(node.text) this cycle"), value: figure(traffic))
+                    LabeledContent("Served this cycle", value: usage.cycleServedBytes.map(bytes) ?? String(localized: "unavailable"))
+                    LabeledContent("REALITY this cycle", value: figure(usage.cycleByProtocol?.reality))
+                    LabeledContent("Hysteria2 this cycle", value: figure(usage.cycleByProtocol?.hy2))
+                    if let byNode = usage.cycleByNode {
+                        ForEach(byNode.sorted { $0.key < $1.key }, id: \.key) { node, traffic in
+                            LabeledContent(String(localized: "On \(node.text) this cycle"), value: figure(traffic))
+                        }
                     }
                 } header: {
                     Text("Usage")
                 } footer: {
+                    if usage.hasIncompleteHistory {
+                        Text("Some earlier usage could not be recovered. Unavailable figures are not zero.")
+                    }
                     if row.row.accuracy.realityDownlinkCountedAtClose {
                         Text("REALITY downloads are counted when their connection closes, so a long one shows late.")
                     }

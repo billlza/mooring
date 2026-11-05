@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "at": 1791464430,
   "exit": {
     "state": {
@@ -225,6 +225,16 @@
           "next_start": "2026-11-01"
         },
         "utc_month_start": "2026-10-01"
+      },
+      "sampled_at": {
+        "ams1": {
+          "detail_through": 1791460800,
+          "monthly_at": 1791460800
+        },
+        "lon1": {
+          "detail_through": 1791460800,
+          "monthly_at": 1791460800
+        }
       }
     }
   },

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! [`MacStatusV1`]: one line of `mooringctl status --follow --json`, and
+//! [`MacStatusV2`]: one line of `mooringctl status --follow --json`, and
 //! the snapshot in `status.json` (design §15, console spec B.1 and B.2).
 //! The name avoids a clash with the agent's `StatusV1` (critique A-14).
 //!
@@ -53,8 +53,8 @@ use crate::router::{RouterAdvisory, RouterReading};
 use crate::usage::{UsageAccuracy, UserActivity, UserUsage};
 use crate::wire::mac_time;
 
-/// The version [`MacStatusV1`] documents carry.
-pub const MAC_STATUS_VERSION: u32 = 1;
+/// The version [`MacStatusV2`] documents carry.
+pub const MAC_STATUS_VERSION: u32 = 2;
 
 /// Where a probe failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -537,13 +537,15 @@ pub struct SimMeterStatus {
 }
 
 /// The users' usage figures, why there are none, or that none were pulled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum UsageView {
     /// Every user row carries usage over these periods.
     Report {
         /// The periods.
         periods: UsagePeriods,
+        /// Actual per-node detail and monthly sample times.
+        sampled_at: BTreeMap<NodeId, crate::usage::UsageSampleTimes>,
     },
     /// No user row carries usage.
     Unavailable {
@@ -748,7 +750,7 @@ pub struct NodeRow {
     pub agent: NodeAgentState,
 }
 
-/// Every part of a [`MacStatusV1`], unchecked.
+/// Every part of a [`MacStatusV2`], unchecked.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MacStatusParts {
     /// When the daemon produced the status.
@@ -787,7 +789,7 @@ pub struct MacStatusParts {
 /// follow from its panel is refused (`AdvisoriesMismatch`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "MacStatusRepr", into = "MacStatusRepr")]
-pub struct MacStatusV1(MacStatusParts);
+pub struct MacStatusV2(MacStatusParts);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -806,12 +808,24 @@ struct MacStatusRepr {
     alerts: Vec<OpenAlert>,
 }
 
-impl MacStatusV1 {
+impl MacStatusV2 {
     /// Checks `parts` (see the type's invariant).
     pub fn new(parts: MacStatusParts) -> Result<Self, StatusError> {
         for node in referenced_nodes(&parts) {
             if !parts.nodes.contains_key(node) {
                 return Err(StatusError::UnknownNode { node: node.clone() });
+            }
+        }
+        if let UsageView::Report { sampled_at, .. } = &parts.usage {
+            for (node, sample) in sampled_at {
+                if !parts.nodes.contains_key(node)
+                    || sample.monthly_at > parts.at
+                    || sample
+                        .detail_through
+                        .is_some_and(|at| at > sample.monthly_at)
+                {
+                    return Err(StatusError::UsageSampleInvalid { node: node.clone() });
+                }
             }
         }
         let with_usage = matches!(parts.usage, UsageView::Report { .. });
@@ -843,7 +857,7 @@ impl MacStatusV1 {
     }
 }
 
-impl TryFrom<MacStatusRepr> for MacStatusV1 {
+impl TryFrom<MacStatusRepr> for MacStatusV2 {
     type Error = StatusError;
 
     fn try_from(repr: MacStatusRepr) -> Result<Self, Self::Error> {
@@ -869,8 +883,8 @@ impl TryFrom<MacStatusRepr> for MacStatusV1 {
     }
 }
 
-impl From<MacStatusV1> for MacStatusRepr {
-    fn from(status: MacStatusV1) -> Self {
+impl From<MacStatusV2> for MacStatusRepr {
+    fn from(status: MacStatusV2) -> Self {
         let parts = status.0;
         Self {
             version: MAC_STATUS_VERSION,
@@ -895,7 +909,9 @@ fn referenced_nodes(parts: &MacStatusParts) -> Vec<&NodeId> {
         nodes.extend(&row.nodes);
         nodes.extend(row.activity.by_node.keys());
         if let Some(usage) = &row.usage {
-            nodes.extend(usage.cycle_by_node().keys());
+            if let Some(by_node) = usage.cycle_by_node() {
+                nodes.extend(by_node.keys());
+            }
             if let Some(shares) = usage.cycle_shares() {
                 nodes.extend(shares.by_node().keys());
             }

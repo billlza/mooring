@@ -64,6 +64,11 @@ text_newtype!(
 /// construction (a test checks each against [`UnitName::new`]'s rule), so
 /// that no conversion of a fixed name can fail.
 impl UnitName {
+    /// The watch service.
+    pub fn watch() -> Self {
+        Self("mooring-watch.service".to_owned())
+    }
+
     /// An engine's service, `mooring-xray.service` or
     /// `mooring-hy2.service` (design §5.2).
     pub fn engine(engine: EngineUser) -> Self {

@@ -98,6 +98,14 @@ pub enum LineRequest {
     Rollback,
     /// Report the node status ([`crate::StatusV1`]).
     Status,
+    /// Ops only: inspect the actual watch process, without changing it.
+    WatchRuntime,
+    /// Ops only: restart a stale watch after a confirmed agent upgrade,
+    /// then verify the actual executable. Holds and halt are preserved.
+    RefreshWatch {
+        /// The answering and running watch agent must match this digest.
+        expected_agent_sha: Sha256Hex,
+    },
     /// Report one month of accounting ([`crate::UsageV1`]).
     Usage {
         /// The month.
@@ -179,6 +187,10 @@ closed_enum! {
         Rollback,
         /// [`LineRequest::Status`].
         Status,
+        /// [`LineRequest::WatchRuntime`].
+        WatchRuntime,
+        /// [`LineRequest::RefreshWatch`].
+        RefreshWatch,
         /// [`LineRequest::Usage`].
         Usage,
         /// [`LineRequest::UsageSeries`].
@@ -257,6 +269,8 @@ impl LineRequest {
             Self::TxnStatus { .. } => RequestKind::TxnStatus,
             Self::Rollback => RequestKind::Rollback,
             Self::Status => RequestKind::Status,
+            Self::WatchRuntime => RequestKind::WatchRuntime,
+            Self::RefreshWatch { .. } => RequestKind::RefreshWatch,
             Self::Usage { .. } => RequestKind::Usage,
             Self::UsageSeries(_) => RequestKind::UsageSeries,
             Self::Events { .. } => RequestKind::Events,

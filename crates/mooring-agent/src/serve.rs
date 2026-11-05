@@ -133,6 +133,12 @@ pub(crate) fn line_reply(
             Ok(Response::Events(Box::new(journal::page(paths, since)?)))
         }
         LineRequest::Status => Ok(Response::Status(Box::new(status::status(paths, node)?))),
+        LineRequest::WatchRuntime => Ok(Response::WatchRuntime(crate::runtime::inspect(
+            paths, node,
+        )?)),
+        LineRequest::RefreshWatch { expected_agent_sha } => Ok(Response::WatchRefreshed(
+            crate::runtime::refresh(paths, node, expected_agent_sha)?,
+        )),
         LineRequest::Usage { month } => Ok(Response::Usage(Box::new(accounting::usage(
             paths,
             node.now(),
