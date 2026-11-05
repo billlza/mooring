@@ -52,6 +52,8 @@ mod paths;
 #[cfg(any(target_os = "linux", test))]
 mod reflect;
 #[cfg(any(target_os = "linux", test))]
+mod runtime;
+#[cfg(any(target_os = "linux", test))]
 mod serve;
 #[cfg(any(target_os = "linux", test))]
 mod status;

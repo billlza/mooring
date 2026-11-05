@@ -41,7 +41,7 @@ pub(crate) fn upgrade_agent(
     let running = running_agent(session.as_mut())?;
     if running == sha {
         writeln!(out, "{node} already runs agent {sha}").map_err(output)?;
-        return Ok(());
+        return super::runtime::converge(env, out, node, interface, sha);
     }
     let uploaded = upload_missing(session.as_mut(), [sha].into(), &mut |_| Ok(bytes.clone()))?;
     writeln!(
@@ -72,7 +72,7 @@ pub(crate) fn upgrade_agent(
         generation.get()
     )
     .map_err(output)?;
-    Ok(())
+    super::runtime::converge(env, out, node, interface, sha)
 }
 
 /// The digest of the agent the node runs, from its `Hello`.

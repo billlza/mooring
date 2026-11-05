@@ -22,6 +22,7 @@ pub(crate) mod hub;
 pub(crate) mod log;
 pub(crate) mod radio;
 pub(crate) mod serve;
+pub(crate) mod usage;
 
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
@@ -70,6 +71,8 @@ pub(crate) struct Intervals {
     pub(crate) router_poll: Duration,
     /// Each node's poll.
     pub(crate) node_poll: Duration,
+    /// A node accounting collection cycle.
+    pub(crate) usage_pull: Duration,
     /// The longest between two published statuses.
     pub(crate) publish: Duration,
     /// How long after the power helper ended it is started again.
@@ -86,6 +89,7 @@ impl Intervals {
         tick: deployed::TICK,
         router_poll: POLL_INTERVAL,
         node_poll: deployed::NODE_POLL_EVERY,
+        usage_pull: Duration::from_secs(60),
         publish: deployed::PUBLISH_EVERY,
         helper_restart: deployed::HELPER_RESTART_EVERY,
         meter_tick: METER_TICK,

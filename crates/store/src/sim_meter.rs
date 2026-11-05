@@ -36,23 +36,29 @@ pub const SIM_METER_FILE: &str = "sim-meter.json";
 /// anything but a regular file where the meter belongs, a link included,
 /// is `NotRegularFile`, and nothing is read through it either.
 pub fn read_sim_meter(support_dir: &Path, limit: usize) -> Result<Option<Vec<u8>>, StoreError> {
-    let Some(dir) = existing_private_dir(support_dir, USAGE_DIRECTORY, IoOp::ReadSimMeter)? else {
+    read_usage_document(support_dir, SIM_METER_FILE, limit, IoOp::ReadSimMeter)
+}
+
+/// A fixed-name usage document, through the same regular-file boundary.
+pub(crate) fn read_usage_document(
+    support_dir: &Path,
+    name: &str,
+    limit: usize,
+    op: IoOp,
+) -> Result<Option<Vec<u8>>, StoreError> {
+    let Some(dir) = existing_private_dir(support_dir, USAGE_DIRECTORY, op)? else {
         return Ok(None);
     };
-    let path = dir.join(SIM_METER_FILE);
+    let path = dir.join(name);
     let Some(RegularFile { file, .. }) =
-        existing_regular_file(&path, OpenOptions::new().read(true), IoOp::ReadSimMeter)?
+        existing_regular_file(&path, OpenOptions::new().read(true), op)?
     else {
         return Ok(None);
     };
     let mut bytes = Vec::new();
     file.take(u64::try_from(limit).unwrap_or(u64::MAX))
         .read_to_end(&mut bytes)
-        .map_err(|source| StoreError::Io {
-            op: IoOp::ReadSimMeter,
-            path,
-            source,
-        })?;
+        .map_err(|source| StoreError::Io { op, path, source })?;
     Ok(Some(bytes))
 }
 
@@ -61,6 +67,15 @@ pub fn read_sim_meter(support_dir: &Path, limit: usize) -> Result<Option<Vec<u8>
 /// usage path that is not a directory (a link included) is
 /// `DirNotDirectory`.
 pub fn write_sim_meter(support_dir: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+    write_usage_document(support_dir, SIM_METER_FILE, bytes)
+}
+
+/// Durably replaces a fixed-name usage document with mode 0600.
+pub(crate) fn write_usage_document(
+    support_dir: &Path,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), StoreError> {
     let dir = private_dir(support_dir, USAGE_DIRECTORY, IoOp::CreateUsageDir)?;
-    write_durably(&dir, SIM_METER_FILE, bytes)
+    write_durably(&dir, name, bytes)
 }

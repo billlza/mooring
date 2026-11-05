@@ -36,6 +36,10 @@ use crate::router::error::RouterError;
 /// A failure on the Mac rather than at the M7.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LocalError {
+    /// Collected usage is inconsistent or cannot be decoded.
+    #[error("collected user usage is invalid")]
+    CollectedUsage(#[source] mooring_daemon_core::error::UsageError),
+
     /// `HOME` is unset or not an absolute path.
     #[error("HOME is not set to an absolute path")]
     Home,
@@ -803,6 +807,18 @@ pub(crate) enum LocalError {
         expected: Sha256Hex,
         /// The agent the node's `Hello` names.
         found: Sha256Hex,
+    },
+    /// The control upgrade is committed, but watch convergence was not verified.
+    #[error(
+        "{node}: watch executable {found:?} is not the expected {expected}; the control agent activation may already be committed"
+    )]
+    WatchNotSwitched {
+        /// The node.
+        node: NodeId,
+        /// The desired executable.
+        expected: Sha256Hex,
+        /// The running watch, if there was one.
+        found: Option<Sha256Hex>,
     },
     /// The node does not run what Mooring supports.
     #[error("the node does not run {wanted}: it reports {found}")]

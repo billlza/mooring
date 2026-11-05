@@ -15,7 +15,7 @@ use crate::policy::QuotaState;
 use crate::router::{RouterReading, RouterUnavailableReason};
 use crate::snapshot::{Ledgers, SimTotals, StatusInputs, assemble};
 use crate::status::{
-    AgentUnreachable, ExitSection, ExitState, MacEngines, MacStatusV1, MeterAccuracy,
+    AgentUnreachable, ExitSection, ExitState, MacEngines, MacStatusV2, MeterAccuracy,
     NodeAgentState, PowerSource, PowerStatus, UsageView,
 };
 use crate::usage::ActiveNow;
@@ -58,7 +58,7 @@ fn at() -> UnixTime {
 
 /// The status assembled before any node poll, with `ledgers` and the nodes
 /// the last poll did not reach.
-fn assembled(ledgers: Ledgers<'_>, unreachable: &BTreeMap<NodeId, NodeAgentState>) -> MacStatusV1 {
+fn assembled(ledgers: Ledgers<'_>, unreachable: &BTreeMap<NodeId, NodeAgentState>) -> MacStatusV2 {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
     assemble(StatusInputs {
         deployment: &fixture.deployment,

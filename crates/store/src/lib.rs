@@ -115,6 +115,7 @@ mod status_snapshot;
 mod store;
 #[cfg(test)]
 mod tests;
+mod user_usage;
 
 pub use allowed_networks::{
     ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
@@ -142,3 +143,5 @@ pub use secrets::{
 pub use sim_meter::{SIM_METER_FILE, USAGE_DIRECTORY, read_sim_meter, write_sim_meter};
 pub use status_snapshot::{STATUS_SNAPSHOT_FILE, write_status_snapshot};
 pub use store::{LOCK_FILE, STATE_FILE, Store};
+
+pub use user_usage::{USER_USAGE_FILE, read_user_usage, write_user_usage};

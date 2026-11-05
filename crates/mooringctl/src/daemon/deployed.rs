@@ -32,7 +32,7 @@ use mooring_daemon_core::network::NetworkCheck;
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::power::{HelperCommand, HelperEvent};
 use mooring_daemon_core::router::RouterReading;
-use mooring_daemon_core::snapshot::{Ledgers, NodePoll, SimTotals, StatusInputs, assemble};
+use mooring_daemon_core::snapshot::{NodePoll, SimTotals, StatusInputs, assemble};
 use mooring_daemon_core::status::{
     AgentUnreachable, DegradedReason, DrainRecord, ExitState, NodeAgentState, OwnNetworkInput,
     PowerSource, PowerStatus,
@@ -139,6 +139,8 @@ pub(crate) struct Deployed<'e, 'a> {
     /// The declarations last read, for the line that logs a change of the
     /// set by its counts; none before the first read that succeeds.
     declared: Option<OwnNetworks>,
+    usage: super::usage::Collector,
+    usage_failure: Option<String>,
     nodes_polled: Option<Instant>,
     polls: BTreeMap<NodeId, NodePoll>,
     unreachable: BTreeMap<NodeId, NodeAgentState>,
@@ -264,6 +266,8 @@ impl<'e, 'a> Deployed<'e, 'a> {
             services_failure: None,
             declarations_failure: None,
             declared: None,
+            usage: super::usage::Collector::open(support_dir, intervals.usage_pull),
+            usage_failure: None,
             nodes_polled: None,
             polls: BTreeMap::new(),
             unreachable: BTreeMap::new(),
@@ -360,11 +364,55 @@ impl<'e, 'a> Deployed<'e, 'a> {
         self.note_meter(log, now)?;
         let state_changed = previous.as_ref() != Some(&section.state)
             || self.published_power != Some(section.power);
+        self.usage
+            .maintain(deployment, now, self.intervals.usage_pull);
+        if self.allow_sleep.is_none()
+            && !matches!(&section.state, ExitState::Paused)
+            && let Ok(egress) = egress_name.as_ref()
+        {
+            let room = self
+                .machine
+                .next_probe_in(self.begun.elapsed(), deployment)
+                .map_or(Duration::from_secs(4), |left| {
+                    left.saturating_sub(Duration::from_secs(2))
+                        .min(Duration::from_secs(4))
+                });
+            if room >= Duration::from_secs(1)
+                && let Some((node, poll)) = self.usage.tick(
+                    self.env,
+                    deployment,
+                    egress,
+                    now,
+                    room,
+                    self.intervals.usage_pull,
+                )
+            {
+                self.unreachable.remove(&node);
+                self.polls.insert(node, poll);
+            }
+        }
+        note_failure(
+            log,
+            now,
+            &mut self.usage_failure,
+            self.usage.failure().map(str::to_owned),
+            "usage collection recovered",
+        )?;
+        for gap in self.usage.take_gaps() {
+            say(log, now, &gap)?;
+        }
         let stale = self
             .published
             .as_ref()
             .is_none_or(|(at, _)| at.elapsed() >= self.intervals.publish);
         if state_changed || stale {
+            // All I/O above may cross a UTC billing boundary. Publish the
+            // fresh clock and recount the meter in that same calendar.
+            let now = (env.clock)()?;
+            let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), now)
+                .map_err(LocalError::Cycle)?;
+            let counted = self.meter.meter()?;
+            let bytes = counted.cycle_bytes(cycle);
             let router = self.router.clone();
             let exit_state = section.state.clone();
             let section_power = section.power;
@@ -382,8 +430,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 },
                 router,
                 capacity: None,
-                // This build pulls no `UsageSeries` (design §15.2, M5).
-                ledgers: Ledgers::NotPulled,
+                ledgers: self.usage.ledgers(),
                 through: now,
                 polls: &self.polls,
                 unreachable: &self.unreachable,

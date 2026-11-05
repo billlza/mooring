@@ -76,6 +76,8 @@ impl Role {
             RequestKind::Hello
             | RequestKind::HaveBlobs
             | RequestKind::PutBlob
+            | RequestKind::WatchRuntime
+            | RequestKind::RefreshWatch
             | RequestKind::ActivateAgent
             | RequestKind::Confirm
             | RequestKind::RevokeBootstrap

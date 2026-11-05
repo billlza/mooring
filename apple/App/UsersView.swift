@@ -77,8 +77,11 @@ struct UsersView: View {
 
     @ViewBuilder private var usageBanner: some View {
         switch status.usage {
-        case .report(let periods):
-            caption(Text("Usage through \(periods.through.text), cycle from \(periods.cycle.start.display)."))
+        case .report(let periods, let sampledAt):
+            caption(Text("Cycle from \(periods.cycle.start.display); figures use the latest node samples."))
+            ForEach(sampledAt.sorted { $0.key < $1.key }, id: \.key) { node, samples in
+                caption(Text("\(node.text): detail through \(samples.detailThrough?.text ?? String(localized: "unavailable")); monthly sample \(samples.monthlyAt.text)."))
+            }
         case .unavailable(let reason):
             Label("Usage unavailable: \(reason.text).", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)

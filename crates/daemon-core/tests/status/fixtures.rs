@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use mooring_daemon_core::MacStatusV1;
+use mooring_daemon_core::MacStatusV2;
 
 use crate::scenarios;
 use crate::support::GRAMMAR_SHAPED_LABEL;
@@ -37,7 +37,7 @@ const FIXTURES: &[(&str, &[u8])] = &[
 ];
 
 /// A fixture file's content: the pretty-printed document and a newline.
-fn encode(status: &MacStatusV1) -> String {
+fn encode(status: &MacStatusV2) -> String {
     let mut text = serde_json::to_string_pretty(status).unwrap();
     text.push('\n');
     text
@@ -61,7 +61,7 @@ fn the_fixtures_are_what_the_scenarios_generate() {
 #[test]
 fn every_fixture_round_trips_byte_for_byte() {
     for (name, bytes) in FIXTURES {
-        let status: MacStatusV1 = serde_json::from_slice(bytes)
+        let status: MacStatusV2 = serde_json::from_slice(bytes)
             .unwrap_or_else(|error| panic!("{name}.json does not decode: {error}"));
         assert!(
             encode(&status).as_bytes() == *bytes,
@@ -70,7 +70,7 @@ fn every_fixture_round_trips_byte_for_byte() {
         // The stream carries the same document as one compact line.
         let line = serde_json::to_string(&status).unwrap();
         assert!(!line.contains('\n'));
-        assert_eq!(serde_json::from_str::<MacStatusV1>(&line).unwrap(), status);
+        assert_eq!(serde_json::from_str::<MacStatusV2>(&line).unwrap(), status);
     }
 }
 

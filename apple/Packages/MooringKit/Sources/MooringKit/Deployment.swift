@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// A deployment's status (`mooring-daemon-core`'s `MacStatusV1`, design
+// A deployment's status (`mooring-daemon-core`'s `MacStatusV2`, design
 // §15.2): the `deployed` document of the console. It carries the exit,
 // the SIM meter, the router panel with the settings the exit needs off,
 // the capacity, one row per user and per node, and the open alerts. Users
@@ -11,7 +11,7 @@ import Foundation
 /// A deployment's status.
 public struct DeployedStatus: Decodable, Hashable, Sendable {
     /// The version this build reads.
-    public static let version: UInt32 = 1
+    public static let version: UInt32 = 2
 
     public let at: UnixTime
     public let exit: ExitSection
@@ -49,6 +49,11 @@ public struct DeployedStatus: Decodable, Hashable, Sendable {
         users = try object.decode([UserId: UserRow].self, forKey: .users)
         nodes = try object.decode([NodeId: NodeRow].self, forKey: .nodes)
         alerts = try object.decode([OpenAlert].self, forKey: .alerts)
+        if case .report(_, let samples) = usage {
+            guard samples.allSatisfy({ nodes[$0.key] != nil && $0.value.monthlyAt <= at }) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "usage source is absent or sampled after publication"))
+            }
+        }
     }
 
     /// The node rows in the order of their ids.

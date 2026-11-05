@@ -33,6 +33,7 @@ mod secrets;
 mod sim_meter;
 mod status_snapshot;
 mod taxonomy;
+mod user_usage;
 
 /// How long a test lets an open run before it calls the open blocked: far
 /// longer than an open that does not wait takes, under any load.

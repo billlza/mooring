@@ -9,9 +9,11 @@ Mooring 让少数受信任的大陆用户经运营者在英国的移动网络出
 
 ## 当前状态
 
+2026-11-05：用户用量开始由守护进程定期采集并原子保存到私有的 `usage/users.json`。明细缺口以节点月累计核对；无法恢复的周期分段和既有节点的未知历史累计显示“无法获取”，不记作零。状态升级为 `MacStatusV2`，每个节点标明明细截止与月累计采样时间，App 与守护进程须一起更新。`node upgrade-agent` 现在还核验并收敛实际运行的 watch；`node runtime <id> --interface <bsd> --json` 可读取控制端摘要、watch PID、启动时刻和实际执行文件摘要。
+
 2026-10-23（M7）：`Mooring.app` 能显示部署后的完整状态（出口、SIM、节点、用户、容量与告警），并由 App 用 `SMAppService` 把守护进程注册为登录项（菜单栏或主窗口工具栏的“守护进程”菜单里的“登录时启动守护进程”/“停止守护进程”），注销或重启后登录即恢复；守护进程不再需要 `--router-interface`，改从 `router pin --interface` 记录的身份文件（第 2 版）读取 M7 接口，并自行写入按 5 MiB 滚动的日志 `~/Library/Logs/Mooring/daemon.log`。
 
-有部署时，守护进程启动 App 包内的电源助手 `mooring-power`：出口启用且接通电源时，它持有 `NetworkClientActive` 与 `PreventUserIdleSystemSleep` 两条断言（`pmset -g assertions` 中名为 “Mooring exit”），使 Mac 不休眠；改用电池时释放断言，出口为 `Degraded`（`OnBattery`）。Mac 仍要休眠时（合盖、手动睡眠），守护进程先停止 `mooring-exit`，再在共 4 秒的预算内请每个节点为排空关闭闸门（每次 SSH 会话到预算用尽即连同拨号进程整组终止），出口保持 `Paused` 直到唤醒，唤醒后重新探测并启动。控制通道的每个连接以一行协议声明开头（`{"control_protocol":1}`）：App 更新后若守护进程仍是旧版本，`mooringctl` 会提示重启守护进程，而不是读不懂回复。
+有部署时，守护进程启动 App 包内的电源助手 `mooring-power`：出口启用且接通电源时，它持有 `NetworkClientActive` 与 `PreventUserIdleSystemSleep` 两条断言（`pmset -g assertions` 中名为 “Mooring exit”），使 Mac 不休眠；改用电池时释放断言，出口为 `Degraded`（`OnBattery`）。Mac 仍要休眠时（合盖、手动睡眠），守护进程先停止 `mooring-exit`，再在共 4 秒的预算内请每个节点为排空关闭闸门（每次 SSH 会话到预算用尽即连同拨号进程整组终止），出口保持 `Paused` 直到唤醒，唤醒后重新探测并启动。控制通道的每个连接以一行协议声明开头（`{"control_protocol":2}`）：App 更新后若守护进程仍是旧版本，`mooringctl` 会提示重启守护进程，而不是读不懂回复。
 
 尚未完成：发布通道（`xtask release` 与 `xtask release-verify`），它需要运营者的 Apple 签名身份与描述文件，以及 M5 的数据保护钥匙串；首个节点 lon1 的部署按 [docs/runbooks/swap-day.md](docs/runbooks/swap-day.md) 进行。控制台的使用方法见 [docs/runbooks/console.md](docs/runbooks/console.md)。
 

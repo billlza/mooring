@@ -60,7 +60,7 @@ import Testing
         }
         #expect(status.advisories == [])
         #expect(status.capacity != nil)
-        guard case .report(let periods) = status.usage else {
+        guard case .report(let periods, _) = status.usage else {
             Issue.record("no usage report: \(status.usage)")
             return
         }
@@ -141,7 +141,7 @@ import Testing
 
     /// The JSON objects that are maps keyed by the deployment's ids, not
     /// records with fixed keys.
-    static let maps: Set<String> = ["users", "nodes", "by_node", "cycle_by_node"]
+    static let maps: Set<String> = ["users", "nodes", "by_node", "cycle_by_node", "sampled_at"]
 
     /// A drain hold taken while the Mac had no handshake holds `null`,
     /// which no fixture does; its key is required all the same.
@@ -160,8 +160,48 @@ import Testing
 
     @Test func anotherVersionIsRefusedAsSuch() throws {
         let line = String(decoding: try scenario("serving"), as: UTF8.self)
-        #expect(throws: ConsoleDecodingError.unsupportedVersion(2)) {
-            try decode(Data(line.replacingOccurrences(of: "\"version\": 1", with: "\"version\": 2").utf8))
+        #expect(throws: ConsoleDecodingError.unsupportedVersion(3)) {
+            try decode(Data(line.replacingOccurrences(of: "\"version\": 2", with: "\"version\": 3").utf8))
+        }
+    }
+
+    @Test func partialHistoryKeepsKnownFiguresAndRequiresNullCycleDependents() throws {
+        let text = #"{"today":{"uplink":1,"downlink":2},"cycle":null,"month":{"uplink":10,"downlink":20},"lifetime":null,"cycle_served_bytes":null,"cycle_by_node":null,"cycle_by_protocol":null,"cycle_shares":null}"#
+        let usage = try JSONDecoder().decode(UserUsage.self, from: Data(text.utf8))
+        #expect(usage.today?.downlink == 2)
+        #expect(usage.month?.uplink == 10)
+        #expect(usage.cycle == nil && usage.cycleServedBytes == nil && usage.lifetime == nil)
+        #expect(usage.hasIncompleteHistory)
+        let contradictory = text.replacingOccurrences(of: "\"cycle_served_bytes\":null", with: "\"cycle_served_bytes\":0")
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(UserUsage.self, from: Data(contradictory.utf8))
+        }
+        let absent = text.replacingOccurrences(of: "\"lifetime\":null,", with: "")
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(UserUsage.self, from: Data(absent.utf8))
+        }
+    }
+
+    @Test func usageSampleTimesAreExplicitAndCannotRunAheadOfPublication() throws {
+        let sample = try JSONDecoder().decode(UsageSampleTimes.self, from: Data(#"{"detail_through":null,"monthly_at":10}"#.utf8))
+        #expect(sample.detailThrough == nil)
+        for text in [#"{"monthly_at":10}"#, #"{"detail_through":11,"monthly_at":10}"#] {
+            #expect(throws: DecodingError.self) {
+                try JSONDecoder().decode(UsageSampleTimes.self, from: Data(text.utf8))
+            }
+        }
+        let original = try #require(JSONSerialization.jsonObject(with: scenario("serving")) as? [String: Any])
+        for node in ["ams1", "ghost1"] {
+            var document = original
+            var usage = try #require(document["usage"] as? [String: Any])
+            var report = try #require(usage["report"] as? [String: Any])
+            let publication = try #require(document["at"] as? UInt64)
+            report["sampled_at"] = [node: ["detail_through": NSNull(), "monthly_at": publication + 1] as [String: Any]]
+            usage["report"] = report
+            document["usage"] = usage
+            #expect(throws: DecodingError.self) {
+                try decode(JSONSerialization.data(withJSONObject: document))
+            }
         }
     }
 

@@ -48,6 +48,13 @@ The pure Rust core is built and tested on this Mac; no engine has been built, an
 
 ---
 
+
+**Implemented 2026-11-05 — watch convergence and collected usage.** Agent protocol 2 adds ops-only `WatchRuntime` and `RefreshWatch{expected_agent_sha}`. After the frozen activation/confirmation transaction, `node upgrade-agent` checks the actual systemd MainPID, `/proc/PID/stat` start ticks and open `/proc/PID/exe` digest, and restarts only the fixed watch unit when needed. PID/start/executable changes invalidate the observation. Restart is bounded to 15 seconds plus a one-second kill grace, then verification to ten seconds. Existing holds, halt and configuration generation remain authoritative. A failed refresh fails the CLI even if control activation already committed. `self-test` retains its frozen `1\n` success marker, independently of `Hello.protocol`, so a protocol-1 agent can activate this build.
+
+The Mac collector uses one pinned, deadline-bounded SSH request in each spare probe slot, stages a whole node batch and fsyncs `usage/users.json` before publication. It pulls the last 48 hours of five-minute bins in bounded pages, the previous month during its seven-day node retention, and the current month's authority last. A stored closed bin is replaced idempotently, never added twice; counter regressions, conflicting bins, bad echoes and corrupt stores fail explicitly. Local retention continues without the network. Only complete ranges roll into hours/days; expired monthly totals fold once into lifetime, and erased users are filtered from later replies as well as local history.
+
+`MacStatusV2` and control protocol 2 expose required nullable per-period figures and per-node source times. A billing-boundary split that cannot be recovered stays unknown; quota cannot infer under-limit from it. Monthly totals recover gaps only when their prefix/suffix evidence permits it, and a cached previous-month snapshot is final only if collected after month end. Existing applied nodes have no proven lifetime origin, so their lifetime remains unavailable; a planned node observed before serving establishes an origin. Retired-node final sealing and the event journal remain outside this collector: a missing/stale required node is unavailable. The remote report's older all-or-none cycle contract reports unavailable for a partial cycle. F7 retention covers these usage counters; this change does not claim identity-record deletion or publication signing is implemented.
+
 ## 0. Decisions at a glance
 
 | Area | Decision |

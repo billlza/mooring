@@ -142,7 +142,7 @@ pub(crate) fn shared() -> (Control, mpsc::Receiver<()>) {
 }
 
 /// The status the hub holds.
-pub(crate) fn published(control: &Control) -> mooring_daemon_core::MacStatusV1 {
+pub(crate) fn published(control: &Control) -> mooring_daemon_core::MacStatusV2 {
     let line = control.hub.latest().unwrap().unwrap().line;
     match decode_reply(&line).unwrap() {
         DaemonReply::Status(ConsoleStatus::Deployed(status)) => *status,
@@ -190,9 +190,14 @@ fn the_exit_starts_its_engine_on_the_rendered_config_and_publishes_its_status() 
         let status = published(&control);
         let parts = status.parts();
         assert_eq!(parts.exit.state, ExitState::Starting);
-        // This build pulls no ledger: the usage view says so and no row
-        // carries figures.
-        assert_eq!(parts.usage, UsageView::NotPulled);
+        // Before the first collection there is no node ledger. It is
+        // unavailable, not a table of invented zero readings.
+        assert_eq!(
+            parts.usage,
+            UsageView::Unavailable {
+                reason: mooring_daemon_core::error::UsageErrorKind::MissingLedger,
+            }
+        );
         assert!(!parts.users.is_empty());
         assert!(parts.users.values().all(|row| row.usage.is_none()));
         assert_eq!(

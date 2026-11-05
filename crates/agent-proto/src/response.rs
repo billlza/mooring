@@ -86,6 +86,10 @@ pub enum Response {
     },
     /// Answers `Status`.
     Status(Box<StatusV1>),
+    /// Answers the read-only `WatchRuntime` request.
+    WatchRuntime(crate::WatchRuntime),
+    /// Answers `RefreshWatch` only after the executable has been verified.
+    WatchRefreshed(crate::WatchRuntime),
     /// Answers `Usage`.
     Usage(Box<UsageV1>),
     /// Answers `UsageSeries`.
@@ -159,6 +163,10 @@ closed_enum! {
         Reverted,
         /// [`Response::Status`].
         Status,
+        /// [`Response::WatchRuntime`].
+        WatchRuntime,
+        /// [`Response::WatchRefreshed`].
+        WatchRefreshed,
         /// [`Response::Usage`].
         Usage,
         /// [`Response::UsageSeries`].
@@ -197,6 +205,8 @@ impl ResponseKind {
             Self::TxnStatus => RequestKind::TxnStatus,
             Self::Reverted => RequestKind::Rollback,
             Self::Status => RequestKind::Status,
+            Self::WatchRuntime => RequestKind::WatchRuntime,
+            Self::WatchRefreshed => RequestKind::RefreshWatch,
             Self::Usage => RequestKind::Usage,
             Self::UsageSeries => RequestKind::UsageSeries,
             Self::Events => RequestKind::Events,
@@ -227,6 +237,8 @@ impl Response {
             Self::TxnStatus { .. } => ResponseKind::TxnStatus,
             Self::Reverted { .. } => ResponseKind::Reverted,
             Self::Status(_) => ResponseKind::Status,
+            Self::WatchRuntime(_) => ResponseKind::WatchRuntime,
+            Self::WatchRefreshed(_) => ResponseKind::WatchRefreshed,
             Self::Usage(_) => ResponseKind::Usage,
             Self::UsageSeries(_) => ResponseKind::UsageSeries,
             Self::Events(_) => ResponseKind::Events,

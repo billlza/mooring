@@ -9,7 +9,7 @@
 //! A message holds node ids, counts, kinds, byte totals, dates and UTC
 //! times, nothing else. [`alert_message`] reads an [`AlertNotice`], whose
 //! condition has no field for a user, an address or any text
-//! ([`crate::alert`]). [`digest_message`] reads a [`MacStatusV1`], which
+//! ([`crate::alert`]). [`digest_message`] reads a [`MacStatusV2`], which
 //! does carry aliases, user ids and addresses, so it reads only
 //! aggregates: the exit's phase, the SIM totals, counts of users, alerts and
 //! nodes, and the cycle's served total. It names no node and no user. The
@@ -38,7 +38,7 @@ use crate::alert::{
 use crate::error::NotifyError;
 use crate::forecast::{Crossing, SimThreshold};
 use crate::report::exit_phase;
-use crate::status::{ForecastView, MacStatusV1, MeterAccuracy, NodeAgentState, UsageView};
+use crate::status::{ForecastView, MacStatusV2, MeterAccuracy, NodeAgentState, UsageView};
 
 /// The ntfy message of one alert notice.
 ///
@@ -88,7 +88,7 @@ pub fn alert_message(notice: &AlertNotice) -> Result<NtfyMessage, NotifyError> {
 ///   crossed; the users by status; the bytes served this cycle; the open
 ///   alerts by severity and kind; and the nodes behind the current
 ///   generation or unreachable, by count.
-pub fn digest_message(status: &MacStatusV1) -> Result<NtfyMessage, NotifyError> {
+pub fn digest_message(status: &MacStatusV2) -> Result<NtfyMessage, NotifyError> {
     let parts = status.parts();
     let title = format!("Mooring digest {}", CalendarDate::utc_of(parts.at)?);
     let lines = [
@@ -234,7 +234,7 @@ fn names<'a>(names: impl Iterator<Item = &'a str>) -> String {
     names.collect::<Vec<_>>().join(", ")
 }
 
-fn sim_line(status: &MacStatusV1) -> String {
+fn sim_line(status: &MacStatusV2) -> String {
     let sim = &status.parts().sim;
     let used = u128::from(sim.rx_bytes) + u128::from(sim.tx_bytes);
     let limit = match sim.thresholds.stop() {
@@ -284,7 +284,7 @@ fn forecast_line(forecast: &ForecastView) -> String {
     line
 }
 
-fn users_line(status: &MacStatusV1) -> String {
+fn users_line(status: &MacStatusV2) -> String {
     let (mut active, mut suspended, mut revoking) = (0_usize, 0_usize, 0_usize);
     for row in status.parts().users.values() {
         match row.status {
@@ -297,24 +297,31 @@ fn users_line(status: &MacStatusV1) -> String {
     format!("Users {active} active, {suspended} suspended, {revoking} revoking")
 }
 
-fn served_line(status: &MacStatusV1) -> String {
+fn served_line(status: &MacStatusV2) -> String {
     let parts = status.parts();
     match parts.usage {
         UsageView::Report { .. } => {
-            let served: u128 = parts
+            let served: Option<u128> = parts
                 .users
                 .values()
-                .filter_map(|row| row.usage.as_ref())
-                .map(|usage| u128::from(usage.cycle_served_bytes()))
+                .map(|row| {
+                    row.usage
+                        .as_ref()
+                        .and_then(|usage| usage.cycle_served_bytes())
+                        .map(u128::from)
+                })
                 .sum();
-            format!("Served this cycle {}", amount(served))
+            served.map_or_else(
+                || "Served this cycle unavailable".to_owned(),
+                |bytes| format!("Served this cycle {}", amount(bytes)),
+            )
         }
         UsageView::Unavailable { .. } => "Served this cycle unavailable".to_owned(),
         UsageView::NotPulled => "Served this cycle not read".to_owned(),
     }
 }
 
-fn alerts_line(status: &MacStatusV1) -> String {
+fn alerts_line(status: &MacStatusV2) -> String {
     let alerts = &status.parts().alerts;
     let severity = |wanted: Severity| {
         alerts
@@ -336,7 +343,7 @@ fn alerts_line(status: &MacStatusV1) -> String {
     line
 }
 
-fn nodes_line(status: &MacStatusV1) -> String {
+fn nodes_line(status: &MacStatusV2) -> String {
     let nodes = &status.parts().nodes;
     let behind = nodes
         .values()

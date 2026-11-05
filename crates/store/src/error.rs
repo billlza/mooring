@@ -78,6 +78,8 @@ io_ops! {
     /// Opening or reading the SIM meter's document, or inspecting the
     /// usage directory to read it.
     ReadSimMeter => "read the SIM meter",
+    /// Reading the daemon-owned per-user usage document.
+    ReadUserUsage => "read collected user usage",
     /// Creating or inspecting the usage directory, to write the meter.
     CreateUsageDir => "create the usage directory",
     /// Creating or inspecting the radio history's directory, to append to

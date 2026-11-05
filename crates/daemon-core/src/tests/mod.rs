@@ -7,6 +7,7 @@
 
 mod alerts;
 mod canary;
+mod collected_usage;
 mod control;
 mod exit;
 mod meter;

@@ -154,6 +154,11 @@ pub(crate) fn run(
         Command::Exit(ExitCommand::AllowedNetworks) => {
             crate::exit::own_network::allowed_networks(env, out)
         }
+        Command::Node(NodeCommand::Runtime {
+            node,
+            interface,
+            json,
+        }) => crate::node::runtime::inspect(env, out, &node, &interface, json),
         Command::Node(NodeCommand::New {
             node,
             role,

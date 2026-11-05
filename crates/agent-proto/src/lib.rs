@@ -68,6 +68,7 @@ mod report;
 mod request;
 mod response;
 mod role;
+mod runtime;
 mod scalar;
 mod series;
 mod status;
@@ -147,4 +148,11 @@ pub use watch::{
 
 /// The protocol version this crate speaks, reported in
 /// [`HelloInfo::protocol`].
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
+
+/// The frozen self-test success marker used by the upgrade core. This
+/// remains version 1 so an already deployed protocol-1 agent can validate
+/// and activate a newer agent; `Hello` reports the actual protocol.
+pub const UPGRADE_SELF_TEST: u32 = 1;
+
+pub use runtime::{WatchProcess, WatchRuntime};

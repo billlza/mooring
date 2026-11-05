@@ -9,7 +9,7 @@ import Foundation
 
 /// Why a line could not be read as a console document.
 public enum ConsoleDecodingError: Error, Equatable, Sendable {
-    /// The document names another version than 1.
+    /// The document names a version this reader does not support.
     case unsupportedVersion(UInt32)
 }
 

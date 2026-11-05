@@ -278,6 +278,17 @@ impl From<PairingArg> for Pairing {
 /// A node command.
 #[derive(Debug, Subcommand)]
 pub(crate) enum NodeCommand {
+    /// Inspect the actual watch executable and process identity on a node.
+    Runtime {
+        /// The node.
+        node: NodeId,
+        /// The interface facing the M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// Print the typed runtime evidence as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Plan a node for a VPS that exists already, pinning its host key.
     New {
         /// The node's id, for example lon1.

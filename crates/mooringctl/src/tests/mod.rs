@@ -49,4 +49,5 @@ mod ticks;
 mod transaction;
 mod units;
 mod upgrade;
+mod usage_collection;
 mod user;

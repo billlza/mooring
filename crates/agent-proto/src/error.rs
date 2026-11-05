@@ -375,6 +375,12 @@ pub enum AgentError {
         /// The running agent's digest.
         actual: Sha256Hex,
     },
+    /// The watch did not run the expected executable within the restart budget.
+    #[error("watch did not run the expected agent {expected}")]
+    WatchNotUpdated {
+        /// The executable required by the operator.
+        expected: Sha256Hex,
+    },
     /// Another transaction or activation is running or awaiting confirmation
     /// (`flock` on `/run/mooring/txn.lock`).
     #[error("generation {generation} holds the transaction lock")]
@@ -570,6 +576,8 @@ closed_enum! {
         RevertedUnconfirmed,
         /// [`AgentError::AgentSelfTestFailed`].
         AgentSelfTestFailed,
+        /// [`AgentError::WatchNotUpdated`].
+        WatchNotUpdated,
         /// [`AgentError::AgentShaMismatch`].
         AgentShaMismatch,
         /// [`AgentError::Busy`].
@@ -640,6 +648,7 @@ impl AgentError {
             Self::RevertedUnconfirmed { .. } => AgentErrorKind::RevertedUnconfirmed,
             Self::AgentSelfTestFailed { .. } => AgentErrorKind::AgentSelfTestFailed,
             Self::AgentShaMismatch { .. } => AgentErrorKind::AgentShaMismatch,
+            Self::WatchNotUpdated { .. } => AgentErrorKind::WatchNotUpdated,
             Self::Busy { .. } => AgentErrorKind::Busy,
             Self::GenerationNotNewer { .. } => AgentErrorKind::GenerationNotNewer,
             Self::GenerationMismatch { .. } => AgentErrorKind::GenerationMismatch,

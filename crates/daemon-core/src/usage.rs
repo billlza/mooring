@@ -47,6 +47,9 @@ use crate::period::{BillingCycle, UsagePeriods};
 use crate::share::{BasisPoints, basis_points, require_whole};
 use crate::wire::{accounting_user, mac_time};
 
+mod collected;
+pub use collected::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES, NodeUsageHistory};
+
 /// The totals of one node's accounting emails before `as_of`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LifetimeBase {
@@ -266,26 +269,33 @@ impl From<CycleShares> for CycleSharesRepr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "UserUsageRepr", into = "UserUsageRepr")]
 pub struct UserUsage {
-    today: Traffic,
-    cycle: Traffic,
-    month: Traffic,
-    lifetime: Traffic,
-    cycle_served_bytes: u64,
-    cycle_by_node: BTreeMap<NodeId, Traffic>,
-    cycle_by_protocol: ProtocolTraffic,
+    today: Option<Traffic>,
+    cycle: Option<Traffic>,
+    month: Option<Traffic>,
+    lifetime: Option<Traffic>,
+    cycle_served_bytes: Option<u64>,
+    cycle_by_node: Option<BTreeMap<NodeId, Traffic>>,
+    cycle_by_protocol: Option<ProtocolTraffic>,
     cycle_shares: Option<CycleShares>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UserUsageRepr {
-    today: Traffic,
-    cycle: Traffic,
-    month: Traffic,
-    lifetime: Traffic,
-    cycle_served_bytes: u64,
-    cycle_by_node: BTreeMap<NodeId, Traffic>,
-    cycle_by_protocol: ProtocolTraffic,
+    #[serde(deserialize_with = "Option::deserialize")]
+    today: Option<Traffic>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    cycle: Option<Traffic>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    month: Option<Traffic>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    lifetime: Option<Traffic>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    cycle_served_bytes: Option<u64>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    cycle_by_node: Option<BTreeMap<NodeId, Traffic>>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    cycle_by_protocol: Option<ProtocolTraffic>,
     #[serde(deserialize_with = "Option::deserialize")]
     cycle_shares: Option<CycleShares>,
 }
@@ -293,6 +303,7 @@ struct UserUsageRepr {
 /// The figures a user's usage is counted into; the rest is derived.
 #[derive(Debug, Default)]
 struct Counted {
+    missing: MissingPeriods,
     today: Traffic,
     cycle: Traffic,
     month: Traffic,
@@ -301,46 +312,54 @@ struct Counted {
     cycle_by_protocol: ProtocolTraffic,
 }
 
+#[derive(Debug, Default)]
+struct MissingPeriods {
+    today: bool,
+    cycle: bool,
+    month: bool,
+    lifetime: bool,
+}
+
 impl UserUsage {
     /// The report's UTC day.
     #[must_use]
-    pub const fn today(&self) -> Traffic {
+    pub const fn today(&self) -> Option<Traffic> {
         self.today
     }
 
     /// The billing cycle.
     #[must_use]
-    pub const fn cycle(&self) -> Traffic {
+    pub const fn cycle(&self) -> Option<Traffic> {
         self.cycle
     }
 
     /// The UTC month.
     #[must_use]
-    pub const fn month(&self) -> Traffic {
+    pub const fn month(&self) -> Option<Traffic> {
         self.month
     }
 
     /// Everything recorded.
     #[must_use]
-    pub const fn lifetime(&self) -> Traffic {
+    pub const fn lifetime(&self) -> Option<Traffic> {
         self.lifetime
     }
 
     /// The cycle's bytes in both directions: what a quota counts.
     #[must_use]
-    pub const fn cycle_served_bytes(&self) -> u64 {
+    pub const fn cycle_served_bytes(&self) -> Option<u64> {
         self.cycle_served_bytes
     }
 
     /// The cycle per node that carried any of it.
     #[must_use]
-    pub const fn cycle_by_node(&self) -> &BTreeMap<NodeId, Traffic> {
-        &self.cycle_by_node
+    pub const fn cycle_by_node(&self) -> Option<&BTreeMap<NodeId, Traffic>> {
+        self.cycle_by_node.as_ref()
     }
 
     /// The cycle per protocol.
     #[must_use]
-    pub const fn cycle_by_protocol(&self) -> ProtocolTraffic {
+    pub const fn cycle_by_protocol(&self) -> Option<ProtocolTraffic> {
         self.cycle_by_protocol
     }
 
@@ -374,14 +393,18 @@ impl UserUsage {
             _ => None,
         };
         Ok(Self {
-            today: counted.today,
-            cycle: counted.cycle,
-            month: counted.month,
-            lifetime: counted.lifetime,
-            cycle_served_bytes,
-            cycle_by_node: counted.cycle_by_node,
-            cycle_by_protocol: counted.cycle_by_protocol,
-            cycle_shares,
+            today: (!counted.missing.today).then_some(counted.today),
+            cycle: (!counted.missing.cycle).then_some(counted.cycle),
+            month: (!counted.missing.month).then_some(counted.month),
+            lifetime: (!counted.missing.lifetime).then_some(counted.lifetime),
+            cycle_served_bytes: (!counted.missing.cycle).then_some(cycle_served_bytes),
+            cycle_by_node: (!counted.missing.cycle).then_some(counted.cycle_by_node),
+            cycle_by_protocol: (!counted.missing.cycle).then_some(protocols),
+            cycle_shares: if counted.missing.cycle {
+                None
+            } else {
+                cycle_shares
+            },
         })
     }
 }
@@ -390,26 +413,42 @@ impl TryFrom<UserUsageRepr> for UserUsage {
     type Error = FigureError;
 
     fn try_from(repr: UserUsageRepr) -> Result<Self, Self::Error> {
-        let mut by_node = Traffic::default();
-        let mut by_protocol = repr.cycle_by_protocol.reality;
-        let split = repr
-            .cycle_by_node
-            .values()
-            .try_for_each(|&traffic| add(&mut by_node, traffic))
-            .and_then(|()| add(&mut by_protocol, repr.cycle_by_protocol.hy2));
-        if split.is_err() || by_node != repr.cycle || by_protocol != repr.cycle {
-            return Err(FigureError::SplitMismatch);
+        match (
+            repr.cycle,
+            &repr.cycle_by_node,
+            repr.cycle_by_protocol,
+            repr.cycle_served_bytes,
+        ) {
+            (Some(cycle), Some(nodes), Some(protocols), Some(_)) => {
+                let mut by_node = Traffic::default();
+                let mut by_protocol = protocols.reality;
+                nodes
+                    .values()
+                    .try_for_each(|&bytes| add(&mut by_node, bytes))
+                    .and_then(|()| add(&mut by_protocol, protocols.hy2))
+                    .map_err(|_| FigureError::SplitMismatch)?;
+                if by_node != cycle || by_protocol != cycle {
+                    return Err(FigureError::SplitMismatch);
+                }
+            }
+            (None, None, None, None) if repr.cycle_shares.is_none() => {}
+            _ => return Err(FigureError::SplitMismatch),
         }
         let stated = (repr.cycle_served_bytes, repr.cycle_shares);
-        // Deriving fails only when the cycle's two directions overflow a
-        // u64 together, so no stated served-bytes figure can match them.
         let derived = Self::derive(Counted {
-            today: repr.today,
-            cycle: repr.cycle,
-            month: repr.month,
-            lifetime: repr.lifetime,
-            cycle_by_node: repr.cycle_by_node,
-            cycle_by_protocol: repr.cycle_by_protocol,
+            missing: MissingPeriods {
+                today: repr.today.is_none(),
+                cycle: repr.cycle.is_none(),
+                month: repr.month.is_none(),
+                lifetime: repr.lifetime.is_none(),
+            },
+            // Missing figures are never published as these internal zero accumulators.
+            today: repr.today.unwrap_or_default(),
+            cycle: repr.cycle.unwrap_or_default(),
+            month: repr.month.unwrap_or_default(),
+            lifetime: repr.lifetime.unwrap_or_default(),
+            cycle_by_node: repr.cycle_by_node.unwrap_or_default(),
+            cycle_by_protocol: repr.cycle_by_protocol.unwrap_or_default(),
         })
         .map_err(|_| FigureError::DerivedMismatch)?;
         if stated != (derived.cycle_served_bytes, derived.cycle_shares.clone()) {
@@ -434,17 +473,32 @@ impl From<UserUsage> for UserUsageRepr {
     }
 }
 
+/// Actual source times for a node's usage: detail uses closed bins, while
+/// monthly snapshots include the node's latest completed accounting poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsageSampleTimes {
+    /// End of the closed detailed range, exclusive.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub detail_through: Option<UnixTime>,
+    /// Timestamp of the authoritative monthly counters.
+    pub monthly_at: UnixTime,
+}
+
 /// Every user's usage over [`UsagePeriods`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageReport {
-    /// The periods, all ending at `periods.through`.
+    /// Calendar periods selected at publication; each node's actual source
+    /// boundary is recorded in `sampled_at`.
     pub periods: UsagePeriods,
     /// Every user of the deployment, revoked ones included; a user with no
     /// recorded traffic has all-zero figures, which are real zeros: every
     /// node that may have counted traffic was covered.
     pub users: BTreeMap<UserId, UserUsage>,
+    /// The last accounting sample used from each node (not the UI refresh time).
+    pub sampled_at: BTreeMap<NodeId, UsageSampleTimes>,
     /// The Mac's in-chain probe traffic this cycle, per node (`probe@…`).
-    pub probe_cycle: BTreeMap<NodeId, ProtocolTraffic>,
+    pub probe_cycle: BTreeMap<NodeId, Option<ProtocolTraffic>>,
 }
 
 /// The cycle's served bytes per user, the input of quota evaluation.
@@ -461,16 +515,20 @@ pub struct CycleUsage {
 impl UsageReport {
     /// The cycle's served bytes per user.
     #[must_use]
-    pub fn cycle_usage(&self) -> CycleUsage {
-        CycleUsage {
+    pub fn cycle_usage(&self) -> Option<CycleUsage> {
+        Some(CycleUsage {
             cycle: self.periods.cycle,
             through: self.periods.through,
             served: self
                 .users
                 .iter()
-                .map(|(user, usage)| (user.clone(), usage.cycle_served_bytes()))
-                .collect(),
-        }
+                .map(|(user, usage)| {
+                    usage
+                        .cycle_served_bytes()
+                        .map(|bytes| (user.clone(), bytes))
+                })
+                .collect::<Option<_>>()?,
+        })
     }
 }
 
@@ -677,13 +735,29 @@ pub fn aggregate(
         }
     }
     Ok(UsageReport {
+        sampled_at: ledgers
+            .iter()
+            .map(|ledger| {
+                (
+                    ledger.node().clone(),
+                    UsageSampleTimes {
+                        detail_through: Some(through.min(ledger.covered_to())),
+                        monthly_at: through.min(ledger.covered_to()),
+                    },
+                )
+            })
+            .collect(),
         periods,
         users: totals
             .usage
             .into_iter()
             .map(|(user, counted)| Ok((user, UserUsage::derive(counted)?)))
             .collect::<Result<_, UsageError>>()?,
-        probe_cycle: totals.probe_cycle,
+        probe_cycle: totals
+            .probe_cycle
+            .into_iter()
+            .map(|(node, traffic)| (node, Some(traffic)))
+            .collect(),
     })
 }
 

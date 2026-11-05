@@ -242,7 +242,8 @@
             "next_start": "2026-11-01"
           },
           "utc_month_start": "2026-10-01"
-        }
+        },
+        "sampled_at": {}
       }
     },
     {
@@ -887,6 +888,9 @@
     "Model"
   ],
   "usage_error_kind": [
+    "LedgerCorrupt",
+    "MonthlyInconsistent",
+    "StoreUnavailable",
     "LedgerGap",
     "DuplicateLedger",
     "MissingLedger",

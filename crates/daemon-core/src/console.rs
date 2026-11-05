@@ -7,7 +7,7 @@
 //! deployment. Without one there is no exit, SIM meter, user or node to
 //! report, but the router adapter needs none of them: its identity pin
 //! and admin password live outside the state (design §15.6 rule 4). So the
-//! console's document is the deployment's [`MacStatusV1`] once there is a
+//! console's document is the deployment's [`MacStatusV2`] once there is a
 //! deployment, and until then [`UndeployedStatus`], which carries the
 //! router panel alone and says that nothing else exists yet, rather than
 //! zeros or defaults for a deployment that does not exist.
@@ -18,7 +18,7 @@ use mooring_model::UnixTime;
 
 use crate::error::ConsoleError;
 use crate::router::{RouterAdvisory, RouterReading};
-use crate::status::MacStatusV1;
+use crate::status::MacStatusV2;
 
 /// The version [`UndeployedStatus`] documents carry.
 pub const UNDEPLOYED_STATUS_VERSION: u32 = 1;
@@ -32,7 +32,7 @@ pub enum ConsoleStatus {
     NoDeployment(UndeployedStatus),
     /// The deployment's status (boxed: it is far larger than the other
     /// variant).
-    Deployed(Box<MacStatusV1>),
+    Deployed(Box<MacStatusV2>),
 }
 
 impl ConsoleStatus {

@@ -394,6 +394,16 @@
         }
       }
     },
+    "%@: detail through %@; monthly sample %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@：明细截至 %2$@；月用量采样于 %3$@。"
+          }
+        }
+      }
+    },
     "%@: the last line is incomplete; the daemon may be writing it, or stopped while writing it.": {
       "localizations": {
         "zh-Hans": {
@@ -866,6 +876,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "计费周期"
+          }
+        }
+      }
+    },
+    "Cycle from %@; figures use the latest node samples.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期从 %@ 开始；用量以节点最新采样为准。"
           }
         }
       }
@@ -2588,6 +2608,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "自 %@ 起。"
+          }
+        }
+      }
+    },
+    "Some earlier usage could not be recovered. Unavailable figures are not zero.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "部分历史用量无法恢复。无法获取的数值不代表零用量。"
           }
         }
       }
@@ -4325,6 +4355,16 @@
         }
       }
     },
+    "monthly usage contradicts an earlier sample or its detailed bins": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "月用量与此前采样或明细记录不一致"
+          }
+        }
+      }
+    },
     "mooring-probe not running": {
       "localizations": {
         "zh-Hans": {
@@ -4781,6 +4821,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "应答超过了 1 MiB"
+          }
+        }
+      }
+    },
+    "the collected usage ledger is invalid": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "采集的用量账本无效"
+          }
+        }
+      }
+    },
+    "the collected usage store could not be read or written": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取或写入采集的用量账本"
           }
         }
       }
