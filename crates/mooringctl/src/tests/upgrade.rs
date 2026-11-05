@@ -198,3 +198,80 @@ fn a_node_that_runs_another_agent_after_the_confirm_is_refused() {
         outcome.stderr
     );
 }
+
+/// A reply to another request at any step stops the upgrade there, naming
+/// the request and the reply; nothing more is sent.
+#[test]
+fn a_reply_to_another_request_stops_the_upgrade() {
+    let generation = Generation::ZERO;
+    let blobs = |sha| {
+        Ok(Response::Blobs {
+            present: BTreeSet::from([sha]),
+        })
+    };
+    for (step, said) in [
+        (0, "the agent answered Hello with BootstrapRevoked"),
+        (1, "the agent answered ActivateAgent with BootstrapRevoked"),
+        (2, "the agent answered Confirm with AwaitingConfirm"),
+    ] {
+        let (mut harness, agent, sha) = ready();
+        if step == 0 {
+            expect(&harness, RequestKind::Hello, Ok(Response::BootstrapRevoked));
+        } else {
+            expect(&harness, RequestKind::Hello, Ok(hello_running(OLD)));
+            expect(&harness, RequestKind::HaveBlobs, blobs(sha));
+            if step == 1 {
+                expect(
+                    &harness,
+                    RequestKind::ActivateAgent,
+                    Ok(Response::BootstrapRevoked),
+                );
+            } else {
+                expect(
+                    &harness,
+                    RequestKind::ActivateAgent,
+                    Ok(Response::AwaitingConfirm { generation }),
+                );
+                expect(
+                    &harness,
+                    RequestKind::Confirm,
+                    Ok(Response::AwaitingConfirm { generation }),
+                );
+            }
+        }
+        let outcome = run(&mut harness, &agent);
+        assert_eq!(outcome.code, EXIT_LOCAL, "{said}");
+        assert_eq!(
+            outcome.stderr,
+            format!("mooringctl: the node could not be reached or refused\n  caused by: {said}\n")
+        );
+        assert!(harness.nodes.script.borrow().is_empty(), "{said}");
+    }
+}
+
+/// Only an adopted or applied node is upgraded: an unknown node and one
+/// not adopted yet are refused before any session.
+#[test]
+fn only_a_deployed_node_is_upgraded() {
+    let (mut harness, agent, _) = ready();
+    let outcome = harness.run(&[
+        "node",
+        "upgrade-agent",
+        "zzz1",
+        "--interface",
+        "lo0",
+        "--agent",
+        agent.to_str().unwrap(),
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stderr, "mooringctl: unknown node zzz1\n");
+    let (mut planned, _) = super::node::planned();
+    let agent = super::node::agent_file(&planned);
+    let outcome = run(&mut planned, &agent);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: node lon1 is Planned; it must be adopted first\n"
+    );
+    assert!(planned.nodes.seen.borrow().is_empty());
+}

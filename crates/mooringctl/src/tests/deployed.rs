@@ -65,7 +65,7 @@ use crate::daemon::deployed::{
 };
 use crate::daemon::hub::Hub;
 use crate::daemon::radio::RadioHistoryWriter;
-use crate::daemon::{Control, LoopState, RunPaths, chain};
+use crate::daemon::{Control, Intervals, LoopState, RunPaths, chain};
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::runtime::ports::{ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE};
@@ -73,12 +73,17 @@ use crate::runtime::power::PowerMessage;
 use crate::runtime::resolve::exit_interfaces;
 
 /// Inside the fixtures' carrier prefix, 31.120.0.0/14.
-const CARRIER: Ipv4Addr = Ipv4Addr::new(31, 120, 5, 6);
+pub(crate) const CARRIER: Ipv4Addr = Ipv4Addr::new(31, 120, 5, 6);
 const OUTSIDE: Ipv4Addr = Ipv4Addr::new(82, 10, 20, 30);
 
 /// The fixture, enabled, with everything the exit needs on this Mac.
-fn deployed() -> Harness {
-    let mut harness = harness_with(fixture(|_| {}));
+pub(crate) fn deployed() -> Harness {
+    deployed_with(fixture(|_| {}))
+}
+
+/// [`deployed`] with `deployment` in its state.
+pub(crate) fn deployed_with(deployment: mooring_model::Deployment) -> Harness {
+    let mut harness = harness_with(deployment);
     harness.pin(PINNED);
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
     for secret_ref in fixture.secrets.refs() {
@@ -124,7 +129,7 @@ fn deployed() -> Harness {
     harness
 }
 
-fn shared() -> (Control, mpsc::Receiver<()>) {
+pub(crate) fn shared() -> (Control, mpsc::Receiver<()>) {
     let (retry, retries) = mpsc::channel();
     (
         Control {
@@ -137,7 +142,7 @@ fn shared() -> (Control, mpsc::Receiver<()>) {
 }
 
 /// The status the hub holds.
-fn published(control: &Control) -> mooring_daemon_core::MacStatusV1 {
+pub(crate) fn published(control: &Control) -> mooring_daemon_core::MacStatusV1 {
     let line = control.hub.latest().unwrap().unwrap().line;
     match decode_reply(&line).unwrap() {
         DaemonReply::Status(ConsoleStatus::Deployed(status)) => *status,
@@ -150,12 +155,22 @@ fn with_exit<T>(
     harness: &mut Harness,
     work: impl FnOnce(&mut Deployed<'_, '_>, &mut Vec<u8>) -> T,
 ) -> T {
+    with_exit_on(harness, Intervals::DAEMON, work)
+}
+
+/// [`with_exit`] with the loop's `intervals`.
+pub(crate) fn with_exit_on<T>(
+    harness: &mut Harness,
+    intervals: Intervals,
+    work: impl FnOnce(&mut Deployed<'_, '_>, &mut Vec<u8>) -> T,
+) -> T {
     let support = harness.support_dir();
     // `start` makes the run directory before the exit opens.
     fs::create_dir_all(RunPaths::under(&support).dir).unwrap();
     harness.with_env(|env| {
         let mut log = Vec::new();
-        let mut exit = Deployed::open(env, &support, &mut log, LoopState::default()).unwrap();
+        let mut exit =
+            Deployed::open(env, &support, &mut log, LoopState::default(), intervals).unwrap();
         work(&mut exit, &mut log)
     })
 }
@@ -244,7 +259,7 @@ pub(crate) fn status_reply() -> Response {
 }
 
 /// Scripts a `Status` answer from every node (ams1, lon1).
-fn statuses(harness: &Harness) {
+pub(crate) fn statuses(harness: &Harness) {
     for _ in 0..2 {
         harness.nodes.expect(
             Expected::Request {
@@ -496,9 +511,16 @@ fn a_lost_power_helper_degrades_the_exit_and_a_missing_one_stops_the_start() {
     assert_eq!(harness.helper.starts.get(), 1);
 
     let support = harness.support_dir();
-    harness.helper.refuse.set(true);
+    harness.helper.handle.refuse(true);
     let error = harness.with_env(|env| {
-        Deployed::open(env, &support, &mut Vec::new(), LoopState::default()).unwrap_err()
+        Deployed::open(
+            env,
+            &support,
+            &mut Vec::new(),
+            LoopState::default(),
+            Intervals::DAEMON,
+        )
+        .unwrap_err()
     });
     assert!(
         matches!(
@@ -507,7 +529,7 @@ fn a_lost_power_helper_degrades_the_exit_and_a_missing_one_stops_the_start() {
         ),
         "{error:?}"
     );
-    harness.helper.refuse.set(false);
+    harness.helper.handle.refuse(false);
     harness.helper.silent.set(true);
     let link = harness.with_env(|env| (env.power_helper)().unwrap());
     let error = first_power_source(&link, std::time::Duration::from_millis(20)).unwrap_err();
@@ -588,7 +610,7 @@ const HOME: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x20, 0x61];
 
 /// `deployed()` with the Mac joined to the operator's hotspot on en0,
 /// which holds the unscoped default route, and the hotspot declared.
-fn joined_to_the_declared_hotspot() -> Harness {
+pub(crate) fn joined_to_the_declared_hotspot() -> Harness {
     let mut harness = deployed();
     if let Ok(listed) = &mut harness.link.listed {
         listed.push(Interface {
@@ -735,7 +757,7 @@ fn a_declared_network_is_allowed_and_an_unreadable_input_fails_closed() {
     assert!(!log.contains("declarations were not read"), "{log}");
 }
 
-fn declare_hotspot_in(support: &std::path::Path) {
+pub(crate) fn declare_hotspot_in(support: &std::path::Path) {
     declare_in(
         support,
         "my phone",
@@ -1087,7 +1109,14 @@ fn a_corrupt_latch_or_meter_stops_the_daemon_at_its_start() {
             fs::write(support.join(USAGE_DIRECTORY).join(SIM_METER_FILE), b"{}").unwrap();
         }
         let error = harness.with_env(|env| {
-            Deployed::open(env, &support, &mut Vec::new(), LoopState::default()).unwrap_err()
+            Deployed::open(
+                env,
+                &support,
+                &mut Vec::new(),
+                LoopState::default(),
+                Intervals::DAEMON,
+            )
+            .unwrap_err()
         });
         let found = match error {
             CommandError::Local(LocalError::Latch(_)) => "Latch",
@@ -1116,7 +1145,14 @@ fn latched() -> LatchRecord {
 fn refused_start(harness: &mut Harness) -> CommandError {
     let support = harness.support_dir();
     harness.with_env(|env| {
-        Deployed::open(env, &support, &mut Vec::new(), LoopState::default()).unwrap_err()
+        Deployed::open(
+            env,
+            &support,
+            &mut Vec::new(),
+            LoopState::default(),
+            Intervals::DAEMON,
+        )
+        .unwrap_err()
     })
 }
 
@@ -1333,7 +1369,14 @@ fn an_engine_an_earlier_daemon_left_is_stopped_at_the_start() {
     fs::write(run.join(ENGINE_PID_FILE), format!("{}\n", left.id())).unwrap();
     let log = harness.with_env(|env| {
         let mut log = Vec::new();
-        let _exit = Deployed::open(env, &support, &mut log, LoopState::default()).unwrap();
+        let _exit = Deployed::open(
+            env,
+            &support,
+            &mut log,
+            LoopState::default(),
+            Intervals::DAEMON,
+        )
+        .unwrap();
         String::from_utf8(log).unwrap()
     });
     assert!(
@@ -1568,6 +1611,25 @@ fn every_failure_of_a_poll_has_its_cause() {
         (
             NodeError::Agent(AgentError::TrailingInput),
             AgentUnreachable::ProtocolMismatch,
+        ),
+        (
+            NodeError::Encode(mooring_agent_proto::WriteError::BlobTooLarge { len: 1 }),
+            AgentUnreachable::ProtocolMismatch,
+        ),
+        (
+            NodeError::Unexpected {
+                request: RequestKind::Status,
+                response: mooring_agent_proto::ResponseKind::Hello,
+            },
+            AgentUnreachable::ProtocolMismatch,
+        ),
+        (NodeError::PastDeadline, AgentUnreachable::Timeout),
+        (
+            NodeError::End(MacsysError::Process {
+                call: mooring_macsys::ProcessCall::KillGroup,
+                errno: 1,
+            }),
+            AgentUnreachable::Transport,
         ),
     ] {
         assert_eq!(

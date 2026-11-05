@@ -1401,7 +1401,7 @@ Each tick does the following:
 
 1. **Inputs.**
    - If `state.json` changed, re-read state. Neither counter alone detects every change, because `Bookkeeping` records (§7) keep both.
-   - Secrets are re-read once per config generation and kept in memory.
+   - Secrets are re-read once per config generation and set of applied nodes, and kept in memory. *Corrected 2026-11-03:* they were re-read once per generation only, but `node apply` records a node applied as bookkeeping, which keeps the generation; with the exit enabled, the tick after the first apply rendered from secrets read while no node was applied, which held none of that node's, and the daemon stopped with the render's error.
    - `errSecInteractionNotAllowed` at read time → `Down(SecretsUnavailable)`.
 2. **Interfaces.**
    - `macsys` resolves the selectors from `NET_RT_IFLIST2`.
@@ -1411,6 +1411,7 @@ Each tick does the following:
 3. **Supervision of each engine.**
    - Render, and compare the digest with the running config. If it is unchanged, nothing restarts.
    - Run `<engine> check -c stdin`. A non-zero exit → `EngineConfigRejected{stderr_tail}`, with no retry.
+   - *Corrected 2026-11-05:* the check's 10 s budget includes writing its configuration, and startup configuration delivery has its own 10 s budget. A child that does not read stdin is killed and reaped at the deadline; the daemon does not block before starting its timer. Check diagnostics are drained with a 4096-byte retention limit, and a failed read is an error rather than partial output presented as complete.
    - Then `run -c stdin`. An exit within 10 s → `EngineStartFailed`, with no retry until an input changes or the user chooses Retry.
    - An exit after the engine has been healthy → backoff of 1, 2, 4 … 60 s. Five such exits in 10 minutes → `EngineCrashLoop`.
    - A stale engine recorded in `run/engine-*.pid` is killed only if `proc_pidpath` matches our engine path.

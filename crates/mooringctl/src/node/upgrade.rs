@@ -43,7 +43,7 @@ pub(crate) fn upgrade_agent(
         writeln!(out, "{node} already runs agent {sha}").map_err(output)?;
         return Ok(());
     }
-    let uploaded = upload_missing(session.as_mut(), [sha].into(), |_| Ok(bytes.clone()))?;
+    let uploaded = upload_missing(session.as_mut(), [sha].into(), &mut |_| Ok(bytes.clone()))?;
     writeln!(
         out,
         "{node}: runs agent {running}; agent {sha}, {uploaded} blob(s) uploaded"

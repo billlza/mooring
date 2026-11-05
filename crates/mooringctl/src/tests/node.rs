@@ -37,14 +37,14 @@ use crate::node::ssh::{Connect, Remote, Session, SshLinks, SshTarget, escaped, r
 use crate::node::{NodeError, NodeLinks};
 use crate::prompt::Answer;
 
-const ADDRESS: &str = "45.67.89.10";
+pub(crate) const ADDRESS: &str = "45.67.89.10";
 
 fn node_id(text: &str) -> NodeId {
     NodeId::parse(text).unwrap()
 }
 
 /// A host key file in the harness's home: `ssh-ed25519 <base64> comment`.
-fn host_key_file(harness: &Harness, name: &str) -> (PathBuf, Ed25519Pub) {
+pub(crate) fn host_key_file(harness: &Harness, name: &str) -> (PathBuf, Ed25519Pub) {
     let (_, public) = SshKeyPair::generate().unwrap().into_parts();
     let path = harness.home.path().join(name);
     fs::write(
@@ -61,7 +61,7 @@ fn host_key_file(harness: &Harness, name: &str) -> (PathBuf, Ed25519Pub) {
 
 /// A harness whose `lo0` faces the pinned M7 and whose support directory
 /// holds a fresh pilot deployment.
-fn deployed() -> Harness {
+pub(crate) fn deployed() -> Harness {
     let mut harness = Harness::new(0);
     harness.pin(PINNED);
     harness.link.gateway = Ok(Ipv4Addr::new(192, 168, 1, 1));
@@ -79,7 +79,7 @@ fn deployed() -> Harness {
 }
 
 /// `deployed()` with lon1 planned through `node new`.
-fn planned() -> (Harness, Ed25519Pub) {
+pub(crate) fn planned() -> (Harness, Ed25519Pub) {
     let mut harness = deployed();
     let (path, key) = host_key_file(&harness, "lon1_host.pub");
     let outcome = harness.run(&[
@@ -261,7 +261,7 @@ fn new_refuses_an_existing_id_a_bad_host_key_and_a_declined_answer() {
 }
 
 /// The `Hello` a Debian 13 amd64 node at `address` answers.
-fn hello(address: Ipv4Addr, debian: u16) -> Response {
+pub(crate) fn hello(address: Ipv4Addr, debian: u16) -> Response {
     Response::Hello(Box::new(HelloInfo {
         protocol: mooring_agent_proto::PROTOCOL,
         agent_sha: Sha256Hex::from_bytes([7; 32]),
@@ -289,19 +289,19 @@ pub(crate) fn hello_at(address: Ipv4Addr) -> Response {
     hello(address, 13)
 }
 
-fn agent_file(harness: &Harness) -> PathBuf {
+pub(crate) fn agent_file(harness: &Harness) -> PathBuf {
     let path = harness.home.path().join("mooring-agent");
     fs::write(&path, b"\x7fELF a static agent").unwrap();
     path
 }
 
-fn root_key(harness: &Harness) -> PathBuf {
+pub(crate) fn root_key(harness: &Harness) -> PathBuf {
     let path = harness.home.path().join("root_ed25519");
     fs::write(&path, b"the operator's own key").unwrap();
     path
 }
 
-fn adopt_args<'a>(agent: &'a str, root: Option<&'a str>) -> Vec<&'a str> {
+pub(crate) fn adopt_args<'a>(agent: &'a str, root: Option<&'a str>) -> Vec<&'a str> {
     let mut args = vec![
         "node",
         "adopt",
@@ -344,7 +344,7 @@ fn script_adoption(harness: &Harness, new_host: &Ed25519Pub, debian: u16) {
     script_after_bootstrap(harness, debian);
 }
 
-fn script_after_bootstrap(harness: &Harness, debian: u16) {
+pub(crate) fn script_after_bootstrap(harness: &Harness, debian: u16) {
     let nodes = &harness.nodes;
     nodes.expect(
         Expected::Empty {
@@ -702,7 +702,7 @@ fn the_ssh_command_line_is_the_designs() {
 }
 
 /// A directory private to the operator, as a node's is.
-fn private_dir(parent: &Path) -> PathBuf {
+pub(crate) fn private_dir(parent: &Path) -> PathBuf {
     let dir = parent.join("lon1");
     fs::create_dir(&dir).unwrap();
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
@@ -712,7 +712,7 @@ fn private_dir(parent: &Path) -> PathBuf {
 /// An executable script at `path`, run once with `warm`: a new script's
 /// first run waits on the system's scan of it, seconds on a loaded Mac, and
 /// that run is spent before a test's clock starts.
-fn script(path: &Path, body: &str) {
+pub(crate) fn script(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     std::process::Command::new(path)
@@ -723,7 +723,7 @@ fn script(path: &Path, body: &str) {
 
 /// A session's target through lo0, its relay socket in `relay_dir`, with
 /// `mooringctl` standing in for the ProxyCommand.
-fn session_target(
+pub(crate) fn session_target(
     dir: &Path,
     relay_dir: &Path,
     mooringctl: &Path,
@@ -743,7 +743,7 @@ fn session_target(
 
 /// `SshLinks` whose sessions open their connections with `connect`, for as
 /// long as the test process lives.
-fn links(
+pub(crate) fn links(
     connect: impl Fn(&M7Egress, SocketAddrV4, Duration) -> Result<TcpStream, NodeError> + Sync + 'static,
 ) -> SshLinks<'static> {
     let connect: &'static Connect = Box::leak(Box::new(connect));
@@ -752,7 +752,10 @@ fn links(
 
 /// What `run` returns, or the test's failure when it takes longer than
 /// `limit`: a session that never ends is a defect, not a test that hangs.
-fn within<T: Send + 'static>(limit: Duration, run: impl FnOnce() -> T + Send + 'static) -> T {
+pub(crate) fn within<T: Send + 'static>(
+    limit: Duration,
+    run: impl FnOnce() -> T + Send + 'static,
+) -> T {
     let (sent, received) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sent.send(run());

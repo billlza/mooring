@@ -68,6 +68,40 @@ const ALLOW: [&str; 7] = [
 
 const POLICY: &str = "only a connection you contract for yourself (your own phone's hotspot, your home broadband) may be allowed, never an institutional network (campus Wi-Fi, eduroam, Janet): on one the exit must stay down (P0-2)\n";
 
+/// A deployed harness whose exit has a separate uplink, en7 behind the
+/// home router, as the deployment's uplink selector names it.
+fn uplinked() -> Harness {
+    let mut harness = harness_with(fixture(|parts| {
+        parts.exit.uplink = Uplink::Separate(InterfaceSelector::GatewayLinkAddr {
+            gw_lladdr: MacAddr::from_bytes(OTHER).unwrap(),
+            subnet: "192.168.0.0/24".parse().unwrap(),
+        });
+    }));
+    harness.pin(PINNED);
+    harness.link.listed = Ok(vec![Interface {
+        index: NonZeroU32::new(7).unwrap(),
+        name: "en7".to_owned(),
+        link_type: 6,
+        lladdr: Some([0x02, 0x6d, 0x6f, 0x6f, 0x72, 0x07]),
+        up: true,
+        running: true,
+        mtu: 1500,
+        ibytes: 0,
+        obytes: 0,
+        baudrate: 0,
+        ipv4: vec![InterfaceAddrV4 {
+            addr: Ipv4Addr::new(192, 168, 0, 20),
+            prefix_len: Some(24),
+        }],
+        ipv6: Vec::new(),
+    }]);
+    harness
+        .link
+        .routes
+        .insert(7, (Ok(Ipv4Addr::new(192, 168, 0, 1)), Ok(OTHER)));
+    harness
+}
+
 /// Runs `args` expecting the refusal `stderr`: exit 1, nothing asked, no
 /// declaration written.
 fn refused(harness: &mut Harness, args: &[&str], stderr: &str) {
@@ -196,34 +230,7 @@ fn allow_network_refuses_the_exits_own_path_and_a_network_it_cannot_identify() {
     );
     // The separate uplink: en7 behind the home router, named by the
     // deployment's uplink selector.
-    let mut uplinked = harness_with(fixture(|parts| {
-        parts.exit.uplink = Uplink::Separate(InterfaceSelector::GatewayLinkAddr {
-            gw_lladdr: MacAddr::from_bytes(OTHER).unwrap(),
-            subnet: "192.168.0.0/24".parse().unwrap(),
-        });
-    }));
-    uplinked.pin(PINNED);
-    uplinked.link.listed = Ok(vec![Interface {
-        index: NonZeroU32::new(7).unwrap(),
-        name: "en7".to_owned(),
-        link_type: 6,
-        lladdr: Some([0x02, 0x6d, 0x6f, 0x6f, 0x72, 0x07]),
-        up: true,
-        running: true,
-        mtu: 1500,
-        ibytes: 0,
-        obytes: 0,
-        baudrate: 0,
-        ipv4: vec![InterfaceAddrV4 {
-            addr: Ipv4Addr::new(192, 168, 0, 20),
-            prefix_len: Some(24),
-        }],
-        ipv6: Vec::new(),
-    }]);
-    uplinked
-        .link
-        .routes
-        .insert(7, (Ok(Ipv4Addr::new(192, 168, 0, 1)), Ok(OTHER)));
+    let mut uplinked = uplinked();
     uplinked.link.services = Ok(vec![service(
         "en7",
         Some([192, 168, 0, 1]),
@@ -304,6 +311,40 @@ fn allow_network_refuses_the_exits_own_path_and_a_network_it_cannot_identify() {
         &mut blind,
         &ALLOW,
         "mooringctl: reading configd's network services failed\n  caused by: the system configuration store could not be opened\n",
+    );
+}
+
+/// With a separate uplink, another interface than the uplink may be
+/// declared, as when the uplink is not there at all; an uplink whose
+/// tables cannot be read refuses the declaration, never takes it as
+/// absent.
+#[test]
+fn allow_network_beside_a_separate_uplink_needs_its_tables() {
+    let mut allowed = uplinked();
+    allowed.link.services = Ok(hotspot());
+    let mut args = ALLOW.to_vec();
+    args.push("--yes");
+    let outcome = allowed.run(&args);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        read_allowed_networks(&allowed.support_dir()).unwrap().len(),
+        1
+    );
+    let mut absent = uplinked();
+    absent.link.listed = Ok(Vec::new());
+    absent.link.services = Ok(hotspot());
+    let outcome = absent.run(&args);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let mut unreadable = uplinked();
+    unreadable
+        .link
+        .routes
+        .insert(7, (Err(MacsysError::Sysctl { errno: 12 }), Ok(OTHER)));
+    unreadable.link.services = Ok(hotspot());
+    refused(
+        &mut unreadable,
+        &args,
+        "mooringctl: reading the kernel's network tables failed\n  caused by: sysctl failed with errno 12\n",
     );
 }
 

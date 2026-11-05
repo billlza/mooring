@@ -290,6 +290,36 @@ fn the_exit_site_resolves_to_the_machine_s_egress_or_its_fault() {
     ));
 }
 
+/// An interface the kernel lists under a name that is no BSD name is never
+/// selected, whatever it carries; a separate uplink whose tables cannot be
+/// read is the daemon's error, never an absent uplink.
+#[test]
+fn an_oddly_named_interface_is_not_selected_and_an_unreadable_uplink_is_an_error() {
+    let odd = interface(9, "not a name", OWN, Some([192, 168, 1, 20]), true);
+    assert!(matches!(
+        resolve(
+            &link(vec![odd], &[(9, (Ok(M7), Ok(PINNED)))]),
+            &behind_the_m7()
+        ),
+        Err(ResolveError::Absent)
+    ));
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let mut site = fixture.deployment.exit().clone();
+    site.uplink = Uplink::Separate(InterfaceSelector::GatewayLinkAddr {
+        gw_lladdr: MacAddr::from_bytes(OTHER).unwrap(),
+        subnet: "10.0.0.0/24".parse().unwrap(),
+    });
+    let en8 = interface(8, "en8", OWN, Some([192, 168, 1, 20]), true);
+    let unreadable = link(
+        vec![en8],
+        &[(8, (Err(MacsysError::Sysctl { errno: 12 }), Ok(OTHER)))],
+    );
+    assert!(matches!(
+        exit_interfaces(&unreadable, &site),
+        Err(LocalError::Kernel(MacsysError::Sysctl { errno: 12 }))
+    ));
+}
+
 fn name(text: &str) -> BsdName {
     BsdName::parse(text).unwrap()
 }
@@ -512,7 +542,7 @@ fn the_check_allows_cfm_tun_and_a_declared_network_and_exempts_the_uplink() {
 }
 
 /// A reflector on loopback that answers each connection with `answer`.
-fn reflector(answer: &'static [u8]) -> SocketAddrV4 {
+pub(crate) fn reflector(answer: &'static [u8]) -> SocketAddrV4 {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -666,7 +696,7 @@ fn the_power_helpers_lines_are_read_as_events_until_one_is_not() {
 
     let read = |input: &[u8]| {
         let mut events = Vec::new();
-        let ended = read_lines(input, |event| {
+        let ended = read_lines(&mut &input[..], &mut |event| {
             events.push(event);
             true
         });
@@ -700,7 +730,7 @@ fn the_power_helpers_lines_are_read_as_events_until_one_is_not() {
         "the power helper wrote a line longer than its protocol allows"
     );
     // A reader that stops taking events ends the reading.
-    let ended = read_lines(&b"\"did_wake\"\n\"did_wake\"\n"[..], |_| false);
+    let ended = read_lines(&mut &b"\"did_wake\"\n\"did_wake\"\n"[..], &mut |_| false);
     assert_eq!(ended, "the daemon stopped reading the power helper");
 }
 

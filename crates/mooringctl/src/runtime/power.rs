@@ -168,7 +168,7 @@ pub(crate) fn spawn_at(path: &Path) -> Result<PowerLink, LocalError> {
 /// Reads `stdout` to its end, one event per line, and passes each on, then
 /// why the reading ended.
 fn read_events(stdout: ChildStdout, sender: &mpsc::Sender<PowerMessage>) {
-    let ended = read_lines(BufReader::new(stdout), |event| {
+    let ended = read_lines(&mut BufReader::new(stdout), &mut |event| {
         sender.send(PowerMessage::Event(event)).is_ok()
     });
     // The loop has stopped if no one receives this.
@@ -178,17 +178,18 @@ fn read_events(stdout: ChildStdout, sender: &mpsc::Sender<PowerMessage>) {
 /// Reads `reader` line by line, passing each event to `deliver` while it
 /// returns `true`, and returns why the reading ended: the end of the
 /// output, a line that is not an event or is longer than the protocol's
-/// bound, or a read that failed.
+/// bound, or a read that failed. (Trait objects, so the helper's reader
+/// and the tests share one copy of this code.)
 pub(crate) fn read_lines(
-    mut reader: impl BufRead,
-    mut deliver: impl FnMut(HelperEvent) -> bool,
+    reader: &mut dyn BufRead,
+    deliver: &mut dyn FnMut(HelperEvent) -> bool,
 ) -> String {
     // usize to u64 is lossless on every target.
     let limit = MAX_HELPER_LINE_BYTES as u64;
     let mut line = Vec::with_capacity(MAX_HELPER_LINE_BYTES);
     loop {
         line.clear();
-        match (&mut reader).take(limit).read_until(b'\n', &mut line) {
+        match (&mut *reader).take(limit).read_until(b'\n', &mut line) {
             Ok(0) => return "the power helper exited".to_owned(),
             Ok(_) if line.last() != Some(&b'\n') => {
                 return if line.len() >= MAX_HELPER_LINE_BYTES {

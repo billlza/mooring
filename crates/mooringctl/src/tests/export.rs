@@ -216,6 +216,41 @@ fn export_into_a_missing_folder_fails_before_reading_the_keychain() {
         outcome.stderr
     );
     assert!(!out.exists());
+    // A path through a file cannot even be looked at.
+    let file = harness.home.path().join("file");
+    fs::write(&file, b"").unwrap();
+    let out = file.join("user.json");
+    let outcome = harness.run(&["user", "export", user.as_str(), "--out", arg(&out)]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: cannot use the folder of {}\n  caused by: Not a directory (os error 20)\n",
+            out.display()
+        )
+    );
+}
+
+/// A folder that takes no new file fails the write after every check:
+/// nothing of the file is left.
+#[test]
+fn export_into_a_folder_that_takes_no_file_leaves_nothing() {
+    let deployment = fixture(|_| {});
+    let user = first_user(&deployment);
+    let (mut harness, folder) = exporting(deployment);
+    let out = folder.join("user.json");
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o500)).unwrap();
+    let outcome = harness.run(&["user", "export", user.as_str(), "--out", arg(&out)]);
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: cannot write the export to {}; no part of it is left\n  caused by: Permission denied (os error 13)\n",
+            out.display()
+        )
+    );
+    assert!(!out.exists());
 }
 
 /// A secret missing from the keychain fails the export and leaves no file.

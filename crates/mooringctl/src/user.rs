@@ -11,7 +11,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use mooring_export::{ExportError, ExportErrorKind, ExportFormat, export_secret_refs, export_user};
-use mooring_keys::{KeysError, credentials};
+use mooring_keys::credentials;
 use mooring_model::ids::MAX_LABEL_CHARS;
 use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::SecretEntry;
@@ -26,10 +26,6 @@ use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::prompt::{Console, Line};
 use crate::state::{load, output, state_change};
-
-fn keys(error: KeysError) -> LocalError {
-    LocalError::Keys(error)
-}
 
 /// The most bytes read for a label: [`MAX_LABEL_CHARS`] characters of at
 /// most four UTF-8 bytes each.
@@ -73,7 +69,7 @@ pub(crate) fn add(
     let store = Store::new(support_dir(env)?);
     let state = load(&store)?;
     let label = read_label(env.console)?;
-    let id = credentials::user_id().map_err(keys)?;
+    let id = credentials::user_id().map_err(LocalError::Keys)?;
     let mut per_node = BTreeMap::new();
     let mut secrets = Vec::new();
     for node in state.deployment.nodes().values().filter(|node| {
@@ -85,23 +81,23 @@ pub(crate) fn add(
         per_node.insert(
             node.id.clone(),
             UserNodePublic {
-                short_id: credentials::short_id().map_err(keys)?,
+                short_id: credentials::short_id().map_err(LocalError::Keys)?,
             },
         );
         secrets.push(SecretEntry::UserVlessUuid(
             id.clone(),
             node.id.clone(),
-            credentials::credential_uuid().map_err(keys)?,
+            credentials::credential_uuid().map_err(LocalError::Keys)?,
         ));
         secrets.push(SecretEntry::UserHy2Password(
             id.clone(),
             node.id.clone(),
-            credentials::password().map_err(keys)?,
+            credentials::password().map_err(LocalError::Keys)?,
         ));
         secrets.push(SecretEntry::UserLoopUuid(
             id.clone(),
             node.id.clone(),
-            credentials::credential_uuid().map_err(keys)?,
+            credentials::credential_uuid().map_err(LocalError::Keys)?,
         ));
     }
     let nodes = per_node
@@ -180,7 +176,7 @@ pub(crate) fn alias(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result
         }
         .into());
     }
-    let alias = credentials::public_alias().map_err(keys)?;
+    let alias = credentials::public_alias().map_err(LocalError::Keys)?;
     store
         .update_config(state.deployment.config_generation(), |mut parts| {
             for candidate in &mut parts.users {
@@ -376,16 +372,17 @@ fn warnings(env: &Env<'_>, folder: &Path) -> Vec<String> {
 /// Creates `path` with mode 0600 and writes `bytes`; on a failure after it
 /// was created, removes it, because it would hold the user's credentials.
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
-    write_new_with(path, |file| {
+    write_new_with(path, &mut |file| {
         file.write_all(bytes)?;
         file.sync_all()
     })
 }
 
-/// [`write_new`] with the writing given, so the tests can fail it.
+/// [`write_new`] with the writing given, so the tests can fail it (one
+/// function, not one per closure, so every caller runs the same code).
 fn write_new_with(
     path: &Path,
-    write: impl FnOnce(&mut fs::File) -> io::Result<()>,
+    write: &mut dyn FnMut(&mut fs::File) -> io::Result<()>,
 ) -> Result<(), CommandError> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -427,8 +424,9 @@ mod tests {
     use std::fs;
     use std::io::{self, Write};
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
 
-    use super::write_new_with;
+    use super::{folder_of, write_new, write_new_with};
     use crate::error::{CommandError, LocalError};
 
     /// A write that fails after the file was created leaves no file.
@@ -436,15 +434,15 @@ mod tests {
     fn a_failed_write_removes_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("user.json");
-        let error = write_new_with(&path, |file| {
+        let error = write_new_with(&path, &mut |file| {
             file.write_all(b"partial")?;
             Err(io::Error::other("disk full"))
         })
         .unwrap_err();
-        let CommandError::Local(LocalError::ExportWrite { path: reported, .. }) = error else {
-            panic!("{error:?}");
-        };
-        assert_eq!(reported, path);
+        assert!(
+            matches!(&error, CommandError::Local(LocalError::ExportWrite { path: reported, .. }) if *reported == path),
+            "{error:?}"
+        );
         assert!(!path.exists());
     }
 
@@ -454,7 +452,7 @@ mod tests {
     fn a_file_that_cannot_be_removed_is_reported() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("user.json");
-        let error = write_new_with(&path, |_| {
+        let error = write_new_with(&path, &mut |_| {
             // A folder without write permission keeps its entries.
             fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500))?;
             Err(io::Error::other("disk full"))
@@ -462,14 +460,51 @@ mod tests {
         .unwrap_err();
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
         assert!(path.exists());
-        let CommandError::Local(local @ LocalError::ExportLeftBehind { .. }) = error else {
-            panic!("{error:?}");
-        };
         assert!(
-            local
+            matches!(&error, CommandError::Local(LocalError::ExportLeftBehind { path: reported, removal, source })
+                if *reported == path && removal.kind() == io::ErrorKind::PermissionDenied
+                    && source.to_string() == "disk full"),
+            "{error:?}"
+        );
+        assert!(
+            error
                 .to_string()
                 .ends_with("cannot remove what was written (Permission denied (os error 13)): delete the file by hand"),
-            "{local}"
+            "{error}"
+        );
+    }
+
+    /// A file that appeared since the check is never overwritten, and a
+    /// file that cannot be made is the write's failure; neither is written.
+    #[test]
+    fn a_file_that_exists_or_cannot_be_made_is_never_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("user.json");
+        fs::write(&path, b"earlier").unwrap();
+        let error = write_new(&path, b"the user's file").unwrap_err();
+        assert!(
+            matches!(&error, CommandError::Local(LocalError::ExportExists { path: reported }) if *reported == path),
+            "{error:?}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"earlier");
+        let missing = dir.path().join("missing").join("user.json");
+        let error = write_new(&missing, b"the user's file").unwrap_err();
+        assert!(
+            matches!(&error, CommandError::Local(LocalError::ExportWrite { path: reported, source }) if *reported == missing && source.kind() == io::ErrorKind::NotFound),
+            "{error:?}"
+        );
+        assert!(!missing.exists());
+    }
+
+    /// A file named without a folder goes in the current one.
+    #[test]
+    fn a_bare_file_name_goes_in_the_current_folder() {
+        let current = fs::canonicalize(".").unwrap();
+        assert_eq!(folder_of(Path::new("user.json")).unwrap(), current);
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            folder_of(&dir.path().join("user.json")).unwrap(),
+            fs::canonicalize(dir.path()).unwrap()
         );
     }
 }

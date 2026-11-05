@@ -167,6 +167,52 @@ fn add_skips_a_retiring_node() {
     assert_eq!(harness.secrets.refs(), user_refs(&user.id, &["lon1"]));
 }
 
+/// With no node planned, adopted or applied, the user is added holding no
+/// credentials, and the command says so.
+#[test]
+fn a_user_added_with_no_active_node_holds_no_credentials() {
+    let before = fixture(|parts| {
+        parts.nodes.clear();
+        for user in &mut parts.users {
+            user.per_node.clear();
+        }
+    });
+    let mut harness = adding(before.clone(), Some(LABEL));
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let user = added(&before, &store(&harness).load().unwrap().deployment);
+    assert!(user.per_node.is_empty());
+    assert!(harness.secrets.is_empty());
+    assert!(
+        outcome.stdout.starts_with(&format!(
+            "added user {}: CFM 0.5, no credentials yet: no node is active\n",
+            user.id
+        )),
+        "{}",
+        outcome.stdout
+    );
+}
+
+/// A label typed in bytes that are not UTF-8 is refused like any other
+/// label that is not one, and nothing is written.
+#[test]
+fn a_label_that_is_not_utf_8_is_refused() {
+    let mut harness = harness_with(fixture(|_| {}));
+    harness
+        .console
+        .lines
+        .push_back(Some(vec![b'a', 0xff, b'b']));
+    let before = state_bytes(&harness);
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: the label was not accepted\n  caused by: label must be 1-64 characters, without control characters or surrounding whitespace\n"
+    );
+    assert_eq!(state_bytes(&harness), before);
+    assert!(harness.secrets.is_empty());
+}
+
 /// Every refusal exits 1, leaves `state.json` byte for byte as it was and
 /// writes nothing to the keychain.
 #[test]

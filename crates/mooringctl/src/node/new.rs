@@ -54,12 +54,21 @@ pub(crate) fn new(
     }
     let host = read_host_key(host_key)?;
     let now = (env.clock)()?;
-    let keys = |error| LocalError::Keys(error);
-    let (reality_private, reality_public) = RealityKeyPair::generate().map_err(keys)?.into_parts();
-    let (vps_private, vps_public) = WgKeyPair::generate().map_err(keys)?.into_parts();
-    let (mac_private, mac_public) = WgKeyPair::generate().map_err(keys)?.into_parts();
-    let (certificate, hy2_key) = Hy2Certificate::generate(now).map_err(keys)?.into_parts();
-    let (bootstrap_seed, _) = SshKeyPair::generate().map_err(keys)?.into_parts();
+    let (reality_private, reality_public) = RealityKeyPair::generate()
+        .map_err(LocalError::Keys)?
+        .into_parts();
+    let (vps_private, vps_public) = WgKeyPair::generate()
+        .map_err(LocalError::Keys)?
+        .into_parts();
+    let (mac_private, mac_public) = WgKeyPair::generate()
+        .map_err(LocalError::Keys)?
+        .into_parts();
+    let (certificate, hy2_key) = Hy2Certificate::generate(now)
+        .map_err(LocalError::Keys)?
+        .into_parts();
+    let (bootstrap_seed, _) = SshKeyPair::generate()
+        .map_err(LocalError::Keys)?
+        .into_parts();
     let ports = PortPlan::with_defaults(DEBIAN_EPHEMERAL_PORTS).map_err(LocalError::NodePlan)?;
     let mut secrets = vec![
         SecretEntry::NodeRealityPrivate(id.clone(), reality_private),
@@ -67,15 +76,24 @@ pub(crate) fn new(
         SecretEntry::NodeWgMacPrivate(id.clone(), mac_private),
         SecretEntry::NodeHy2Key(id.clone(), hy2_key),
         SecretEntry::NodeSshBootstrapPrivate(id.clone(), bootstrap_seed),
-        SecretEntry::ProbeVlessUuid(id.clone(), credentials::credential_uuid().map_err(keys)?),
-        SecretEntry::ProbeHy2Password(id.clone(), credentials::password().map_err(keys)?),
-        SecretEntry::ProbeLoopUuid(id.clone(), credentials::credential_uuid().map_err(keys)?),
+        SecretEntry::ProbeVlessUuid(
+            id.clone(),
+            credentials::credential_uuid().map_err(LocalError::Keys)?,
+        ),
+        SecretEntry::ProbeHy2Password(
+            id.clone(),
+            credentials::password().map_err(LocalError::Keys)?,
+        ),
+        SecretEntry::ProbeLoopUuid(
+            id.clone(),
+            credentials::credential_uuid().map_err(LocalError::Keys)?,
+        ),
     ];
     for (listener, _) in ports.hy2_listeners() {
         secrets.push(SecretEntry::NodeHy2Obfs(
             id.clone(),
             listener,
-            credentials::password().map_err(keys)?,
+            credentials::password().map_err(LocalError::Keys)?,
         ));
     }
     let served: Vec<_> = state
@@ -92,21 +110,24 @@ pub(crate) fn new(
         .collect();
     let mut credentials_of = Vec::new();
     for user in &served {
-        credentials_of.push((user.clone(), credentials::short_id().map_err(keys)?));
+        credentials_of.push((
+            user.clone(),
+            credentials::short_id().map_err(LocalError::Keys)?,
+        ));
         secrets.push(SecretEntry::UserVlessUuid(
             user.clone(),
             id.clone(),
-            credentials::credential_uuid().map_err(keys)?,
+            credentials::credential_uuid().map_err(LocalError::Keys)?,
         ));
         secrets.push(SecretEntry::UserHy2Password(
             user.clone(),
             id.clone(),
-            credentials::password().map_err(keys)?,
+            credentials::password().map_err(LocalError::Keys)?,
         ));
         secrets.push(SecretEntry::UserLoopUuid(
             user.clone(),
             id.clone(),
-            credentials::credential_uuid().map_err(keys)?,
+            credentials::credential_uuid().map_err(LocalError::Keys)?,
         ));
     }
     let node = Node {
@@ -117,7 +138,7 @@ pub(crate) fn new(
         ssh: SshPin { host_ed25519: host },
         reality: RealityServer {
             public_key: reality_public,
-            probe_short_id: credentials::short_id().map_err(keys)?,
+            probe_short_id: credentials::short_id().map_err(LocalError::Keys)?,
             target: None,
         },
         hy2: Hy2Server { certificate },

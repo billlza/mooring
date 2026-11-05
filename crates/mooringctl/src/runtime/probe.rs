@@ -98,7 +98,7 @@ fn connect_within(socket: &Socket, target: &SockAddr, timeout: Duration) -> io::
 }
 
 /// The reflector's line on `stream`, read before `timeout` from `started`.
-fn read_address(
+pub(crate) fn read_address(
     mut stream: TcpStream,
     started: Instant,
     timeout: Duration,

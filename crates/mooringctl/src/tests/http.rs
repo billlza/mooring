@@ -174,6 +174,58 @@ fn oversized_bodies_are_refused_before_reading() {
     let mut closing = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
     closing.extend(vec![b'x'; MAX_BODY_BYTES + 1]);
     assert_eq!(get_bytes(&closing), fault(HttpFault::TooLarge));
+    // One that ends exactly at the limit is accepted.
+    closing.pop();
+    assert_eq!(
+        get_bytes(&closing).map(|body| body.len()),
+        Ok(MAX_BODY_BYTES)
+    );
+}
+
+/// A chunk may end with a bare line feed, as a line of the head may; the
+/// trailers are bounded like the head's lines.
+#[test]
+fn a_chunk_may_end_with_a_bare_line_feed_and_the_trailers_are_bounded() {
+    assert_eq!(
+        get_bytes(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\n0\r\n\r\n"),
+        Ok(b"{}".to_vec())
+    );
+    let mut trailers = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
+    for _ in 0..=64 {
+        trailers.extend(b"Trailer: x\r\n");
+    }
+    trailers.extend(b"\r\n");
+    assert_eq!(get_bytes(&trailers), fault(HttpFault::TooManyHeaders));
+}
+
+/// A connection the far end never answers times out at the connect
+/// limit: on macOS a loopback port held by a socket that is only bound
+/// drops the connection's SYN unanswered (support's `RefusingPort`).
+#[test]
+fn a_connection_never_answered_times_out_connecting() {
+    let held = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .unwrap();
+    held.bind(&std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, 0)).into())
+        .unwrap();
+    let port = held.local_addr().unwrap().as_socket().unwrap().port();
+    let timeouts = Timeouts {
+        connect: Duration::from_millis(200),
+        io: Duration::from_millis(200),
+        total: Duration::from_secs(5),
+    };
+    let started = Instant::now();
+    let result = Client::new(endpoint(port), timeouts).model_json();
+    assert_eq!(
+        result.map(|body| body.as_bytes().to_vec()),
+        Err(RouterError::unreachable(UnreachableCause::Timeout {
+            phase: Phase::Connect
+        }))
+    );
+    assert!(started.elapsed() < Duration::from_secs(4));
 }
 
 #[test]
