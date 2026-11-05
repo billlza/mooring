@@ -65,10 +65,10 @@ const DEADLINE: Duration = Duration::from_secs(10);
 
 /// Work on its own thread, whose result a test waits for at most
 /// [`DEADLINE`].
-struct Running<T>(mpsc::Receiver<T>);
+pub(crate) struct Running<T>(mpsc::Receiver<T>);
 
 impl<T: Send + 'static> Running<T> {
-    fn start(work: impl FnOnce() -> T + Send + 'static) -> Self {
+    pub(crate) fn start(work: impl FnOnce() -> T + Send + 'static) -> Self {
         let (done, result) = mpsc::channel();
         thread::spawn(move || {
             // Nothing waits any more once the test has failed.
@@ -77,7 +77,7 @@ impl<T: Send + 'static> Running<T> {
         Self(result)
     }
 
-    fn result(self) -> T {
+    pub(crate) fn result(self) -> T {
         self.0
             .recv_timeout(DEADLINE)
             .unwrap_or_else(|error| panic!("not done within {DEADLINE:?}: {error}"))
@@ -97,7 +97,7 @@ fn short_dir() -> TempDir {
 }
 
 /// A harness whose `HOME` is short enough for the control socket's path.
-fn harness() -> Harness {
+pub(crate) fn harness() -> Harness {
     let mut harness = Harness::new(9);
     harness.home = short_dir();
     harness
@@ -1212,7 +1212,7 @@ fn clients_beyond_the_limit_are_told_busy() {
 /// A fake daemon on the harness's control socket that answers one
 /// connection as the daemon does, with the protocol line and then
 /// `replies`, then closes it, and returns the request it read.
-fn fake_daemon(harness: &Harness, replies: Vec<Vec<u8>>) -> Running<Vec<u8>> {
+pub(crate) fn fake_daemon(harness: &Harness, replies: Vec<Vec<u8>>) -> Running<Vec<u8>> {
     let mut lines = vec![protocol_line()];
     lines.extend(replies);
     raw_daemon(harness, lines)
@@ -1220,7 +1220,7 @@ fn fake_daemon(harness: &Harness, replies: Vec<Vec<u8>>) -> Running<Vec<u8>> {
 
 /// [`fake_daemon`] with exactly `lines`, and no protocol line unless one of
 /// them is.
-fn raw_daemon(harness: &Harness, lines: Vec<Vec<u8>>) -> Running<Vec<u8>> {
+pub(crate) fn raw_daemon(harness: &Harness, lines: Vec<Vec<u8>>) -> Running<Vec<u8>> {
     let paths = RunPaths::under(&harness.support_dir());
     fs::create_dir_all(&paths.dir).unwrap();
     let listener = UnixListener::bind(&paths.socket).unwrap();
@@ -1237,7 +1237,7 @@ fn raw_daemon(harness: &Harness, lines: Vec<Vec<u8>>) -> Running<Vec<u8>> {
     })
 }
 
-fn available_line(at: u64) -> Vec<u8> {
+pub(crate) fn available_line(at: u64) -> Vec<u8> {
     status_line(
         at,
         RouterReading::Available {
@@ -1249,7 +1249,7 @@ fn available_line(at: u64) -> Vec<u8> {
 }
 
 /// The document `status --json` prints for a reply line: the status alone.
-fn document_of(reply: &[u8]) -> String {
+pub(crate) fn document_of(reply: &[u8]) -> String {
     let DaemonReply::Status(status) = decode_reply(reply).unwrap() else {
         panic!("a status reply");
     };

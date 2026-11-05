@@ -565,30 +565,52 @@ fn observe_refuses_no_answer_and_another_gateway() {
 }
 
 /// `exit retry` asks the daemon on the control socket, and reports a
-/// refusal as the daemon's.
+/// refusal as the daemon's; a status in place of the answer, or no answer
+/// before the daemon closes, is refused.
 #[test]
 fn retry_asks_the_daemon_and_reports_its_answer() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
 
+    use mooring_daemon_core::console::{ConsoleStatus, UndeployedStatus};
     use mooring_daemon_core::control::{
         DaemonReply, MAX_REPLY_LINE_BYTES, ProtocolLine, Refusal, encode_line,
     };
+    use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
 
+    let a_status = DaemonReply::Status(ConsoleStatus::NoDeployment(UndeployedStatus::new(
+        mooring_model::UnixTime::from_secs(super::support::NOW),
+        RouterReading::Unavailable {
+            reason: RouterUnavailableReason::Unreachable,
+            last_polled_at: None,
+        },
+    )));
     for (reply, code, stdout, stderr) in [
         (
-            DaemonReply::RetryQueued,
+            Some(DaemonReply::RetryQueued),
             0,
             "retry queued: the daemon clears the latch and runs a fresh preflight at its next tick; `mooringctl status` shows the outcome\n",
             "",
         ),
         (
-            DaemonReply::Refused {
+            Some(DaemonReply::Refused {
                 reason: Refusal::NotDeployed,
-            },
+            }),
             EXIT_LOCAL,
             "",
             "mooringctl: the daemon refused the request: there is no deployment yet (`exit init` creates it)\n",
+        ),
+        (
+            Some(a_status),
+            EXIT_LOCAL,
+            "",
+            "mooringctl: the daemon answered with a reply to another request\n",
+        ),
+        (
+            None,
+            EXIT_LOCAL,
+            "",
+            "mooringctl: the daemon closed the status stream\n",
         ),
     ] {
         // A home short enough for the control socket's path (SUN_LEN).
@@ -601,7 +623,9 @@ fn retry_asks_the_daemon_and_reports_its_answer() {
         fs::create_dir_all(&paths.dir).unwrap();
         let listener = UnixListener::bind(&paths.socket).unwrap();
         let protocol = encode_line(&ProtocolLine::CURRENT, MAX_REPLY_LINE_BYTES).unwrap();
-        let line = encode_line(&reply, MAX_REPLY_LINE_BYTES).unwrap();
+        let line = reply.map_or_else(Vec::new, |reply| {
+            encode_line(&reply, MAX_REPLY_LINE_BYTES).unwrap()
+        });
         let daemon = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             stream.write_all(&protocol).unwrap();
@@ -618,4 +642,111 @@ fn retry_asks_the_daemon_and_reports_its_answer() {
         assert_eq!(outcome.stdout, stdout);
         assert_eq!(outcome.stderr, stderr);
     }
+}
+
+/// Runs `args` with the support directory's mode set to `mode`, then set
+/// back to 0700.
+fn with_support_mode(harness: &mut Harness, mode: u32, args: &[&str]) -> super::support::Outcome {
+    use std::os::unix::fs::PermissionsExt;
+
+    let support = harness.support_dir();
+    fs::set_permissions(&support, fs::Permissions::from_mode(mode)).unwrap();
+    let outcome = harness.run(args);
+    fs::set_permissions(&support, fs::Permissions::from_mode(0o700)).unwrap();
+    outcome
+}
+
+/// A support directory that cannot be searched or written stops `exit
+/// init`: whether a deployment exists cannot be told, or the new state
+/// cannot be written. Neither leaves a state behind.
+#[test]
+fn init_refuses_a_support_directory_it_cannot_use() {
+    let mut harness = facing_the_m7();
+    let outcome = with_support_mode(&mut harness, 0o000, &INIT);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome.stderr.starts_with(&format!(
+            "mooringctl: cannot inspect {}\n",
+            store(&harness).state_path().display()
+        )),
+        "{}",
+        outcome.stderr
+    );
+    let mut args = INIT.to_vec();
+    args.push("--yes");
+    let outcome = with_support_mode(&mut harness, 0o500, &args);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: the state was not changed\n"),
+        "{}",
+        outcome.stderr
+    );
+    assert!(!store(&harness).state_path().exists());
+}
+
+/// A state that cannot be written stops `exit enable` and `exit
+/// record-carrier`, which change nothing.
+#[test]
+fn a_state_that_cannot_be_written_changes_nothing() {
+    let deployment = fixture(|parts| parts.exit.egress_check = None);
+    let mut harness = harness_with(deployment);
+    // The lock file a first read makes is there, as after any command.
+    store(&harness).load().unwrap();
+    let before = state_bytes(&harness);
+    for args in [
+        &["exit", "enable"][..],
+        &[
+            "exit",
+            "record-carrier",
+            "--prefix",
+            "31.120.0.0/14",
+            "--pairing",
+            "paired",
+            "--yes",
+        ],
+    ] {
+        let outcome = with_support_mode(&mut harness, 0o500, args);
+        assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
+        assert!(
+            outcome
+                .stderr
+                .starts_with("mooringctl: the state was not changed\n"),
+            "{args:?}: {}",
+            outcome.stderr
+        );
+        assert_eq!(state_bytes(&harness), before, "{args:?}");
+    }
+}
+
+/// A node without a site has no reflector to ask: `exit observe` passes it
+/// by.
+#[test]
+fn observe_passes_a_node_without_a_site_by() {
+    let mut harness = observing(|parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|node| node.id.as_str() == "ams1")
+            .unwrap();
+        ams1.lifecycle = mooring_model::node::NodeLifecycle::Planned;
+    });
+    harness
+        .probes
+        .borrow_mut()
+        .push_back(Ok(Ipv4Addr::new(31, 120, 5, 6)));
+    let outcome = harness.run(&["exit", "observe", "--interface", "lo0"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "lon1: the reflector sees 31.120.5.6 (inside the recorded carrier prefixes)\n"
+    );
+    let probed: Vec<String> = harness
+        .probed
+        .borrow()
+        .iter()
+        .map(|(_, reflector)| reflector.to_string())
+        .collect();
+    assert_eq!(probed, ["45.67.89.10:27900"]);
 }

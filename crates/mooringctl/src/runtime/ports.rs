@@ -2,9 +2,10 @@
 
 //! The exit machine's ports on the Mac (design §10.1, §10.2): the
 //! `mooring-exit` config rendered from the Keychain's WireGuard keys (read
-//! once per configuration generation), the engine checked against its pin
-//! before every check and start, the direct probe, the latch file, and the
-//! node calls over the operations key's sessions through the M7.
+//! once per configuration generation and set of applied nodes), the engine
+//! checked against its pin before every check and start, the direct probe,
+//! the latch file, and the node calls over the operations key's sessions
+//! through the M7.
 //!
 //! An engine an earlier daemon left is stopped at start
 //! ([`stop_stale_engine`]) only when its pid file names a process whose
@@ -67,9 +68,20 @@ pub(crate) struct DaemonPorts<'e, 'a> {
     pins: Pins<'a>,
     running: Option<Running>,
     prober: Option<Running>,
-    secrets: Option<(ConfigGeneration, SecretSnapshot)>,
+    secrets: Option<HeldSecrets>,
     egress: Option<BsdName>,
     notes: Vec<String>,
+}
+
+/// The secrets read for the engines' configs, and what they were read for:
+/// a configuration generation and the references its applied nodes need.
+/// `node apply` keeps the generation and adds a node's references, so the
+/// generation alone does not say whether the secrets held are the ones
+/// needed.
+struct HeldSecrets {
+    generation: ConfigGeneration,
+    refs: BTreeSet<SecretRef>,
+    snapshot: SecretSnapshot,
 }
 
 impl std::fmt::Debug for DaemonPorts<'_, '_> {
@@ -131,16 +143,10 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
     /// The secrets the two engines' configs hold: each applied node's
     /// WireGuard key, and the probe identity's credentials and the first
     /// listener's obfuscation password on it. They are read once per
-    /// generation; `None` when the Keychain would have to ask.
+    /// generation and set of applied nodes; `None` when the Keychain would
+    /// have to ask.
     fn secrets(&mut self, deployment: &Deployment) -> Result<Option<&SecretSnapshot>, LocalError> {
         let generation = deployment.config_generation();
-        if self
-            .secrets
-            .as_ref()
-            .is_some_and(|(held, _)| *held == generation)
-        {
-            return Ok(self.secrets.as_ref().map(|(_, secrets)| secrets));
-        }
         let refs: BTreeSet<SecretRef> = deployment
             .nodes()
             .values()
@@ -154,10 +160,21 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
                 ]
             })
             .collect();
+        if self
+            .secrets
+            .as_ref()
+            .is_some_and(|held| held.generation == generation && held.refs == refs)
+        {
+            return Ok(self.secrets.as_ref().map(|held| &held.snapshot));
+        }
         match read_snapshot(&*self.env.secrets, &refs) {
             Ok(snapshot) => {
-                self.secrets = Some((generation, snapshot));
-                Ok(self.secrets.as_ref().map(|(_, secrets)| secrets))
+                let held = self.secrets.insert(HeldSecrets {
+                    generation,
+                    refs,
+                    snapshot,
+                });
+                Ok(Some(&held.snapshot))
             }
             Err(SnapshotReadError::Store(SecretStoreError::Keychain { status, .. }))
                 if status == INTERACTION_NOT_ALLOWED =>
@@ -194,17 +211,38 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
     }
 }
 
-/// A failure to wait for or stop an engine.
-fn wait_error(error: EngineError) -> LocalError {
+/// What an engine's failure to check or start its config is to the exit
+/// machine (`engine` names it in the note a refused config gets): one that
+/// cannot be started, refuses its config, does not take it or does not
+/// finish its check is a fault the machine reports; one that cannot be
+/// waited for is the daemon's own failure. (`Rejected` and `CheckTimeout`
+/// come from the check; a startup delivery timeout is a `Config` error.)
+pub(crate) fn start_fault(
+    engine: &str,
+    error: EngineError,
+    notes: &mut Vec<String>,
+) -> Result<StartFault, LocalError> {
     match error {
-        EngineError::Wait(source) => LocalError::EngineWait(source),
-        other => LocalError::EngineWait(io::Error::other(other.to_string())),
+        EngineError::Spawn { .. } => Ok(StartFault::Spawn),
+        EngineError::Rejected { code, stderr } => {
+            notes.push(format!(
+                "{engine} refused its config (exit status {}): {stderr}",
+                code.map_or_else(|| "none".to_owned(), |code| code.to_string())
+            ));
+            Ok(StartFault::Rejected)
+        }
+        EngineError::Config(source) => {
+            notes.push(format!("{engine} did not take its config: {source}"));
+            Ok(StartFault::Rejected)
+        }
+        EngineError::CheckTimeout => Ok(StartFault::CheckTimedOut),
+        EngineError::Wait(source) => Err(LocalError::EngineWait(source)),
     }
 }
 
 /// How an engine's process ended: `wait` reports only processes that
 /// exited or were signalled.
-fn end_of(status: ExitStatus) -> Result<ProcessEnd, LocalError> {
+pub(crate) fn end_of(status: ExitStatus) -> Result<ProcessEnd, LocalError> {
     match (status.code(), status.signal()) {
         (Some(code), _) => Ok(ProcessEnd::Exited { code }),
         (None, Some(signal)) => Ok(ProcessEnd::Signalled { signal }),
@@ -246,17 +284,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
         };
         match engine.check(config.file().expose_bytes()) {
             Ok(()) => Ok(Ok(())),
-            Err(EngineError::Spawn { .. }) => Ok(Err(StartFault::Spawn)),
-            Err(EngineError::Rejected { code, stderr }) => {
-                self.notes.push(format!(
-                    "mooring-exit refused its config (exit status {}): {stderr}",
-                    code.map_or_else(|| "none".to_owned(), |code| code.to_string())
-                ));
-                Ok(Err(StartFault::Rejected))
-            }
-            Err(EngineError::CheckTimeout) => Ok(Err(StartFault::CheckTimedOut)),
-            Err(EngineError::Config(_)) => Ok(Err(StartFault::Rejected)),
-            Err(EngineError::Wait(source)) => Err(LocalError::EngineWait(source).into()),
+            Err(error) => Ok(Err(start_fault("mooring-exit", error, &mut self.notes)?)),
         }
     }
 
@@ -272,12 +300,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
                 self.write_pid(ENGINE_PID_FILE, pid)?;
                 Ok(Ok(pid))
             }
-            Err(EngineError::Spawn { .. }) => Ok(Err(StartFault::Spawn)),
-            Err(EngineError::Config(_) | EngineError::Rejected { .. }) => {
-                Ok(Err(StartFault::Rejected))
-            }
-            Err(EngineError::CheckTimeout) => Ok(Err(StartFault::CheckTimedOut)),
-            Err(EngineError::Wait(source)) => Err(LocalError::EngineWait(source).into()),
+            Err(error) => Ok(Err(start_fault("mooring-exit", error, &mut self.notes)?)),
         }
     }
 
@@ -285,7 +308,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
         let Some(running) = self.running.as_mut() else {
             return Ok(None);
         };
-        let Some(status) = running.exited().map_err(wait_error)? else {
+        let Some(status) = running.exited().map_err(LocalError::EngineWait)? else {
             return Ok(None);
         };
         self.running = None;
@@ -297,7 +320,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
         let Some(running) = self.running.take() else {
             return Err(LocalError::EngineWait(io::Error::other("no engine runs")).into());
         };
-        let status = running.stop().map_err(wait_error)?;
+        let status = running.stop().map_err(LocalError::EngineWait)?;
         self.remove_pid(ENGINE_PID_FILE)?;
         Ok(end_of(status)?)
     }
@@ -440,22 +463,8 @@ impl ExitPorts for DaemonPorts<'_, '_> {
             Err(fault) => return Ok(Err(fault)),
         };
         let bytes = config.file().expose_bytes();
-        let checked = match engine.check(bytes) {
-            Ok(()) => Ok(()),
-            Err(EngineError::Rejected { code, stderr }) => {
-                self.notes.push(format!(
-                    "mooring-probe refused its config (exit status {}): {stderr}",
-                    code.map_or_else(|| "none".to_owned(), |code| code.to_string())
-                ));
-                Err(StartFault::Rejected)
-            }
-            Err(EngineError::Spawn { .. }) => Err(StartFault::Spawn),
-            Err(EngineError::CheckTimeout) => Err(StartFault::CheckTimedOut),
-            Err(EngineError::Config(_)) => Err(StartFault::Rejected),
-            Err(EngineError::Wait(source)) => return Err(LocalError::EngineWait(source).into()),
-        };
-        if let Err(fault) = checked {
-            return Ok(Err(fault));
+        if let Err(error) = engine.check(bytes) {
+            return Ok(Err(start_fault("mooring-probe", error, &mut self.notes)?));
         }
         match engine.start(bytes) {
             Ok(running) => {
@@ -464,12 +473,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
                 self.write_pid(PROBER_PID_FILE, pid)?;
                 Ok(Ok(pid))
             }
-            Err(EngineError::Spawn { .. }) => Ok(Err(StartFault::Spawn)),
-            Err(EngineError::Config(_) | EngineError::Rejected { .. }) => {
-                Ok(Err(StartFault::Rejected))
-            }
-            Err(EngineError::CheckTimeout) => Ok(Err(StartFault::CheckTimedOut)),
-            Err(EngineError::Wait(source)) => Err(LocalError::EngineWait(source).into()),
+            Err(error) => Ok(Err(start_fault("mooring-probe", error, &mut self.notes)?)),
         }
     }
 
@@ -477,7 +481,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
         let Some(running) = self.prober.as_mut() else {
             return Ok(None);
         };
-        let Some(status) = running.exited().map_err(wait_error)? else {
+        let Some(status) = running.exited().map_err(LocalError::EngineWait)? else {
             return Ok(None);
         };
         self.prober = None;
@@ -489,7 +493,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
         let Some(running) = self.prober.take() else {
             return Err(LocalError::EngineWait(io::Error::other("no prober runs")).into());
         };
-        let status = running.stop().map_err(wait_error)?;
+        let status = running.stop().map_err(LocalError::EngineWait)?;
         self.remove_pid(PROBER_PID_FILE)?;
         Ok(end_of(status)?)
     }

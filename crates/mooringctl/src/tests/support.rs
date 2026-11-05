@@ -8,9 +8,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::io::Cursor;
+use std::io::{self, Cursor, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -21,9 +22,11 @@ use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::status::PowerSource;
 use mooring_macsys::{DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
-use mooring_model::secret::{RouterAdminPassword, SecretEntry};
+use mooring_model::secret::{RouterAdminPassword, SecretEntry, SecretMaterial, SecretRef};
 use mooring_model::time::UnixTime;
-use mooring_store::{InMemorySecretStore, RouterPin, SecretStore, write_router_pin};
+use mooring_store::{
+    InMemorySecretStore, RouterPin, SecretOp, SecretStore, SecretStoreError, write_router_pin,
+};
 use socket2::{Domain, Protocol, Socket, Type};
 use tempfile::TempDir;
 use zeroize::Zeroizing;
@@ -570,6 +573,109 @@ impl Console for FakeConsole {
     }
 }
 
+/// A writer that refuses every write, as a pipe whose reader has gone
+/// does: a command's closed output, or a log the disk no longer takes.
+#[derive(Debug, Default)]
+pub(crate) struct Refusing;
+
+impl Write for Refusing {
+    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        Err(io::Error::from(io::ErrorKind::BrokenPipe))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Err(io::Error::from(io::ErrorKind::BrokenPipe))
+    }
+}
+
+/// A log that keeps every write until one holds `fails_at`, and refuses
+/// that write and every one after it, as a disk that has filled up does.
+#[derive(Debug)]
+pub(crate) struct FailingLog {
+    fails_at: &'static str,
+    failed: bool,
+    /// What was written before the failure.
+    pub(crate) kept: Vec<u8>,
+}
+
+impl FailingLog {
+    pub(crate) fn at(fails_at: &'static str) -> Self {
+        Self {
+            fails_at,
+            failed: false,
+            kept: Vec::new(),
+        }
+    }
+
+    /// Whether a write was refused.
+    pub(crate) fn failed(&self) -> bool {
+        self.failed
+    }
+}
+
+impl Write for FailingLog {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let needle = self.fails_at.as_bytes();
+        if self.failed || buf.windows(needle.len()).any(|window| window == needle) {
+            self.failed = true;
+            return Err(io::Error::other("no space left for the log"));
+        }
+        self.kept.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// What the fake keychain refuses, with the `OSStatus` the Security
+/// framework gives: every read (`get`) or every write (`put`).
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Refusals {
+    pub(crate) get: Option<i32>,
+    pub(crate) put: Option<i32>,
+}
+
+/// The harness's secrets as a command sees them: its in-memory store, with
+/// the refusals the test sets, which it may change while the command runs.
+struct RefusingStore<'s> {
+    store: &'s mut InMemorySecretStore,
+    refusals: &'s Mutex<Refusals>,
+}
+
+impl RefusingStore<'_> {
+    fn refusals(&self) -> Refusals {
+        *self.refusals.lock().unwrap()
+    }
+}
+
+impl SecretStore for RefusingStore<'_> {
+    fn get(&self, secret_ref: &SecretRef) -> Result<SecretMaterial, SecretStoreError> {
+        match self.refusals().get {
+            Some(status) => Err(SecretStoreError::Keychain {
+                op: SecretOp::Get,
+                status,
+            }),
+            None => self.store.get(secret_ref),
+        }
+    }
+
+    fn put(&mut self, entry: SecretEntry) -> Result<(), SecretStoreError> {
+        match self.refusals().put {
+            Some(status) => Err(SecretStoreError::Keychain {
+                op: SecretOp::Put,
+                status,
+            }),
+            None => self.store.put(entry),
+        }
+    }
+
+    fn delete(&mut self, secret_ref: &SecretRef) -> Result<(), SecretStoreError> {
+        self.store.delete(secret_ref)
+    }
+}
+
 /// A finished command: its exit code and what it wrote.
 #[derive(Debug)]
 pub(crate) struct Outcome {
@@ -642,22 +748,25 @@ impl FakeParent {
 
 /// A stand-in for the power helper: each start opens a channel whose first
 /// event is the power source (unless `silent`), keeps its sender for the
-/// test, and collects the commands the daemon writes; `refuse` makes the
-/// next starts fail.
+/// test, and collects the commands the daemon writes (unless `deaf`, when
+/// every command fails to write, as to a helper whose input has closed);
+/// the handle makes the next starts fail ([`HelperHandle::refuse`]).
 #[derive(Debug, Default)]
 pub(crate) struct FakeHelper {
     pub(crate) handle: HelperHandle,
     pub(crate) starts: Cell<u32>,
-    pub(crate) refuse: Cell<bool>,
     pub(crate) silent: Cell<bool>,
+    pub(crate) deaf: Cell<bool>,
 }
 
 /// What a test keeps of the fake helper while the daemon holds the
-/// harness: the running helper's event channel and every command written.
+/// harness: the running helper's event channel, every command written, and
+/// whether the next starts fail.
 #[derive(Clone, Default)]
 pub(crate) struct HelperHandle {
     events: Arc<Mutex<Option<mpsc::Sender<PowerMessage>>>>,
     commands: Arc<Mutex<Vec<u8>>>,
+    refusing: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for HelperHandle {
@@ -678,6 +787,17 @@ impl HelperHandle {
             .unwrap();
     }
 
+    /// Makes the next starts fail (`true`), or succeed again.
+    pub(crate) fn refuse(&self, refuse: bool) {
+        self.refusing.store(refuse, Ordering::SeqCst);
+    }
+
+    /// Drops the running helper's sender, as a reader thread that has
+    /// stopped does: its channel is then disconnected.
+    pub(crate) fn disconnect(&self) {
+        drop(self.events.lock().unwrap().take());
+    }
+
     /// The command lines the daemon wrote, in order.
     pub(crate) fn commands(&self) -> Vec<String> {
         String::from_utf8(self.commands.lock().unwrap().clone())
@@ -691,16 +811,16 @@ impl HelperHandle {
 /// The commands' sink, shared with the test.
 struct SharedSink(Arc<Mutex<Vec<u8>>>);
 
-impl std::io::Write for SharedSink {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+impl Write for SharedSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0
             .lock()
-            .map_err(|_| std::io::Error::other("poisoned"))?
+            .map_err(|_| io::Error::other("poisoned"))?
             .extend_from_slice(buf);
         Ok(buf.len())
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
@@ -715,11 +835,12 @@ impl FakeHelper {
                 .unwrap();
         }
         *self.handle.events.lock().unwrap() = Some(sender);
-        PowerLink::new(
-            messages,
-            Box::new(SharedSink(Arc::clone(&self.handle.commands))),
-            None,
-        )
+        let commands: Box<dyn Write + Send> = if self.deaf.get() {
+            Box::new(Refusing)
+        } else {
+            Box::new(SharedSink(Arc::clone(&self.handle.commands)))
+        };
+        PowerLink::new(messages, commands, None)
     }
 }
 
@@ -727,6 +848,8 @@ impl FakeHelper {
 pub(crate) struct Harness {
     pub(crate) home: TempDir,
     pub(crate) secrets: InMemorySecretStore,
+    /// What the keychain refuses while a command runs; nothing by default.
+    pub(crate) keychain: Arc<Mutex<Refusals>>,
     pub(crate) link: FakeLink,
     pub(crate) console: FakeConsole,
     pub(crate) stdin: Cursor<Vec<u8>>,
@@ -761,6 +884,7 @@ impl Harness {
         Self {
             home: tempfile::tempdir().unwrap(),
             secrets: InMemorySecretStore::new(),
+            keychain: Arc::default(),
             link: FakeLink::pinned(),
             console: FakeConsole::default(),
             stdin: Cursor::new(Vec::new()),
@@ -820,16 +944,22 @@ impl Harness {
 
     /// Runs `mooringctl <args>`.
     pub(crate) fn run(&mut self, args: &[&str]) -> Outcome {
-        let cli =
-            Cli::try_parse_from(std::iter::once("mooringctl").chain(args.iter().copied())).unwrap();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let code = self.with_env(|env| run(cli.command, env, &mut stdout, &mut stderr));
+        let code = self.run_to(args, &mut stdout, &mut stderr);
         Outcome {
             code,
             stdout: String::from_utf8(stdout).unwrap(),
             stderr: String::from_utf8(stderr).unwrap(),
         }
+    }
+
+    /// Runs `mooringctl <args>` with its output going to `out` and `err`;
+    /// returns its exit code.
+    pub(crate) fn run_to(&mut self, args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+        let cli =
+            Cli::try_parse_from(std::iter::once("mooringctl").chain(args.iter().copied())).unwrap();
+        self.with_env(|env| run(cli.command, env, out, err))
     }
 
     /// Runs `work` against the environment a command gets.
@@ -849,10 +979,10 @@ impl Harness {
         let source = self.power;
         let helper = &self.helper;
         let power_helper = move || {
-            if helper.refuse.get() {
+            if helper.handle.refusing.load(Ordering::SeqCst) {
                 return Err(LocalError::PowerHelperSpawn {
                     path: PathBuf::from("mooring-power"),
-                    source: std::io::Error::other("refused by the test"),
+                    source: io::Error::other("refused by the test"),
                 });
             }
             Ok(helper.start(source))
@@ -874,7 +1004,7 @@ impl Harness {
                 .pop_front()
                 .unwrap_or(Err(ProbeFailure {
                     stage: mooring_daemon_core::status::ProbeStage::Connect,
-                    kind: Some(std::io::ErrorKind::ConnectionRefused),
+                    kind: Some(io::ErrorKind::ConnectionRefused),
                 }))
         };
         let redirected = &self.redirected;
@@ -882,13 +1012,17 @@ impl Harness {
             redirected.set(redirected.get() + 1);
             Ok(())
         };
+        let mut secrets = RefusingStore {
+            store: &mut self.secrets,
+            refusals: &self.keychain,
+        };
         let mut env = Env {
             router: RouterEnv {
                 link: &self.link,
                 port: self.port,
                 timeouts: self.timeouts,
             },
-            secrets: &mut self.secrets,
+            secrets: &mut secrets,
             home: Some(self.home.path().as_os_str().to_owned()),
             clock: &clock,
             console: &mut self.console,

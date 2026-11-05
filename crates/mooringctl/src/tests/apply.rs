@@ -41,7 +41,7 @@ fn fill(secrets: &mut InMemorySecretStore) {
 
 /// The fixture with its secrets, the M7 pinned, and an engine directory of
 /// stand-in files pinned for the harness.
-fn ready(deployment: Deployment) -> (Harness, PathBuf) {
+pub(crate) fn ready(deployment: Deployment) -> (Harness, PathBuf) {
     let mut harness = harness_with(deployment);
     harness.pin(PINNED);
     fill(&mut harness.secrets);
@@ -61,7 +61,7 @@ fn ready(deployment: Deployment) -> (Harness, PathBuf) {
     (harness, dir)
 }
 
-fn pin_of(harness: &Harness, path: &str) -> Sha256Hex {
+pub(crate) fn pin_of(harness: &Harness, path: &str) -> Sha256Hex {
     harness
         .engine_pins
         .iter()
@@ -72,10 +72,10 @@ fn pin_of(harness: &Harness, path: &str) -> Sha256Hex {
         .unwrap()
 }
 
-const HOST: &str = "www.quiet-target.co.uk";
+pub(crate) const HOST: &str = "www.quiet-target.co.uk";
 
 /// What a node reports about a target that passes every rule.
-fn good_facts() -> TargetFacts {
+pub(crate) fn good_facts() -> TargetFacts {
     TargetFacts {
         host: TargetHost::new(HOST).unwrap(),
         resolved: BTreeSet::from([Ipv4Addr::new(45, 67, 89, 201)]),
@@ -96,7 +96,7 @@ fn good_facts() -> TargetFacts {
     }
 }
 
-fn script_measure(harness: &Harness, present: bool, facts: TargetFacts) {
+pub(crate) fn script_measure(harness: &Harness, present: bool, facts: TargetFacts) {
     let xray = pin_of(harness, "linux-amd64/xray");
     harness.nodes.expect(
         Expected::Request {
@@ -315,7 +315,7 @@ fn an_engine_file_that_does_not_match_its_pin_is_refused_before_any_session() {
     assert!(harness.nodes.seen.borrow().is_empty());
 }
 
-fn script_hello_and_blobs(harness: &Harness, present: BTreeSet<Sha256Hex>) {
+pub(crate) fn script_hello_and_blobs(harness: &Harness, present: BTreeSet<Sha256Hex>) {
     harness.nodes.expect(
         Expected::Request {
             identity: "ops_ed25519",
@@ -334,7 +334,7 @@ fn script_hello_and_blobs(harness: &Harness, present: BTreeSet<Sha256Hex>) {
     );
 }
 
-fn apply_args(engines: &std::path::Path) -> Vec<String> {
+pub(crate) fn apply_args(engines: &std::path::Path) -> Vec<String> {
     [
         "node",
         "apply",
@@ -348,7 +348,7 @@ fn apply_args(engines: &std::path::Path) -> Vec<String> {
     .to_vec()
 }
 
-fn run(harness: &mut Harness, args: &[String]) -> super::support::Outcome {
+pub(crate) fn run(harness: &mut Harness, args: &[String]) -> super::support::Outcome {
     harness.run(&args.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
@@ -504,7 +504,7 @@ fn apply_confirms_the_transaction_and_records_the_bundle() {
 
 /// The bundle of `deployment`'s lon1 with the harness's engine pins, and
 /// its header after the scripted `Hello`.
-fn bundle_and_header(
+pub(crate) fn bundle_and_header(
     harness: &Harness,
     engines: &std::path::Path,
     deployment: &Deployment,

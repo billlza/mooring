@@ -68,6 +68,52 @@ fn the_settings_the_exit_needs_off_are_named() {
     );
 }
 
+/// A secondary carrier is listed after the primary, no carrier at all is
+/// none, the NR readings are shown when reported, a charging battery says
+/// so, and every setting the exit needs off is named.
+#[test]
+fn the_summary_names_secondary_carriers_nr_readings_charging_and_each_setting() {
+    let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
+    let list = document["wwan"]["lteBandInfo"].as_array_mut().unwrap();
+    let mut secondary = list[0].clone();
+    secondary["isPcc"] = serde_json::json!(false);
+    secondary["band"] = serde_json::json!(7);
+    secondary["dlBandwidth"] = serde_json::json!("10MHz");
+    list.insert(1, secondary);
+    document["wwan"]["signalStrength"]["nr5gRsrp"] = serde_json::json!(-95);
+    document["wwan"]["signalStrength"]["nr5gRsrq"] = serde_json::json!(-11);
+    document["wwan"]["signalStrength"]["nr5gSinr"] = serde_json::json!(12);
+    document["power"]["charging"] = serde_json::json!(true);
+    document["wifi"]["enabled"] = serde_json::json!(true);
+    document["wifi"]["offload"]["enabled"] = serde_json::json!(true);
+    document["ethernet"]["offload"]["enabled"] = serde_json::json!(true);
+    let body = serde_json::to_vec(&document).unwrap();
+    let text = summary(
+        None,
+        UnixTime::from_secs(NOW),
+        &parse_netgear_model_json(&body).unwrap(),
+    )
+    .unwrap();
+    for said in [
+        "LTE carriers B3 20MHz (primary), B7 10MHz; ",
+        "; NR RSRP -95 dBm, RSRQ -11 dB, SINR 12 dB\n",
+        "battery 100 %, Normal, charging, QuickCharge",
+        "the exit needs these off: Wi-Fi radio, Wi-Fi offload, Ethernet offload\n",
+    ] {
+        assert!(text.contains(said), "{said}: {text}");
+    }
+    let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
+    document["wwan"]["lteBandInfo"] = serde_json::json!([{}]);
+    let body = serde_json::to_vec(&document).unwrap();
+    let text = summary(
+        None,
+        UnixTime::from_secs(NOW),
+        &parse_netgear_model_json(&body).unwrap(),
+    )
+    .unwrap();
+    assert!(text.contains("; LTE carriers none; "), "{text}");
+}
+
 /// Unassigned secondary slots are counted after the carriers, never listed
 /// as carriers.
 #[test]

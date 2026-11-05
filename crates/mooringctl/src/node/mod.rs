@@ -34,11 +34,12 @@ pub(crate) trait AgentLink {
 
 /// Uploads every blob of `wanted` the node does not hold, asking first with
 /// `HaveBlobs` (design §11.1); `source` gives each missing blob's bytes.
-/// Returns how many were uploaded.
+/// Returns how many were uploaded. (`source` is a trait object, so the
+/// commands that upload share one copy of this code.)
 pub(crate) fn upload_missing(
     session: &mut dyn NodeSession,
     wanted: BTreeSet<Sha256Hex>,
-    mut source: impl FnMut(&Sha256Hex) -> Result<Vec<u8>, crate::error::LocalError>,
+    source: &mut dyn FnMut(&Sha256Hex) -> Result<Vec<u8>, crate::error::LocalError>,
 ) -> Result<usize, crate::error::CommandError> {
     let reply = session.request(&LineRequest::HaveBlobs {
         blobs: wanted.clone(),

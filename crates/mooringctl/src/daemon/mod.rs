@@ -47,6 +47,7 @@ use crate::app::Env;
 use crate::error::{CommandError, LocalError};
 use crate::paths::create_support_dir;
 use crate::router;
+use crate::runtime::meter::{METER_TICK, PERSIST_EVERY};
 
 use self::hub::Hub;
 use self::radio::RadioHistoryWriter;
@@ -55,6 +56,42 @@ use self::serve::{AcceptFailed, LIMITS, MAX_CLIENTS, accept};
 /// How often the M7 is polled (design §15.6 rule 7: a 60 s poll must not
 /// lock out the M7's admin session over 24 h, an M5 acceptance).
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How often the daemon's loops do what they do on a timer (design §10.1):
+/// the deployed loop's tick, the polls of the M7 and of the nodes, the
+/// longest the console goes without a new status, the power helper's
+/// restart, and the SIM meter's readings and writes. The daemon runs on
+/// [`Intervals::DAEMON`]; the tests shorten them instead of waiting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Intervals {
+    /// The deployed loop's tick.
+    pub(crate) tick: Duration,
+    /// The M7's poll.
+    pub(crate) router_poll: Duration,
+    /// Each node's poll.
+    pub(crate) node_poll: Duration,
+    /// The longest between two published statuses.
+    pub(crate) publish: Duration,
+    /// How long after the power helper ended it is started again.
+    pub(crate) helper_restart: Duration,
+    /// The SIM meter's readings.
+    pub(crate) meter_tick: Duration,
+    /// The SIM meter's writes.
+    pub(crate) meter_persist: Duration,
+}
+
+impl Intervals {
+    /// The daemon's.
+    pub(crate) const DAEMON: Self = Self {
+        tick: deployed::TICK,
+        router_poll: POLL_INTERVAL,
+        node_poll: deployed::NODE_POLL_EVERY,
+        publish: deployed::PUBLISH_EVERY,
+        helper_restart: deployed::HELPER_RESTART_EVERY,
+        meter_tick: METER_TICK,
+        meter_persist: PERSIST_EVERY,
+    };
+}
 
 /// The daemon's instance lock, in the run directory.
 pub(crate) const INSTANCE_LOCK_FILE: &str = "daemon.lock";
@@ -393,9 +430,8 @@ pub(crate) fn wait_for_next_poll(until: Instant, acceptor_ended: &mpsc::Receiver
     }
 }
 
-/// `mooringctl daemon`: starts, then serves until it fails: as the router
-/// console until a deployment exists, then as the exit. It never returns
-/// `Ok`.
+/// `mooringctl daemon`: starts, then serves until it fails
+/// ([`serve_until_stopped`]). It never returns `Ok`.
 pub(crate) fn run(env: &mut Env<'_>, log: &mut dyn Write) -> Result<(), CommandError> {
     let support_dir = crate::app::support_dir(env)?;
     let started = start(&support_dir)?;
@@ -406,47 +442,63 @@ pub(crate) fn run(env: &mut Env<'_>, log: &mut dyn Write) -> Result<(), CommandE
         deployed: AtomicBool::new(false),
     });
     let (acceptor, acceptor_ended) = spawn_acceptor(started.listener, &control)?;
-    let begun = (env.clock)()?;
-    let mut state = LoopState::default();
-    if !deployment_exists(&support_dir)? {
-        say(
-            log,
-            begun,
-            &format!(
-                "daemon started: polling the M7 every {} s on the interface the router pin records",
-                POLL_INTERVAL.as_secs()
-            ),
-        )?;
-        loop {
-            let next = Instant::now() + POLL_INTERVAL;
-            if poll_once(env, &support_dir, &control.hub, log, &mut state)?
-                == Polled::DeploymentAppeared
-            {
-                say(log, (env.clock)()?, "a deployment exists: serving the exit")?;
-                break;
-            }
-            if wait_for_next_poll(next, &acceptor_ended) == Waited::AcceptorEnded {
-                return Err(CommandError::Local(acceptor_end(acceptor)));
-            }
-        }
-    }
-    let ended = deployed::serve(
+    let ended = serve_until_stopped(
         env,
         log,
         &support_dir,
         &control,
         &acceptor_ended,
         &retries,
-        state,
-    );
+        Intervals::DAEMON,
+    )?;
     match ended {
-        Err(error) => Err(error),
-        Ok(deployed::Stopped::AcceptorEnded) => Err(CommandError::Local(acceptor_end(acceptor))),
+        deployed::Stopped::AcceptorEnded => Err(CommandError::Local(acceptor_end(acceptor))),
     }
 }
 
+/// Serves until the acceptor ends (it says so on `acceptor_ended`) or the
+/// daemon fails: as the router console, polling the M7 every
+/// `intervals.router_poll`, until a deployment exists, then as the exit.
+pub(crate) fn serve_until_stopped(
+    env: &mut Env<'_>,
+    log: &mut dyn Write,
+    support_dir: &Path,
+    control: &Control,
+    acceptor_ended: &mpsc::Receiver<()>,
+    retries: &mpsc::Receiver<()>,
+    intervals: Intervals,
+) -> Result<deployed::Stopped, CommandError> {
+    let begun = (env.clock)()?;
+    let mut state = LoopState::default();
+    if !deployment_exists(support_dir)? {
+        say(
+            log,
+            begun,
+            &format!(
+                "daemon started: polling the M7 every {} s on the interface the router pin records",
+                intervals.router_poll.as_secs()
+            ),
+        )?;
+        loop {
+            let next = Instant::now() + intervals.router_poll;
+            if poll_once(env, support_dir, &control.hub, log, &mut state)?
+                == Polled::DeploymentAppeared
+            {
+                say(log, (env.clock)()?, "a deployment exists: serving the exit")?;
+                break;
+            }
+            if wait_for_next_poll(next, acceptor_ended) == Waited::AcceptorEnded {
+                return Ok(deployed::Stopped::AcceptorEnded);
+            }
+        }
+    }
+    let env: &Env<'_> = env;
+    let mut exit = deployed::Deployed::open(env, support_dir, log, state, intervals)?;
+    deployed::serve(&mut exit, log, control, acceptor_ended, retries)
+}
+
 /// Starts the acceptor, which says on the returned channel when it ends.
-fn spawn_acceptor(
+pub(crate) fn spawn_acceptor(
     listener: UnixListener,
     control: &Arc<Control>,
 ) -> Result<(JoinHandle<AcceptFailed>, mpsc::Receiver<()>), LocalError> {
@@ -465,7 +517,7 @@ fn spawn_acceptor(
 }
 
 /// Why the acceptor ended: its error, or that it panicked.
-fn acceptor_end(acceptor: JoinHandle<AcceptFailed>) -> LocalError {
+pub(crate) fn acceptor_end(acceptor: JoinHandle<AcceptFailed>) -> LocalError {
     match acceptor.join() {
         Ok(AcceptFailed(error)) => LocalError::Acceptor(error),
         Err(_) => LocalError::Acceptor(std::io::Error::other("the acceptor thread panicked")),

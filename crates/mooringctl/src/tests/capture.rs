@@ -224,6 +224,62 @@ fn capture_never_overwrites() {
     assert!(!harness.home.path().join("absent").exists());
 }
 
+/// A path that cannot be looked at is refused before the M7 is asked; one
+/// whose folder is missing is found only when the file is made, after the
+/// M7 answered, and nothing is written.
+#[test]
+fn a_capture_that_cannot_be_written_is_the_error() {
+    let stub = Stub::start(vec![]);
+    let mut harness = Harness::new(stub.port());
+    harness.pin(PINNED);
+    let file = harness.home.path().join("file");
+    fs::write(&file, b"").unwrap();
+    let out = file.join("model.json");
+    let outcome = harness.run(&[
+        "router",
+        "capture",
+        "--interface",
+        "lo0",
+        "--out",
+        out.to_str().unwrap(),
+        "--anonymous",
+    ]);
+    assert_eq!(outcome.code, 1, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: cannot write the capture to {}\n  caused by: Not a directory (os error 20)\n",
+            out.display()
+        )
+    );
+    assert!(stub.finish().is_empty(), "the M7 was not asked");
+
+    let document = anonymous("Guest", 0, "MR7450");
+    let stub = Stub::start(vec![json(&[], &document)]);
+    let mut harness = Harness::new(stub.port());
+    harness.pin(PINNED);
+    let out = harness.home.path().join("missing").join("model.json");
+    let outcome = harness.run(&[
+        "router",
+        "capture",
+        "--interface",
+        "lo0",
+        "--out",
+        out.to_str().unwrap(),
+        "--anonymous",
+    ]);
+    assert_eq!(outcome.code, 1, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: cannot write the capture to {}\n  caused by: No such file or directory (os error 2)\n",
+            out.display()
+        )
+    );
+    assert_eq!(stub.finish().len(), 1);
+    assert!(!out.exists());
+}
+
 #[test]
 fn anonymous_capture_reads_no_password_and_sends_no_post() {
     let document = anonymous("Guest", 0, "MR7450");

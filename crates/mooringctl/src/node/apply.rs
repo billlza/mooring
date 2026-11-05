@@ -55,7 +55,7 @@ pub(crate) fn apply(
         return Err(unexpected(RequestKind::Hello, &reply));
     };
     let header = bundle.header(&hello.host).map_err(LocalError::Render)?;
-    let uploaded = upload_missing(session.as_mut(), header.blobs(), |sha256| {
+    let uploaded = upload_missing(session.as_mut(), header.blobs(), &mut |sha256| {
         if let Some((_, file)) = bundle.files().find(|(_, file)| file.sha256() == *sha256) {
             return Ok(file.expose_bytes().to_vec());
         }
@@ -73,7 +73,7 @@ pub(crate) fn apply(
     let reply = session.request(&LineRequest::Apply(Box::new(header)))?;
     let generation = match reply {
         Response::TxnLaunched { generation } => {
-            wait_for_confirm(session.as_mut(), out, generation)?;
+            wait_for_confirm(session.as_mut(), out, generation, POLL, MAX_WAIT)?;
             let reply = session.request(&LineRequest::Confirm { generation })?;
             if reply != (Response::Confirmed { generation }) {
                 return Err(unexpected(RequestKind::Confirm, &reply));
@@ -113,13 +113,16 @@ pub(crate) fn apply(
     Ok(())
 }
 
-/// Reads the transaction's state every [`POLL`] until it awaits
-/// confirmation, printing each new stage; a failed or reverted transaction
-/// is the error, and so is one still running after [`MAX_WAIT`].
-fn wait_for_confirm(
+/// Reads the transaction's state every `poll` ([`POLL`] for `node apply`)
+/// until it awaits confirmation, printing each new stage; a failed or
+/// reverted transaction is the error, and so is one still running after
+/// `max_wait` ([`MAX_WAIT`]).
+pub(crate) fn wait_for_confirm(
     session: &mut dyn NodeSession,
     out: &mut dyn Write,
     generation: Generation,
+    poll: Duration,
+    max_wait: Duration,
 ) -> Result<(), CommandError> {
     let started = Instant::now();
     let mut shown: Option<TxnStage> = None;
@@ -169,14 +172,14 @@ fn wait_for_confirm(
                 .into());
             }
         }
-        if started.elapsed() >= MAX_WAIT {
+        if started.elapsed() >= max_wait {
             return Err(LocalError::TxnTimeout {
                 generation: generation.get(),
-                secs: MAX_WAIT.as_secs(),
+                secs: max_wait.as_secs(),
             }
             .into());
         }
-        thread::sleep(POLL);
+        thread::sleep(poll);
     }
 }
 

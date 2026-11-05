@@ -259,3 +259,23 @@ fn every_user_command_without_a_state_says_there_is_no_deployment() {
         }
     }
 }
+
+/// A state file that is there but cannot be read is that error, never "no
+/// deployment yet".
+#[test]
+fn a_state_that_cannot_be_read_is_not_taken_as_none() {
+    let deployment = fixture(|_| {});
+    let user = first_user(&deployment);
+    let mut harness = harness_with(deployment);
+    fs::write(store(&harness).state_path(), b"{}").unwrap();
+    let outcome = harness.run(&["user", "agree", user.as_str()]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: the state could not be read\n"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(fs::read(store(&harness).state_path()).unwrap(), b"{}");
+}

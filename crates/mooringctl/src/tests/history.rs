@@ -420,3 +420,60 @@ fn the_human_summary_of_two_days() {
         before
     );
 }
+
+/// Service lost and regained within an hour shows both events, and the
+/// hour counts its reads without service; an hour whose polls all failed
+/// has no reads.
+#[test]
+fn the_summary_counts_reads_without_service_and_hours_without_reads() {
+    let mut harness = Harness::new(0);
+    let lte = |secs, uptime| {
+        attached(
+            secs,
+            NetworkService::Lte,
+            DataService::LtePlus,
+            3,
+            "30",
+            uptime,
+            uptime - 100,
+            -1000,
+            20,
+        )
+    };
+    let samples = [
+        lte(18 * 3600, 5_000),
+        no_service(18 * 3600 + 60, 5_060),
+        lte(18 * 3600 + 120, 5_120),
+        failed(19 * 3600, RouterUnavailableReason::Unreachable),
+    ];
+    plant(&harness.support_dir(), day("2026-10-13"), &samples, false);
+    let outcome = harness.run(&["router", "history", "--since", "2026-10-13"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    for said in [
+        "  2026-10-13 18:01:00 UTC  no service\n",
+        "  2026-10-13 18:02:00 UTC  service regained\n",
+        "; LteService (1 without service)\n",
+        "  2026-10-13 19:00  1/0  ",
+        "; no reads\n",
+    ] {
+        assert!(outcome.stdout.contains(said), "{said}: {}", outcome.stdout);
+    }
+}
+
+/// A radio directory that cannot be read is the error, never no history.
+#[test]
+fn a_radio_directory_that_cannot_be_read_is_the_error() {
+    let mut harness = Harness::new(0);
+    fs::create_dir_all(harness.support_dir()).unwrap();
+    fs::write(history_dir(&harness), b"").unwrap();
+    let outcome = harness.run(&["router", "history"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stdout, "");
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: the radio history's files failed\n"),
+        "{}",
+        outcome.stderr
+    );
+}

@@ -72,7 +72,34 @@ pub(crate) fn parse_isexcluded(stdout: &[u8]) -> Result<bool, BackupCheckError> 
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::{BackupCheckError, parse_isexcluded};
+
+    /// What each failure says in the export's warning.
+    #[test]
+    fn each_failure_says_what_tmutil_did() {
+        for (error, text) in [
+            (
+                BackupCheckError::Run(io::Error::from(io::ErrorKind::NotFound)),
+                "tmutil could not be run: entity not found",
+            ),
+            (
+                BackupCheckError::Failed(Some(64)),
+                "tmutil exited with status 64",
+            ),
+            (
+                BackupCheckError::Failed(None),
+                "tmutil was stopped by a signal",
+            ),
+            (
+                BackupCheckError::Unanswered,
+                "tmutil reported neither excluded nor included",
+            ),
+        ] {
+            assert_eq!(error.to_string(), text);
+        }
+    }
 
     /// The three answers seen on this Mac on 2026-10-18.
     #[test]

@@ -3,7 +3,7 @@
 //! The daemon with a deployment (design §10.1): every [`TICK`] it reads
 //! the state, resolves the exit's interfaces, checks for foreign networks,
 //! reads the SIM meter and ticks the exit machine; it polls the M7 every
-//! [`POLL_INTERVAL`] and each node's agent every [`NODE_POLL_EVERY`]
+//! [`super::POLL_INTERVAL`] and each node's agent every [`NODE_POLL_EVERY`]
 //! (`Status`, design §10.5) in the slot after a direct-probe round, so
 //! neither delays a probe; and it publishes the deployment's status when
 //! the exit's state changes and at least every [`PUBLISH_EVERY`]. The SIM
@@ -44,7 +44,7 @@ use mooring_model::{Deployment, NodeId};
 use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
 use super::{
-    Control, LoopState, POLL_INTERVAL, RunPaths, Waited, chain, poll_router_on, publish,
+    Control, Intervals, LoopState, RunPaths, Waited, chain, poll_router_on, publish,
     radio::RadioHistoryWriter, router_after_poll, say, unavailable_reason, wait_for_next_poll,
 };
 use crate::app::Env;
@@ -52,7 +52,7 @@ use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::node::session::ops_session;
 use crate::router::error::{RouterError, UnreachableCause};
-use crate::runtime::meter::{METER_TICK, MeterThread, PERSIST_EVERY, Watched};
+use crate::runtime::meter::{MeterThread, Watched};
 use crate::runtime::network;
 use crate::runtime::ports::{
     DaemonPorts, ENGINE_PID_FILE, EXIT_ENGINE, PROBE_ENGINE, PROBER_PID_FILE, stop_stale_engine,
@@ -104,6 +104,7 @@ pub(crate) struct Deployed<'e, 'a> {
     env: &'e Env<'a>,
     support_dir: PathBuf,
     store: Store,
+    intervals: Intervals,
     machine: ExitMachine,
     ports: DaemonPorts<'e, 'a>,
     meter: MeterThread,
@@ -162,12 +163,14 @@ impl<'e, 'a> Deployed<'e, 'a> {
     /// the bundle that carries the daemon carries the helper); then it
     /// polls the M7 once, so every status it publishes has a panel.
     /// `state` is the router console's, if it ran: the panel it last
-    /// showed, and the radio history's writer, carry on.
+    /// showed, and the radio history's writer, carry on. The loop and the
+    /// meter keep `intervals`.
     pub(crate) fn open(
         env: &'e Env<'a>,
         support_dir: &Path,
         log: &mut dyn Write,
         state: LoopState,
+        intervals: Intervals,
     ) -> Result<Self, CommandError> {
         let LoopState {
             previous: router,
@@ -209,8 +212,8 @@ impl<'e, 'a> Deployed<'e, 'a> {
             support_dir.to_path_buf(),
             meter,
             (env.meter_reader)(),
-            METER_TICK,
-            PERSIST_EVERY,
+            intervals.meter_tick,
+            intervals.meter_persist,
         )?;
         let helper = (env.power_helper)()?;
         let power = first_power_source(&helper, HELPER_FIRST_REPORT)?;
@@ -236,6 +239,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             env,
             support_dir: support_dir.to_path_buf(),
             store,
+            intervals,
             machine: ExitMachine::new(now, latch),
             ports: DaemonPorts::new(env, run_dir, engines),
             meter,
@@ -339,7 +343,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
         }
         let due = self
             .router_polled
-            .is_none_or(|at| at.elapsed() >= POLL_INTERVAL);
+            .is_none_or(|at| at.elapsed() >= self.intervals.router_poll);
         let slot = self
             .machine
             .next_probe_in(self.begun.elapsed(), deployment)
@@ -349,7 +353,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
         }
         let nodes_due = self
             .nodes_polled
-            .is_none_or(|at| at.elapsed() >= NODE_POLL_EVERY);
+            .is_none_or(|at| at.elapsed() >= self.intervals.node_poll);
         if nodes_due && slot {
             self.poll_nodes(log, deployment, egress_name.as_ref())?;
         }
@@ -359,7 +363,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
         let stale = self
             .published
             .as_ref()
-            .is_none_or(|(at, _)| at.elapsed() >= PUBLISH_EVERY);
+            .is_none_or(|(at, _)| at.elapsed() >= self.intervals.publish);
         if state_changed || stale {
             let router = self.router.clone();
             let exit_state = section.state.clone();
@@ -417,7 +421,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if self.helper.is_none() {
             if self
                 .helper_lost
-                .is_some_and(|at| at.elapsed() >= HELPER_RESTART_EVERY)
+                .is_some_and(|at| at.elapsed() >= self.intervals.helper_restart)
             {
                 self.restart_helper(log, now)?;
             }
@@ -893,25 +897,22 @@ pub(crate) fn poll_m7(
     Ok(reading)
 }
 
-/// Serves the exit until the acceptor ends or the daemon fails. `state` is
-/// the router console's, so the panel carries on.
+/// Serves the opened exit until the acceptor ends or the daemon fails: a
+/// tick every `intervals.tick`, with a retry when the operator asked for
+/// one since the last.
 pub(crate) fn serve(
-    env: &mut Env<'_>,
+    exit: &mut Deployed<'_, '_>,
     log: &mut dyn Write,
-    support_dir: &Path,
     control: &Control,
     acceptor_ended: &mpsc::Receiver<()>,
     retries: &mpsc::Receiver<()>,
-    state: LoopState,
 ) -> Result<Stopped, CommandError> {
-    let env: &Env<'_> = env;
-    let mut deployed = Deployed::open(env, support_dir, log, state)?;
     control.deployed.store(true, Ordering::SeqCst);
-    say(log, (env.clock)()?, "serving the exit")?;
+    say(log, (exit.env.clock)()?, "serving the exit")?;
     loop {
-        let next = Instant::now() + TICK;
+        let next = Instant::now() + exit.intervals.tick;
         let retry = retries.try_iter().count() > 0;
-        deployed.tick(control, log, retry)?;
+        exit.tick(control, log, retry)?;
         if wait_for_next_poll(next, acceptor_ended) == Waited::AcceptorEnded {
             return Ok(Stopped::AcceptorEnded);
         }
