@@ -92,7 +92,12 @@ mod tests {
             PortalAgreement::SHIPPED,
             PortalAgreement::since(PORTAL_AGREEMENT_SINCE)
         );
-        assert!(PORTAL_AGREEMENT_SINCE.is_none_or(|since| since <= AgreementVersion::CURRENT));
+        // Naming a revision opens the gate: the constant never names one the
+        // build does not ship yet.
+        assert_eq!(
+            PortalAgreement::SHIPPED.required().is_ok(),
+            PORTAL_AGREEMENT_SINCE.is_some()
+        );
     }
 
     /// Covered from the first covering revision on, and only then; the
