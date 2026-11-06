@@ -8,7 +8,7 @@ The user portal is a separate web application. It shows each user who has an acc
 | Snapshot, `mooring-portal-snapshot` version 1 | `mooringctl portal export --user <id>... --out <path>` | no | `mooring-portal import` |
 | Profile bundle, `mooring-portal-cfm-profiles` version 1 | `mooringctl user export-profiles --out <path>` | yes | `mooring-portal import-profiles` |
 
-This page is Mooring's statement of both formats, complete without the portal's repository. The portal defines them, in its `docs/contract/portal-snapshot-v1.md` and `docs/contract/cfm-profiles-v1.md`; this page follows those documents at the portal's commit `c070413`. Changing a key, a value or a rule is a new version in the portal's contract, and then here.
+This page is Mooring's statement of both formats, complete without the portal's repository. The portal defines them, in its `docs/contract/portal-snapshot-v1.md` and `docs/contract/cfm-profiles-v1.md`. This page follows those documents at the portal's commit `d748b06`. The formats and the valid goldens there are the same as at `c070413`, where the copies below were taken. Changing a key, a value or a rule is a new version in the portal's contract, and then here.
 
 Design §9.5 places the exporters in Mooring.
 
@@ -95,7 +95,7 @@ Each `document` is the user's CFM file exactly as `user export` writes it in the
 
 ### 3.2 Who is in it
 
-A bundle is a complete set: on import the portal deletes the stored profile of every user the bundle does not list, so their subscription link stops working. The bundle therefore holds every user who is to be served, and no others:
+A bundle is a complete set. On import the portal deletes the stored profile of every user the bundle does not list, and deactivates that user's subscription link in the same transaction. A later bundle that lists the user again does not bring the old link back: the user generates a new one at the portal and imports it into CFM again. The bundle therefore holds every user who is to be served, and no others:
 
 - **In it:** every `Active` user with an acceptance of the required revision (§1). Each passes every check of `user export` (design §9.2): its capabilities, its credentials, and each node's generation, certificate and address.
 - **Left out, and named in the output with the reason:** a suspended user, a user being revoked or revoked, and an active user without the acceptance.
@@ -105,7 +105,7 @@ As for `user export`, every check runs before the file is looked at, and the fil
 
 ### 3.3 Goldens
 
-`contract/portal-fixtures/cfm-profiles-v1/pilot.json` is a copy of the portal's `contract/fixtures/cfm-profiles-v1/valid/pilot.json` at `c070413`. No export can produce its values: it uses a documentation address and a pin of the wrong length. So `crates/export/tests/export/profiles.rs` compares a bundle of the fixture deployment with it key by key and type by type, at every level and for both protocols. Each document is compared with the user's own `user export`.
+`contract/portal-fixtures/cfm-profiles-v1/pilot.json` is a copy of the portal's `contract/fixtures/cfm-profiles-v1/valid/pilot.json` at `c070413`. No export can produce its values: it uses a documentation address and a pin of the wrong length. So `crates/export/tests/export/profiles.rs` compares a bundle of the fixture deployment with it key by key and type by type, at every level and for both protocols. Each document is compared with the user's own `user export`. The portal's `invalid/` fixtures for this contract are cases of its own parsing: none is a document Mooring writes.
 
 ## 4. The files
 
