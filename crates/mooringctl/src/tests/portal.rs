@@ -26,6 +26,14 @@ fn open() -> PortalAgreement {
     PortalAgreement::since(Some(AgreementVersion::CURRENT))
 }
 
+/// What both portal commands print while the gate is closed.
+pub(crate) fn closed_gate_refusal() -> String {
+    format!(
+        "mooringctl: no file was written: nothing goes to the portal before a revision of the user agreement covers it and the users accept that revision (docs/runbooks/user-agreement.md)\n  caused by: agreement revision {}, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links\n",
+        AgreementVersion::CURRENT
+    )
+}
+
 fn users(deployment: &Deployment) -> Vec<UserId> {
     deployment.users().keys().cloned().collect()
 }
@@ -236,34 +244,26 @@ fn portal_export_warns_about_a_backed_up_folder() {
     assert!(out.exists());
 }
 
-/// Until the agreement covers the portal nothing is written, whatever the
-/// state holds: the gate is the first check, before even the state is
-/// read.
+/// While the gate is closed nothing is written, whatever the state holds:
+/// the gate is the first check, before even the state is read.
 #[test]
-fn portal_export_is_refused_until_the_agreement_covers_the_portal() {
+fn portal_export_is_refused_while_the_gate_is_closed() {
     let deployment = fixture(|_| {});
     let named = users(&deployment);
     let (mut harness, folder) = exporting(deployment);
+    harness.portal_agreement = PortalAgreement::since(None);
     let out = folder.join("snapshot.json");
     let outcome = run(&mut harness, &named, arg(&out));
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert_eq!(outcome.stdout, "");
-    assert_eq!(
-        outcome.stderr,
-        "mooringctl: no file was written: nothing goes to the portal before a revision of the user agreement covers it and the users accept that revision (docs/runbooks/user-agreement.md)\n  caused by: agreement revision 1, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links\n"
-    );
+    assert_eq!(outcome.stderr, closed_gate_refusal());
     assert!(!out.exists());
     let mut bare = Harness::new(0);
+    bare.portal_agreement = PortalAgreement::since(None);
     let out = bare.home.path().join("snapshot.json");
     let outcome = run(&mut bare, &named, arg(&out));
     assert_eq!(outcome.code, EXIT_LOCAL);
-    assert!(
-        outcome
-            .stderr
-            .starts_with("mooringctl: no file was written: nothing goes to the portal"),
-        "{}",
-        outcome.stderr
-    );
+    assert_eq!(outcome.stderr, closed_gate_refusal());
 }
 
 /// A refusal of the core writes nothing and comes before the file's own
@@ -282,8 +282,9 @@ fn a_refused_snapshot_writes_nothing() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: no file was written: the portal snapshot was refused\n  caused by: user {} has not accepted agreement revision 1: no acceptance is recorded\n",
-            named[1]
+            "mooringctl: no file was written: the portal snapshot was refused\n  caused by: user {} has not accepted agreement revision {}: no acceptance is recorded\n",
+            named[1],
+            AgreementVersion::CURRENT
         )
     );
     assert_eq!(fs::read(&out).unwrap(), b"earlier\n");

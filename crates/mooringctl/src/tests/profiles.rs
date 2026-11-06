@@ -16,6 +16,7 @@ use mooring_model::{
 use mooring_store::SecretStore as _;
 
 use super::export::{arg, exporting, mode};
+use super::portal::closed_gate_refusal;
 use super::support::{Harness, NOW};
 use super::user::{fixture, harness_with, store};
 use crate::error::EXIT_LOCAL;
@@ -72,19 +73,17 @@ fn export_profiles_writes_the_bundle_of_every_user_to_be_served() {
     assert_eq!(store(&harness).load().unwrap().deployment, deployment);
 }
 
-/// Until the agreement covers the portal nothing is written and no secret
-/// is read, whatever the state and the keychain hold.
+/// While the gate is closed nothing is written and no secret is read,
+/// whatever the state and the keychain hold.
 #[test]
-fn export_profiles_is_refused_until_the_agreement_covers_the_portal() {
+fn export_profiles_is_refused_while_the_gate_is_closed() {
     let (mut harness, folder) = exporting(fixture(|_| {}));
+    harness.portal_agreement = PortalAgreement::since(None);
     let out = folder.join("profiles.json");
     let outcome = run(&mut harness, arg(&out));
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert_eq!(outcome.stdout, "");
-    assert_eq!(
-        outcome.stderr,
-        "mooringctl: no file was written: nothing goes to the portal before a revision of the user agreement covers it and the users accept that revision (docs/runbooks/user-agreement.md)\n  caused by: agreement revision 1, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links\n"
-    );
+    assert_eq!(outcome.stderr, closed_gate_refusal());
     assert!(!out.exists());
 }
 
@@ -93,16 +92,11 @@ fn export_profiles_is_refused_until_the_agreement_covers_the_portal() {
 #[test]
 fn export_profiles_checks_the_gate_before_reading_anything() {
     let mut bare = Harness::new(0);
+    bare.portal_agreement = PortalAgreement::since(None);
     let out = bare.home.path().join("profiles.json");
     let outcome = run(&mut bare, arg(&out));
     assert_eq!(outcome.code, EXIT_LOCAL);
-    assert!(
-        outcome
-            .stderr
-            .starts_with("mooringctl: no file was written: nothing goes to the portal"),
-        "{}",
-        outcome.stderr
-    );
+    assert_eq!(outcome.stderr, closed_gate_refusal());
     assert!(!out.exists());
 }
 

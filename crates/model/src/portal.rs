@@ -115,7 +115,6 @@ mod tests {
             PortalAgreement::since(Some(revision(current.get() + 1))).required(),
             closed
         );
-        assert_eq!(PortalAgreement::SHIPPED.required(), closed);
     }
 
     #[test]

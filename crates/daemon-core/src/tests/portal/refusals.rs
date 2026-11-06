@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 
 use mooring_model::{
-    AgreementRecord, AgreementVersion, AutoQuotaPolicy, CalendarDate, PortalAgreement, UnixTime,
-    User, UserId, UserStatus,
+    AgreementRecord, AgreementVersion, AutoQuotaPolicy, CalendarDate, PortalAgreement,
+    PortalNotCovered, UnixTime, User, UserId, UserStatus,
 };
 use serde::ser::Error as _;
 
@@ -21,23 +21,19 @@ use super::{
 use crate::error::PolicyError;
 use crate::portal::{MAX_SNAPSHOT_BYTES, PortalError, PortalErrorKind, snapshot};
 
-/// Nothing is made while the shipped agreement does not cover the portal,
-/// whatever the users accepted.
+/// Nothing is made while the gate is closed, whatever the users accepted.
 #[test]
 fn nothing_is_made_while_the_agreement_does_not_cover_the_portal() {
     let deployment = pilots(|_| {});
-    let error = snapshot(
-        &deployment,
-        None,
-        &ids(&ALL),
-        GENERATED_AT,
-        PortalAgreement::SHIPPED,
-    )
-    .unwrap_err();
+    let closed = PortalAgreement::since(None);
+    let error = snapshot(&deployment, None, &ids(&ALL), GENERATED_AT, closed).unwrap_err();
     assert_eq!(error.kind(), PortalErrorKind::NotCovered);
     assert_eq!(
         error.to_string(),
-        "agreement revision 1, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links"
+        format!(
+            "agreement revision {}, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links",
+            AgreementVersion::CURRENT
+        )
     );
 }
 
@@ -45,15 +41,16 @@ fn nothing_is_made_while_the_agreement_does_not_cover_the_portal() {
 /// requires: none, or one of another revision, is refused by name.
 #[test]
 fn a_user_without_the_required_acceptance_is_refused() {
-    let other = AgreementVersion::new(NonZeroU16::new(2).unwrap());
+    let current = AgreementVersion::CURRENT;
+    let other = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
     for (record, said) in [
-        (None, "no acceptance is recorded"),
+        (None, "no acceptance is recorded".to_owned()),
         (
             Some(AgreementRecord {
                 version: other,
                 accepted_on: date("2026-10-20"),
             }),
-            "the recorded acceptance is of revision 2",
+            format!("the recorded acceptance is of revision {other}"),
         ),
     ] {
         let deployment = pilots(|users| users[1].agreement = record);
@@ -73,7 +70,7 @@ fn a_user_without_the_required_acceptance_is_refused() {
         );
         assert_eq!(
             error.to_string(),
-            format!("user pilotuserb has not accepted agreement revision 1: {said}")
+            format!("user pilotuserb has not accepted agreement revision {current}: {said}")
         );
     }
 }
@@ -314,7 +311,9 @@ fn every_error_has_its_kind() {
     let at = UnixTime::from_secs(1);
     let cases = [
         (
-            PortalError::NotCovered(PortalAgreement::SHIPPED.required().unwrap_err()),
+            PortalError::NotCovered(PortalNotCovered {
+                current: AgreementVersion::CURRENT,
+            }),
             PortalErrorKind::NotCovered,
         ),
         (PortalError::NoUsers, PortalErrorKind::NoUsers),
