@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn an_acceptance_counts_for_exactly_its_revision() {
         let first = AgreementVersion::CURRENT;
-        let second = AgreementVersion::new(NonZeroU16::new(2).unwrap());
+        let second = AgreementVersion::new(NonZeroU16::new(first.get() + 1).unwrap());
         let mut user = user();
         assert_eq!(user.accepted(first), Err(RecordedAgreement(None)));
         user.agreement = Some(AgreementRecord {
@@ -461,7 +461,7 @@ mod tests {
         );
         assert_eq!(
             RecordedAgreement(Some(first)).to_string(),
-            "the recorded acceptance is of revision 1"
+            format!("the recorded acceptance is of revision {first}")
         );
     }
 

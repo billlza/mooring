@@ -22,7 +22,7 @@ use mooring_export::{
 use mooring_fixtures::FIXTURE_NOW;
 use mooring_model::{
     AgreementRecord, AgreementVersion, CalendarDate, ClientLine, ConfigGeneration, Deployment,
-    PortalAgreement, SecretSnapshot, SuspendReason, UnixTime, UserId, UserStatus,
+    PortalAgreement, PortalNotCovered, SecretSnapshot, SuspendReason, UnixTime, UserId, UserStatus,
 };
 use saphyr::YamlOwned;
 
@@ -211,7 +211,8 @@ fn suspended() -> UserStatus {
 #[test]
 fn users_not_to_be_served_are_left_out_and_named() {
     let fixture = mooring_fixtures::two_nodes_twenty_users().unwrap();
-    let other = AgreementVersion::new(NonZeroU16::new(2).unwrap());
+    let current = AgreementVersion::CURRENT;
+    let other = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
     let deployment = edited(&fixture.deployment, |parts| {
         parts.users[0].status = suspended();
         parts.users[1].status = UserStatus::RevokePending;
@@ -257,11 +258,13 @@ fn users_not_to_be_served_are_left_out_and_named() {
     assert_eq!(
         said,
         [
-            "suspended",
-            "being revoked",
-            "revoked",
-            "has not accepted agreement revision 1: no acceptance is recorded",
-            "has not accepted agreement revision 1: the recorded acceptance is of revision 2",
+            "suspended".to_owned(),
+            "being revoked".to_owned(),
+            "revoked".to_owned(),
+            format!("has not accepted agreement revision {current}: no acceptance is recorded"),
+            format!(
+                "has not accepted agreement revision {current}: the recorded acceptance is of revision {other}"
+            ),
         ]
     );
     // Exactly the included users' secrets are listed.
@@ -296,20 +299,23 @@ fn users_not_to_be_served_are_left_out_and_named() {
     );
 }
 
-/// Nothing is made while the shipped agreement does not cover the portal:
-/// neither the selection nor the bundle, whatever the users accepted.
+/// Nothing is made while the gate is closed: neither the selection nor the
+/// bundle, whatever the users accepted.
 #[test]
 fn nothing_is_made_while_the_agreement_does_not_cover_the_portal() {
     let fixture = two_nodes();
-    let shipped = PortalAgreement::SHIPPED;
-    let refused = profile_selection(&fixture.deployment, FIXTURE_NOW, shipped).unwrap_err();
+    let closed = PortalAgreement::since(None);
+    let refused = profile_selection(&fixture.deployment, FIXTURE_NOW, closed).unwrap_err();
     assert_eq!(refused.kind(), ProfilesErrorKind::NotCovered);
     let refused =
-        export_profiles(&fixture.deployment, &fixture.secrets, FIXTURE_NOW, shipped).unwrap_err();
+        export_profiles(&fixture.deployment, &fixture.secrets, FIXTURE_NOW, closed).unwrap_err();
     assert_eq!(refused.kind(), ProfilesErrorKind::NotCovered);
     assert_eq!(
         refused.to_string(),
-        "agreement revision 1, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links"
+        format!(
+            "agreement revision {}, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links",
+            AgreementVersion::CURRENT
+        )
     );
 }
 
@@ -384,7 +390,9 @@ fn every_profiles_error_kind_is_named() {
     let encode = || serde_json::from_str::<u8>("x").unwrap_err();
     let cases = [
         (
-            ProfilesError::NotCovered(PortalAgreement::SHIPPED.required().unwrap_err()),
+            ProfilesError::NotCovered(PortalNotCovered {
+                current: AgreementVersion::CURRENT,
+            }),
             ProfilesErrorKind::NotCovered,
         ),
         (ProfilesError::NoProfiles, ProfilesErrorKind::NoProfiles),
