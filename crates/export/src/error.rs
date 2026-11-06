@@ -10,8 +10,8 @@ use std::fmt;
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretSnapshotError;
 use mooring_model::{
-    AgreementVersion, Capability, ClientLine, ConfigGeneration, ModelError, NodeId, UnixTime,
-    UserId,
+    AgreementVersion, Capability, ClientLine, ConfigGeneration, ModelError, NodeId,
+    PortalNotCovered, RecordedAgreement, UnixTime, UserId,
 };
 
 use mooring_model::kinds;
@@ -66,18 +66,6 @@ impl fmt::Display for TagRule {
             Self::InvalidCharacter => "the tag contains a byte outside a-z, 0-9 and '-'",
             Self::HyphenAtEdge => "the tag starts or ends with '-'",
         })
-    }
-}
-
-/// The recorded acceptance an [`ExportError::AgreementNotAccepted`] names.
-struct RecordedAgreement(Option<AgreementVersion>);
-
-impl fmt::Display for RecordedAgreement {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            None => f.write_str("no acceptance is recorded"),
-            Some(version) => write!(f, "the recorded acceptance is of revision {version}"),
-        }
     }
 }
 
@@ -244,6 +232,89 @@ impl ExportError {
             Self::CertEkuMissing { .. } => ExportErrorKind::CertEkuMissing,
             Self::InvalidTag { .. } => ExportErrorKind::InvalidTag,
             Self::Encode(_) => ExportErrorKind::Encode,
+        }
+    }
+}
+
+/// The portal's profile bundle could not be made ([`crate::export_profiles`]);
+/// nothing was encoded, and no part of a bundle is ever returned.
+#[derive(Debug, thiserror::Error)]
+pub enum ProfilesError {
+    /// The agreement revision this build ships does not cover the portal.
+    #[error(transparent)]
+    NotCovered(#[from] PortalNotCovered),
+    /// No user is to be served through the portal, and a bundle holds at
+    /// least one profile.
+    #[error(
+        "no user is to be served: every user is suspended, being revoked, revoked or without an acceptance of the agreement revision the portal requires"
+    )]
+    NoProfiles,
+    /// A user who is to be served cannot have a file. The whole bundle is
+    /// refused: the portal drops the profile of every user a bundle leaves
+    /// out, so leaving this user out would take their profile away.
+    #[error("user {user}'s file cannot be made")]
+    User {
+        /// The user.
+        user: UserId,
+        /// Why.
+        #[source]
+        source: Box<ExportError>,
+    },
+    /// A user's document, as it stands in the bundle, is larger than the
+    /// portal accepts.
+    #[error(
+        "user {user}'s document is {bytes} bytes in the bundle, more than the portal's {limit}"
+    )]
+    DocumentTooLarge {
+        /// The user.
+        user: UserId,
+        /// The document's size in the bundle.
+        bytes: usize,
+        /// The portal's bound.
+        limit: usize,
+    },
+    /// The bundle is larger than the portal reads.
+    #[error("the bundle is {bytes} bytes, more than the portal's {limit}")]
+    BundleTooLarge {
+        /// Its size.
+        bytes: usize,
+        /// The portal's bound.
+        limit: usize,
+    },
+    /// The JSON encoder failed.
+    #[error("the profile bundle could not be encoded")]
+    Encode(#[source] serde_json::Error),
+}
+
+kinds! {
+    /// The kind of a [`ProfilesError`], without its details.
+    pub enum ProfilesErrorKind {
+        /// See [`ProfilesError::NotCovered`].
+        NotCovered,
+        /// See [`ProfilesError::NoProfiles`].
+        NoProfiles,
+        /// See [`ProfilesError::User`].
+        User,
+        /// See [`ProfilesError::DocumentTooLarge`].
+        DocumentTooLarge,
+        /// See [`ProfilesError::BundleTooLarge`].
+        BundleTooLarge,
+        /// See [`ProfilesError::Encode`].
+        Encode,
+    }
+}
+
+impl ProfilesError {
+    /// The kind of this error.
+    #[must_use]
+    pub const fn kind(&self) -> ProfilesErrorKind {
+        match self {
+            Self::NotCovered(_) => ProfilesErrorKind::NotCovered,
+            Self::NoProfiles => ProfilesErrorKind::NoProfiles,
+            Self::User { .. } => ProfilesErrorKind::User,
+            Self::DocumentTooLarge { .. } => ProfilesErrorKind::DocumentTooLarge,
+            Self::BundleTooLarge { .. } => ProfilesErrorKind::BundleTooLarge,
+            Self::Encode(_) => ProfilesErrorKind::Encode,
         }
     }
 }

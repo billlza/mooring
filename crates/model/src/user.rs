@@ -276,6 +276,21 @@ impl fmt::Display for AgreementVersion {
     }
 }
 
+/// The acceptance a refusal names, when a user has none of the revision
+/// required: none at all, or one of another revision. Every refusal for the
+/// agreement (a user export's, the portal's) words it this way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RecordedAgreement(pub Option<AgreementVersion>);
+
+impl fmt::Display for RecordedAgreement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            None => f.write_str("no acceptance is recorded"),
+            Some(version) => write!(f, "the recorded acceptance is of revision {version}"),
+        }
+    }
+}
+
 /// That a user accepted a revision of the user agreement, and on which day
 /// (a calendar day, never compared with a clock). Since decision F9
 /// (2026-10-15) `user export` requires a record of

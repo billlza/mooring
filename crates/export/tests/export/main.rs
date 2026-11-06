@@ -19,6 +19,8 @@ mod kinds;
 #[cfg(test)]
 mod probes;
 #[cfg(test)]
+mod profiles;
+#[cfg(test)]
 mod refusals;
 #[cfg(test)]
 mod secrets;

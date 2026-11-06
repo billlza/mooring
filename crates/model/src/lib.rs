@@ -36,6 +36,7 @@ pub mod ipv4;
 pub mod keys;
 pub mod node;
 pub mod own_network;
+pub mod portal;
 pub mod ports;
 pub mod quota;
 pub mod secret;
@@ -72,6 +73,7 @@ pub use node::{
     HostFacts, Hy2Server, Node, NodeAddress, NodeLifecycle, NodeRole, RealityServer, SshPin,
 };
 pub use own_network::{OwnNetwork, OwnNetworkKind, OwnNetworks, PERSONAL_HOTSPOT_ROUTER};
+pub use portal::{PORTAL_AGREEMENT_SINCE, PortalAgreement, PortalNotCovered};
 pub use ports::{HopInterval, Hy2Listener, Hy2Obfs, ListenerIdx, Port, PortPlan, PortRange};
 pub use quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
 pub use secret::{
@@ -88,7 +90,8 @@ pub use target::{TargetAttestation, TargetSpec, qualify};
 pub use time::UnixTime;
 pub use user::{
     AgreementRecord, AgreementVersion, Capability, ClientLine, ClientProfile, QuotaAction,
-    SuspendReason, User, UserNodePublic, UserPolicy, UserQuota, UserStatus, WarnPercent,
+    RecordedAgreement, SuspendReason, User, UserNodePublic, UserPolicy, UserQuota, UserStatus,
+    WarnPercent,
 };
 pub use v1::StateV1;
 pub use verdict::{Verdict, Violation};

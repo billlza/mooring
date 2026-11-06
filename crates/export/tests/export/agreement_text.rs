@@ -6,7 +6,7 @@
 //! before their next file. A Level 1 drift check: it detects an accidental
 //! edit, not a malicious one.
 
-use mooring_model::AgreementVersion;
+use mooring_model::{AgreementVersion, PortalAgreement};
 use sha2::{Digest as _, Sha256};
 
 const AGREEMENT: &str = include_str!("../../../../docs/runbooks/user-agreement.md");
@@ -59,6 +59,22 @@ fn the_agreement_text_is_bound_to_its_revision() {
     assert!(
         visible.contains(&format!("\n> 我已阅读并同意{name}\n")),
         "{name}"
+    );
+}
+
+/// The portal's gate (design §9.5) opens only with a text that names the
+/// portal (门户): a revision that covers it says what the portal's host
+/// keeps and how its subscription links are used, and revision 1, which
+/// does not cover it, never mentions it. Like the digest, a Level 1 check:
+/// it catches the gate opened on a text that was not revised for it, or a
+/// revised text shipped with the gate still closed.
+#[test]
+fn the_portal_gate_opens_only_with_a_text_that_names_the_portal() {
+    let names_the_portal = user_visible(AGREEMENT).contains("门户");
+    assert_eq!(
+        PortalAgreement::SHIPPED.required().is_ok(),
+        names_the_portal,
+        "the agreement text and PORTAL_AGREEMENT_SINCE disagree about the portal"
     );
 }
 

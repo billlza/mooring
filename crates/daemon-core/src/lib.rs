@@ -29,6 +29,8 @@
 //! - [`control`]: the daemon's control channel, its requests, replies and
 //!   line bounds.
 //! - [`report`]: the remote viewer's report projected from it.
+//! - [`portal`]: the user portal's snapshot of the users the operator
+//!   names, from the deployment and the usage report.
 //!
 //! # Purity
 //!
@@ -68,6 +70,7 @@ pub mod network;
 pub mod notify;
 pub mod period;
 pub mod policy;
+pub mod portal;
 pub mod power;
 pub mod radio_history;
 pub mod report;
@@ -102,6 +105,7 @@ pub use network::{
 };
 pub use period::{BillingCycle, UsagePeriods};
 pub use policy::{ExpiryState, PolicyAction, QuotaState, UserAction};
+pub use portal::{PortalError, PortalErrorKind, PortalSnapshot};
 pub use radio_history::{RadioHistory, RadioSample};
 pub use router::{RouterReading, RouterStatus};
 pub use snapshot::{Ledgers, NodePoll, SimTotals, SnapshotError, StatusInputs, assemble};

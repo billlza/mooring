@@ -153,9 +153,14 @@ impl Serialize for SingBoxOutbound {
     }
 }
 
+/// The document of `outbounds`, with every slot resolved: what a user
+/// export writes and what the portal's bundle holds for the user.
+pub(crate) fn document_tree(outbounds: &[SingBoxOutbound]) -> Tree<Scalar> {
+    document(outbounds.iter().map(SingBoxOutbound::tree).collect())
+}
+
 /// Renders `outbounds` as a pretty-printed document with a trailing newline,
 /// into a zeroizing buffer of exactly the needed capacity.
 pub(crate) fn render(outbounds: &[SingBoxOutbound]) -> Result<Zeroizing<Vec<u8>>, ExportError> {
-    let tree = document(outbounds.iter().map(SingBoxOutbound::tree).collect());
-    exact_json(&tree).map_err(ExportError::Encode)
+    exact_json(&document_tree(outbounds)).map_err(ExportError::Encode)
 }

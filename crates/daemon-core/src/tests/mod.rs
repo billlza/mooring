@@ -14,6 +14,7 @@ mod meter;
 mod netgear;
 mod notify;
 mod policy;
+mod portal;
 mod power;
 mod radio_history;
 mod router;

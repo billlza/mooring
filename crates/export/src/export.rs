@@ -269,7 +269,9 @@ fn checked_nodes<'a>(
     Ok(CheckedNodes { hello, nodes })
 }
 
-fn user_outbounds(
+/// Every outbound of `user`'s file, in file order, after every check
+/// [`export_user`] makes; it reads the user's secrets from `secrets`.
+pub(crate) fn user_outbounds(
     deployment: &Deployment,
     secrets: &SecretSnapshot,
     user: &User,

@@ -1,0 +1,86 @@
+{
+  "format": "mooring-portal-cfm-profiles",
+  "version": 1,
+  "generated_at": 1793955600,
+  "profiles": [
+    {
+      "user": "pilotusera",
+      "document": {
+        "outbounds": [
+          {
+            "type": "vless",
+            "tag": "lon1-reality",
+            "server": "192.0.2.10",
+            "server_port": 443,
+            "uuid": "00000000-0000-4000-8000-00000000000a",
+            "flow": "xtls-rprx-vision",
+            "packet_encoding": "xudp",
+            "tls": {
+              "enabled": true,
+              "server_name": "www.example.com",
+              "utls": {
+                "enabled": true,
+                "fingerprint": "chrome"
+              },
+              "reality": {
+                "enabled": true,
+                "public_key": "c3ludGhldGljLXJlYWxpdHkta2V5LW5vdC1yZWFsLTA",
+                "short_id": "000000000000000a"
+              }
+            }
+          },
+          {
+            "type": "hysteria2",
+            "tag": "lon1-hy2",
+            "server": "192.0.2.10",
+            "server_ports": [
+              "61000:62999"
+            ],
+            "hop_interval": "30s",
+            "password": "synthetic-hysteria2-password-for-pilotusera",
+            "obfs": {
+              "type": "salamander",
+              "password": "synthetic-salamander-password-not-a-real-1"
+            },
+            "tls": {
+              "enabled": true,
+              "server_name": "n000000000000000a.internal",
+              "certificate_public_key_sha256": [
+                "c3ludGhldGljIFNQS0kgcGluIC0gbm90IGEgcmVhbCBvbmU="
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "user": "pilotuserb",
+      "document": {
+        "outbounds": [
+          {
+            "type": "vless",
+            "tag": "lon1-reality",
+            "server": "192.0.2.10",
+            "server_port": 443,
+            "uuid": "00000000-0000-4000-8000-00000000000b",
+            "flow": "xtls-rprx-vision",
+            "packet_encoding": "xudp",
+            "tls": {
+              "enabled": true,
+              "server_name": "www.example.com",
+              "utls": {
+                "enabled": true,
+                "fingerprint": "chrome"
+              },
+              "reality": {
+                "enabled": true,
+                "public_key": "c3ludGhldGljLXJlYWxpdHkta2V5LW5vdC1yZWFsLTA",
+                "short_id": "000000000000000b"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

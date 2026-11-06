@@ -1,0 +1,94 @@
+{
+  "format": "mooring-portal-snapshot",
+  "version": 1,
+  "generated_at": 1793880000,
+  "cycle": {
+    "start": "2026-11-01",
+    "next_start": "2026-12-01"
+  },
+  "counted_through": 1793879700,
+  "users": [
+    {
+      "user": "pilotusera",
+      "status": "active",
+      "cycle_served_bytes": 12345678901,
+      "reality_downlink_counted_at_close": true,
+      "quota": {
+        "cycle_served_bytes": 40000000000,
+        "warn_percent": 80,
+        "action": "suspend"
+      },
+      "expires_at": 1809129600
+    },
+    {
+      "user": "pilotuserb",
+      "status": "active",
+      "cycle_served_bytes": 35000000000,
+      "reality_downlink_counted_at_close": true,
+      "quota": {
+        "cycle_served_bytes": 40000000000,
+        "warn_percent": 80,
+        "action": "suspend"
+      },
+      "expires_at": null
+    },
+    {
+      "user": "pilotuserc",
+      "status": {
+        "suspended": {
+          "reason": "quota_exceeded",
+          "since": 1793784600
+        }
+      },
+      "cycle_served_bytes": 40100000000,
+      "reality_downlink_counted_at_close": false,
+      "quota": {
+        "cycle_served_bytes": 40000000000,
+        "warn_percent": 80,
+        "action": "suspend"
+      },
+      "expires_at": null
+    },
+    {
+      "user": "pilotuserd",
+      "status": "active",
+      "cycle_served_bytes": null,
+      "reality_downlink_counted_at_close": true,
+      "quota": {
+        "cycle_served_bytes": 40000000000,
+        "warn_percent": 80,
+        "action": "warn"
+      },
+      "expires_at": 1795132800
+    },
+    {
+      "user": "pilotusere",
+      "status": "active",
+      "cycle_served_bytes": 2000000000,
+      "reality_downlink_counted_at_close": true,
+      "quota": null,
+      "expires_at": null
+    },
+    {
+      "user": "pilotuserf",
+      "status": "revoked",
+      "cycle_served_bytes": 0,
+      "reality_downlink_counted_at_close": false,
+      "quota": null,
+      "expires_at": null
+    },
+    {
+      "user": "pilotuserg",
+      "status": {
+        "suspended": {
+          "reason": "expired",
+          "since": 1793577900
+        }
+      },
+      "cycle_served_bytes": 1500000000,
+      "reality_downlink_counted_at_close": false,
+      "quota": null,
+      "expires_at": 1793577600
+    }
+  ]
+}
