@@ -26,7 +26,8 @@ use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, wr
 
 use crate::backup::BackupCheck;
 use crate::cli::{
-    Command, ExitCommand, NodeCommand, RouterCommand, SimCommand, TargetCommand, UserCommand,
+    Command, ExitCommand, NodeCommand, PortalCommand, RouterCommand, SimCommand, TargetCommand,
+    UserCommand,
 };
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::paths;
@@ -75,6 +76,10 @@ pub(crate) struct Env<'a> {
     /// Points standard error at the daemon's log
     /// (`mooring_macsys::redirect_stderr` in the binary).
     pub(crate) redirect_stderr: &'a crate::daemon::log::RedirectStderr<'a>,
+    /// Whether the agreement this build ships covers the portal
+    /// (`PortalAgreement::SHIPPED` in the binary): the portal's exports are
+    /// refused until it does.
+    pub(crate) portal_agreement: mooring_model::PortalAgreement,
 }
 
 /// The system clock, in whole seconds since the epoch.
@@ -117,6 +122,12 @@ pub(crate) fn run(
             format,
             out: path,
         }) => crate::user::export(env, out, err, &user, format.into(), &path),
+        Command::User(UserCommand::ExportProfiles { out: path }) => {
+            crate::user::export_profiles(env, out, err, &path)
+        }
+        Command::Portal(PortalCommand::Export { users, out: path }) => {
+            crate::portal::export(env, out, err, &users, &path)
+        }
         Command::Exit(ExitCommand::Init {
             interface,
             cycle_anchor,

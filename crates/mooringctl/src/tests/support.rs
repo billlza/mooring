@@ -21,6 +21,7 @@ use mooring_daemon_core::meter::CounterReading;
 use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::status::PowerSource;
 use mooring_macsys::{DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
+use mooring_model::PortalAgreement;
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry, SecretMaterial, SecretRef};
 use mooring_model::time::UnixTime;
@@ -876,6 +877,9 @@ pub(crate) struct Harness {
     /// How many times the daemon pointed standard error at its log; the
     /// test process's own stderr is never touched.
     pub(crate) redirected: Cell<u32>,
+    /// The portal's gate on the agreement: the binary's, closed, unless a
+    /// test opens it.
+    pub(crate) portal_agreement: PortalAgreement,
 }
 
 impl Harness {
@@ -904,6 +908,7 @@ impl Harness {
             probes: RefCell::new(VecDeque::new()),
             probed: RefCell::new(Vec::new()),
             redirected: Cell::new(0),
+            portal_agreement: PortalAgreement::SHIPPED,
         }
     }
 
@@ -1036,6 +1041,7 @@ impl Harness {
             meter_reader: &meter_reader,
             probe: &probe,
             redirect_stderr: &redirect,
+            portal_agreement: self.portal_agreement,
         };
         work(&mut env)
     }

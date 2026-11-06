@@ -19,6 +19,16 @@
     bins and monthly files (§11.5), `last_active` (§11.1) and the Mac report
     (§15.9).
   - Clause 3 states the node's deny rules (design §8.2).
+  - Revision 1 does not cover the user portal (design §9.5,
+    docs/portal-contract.md): the portal's host is not among the places
+    clause 4 lists, and clauses 2 and 5 rule out links. `portal export` and
+    `user export-profiles` stay refused until a revision that covers it
+    sets `PORTAL_AGREEMENT_SINCE` (crates/model/src/portal.rs), in the
+    commit that raises the revision and records its digest. Its text must
+    name the portal (门户), which agreement_text.rs checks against the gate.
+    Clause 4 then says what the portal's host keeps, where and for how
+    long; clauses 2 and 5 how a subscription link is used and kept, and what
+    to do when one leaks.
 -->
 # 《Mooring 使用约定》第 1 版
 

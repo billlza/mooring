@@ -2,13 +2,17 @@
 
 //! The user commands (design §15.3) against `state.json` in the support
 //! directory: `user add` and `user alias`, `user agree`, which decision F9
-//! makes `user export` require, and `user export`.
+//! makes `user export` require, `user export`, and `user export-profiles`,
+//! the portal's bundle of every served user's file (design §9.5).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 
-use mooring_export::{ExportError, ExportErrorKind, ExportFormat, export_secret_refs, export_user};
+use mooring_export::{
+    ExportError, ExportErrorKind, ExportFormat, ProfilesError, export_secret_refs, export_user,
+    profile_selection,
+};
 use mooring_keys::credentials;
 use mooring_model::ids::MAX_LABEL_CHARS;
 use mooring_model::node::NodeLifecycle;
@@ -277,6 +281,60 @@ pub(crate) fn export(
         .as_bytes(),
     )
     .map_err(output)
+}
+
+/// `user export-profiles --out <path>` (design §9.5): writes the portal's
+/// profile bundle, the CFM file of every user to be served, to a new file
+/// with mode 0600, never overwriting one.
+///
+/// Refused first while the agreement this build ships does not cover the
+/// portal. Then every check `mooring-export` makes before reading a secret
+/// runs for every user to be served (`profile_selection`), the file and its
+/// folder are checked as for `user export`, and only then are exactly
+/// those users' secrets read from the keychain. A user to be served whose
+/// file cannot be made refuses the whole bundle; each user left out is
+/// named with the reason, since the portal drops their profile.
+pub(crate) fn export_profiles(
+    env: &Env<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    path: &Path,
+) -> Result<(), CommandError> {
+    env.portal_agreement
+        .required()
+        .map_err(LocalError::PortalNotCovered)?;
+    let store = Store::new(support_dir(env)?);
+    let state = load(&store)?;
+    let now = (env.clock)()?;
+    let selection = profile_selection(&state.deployment, now, env.portal_agreement)
+        .map_err(profiles_refused)?;
+    export_file::prepare(env, err, path)?;
+    let secrets = read_snapshot(&*env.secrets, selection.secret_refs())
+        .map_err(|error| LocalError::ProfilesSecrets(Box::new(error)))?;
+    let bundle =
+        mooring_export::export_profiles(&state.deployment, &secrets, now, env.portal_agreement)
+            .map_err(profiles_refused)?;
+    export_file::write_new(path, bundle.expose_bytes())?;
+    let left_out: String = bundle
+        .selection()
+        .omitted()
+        .iter()
+        .map(|(user, omission)| format!("left out: user {user} ({omission})\n"))
+        .collect();
+    out.write_all(
+        format!(
+            "wrote {}: CFM profiles of {} user(s), sing-box-json, mode 0600\n{left_out}import it with `mooring-portal import-profiles` on the portal host, then delete it; the portal drops the profile of every user left out\n",
+            path.display(),
+            bundle.selection().included().len(),
+        )
+        .as_bytes(),
+    )
+    .map_err(output)
+}
+
+/// A refusal of the profile bundle.
+fn profiles_refused(error: ProfilesError) -> CommandError {
+    CommandError::Local(LocalError::ProfilesRefused(Box::new(error)))
 }
 
 /// A refusal of `mooring-export`; one for the agreement names the command
