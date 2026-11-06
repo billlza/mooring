@@ -314,7 +314,8 @@ fn public_ips_records_each_sample_and_the_distinct_addresses() {
 /// A peer that answers and closes at once, as the reflector does, can hang
 /// up before the connect's poll looks, which socket2 reports as a failed
 /// connect with no error set (about 1 connect in 170 on this Mac). Every
-/// one of those connects was made, and its answer is read.
+/// one of those connects was made, and its answer is read. A run need not
+/// meet that race; `tests::net` pins how the report is read.
 #[test]
 fn a_peer_that_closes_before_the_connect_is_polled_is_still_connected() {
     const CONNECTS: usize = 1000;

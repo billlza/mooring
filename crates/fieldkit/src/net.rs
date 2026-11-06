@@ -85,16 +85,8 @@ impl Bind {
         Ok(socket.into())
     }
 
-    /// A TCP connection from the interface to `peer`, within `timeout`.
-    ///
-    /// A peer that answers and closes at once, as the reflector does, can
-    /// hang up before `connect_timeout`'s poll looks, and socket2 then
-    /// reports the hang-up with no error set (`ErrorKind::Other`, "no error
-    /// set after POLLHUP", socket2 0.6.5 `sys/unix.rs`) although the
-    /// connection was made and the answer waits to be read: about 1 connect
-    /// in 170 on loopback on this Mac. A socket that has a peer is
-    /// connected, so that report, and only it, is the connection it is, as
-    /// in `mooringctl`'s probe (`runtime/probe.rs`).
+    /// A TCP connection from the interface to `peer`, within `timeout`,
+    /// socket2's report read by [`connect_outcome`].
     pub(crate) fn connect(
         &self,
         peer: SocketAddrV4,
@@ -103,14 +95,29 @@ impl Bind {
         let socket = self
             .socket(Type::STREAM, Protocol::TCP)
             .map_err(Connect::Setup)?;
-        match socket.connect_timeout(&SocketAddr::V4(peer).into(), timeout) {
-            Err(error)
-                if error.kind() == io::ErrorKind::Other
-                    && error.raw_os_error().is_none()
-                    && socket.peer_addr().is_ok() => {}
-            connected => connected.map_err(Connect::Failed)?,
-        }
+        let report = socket.connect_timeout(&SocketAddr::V4(peer).into(), timeout);
+        connect_outcome(&socket, report).map_err(Connect::Failed)?;
         Ok(socket.into())
+    }
+}
+
+/// What `report`, socket2's `connect_timeout` on `socket`, says of the
+/// connection, as in `mooringctl`'s probe (`runtime/probe.rs`). A peer
+/// that answers and closes at once, as the reflector does, can hang up
+/// before `connect_timeout`'s poll looks, and socket2 then reports the
+/// hang-up with no error set (`ErrorKind::Other`, "no error set after
+/// POLLHUP", socket2 0.6.5 `sys/unix.rs`) although the connection was made
+/// and the answer waits to be read: about 1 connect in 170 on loopback on
+/// this Mac. A socket whose peer answered and hung up still has that peer,
+/// so that report, on a socket that has a peer, is the connection it is.
+/// No other report of `connect_timeout` has its kind: the others are its
+/// time-out and the operating system's errors, and the standard library
+/// uses the kind `Other` for none of its errors (its documentation of
+/// `ErrorKind::Other` says so). Every other report is returned as it is.
+pub(crate) fn connect_outcome(socket: &Socket, report: io::Result<()>) -> io::Result<()> {
+    match report {
+        Err(error) if error.kind() == io::ErrorKind::Other && socket.peer_addr().is_ok() => Ok(()),
+        report => report,
     }
 }
 
