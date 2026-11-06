@@ -10,7 +10,7 @@ The user portal is a separate web application. It shows each user who has an acc
 
 Both files hold only the users the operator names, those bound to an account at the portal. A user with no account there, delivered by file only, is never named, so nothing about them reaches the portal's host.
 
-This page is Mooring's statement of both formats, complete without the portal's repository. The portal defines them, in its `docs/contract/portal-snapshot-v1.md` and `docs/contract/cfm-profiles-v2.md`. This page follows those documents at the portal's commit `ac7e285`. The snapshot's format and valid goldens there are the same as at `c070413`, where its copies below were taken. The bundle's format and valid goldens are those of `520c358`, where its copies were taken; `ac7e285` only records the operator's decision that a withheld user's link ends for good whatever the reason (§3.2). Changing a key, a value or a rule is a new version in the portal's contract, and then here.
+This page is Mooring's statement of both formats, complete without the portal's repository. The portal defines them, in its `docs/contract/portal-snapshot-v1.md` and `docs/contract/cfm-profiles-v2.md`. This page follows those documents at the portal's commit `120ca8a`. The snapshot's format and valid goldens there are the same as at `c070413`, where its copies below were taken. The bundle's format and valid goldens are those of `520c358`, where its copies were taken; `120ca8a` changed only what the import does to a withheld user's subscription link (§3.2). Changing a key, a value or a rule is a new version in the portal's contract, and then here.
 
 Design §9.5 places the exporters in Mooring.
 
@@ -28,7 +28,7 @@ So both commands refuse everything until a revision that covers the portal is wr
 - Both commands check the gate first, before they read the state. The pure exporters check it again (`mooring-daemon-core`'s `portal::snapshot` and `mooring-export`'s `profile_selection` and `export_profiles`).
 - `PortalAgreement::since` builds a gate from an explicit revision, which tests use to open it. No product code calls it; `crates/mooringctl/tests/shipped/portal_gate.rs` runs the built binary and requires both commands to refuse with the gate's message, so what `main` passes is checked, not only the types.
 - Once the gate opens, a user's data and file go to the portal only once the user has accepted that revision, `AgreementVersion::CURRENT`: the snapshot refuses a user named without that acceptance, and the bundle withholds them (§3.2). A user export requires the same (decision F9).
-- While the gate is closed, the bundle is refused whole. It is never written with every user withheld for want of an acceptance that cannot be had yet: such a bundle is valid, and its import would end every bound user's subscription link.
+- While the gate is closed, the bundle is refused whole. It is never written with every user withheld for want of an acceptance that cannot be had yet: such a bundle is valid, and its import would pause every bound user's subscription link.
 - `crates/export/tests/export/agreement_text.rs` ties the gate to the text. The gate is open exactly when the user-visible text names the portal (门户). The text's SHA-256 is pinned in the same file, so a revised text needs a new revision.
 
 Writing the revision (see the operator notes of `user-agreement.md`) sets `PORTAL_AGREEMENT_SINCE`, raises `AgreementVersion::CURRENT` and records the new digest, all in one commit. Every user then accepts it again (`user agree`) before anything about them goes to the portal.
@@ -112,15 +112,22 @@ Each user named is on exactly one side. An exhaustive match on `UserStatus`, wit
 
 - **Delivered (`profiles`):** an `Active` user with an acceptance of the required revision (§1). Each passes every check of `user export` (design §9.2): its capabilities, its credentials, and each node's generation, certificate and address.
 - **Withheld (`withheld`), and named in the output with the reason:** a suspended user, whatever the reason, as `suspended` (the snapshot carries the reason); a user being revoked or revoked as `revoked`, as in the snapshot; an active user without the acceptance as `agreement_not_accepted`.
-- **Refused:** a bundle in which a user to be delivered cannot have a file (a node not applied at the current generation, a certificate no longer current, no credentials). Withheld, that user would lose their link for good, so nothing is written.
+- **Refused:** a bundle in which a user to be delivered cannot have a file (a node not applied at the current generation, a certificate no longer current, no credentials). None of the contract's reasons to withhold a user is theirs, and leaving them out would make the portal refuse the bundle, so nothing is written.
 
-A bundle that withholds every user named is still written, with `profiles` empty: the portal stops serving them on import. When users are withheld for want of the current acceptance, the command also warns on standard error that the import ends their links: after a new revision of the agreement, such an export is most likely too early.
+A bundle that withholds every user named is still written, with `profiles` empty: the portal stops serving them on import.
 
-On import, a bound user who is withheld loses their stored profile, and their subscription link ends in the same transaction, whatever the reason: the operator kept that rule on 2026-11-06 for suspensions too, those for quota or expiry included. A later bundle that delivers them again does not bring the old link back: the user generates a new one at the portal and imports it into CFM again. A user named but bound to no account is not stored, and the portal reports them; if they were delivered, the file has carried their credentials to its host, and the import says to delete it at once.
+On import, a bound user who is withheld is no longer served a profile. What becomes of their subscription link depends on the reason (the operator's decision, 2026-11-06), and the command says it for each user withheld:
+
+- `suspended`, whatever the suspension's reason (quota, expiry, review or the operator's), and `agreement_not_accepted` pause the link. Once the user is resumed, or accepts the revision, and a bundle delivers them again, the same link serves their document again, and the user chooses Update in CFM. A suspension for quota pauses until the next billing cycle. Mooring is to lift it at the first apply of the new cycle (design §13.6, M5), which is not built yet: until then the operator resumes the user and exports the bundle again.
+- `revoked` ends the link for good. A ban for illegal use is a revocation here and, at the portal, a separate step by the operator, which also bars the person from registering again. Mooring's revocation records no reason, and a user who leaves is revoked too, so the portal never takes a revocation for a ban.
+
+A paused link answers 404, as an unknown one does, and while it is paused the user cannot generate a new link at the portal. The portal's contract and import work this way since its commit `120ca8a`; the bundle's format did not change.
+
+A user named but bound to no account is not stored, and the portal reports them; if they were delivered, the file has carried their credentials to its host, and the import says to delete it at once.
 
 As for `user export`, every check runs before the file is looked at, and the file is checked before the keychain is read. Then exactly the delivered users' secrets are read (`ProfileSelection::secret_refs`), and none of a withheld or unnamed user's.
 
-The bundle is exported again whenever its set or a file in it changes: a user is bound or unbound at the portal, added (once every node is applied), suspended, resumed, revoked, or accepts a new revision, and after every change that changes a user's file (`delivery.md`, section 7). After a new revision of the agreement, export it once every bound user has accepted that revision: until then they are withheld, and the import would end their links.
+The bundle is exported again whenever its set or a file in it changes: a user is bound or unbound at the portal, added (once every node is applied), suspended, resumed, revoked, or accepts a new revision, and after every change that changes a user's file (`delivery.md`, section 7). After a new revision of the agreement, a bound user who has not accepted it yet is withheld, and their link pauses until they accept and a bundle delivers them again, so the bundle need not wait until every bound user has accepted. The snapshot does not withhold: it refuses a user named without the acceptance (§2.2), so until a user accepts, the operator leaves them out of its list, and the portal keeps their last snapshot.
 
 ### 3.3 Goldens
 
