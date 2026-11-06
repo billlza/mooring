@@ -36,7 +36,10 @@ The last command must print `[Excluded]`.
 - The portal runs on a UK VPS of its own, never on a node or on the Mac.
 - TLS ends on that host, at the reverse proxy in front of the portal (the portal's README, "部署前提"): no relay or CDN between the user and that host decrypts the traffic.
 - The reverse proxy keeps no access log, compresses nothing under `/sub/`, and passes the client address as the portal's README says. The portal itself keeps client addresses only in memory.
-- No backup of the portal's database outlives what clause 4 promises: keep none, or only one that is deleted on the same schedule. Its database and any backup hold every bound user's credentials: keep them as the export files are kept.
+- No backup or host snapshot of the portal's database outlives what clause 4 promises. Keep none, and turn off the provider's automatic snapshots of that host, or keep only one that is deleted on the same schedule. Its database and any backup hold every bound user's credentials: keep them as the export files are kept.
+- The portal erases what it deletes since its commit `634e16e`. Run that commit or a later one, and change the database only with the portal's own commands, never with `sqlite3`.
+  - A command that deletes or overwrites rows may report that the database stayed busy. Its change is then done but not erased: run `mooring-portal --db <file> erase-deleted` at once.
+- Run the portal's commands by hand. Their output names account numbers and Mooring ids, so keep it out of cron jobs, systemd units and mail. The portal's own log names no account (`634e16e`).
 - The operator's Stripe account accepts bank cards only, never Alipay or WeChat Pay: their merchant rules prohibit VPN and proxy services (Stripe's Alipay terms, stripe.com/legal/alipay), and their records are tied to the user's real name.
 - It shows users a business name and a statement descriptor that say nothing about the service: they appear in the user's bank records.
 

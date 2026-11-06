@@ -69,10 +69,25 @@
     - The operator deletes a user's portal account, and with it everything
       there, when the user is revoked or leaves (delivery.md, section 10);
       orders go with the account.
-    - No backup of the portal's database may outlive these rules. Before
-      the portal opens to users it must delete rows for good (SQLite's
-      secure_delete), and its log must stop naming accounts; at a4359ea it
-      does neither (its log records each registration's account number).
+    - No backup or host snapshot of the portal's database may outlive
+      these rules. The portal's 634e16e (not yet pushed when this was
+      written) meets the two preconditions a4359ea did not.
+      - Every command that deletes or overwrites rows then erases them
+        (VACUUM, then wal_checkpoint(TRUNCATE)). When the database stays
+        busy past 5 s, the command says what it did, fails, and names
+        `erase-deleted`.
+      - Its log names no account.
+      - Out of its reach (its docs/security.md §11): old backups, host
+        snapshots, and what the file system and disk keep. Clause 4 says
+        that the host's provider may see what the disk keeps.
+    - The ban list keeps an unkeyed, fast BLAKE2s digest of the email.
+      Whoever holds the data can test an address, and can find numeric
+      ones such as QQ addresses by trying them all, in minutes. Clause 4
+      says both. A slow digest (Argon2id) would prevent the second; it is
+      not built.
+    - The portal's command output names account numbers and Mooring ids.
+      The operator runs those commands by hand and keeps their output out
+      of cron, systemd and mail (delivery.md, section 0).
     - The portal keeps client addresses only in memory; its reverse proxy
       keeps no access log, and TLS ends on that host.
     - The Mac's new record is the payments it pulls, under the 13-month
@@ -225,7 +240,7 @@
 - 你在国内使用的网络还能看到你访问了门户的域名：CFM 导入或「更新」订阅时，会先用你所在网络的 DNS 查询门户的域名，打开了「系统代理」时也是这样；不经过 CFM 访问门户时也一样。
 - 你连接时，服务器能看到你的 IP 地址，但不记录。门户也一样：你访问门户时，它能看到你的 IP 地址，只用来限制请求的次数，不记录。
 - 服务器提供商能看到你的 IP 地址、连接时间和流量大小；如果它控制了服务器，也能看到你访问的目标地址和域名，以及没有经过 HTTPS 加密的内容。
-- 门户所在服务器的提供商能看到连接门户的 IP 地址；如果它控制了这台服务器，也能看到门户上保存的全部内容，包括你的配置和凭据。
+- 门户所在服务器的提供商能看到连接门户的 IP 地址；如果它控制了这台服务器，也能看到门户上保存的全部内容，包括你的配置和凭据，以及磁盘上可能残留的、门户已经删除的记录。
 - 门户被攻破或数据外泄时，所有用户的登录邮箱、订单、配置和凭据会一起外泄。这时运营者会为所有用户更换凭据，你需要在门户上重新生成订阅链接并导入 CFM，或者重新下载配置文件。
 - 服务器通过 Cloudflare 的加密 DNS 服务（1.1.1.1 和 1.0.0.1）查询你访问的域名。Cloudflare 能看到这些域名和查询时间，但看到的是英国移动网络的地址，不是你的地址。
 - 英国移动运营商能看到目标 IP 地址，以及大多数加密连接开头的域名（SNI），看不到你的地址，也看不到 HTTPS 加密的内容。
@@ -236,7 +251,7 @@
 - 运营者的电脑上：五分钟粒度的流量记录保存 7 天，按小时汇总的保存 35 天，按日和按月的合计保存 13 个月。
 - 你的累计总量、最近一次使用的时间、账户状态变化和这些操作记录、付款记录、你接受本约定的记录，以及你的名字和别名，在你的账户作废 13 个月后全部删除。
 - 服务器上：流量明细保存 48 小时，每月合计在当月结束 7 天后删除，运营者的电脑会在此之前取回它们；你最近一次使用的时间在你的账户作废、服务器不再为你服务时删除。
-- 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会一直保留你登录邮箱的摘要和封禁的时间，用来拒绝这个邮箱再注册。门户不保存邮箱本身，但拿到门户数据的人，可以拿一个邮箱核对它是否被封禁过。
+- 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会一直保留你登录邮箱的摘要和封禁的时间，用来拒绝这个邮箱再注册。门户不保存邮箱本身，但拿到门户数据的人，可以拿一个邮箱核对它是否被封禁过；像 QQ 号邮箱这样由数字组成的邮箱，还能被很快地逐个试出来。
 - Stripe 上：你的账户作废时，运营者会取消你的自动续费，并删除 Stripe 上保存的你的银行卡。付款记录本身由 Stripe 按它自己的规定保存，运营者不能删除。
 - 你可以随时请运营者告诉你，运营者保存了哪些关于你的记录。退出时，你可以请运营者立即删除运营者电脑上的这些记录，不必等 13 个月；门户上的记录在运营者删除你的门户账号时删除；服务器上的记录按上面的期限自动删除。
 
