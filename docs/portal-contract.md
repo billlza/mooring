@@ -116,7 +116,7 @@ Each user named is on exactly one side. An exhaustive match on `UserStatus`, wit
 
 A bundle that withholds every user named is still written, with `profiles` empty: the portal stops serving them on import.
 
-On import, a bound user who is withheld loses their stored profile, and their subscription link ends in the same transaction, whatever the reason. A later bundle that delivers them again does not bring the old link back: the user generates a new one at the portal and imports it into CFM again. A user named but bound to no account is not stored, and the portal reports them; if they were delivered, the file has carried their credentials to its host, and the import says to delete it at once.
+On import, a bound user who is withheld loses their stored profile, and their subscription link ends in the same transaction, whatever the reason: the operator kept that rule on 2026-11-06 for suspensions too, those for quota or expiry included. A later bundle that delivers them again does not bring the old link back: the user generates a new one at the portal and imports it into CFM again. A user named but bound to no account is not stored, and the portal reports them; if they were delivered, the file has carried their credentials to its host, and the import says to delete it at once.
 
 As for `user export`, every check runs before the file is looked at, and the file is checked before the keychain is read. Then exactly the delivered users' secrets are read (`ProfileSelection::secret_refs`), and none of a withheld or unnamed user's.
 
