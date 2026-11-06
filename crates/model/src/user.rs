@@ -254,8 +254,12 @@ impl AgreementVersion {
     /// another revision, or who has none (decision F9). A new revision of the
     /// text changes this constant in the same commit; the export crate's
     /// `agreement_text` test pins the text of this revision by its SHA-256,
-    /// so an edit made without a new revision fails it.
-    pub const CURRENT: Self = Self(NonZeroU16::MIN);
+    /// so an edit made without a new revision fails it. Revision 2
+    /// (2026-11-06) covers the user portal and payment.
+    pub const CURRENT: Self = match NonZeroU16::new(2) {
+        Some(revision) => Self(revision),
+        None => panic!("agreement revisions count from 1"),
+    };
 
     /// The agreement revision `revision`.
     #[must_use]
@@ -295,7 +299,8 @@ impl fmt::Display for RecordedAgreement {
 /// (a calendar day, never compared with a clock). Since decision F9
 /// (2026-10-15) `user export` requires a record of
 /// [`AgreementVersion::CURRENT`]. Mac-only, like the label: never rendered,
-/// sent or exported.
+/// sent or exported. The portal's profile bundle only says that a user is
+/// withheld for want of the current acceptance (design §9.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgreementRecord {
@@ -432,9 +437,9 @@ mod tests {
     }
 
     #[test]
-    fn the_current_agreement_revision_is_the_first() {
-        assert_eq!(AgreementVersion::CURRENT.get(), 1);
-        assert_eq!(AgreementVersion::CURRENT.to_string(), "1");
+    fn the_current_agreement_revision_is_the_second() {
+        assert_eq!(AgreementVersion::CURRENT.get(), 2);
+        assert_eq!(AgreementVersion::CURRENT.to_string(), "2");
         assert_eq!(
             AgreementVersion::new(NonZeroU16::new(12).unwrap()).to_string(),
             "12"
@@ -445,23 +450,32 @@ mod tests {
     /// what is recorded instead.
     #[test]
     fn an_acceptance_counts_for_exactly_its_revision() {
-        let first = AgreementVersion::CURRENT;
-        let second = AgreementVersion::new(NonZeroU16::new(first.get() + 1).unwrap());
+        let current = AgreementVersion::CURRENT;
+        let newer = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
+        let first = AgreementVersion::new(NonZeroU16::MIN);
+        assert!(first < current);
         let mut user = user();
-        assert_eq!(user.accepted(first), Err(RecordedAgreement(None)));
+        assert_eq!(user.accepted(current), Err(RecordedAgreement(None)));
         user.agreement = Some(AgreementRecord {
-            version: first,
+            version: current,
             accepted_on: date("2026-10-20"),
         });
-        assert_eq!(user.accepted(first), Ok(()));
-        assert_eq!(user.accepted(second), Err(RecordedAgreement(Some(first))));
+        assert_eq!(user.accepted(current), Ok(()));
+        assert_eq!(user.accepted(newer), Err(RecordedAgreement(Some(current))));
+        // An older acceptance, revision 1's as every pilot user's before
+        // revision 2, does not count for the current revision.
+        user.agreement = Some(AgreementRecord {
+            version: first,
+            accepted_on: date("2026-10-18"),
+        });
+        assert_eq!(user.accepted(current), Err(RecordedAgreement(Some(first))));
         assert_eq!(
             RecordedAgreement(None).to_string(),
             "no acceptance is recorded"
         );
         assert_eq!(
-            RecordedAgreement(Some(first)).to_string(),
-            format!("the recorded acceptance is of revision {first}")
+            RecordedAgreement(Some(current)).to_string(),
+            format!("the recorded acceptance is of revision {current}")
         );
     }
 

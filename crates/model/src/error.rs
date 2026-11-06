@@ -1292,7 +1292,9 @@ mod tests {
                 Deployment::try_from({
                     let mut parts = two_node_parts();
                     parts.users[0].agreement = Some(AgreementRecord {
-                        version: AgreementVersion::new(NonZeroU16::new(2).unwrap()),
+                        version: AgreementVersion::new(
+                            NonZeroU16::new(AgreementVersion::CURRENT.get() + 1).unwrap(),
+                        ),
                         accepted_on: CalendarDate::parse("2026-11-02").unwrap(),
                     });
                     parts

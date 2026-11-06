@@ -335,6 +335,9 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
     let fixture = mooring_fixtures::two_nodes_twenty_users().unwrap();
     let current = AgreementVersion::CURRENT;
     let other = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
+    // Revision 1 is what every pilot user accepted before revision 2.
+    let first = AgreementVersion::new(NonZeroU16::MIN);
+    assert!(first < current);
     let quota = SuspendReason::QuotaExceeded {
         cycle_start: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
     };
@@ -349,6 +352,10 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
         parts.users[6].agreement = None;
         parts.users[7].agreement = Some(AgreementRecord {
             version: other,
+            accepted_on: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
+        });
+        parts.users[8].agreement = Some(AgreementRecord {
+            version: first,
             accepted_on: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
         });
         // Not active, and without the acceptance either.
@@ -377,6 +384,10 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             recorded: Some(other),
             required,
         },
+        Withheld::AgreementNotAccepted {
+            recorded: Some(first),
+            required,
+        },
     ];
     assert_eq!(
         selection.withheld(),
@@ -387,7 +398,7 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             .collect::<Vec<_>>()
             .as_slice()
     );
-    assert_eq!(selection.delivered(), &users[8..]);
+    assert_eq!(selection.delivered(), &users[9..]);
     let said: Vec<String> = selection
         .withheld()
         .iter()
@@ -402,6 +413,9 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             format!("has not accepted agreement revision {current}: no acceptance is recorded"),
             format!(
                 "has not accepted agreement revision {current}: the recorded acceptance is of revision {other}"
+            ),
+            format!(
+                "has not accepted agreement revision {current}: the recorded acceptance is of revision {first}"
             ),
         ]
     );
@@ -432,7 +446,7 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             .into_iter()
             .map(|(user, _)| user)
             .collect::<Vec<_>>(),
-        users[8..].iter().map(UserId::as_str).collect::<Vec<_>>()
+        users[9..].iter().map(UserId::as_str).collect::<Vec<_>>()
     );
     let reasons = [
         "suspended",
@@ -441,6 +455,7 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
         "suspended",
         "revoked",
         "revoked",
+        "agreement_not_accepted",
         "agreement_not_accepted",
         "agreement_not_accepted",
     ];
