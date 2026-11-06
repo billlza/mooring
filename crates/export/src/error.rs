@@ -249,8 +249,8 @@ pub enum ProfilesError {
     #[error(transparent)]
     Named(#[from] NamedUsersError),
     /// A user named who is to be delivered cannot have a file. The whole
-    /// bundle is refused: withheld, the user would lose their subscription
-    /// link at the portal for good, and left out, the portal would refuse
+    /// bundle is refused: none of the contract's reasons to withhold a user
+    /// is this user's, and left out, the user would make the portal refuse
     /// the bundle.
     #[error("user {user}'s file cannot be made")]
     User {

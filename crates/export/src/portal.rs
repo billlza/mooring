@@ -19,8 +19,8 @@
 //! puts each status on one side, so a status added later has to be placed
 //! there. A user to be delivered whose file cannot be made (a node not
 //! applied, a certificate no longer current, no credentials) refuses the
-//! whole bundle: withheld, they would lose their subscription link at the
-//! portal for good.
+//! whole bundle: none of the contract's reasons to withhold a user is
+//! theirs, and left out, they would make the portal refuse the bundle.
 //!
 //! # What it holds
 //!
