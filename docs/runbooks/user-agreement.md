@@ -50,7 +50,7 @@
       law, including the rules on subscription contracts, adds to it is the
       operator's to check.
   - Clauses 2 and 5 state the portal's link rules (its docs/security.md §9
-    and docs/contract/cfm-profiles-v2.md at commit a4359ea): shown once,
+    and docs/contract/cfm-profiles-v2.md at commit edf5d01): shown once,
     stored as a digest, regenerated or disabled by the user, disabled by a
     password change. A suspended user (for quota, expiry, the operator, or
     abuse review) and one who has not accepted the current revision keep
@@ -68,13 +68,13 @@
   - Clause 4 adds the portal's host: a UK VPS of its own, neither a node nor
     the Mac (the operator's decision of 2026-11-06). What it keeps is the
     portal's schema at 520c358 (accounts, sessions, bindings, snapshot
-    records, CFM profiles, links), the ban list (b094973's migration 3)
+    records, CFM profiles, links), the ban list (852eb24's migration 3)
     and, once payment is built, its orders.
     - The operator deletes a user's portal account, and with it everything
       there, when the user is revoked or leaves (delivery.md, section 10);
       orders go with the account.
     - No backup or host snapshot of the portal's database may outlive
-      these rules. The portal's 634e16e meets the two preconditions a4359ea
+      these rules. The portal's f87ddb8 meets the two preconditions edf5d01
       did not.
       - Every command that deletes or overwrites rows then erases them
         (VACUUM, then wal_checkpoint(TRUNCATE)). When the database stays
@@ -85,7 +85,7 @@
         snapshots, and what the file system and disk keep. Clause 4 says
         that the host's provider may see what the disk keeps.
     - The ban list keeps an Argon2id digest of the email (19 MiB, two
-      passes, one lane, a fixed public salt) since the portal's 1797f4e. A
+      passes, one lane, a fixed public salt) since the portal's e0604f2. A
       sign-up computes the same digest to check the list, and keeps nothing
       of it. No key kept out of the database and its backups is built, so a
       copy of them can still test addresses. Clause 4 says how far:
@@ -128,7 +128,7 @@
       «额度用尽当然只暂停直到下一个计费周期，你用我的网从事非法活动被我抓了，我当然要封禁涉事账号。并且使其永远不得重复注册».
       A ban refunds nothing (the operator's decision, the same day).
     - Mooring's revocation records no reason, so a ban is the operator's
-      own act at the portal, `mooring-portal ban` (portal b094973), beside
+      own act at the portal, `mooring-portal ban` (portal 852eb24), beside
       the revocation in Mooring.
     - The portal deletes the account as for any revocation. It keeps for
       good the Argon2id digest of the email (above), trimmed and in lower
