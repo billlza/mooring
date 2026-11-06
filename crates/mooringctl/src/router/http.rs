@@ -46,6 +46,7 @@ use crate::router::error::{
 };
 use crate::router::form::LoginBody;
 use crate::router::link::VerifiedIdentity;
+use crate::sockopt::option_outcome;
 
 /// The M7's HTTP port.
 pub(crate) const HTTP_PORT: u16 = 80;
@@ -290,8 +291,13 @@ fn timed_out(kind: io::ErrorKind) -> bool {
     matches!(kind, io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
 }
 
+/// A socket call that failed, as the request's failure.
+fn socket_error(error: io::Error) -> RouterError {
+    RouterError::unreachable(UnreachableCause::Socket { kind: error.kind() })
+}
+
 /// One connection, with the request's deadline.
-struct Connection {
+pub(crate) struct Connection {
     stream: TcpStream,
     deadline: Instant,
     io: Duration,
@@ -302,9 +308,6 @@ impl Connection {
     /// Connects to `endpoint` through its interface.
     fn open(endpoint: &Endpoint, timeouts: &Timeouts) -> Result<Self, RouterError> {
         let deadline = Instant::now() + timeouts.total;
-        let socket_error = |error: io::Error| {
-            RouterError::unreachable(UnreachableCause::Socket { kind: error.kind() })
-        };
         let socket =
             Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).map_err(socket_error)?;
         socket
@@ -325,14 +328,25 @@ impl Connection {
                 };
                 RouterError::unreachable(cause)
             })?;
-        socket
-            .set_read_timeout(Some(timeouts.io))
+        Self::over(socket.into(), deadline, timeouts)
+    }
+
+    /// The connection on `stream`, connected for a request due by
+    /// `deadline`, each read and write held to `timeouts.io`. A stream
+    /// that a reset has already ended is still a connection: its reads
+    /// give what came before the reset and then the reset, and its writes
+    /// fail, with a broken pipe on macOS ([`option_outcome`]).
+    pub(crate) fn over(
+        stream: TcpStream,
+        deadline: Instant,
+        timeouts: &Timeouts,
+    ) -> Result<Self, RouterError> {
+        option_outcome(&stream, stream.set_read_timeout(Some(timeouts.io)))
             .map_err(socket_error)?;
-        socket
-            .set_write_timeout(Some(timeouts.io))
+        option_outcome(&stream, stream.set_write_timeout(Some(timeouts.io)))
             .map_err(socket_error)?;
         Ok(Self {
-            stream: socket.into(),
+            stream,
             deadline,
             io: timeouts.io,
             read_timeout: timeouts.io,
@@ -364,13 +378,14 @@ impl Connection {
     }
 
     /// Reads into `buffer`; 0 at the end of the stream. Each read waits at
-    /// most the per-read limit, and never past the request's deadline.
-    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, RouterError> {
+    /// most the per-read limit, and never past the request's deadline; on
+    /// a stream that a reset has ended it waits for nothing and reports
+    /// what came before the reset, then the reset ([`option_outcome`]).
+    pub(crate) fn read(&mut self, buffer: &mut [u8]) -> Result<usize, RouterError> {
         let wait = self.remaining(Phase::Receive)?.min(self.io);
         if wait != self.read_timeout {
-            self.stream.set_read_timeout(Some(wait)).map_err(|error| {
-                RouterError::unreachable(UnreachableCause::Socket { kind: error.kind() })
-            })?;
+            option_outcome(&self.stream, self.stream.set_read_timeout(Some(wait)))
+                .map_err(socket_error)?;
             self.read_timeout = wait;
         }
         loop {

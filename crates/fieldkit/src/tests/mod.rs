@@ -13,5 +13,6 @@ mod loopback;
 mod net;
 mod output;
 mod search;
+mod sockopt;
 mod stats;
 mod wire;

@@ -141,10 +141,19 @@ pub(crate) fn sample(
     timing: Timing,
     random: &[u8; RANDOM_BYTES],
 ) -> Result<Sample, String> {
-    let mut stream = TcpStream::connect_timeout(&address, timing.connect)
+    let stream = TcpStream::connect_timeout(&address, timing.connect)
         .map_err(|error| format!("connect: {error}"))?;
-    stream
-        .set_nodelay(true)
+    handshake(stream, host, timing, random)
+}
+
+/// The handshake of [`sample`] on `stream`, connected to the target.
+pub(crate) fn handshake(
+    mut stream: TcpStream,
+    host: &TargetHost,
+    timing: Timing,
+    random: &[u8; RANDOM_BYTES],
+) -> Result<Sample, String> {
+    option_outcome(&stream, stream.set_nodelay(true))
         .map_err(|error| format!("socket: {error}"))?;
     stream
         .write_all(&client_hello(host, random))
@@ -184,9 +193,8 @@ pub(crate) fn first_flight(
             }
             break;
         }
-        stream
-            .set_read_timeout(Some(left))
-            .map_err(|error| refused_timeout(stream, &error))?;
+        option_outcome(stream, stream.set_read_timeout(Some(left)))
+            .map_err(|error| format!("socket: {error}"))?;
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
@@ -216,21 +224,30 @@ pub(crate) fn first_flight(
     Ok((flight, last))
 }
 
-/// Why `stream` refused its read timeout with `error`. macOS refuses the
-/// timeout with EINVAL on a socket that a reset has closed and keeps the
-/// reset in the socket for the next read, while Linux sets the timeout and
-/// the read finds the reset. So that refusal is described by the error
-/// waiting in the socket, as the read would have reported it, and a reset
-/// is the same receive failure on both, whether it came before the
-/// flight's first read or during the flight. The error is taken from the
-/// socket, so nothing may read on after this. Any other refusal, or that
-/// one when no error can be taken, is described as itself.
-pub(crate) fn refused_timeout(stream: &TcpStream, error: &io::Error) -> String {
-    let closed = error.kind() == io::ErrorKind::InvalidInput && error.raw_os_error().is_some();
-    if closed && let Ok(Some(ended)) = stream.take_error() {
-        return format!("receive: {ended}");
+/// What `set`, the outcome of setting an option on `stream`, comes to, as
+/// in `mooringctl`'s `sockopt.rs`. macOS refuses every option, with EINVAL
+/// ("The socket has been shut down", `setsockopt(2)`), once both
+/// directions of a stream are shut, as a reset shuts them; Linux sets the
+/// option. Such a stream needs none of the options set here, nodelay and
+/// the read timeout: a read on it returns at once, with what had arrived,
+/// then the error that ended it if there is one, then the end, and a write
+/// fails at once. So that refusal, on a stream that has no peer left, is
+/// `Ok`, and the stream's next read or write reports it as it would have
+/// with the option set: a reset fails the hello's send or the flight's
+/// receive, whenever it comes, never the socket's set-up. Any other
+/// refusal, and that one on a stream that still has its peer, is returned
+/// as it is.
+pub(crate) fn option_outcome(stream: &TcpStream, set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(refusal)
+            if refusal.kind() == io::ErrorKind::InvalidInput
+                && refusal.raw_os_error().is_some()
+                && stream.peer_addr().is_err() =>
+        {
+            Ok(())
+        }
+        set => set,
     }
-    format!("socket: {error}")
 }
 
 /// `SHA-256("HelloRetryRequest")`, the random of a ServerHello that asks

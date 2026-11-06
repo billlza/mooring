@@ -22,6 +22,8 @@ use mooring_daemon_core::status::ProbeStage;
 use mooring_model::iface::InterfaceIndex;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
+use crate::sockopt::option_outcome;
+
 /// The longest the whole direct probe may take.
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -105,6 +107,8 @@ pub(crate) fn connect_outcome(socket: &Socket, report: io::Result<()>) -> io::Re
 }
 
 /// The reflector's line on `stream`, read before `timeout` from `started`.
+/// Each byte waits only for what is left; a reset ends the read where it
+/// comes, after the bytes that came before it ([`option_outcome`]).
 pub(crate) fn read_address(
     mut stream: TcpStream,
     started: Instant,
@@ -126,8 +130,7 @@ pub(crate) fn read_address(
                 kind: Some(ErrorKind::TimedOut),
             });
         }
-        stream
-            .set_read_timeout(Some(left))
+        option_outcome(&stream, stream.set_read_timeout(Some(left)))
             .map_err(failed(ProbeStage::Read))?;
         match stream.read(&mut byte) {
             Ok(0) => {
