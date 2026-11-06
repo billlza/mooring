@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use crate::error::FieldkitError;
 use crate::limits::ensure_open_files;
-use crate::net::{Bind, Connect, Failure};
+use crate::net::{Bind, Connect, Failure, option_outcome};
 use crate::output::Output;
 use crate::wire::CEILING_ACK;
 
@@ -67,7 +67,9 @@ pub(crate) struct Summary {
     pub(crate) elapsed_ms: u64,
 }
 
-enum Attempt {
+/// One connection's attempt: held, or the failure that stopped it.
+#[derive(Debug)]
+pub(crate) enum Attempt {
     Held(TcpStream),
     ConnectFailed(Failure),
     TargetRefused(Failure),
@@ -125,15 +127,20 @@ pub(crate) fn run(
 }
 
 fn attempt(bind: &Bind, plan: Plan) -> Result<Attempt, FieldkitError> {
-    let mut stream = match bind.connect(plan.target, plan.timeout) {
+    let stream = match bind.connect(plan.target, plan.timeout) {
         Ok(stream) => stream,
         Err(Connect::Setup(error)) => return Err(error),
         Err(Connect::Failed(error)) => {
             return Ok(Attempt::ConnectFailed(Failure::of("connect", &error)));
         }
     };
-    stream
-        .set_read_timeout(Some(plan.timeout))
+    acknowledgement(stream, plan)
+}
+
+/// The attempt on `stream`, connected to the target: held once the target
+/// acknowledges it within the plan's timeout.
+pub(crate) fn acknowledgement(mut stream: TcpStream, plan: Plan) -> Result<Attempt, FieldkitError> {
+    option_outcome(&stream, stream.set_read_timeout(Some(plan.timeout)))
         .map_err(|source| FieldkitError::socket("set a read timeout", source))?;
     let mut ack = [0_u8; 1];
     Ok(match stream.read(&mut ack) {

@@ -53,7 +53,7 @@ fn hang_up() -> io::Error {
 
 /// A report as these tests compare it: the error's kind, its operating
 /// system's code and its text.
-fn seen(report: io::Result<()>) -> Result<(), (ErrorKind, Option<i32>, String)> {
+pub(super) fn seen(report: io::Result<()>) -> Result<(), (ErrorKind, Option<i32>, String)> {
     report.map_err(|error| (error.kind(), error.raw_os_error(), error.to_string()))
 }
 

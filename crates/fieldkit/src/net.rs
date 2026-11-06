@@ -121,6 +121,31 @@ pub(crate) fn connect_outcome(socket: &Socket, report: io::Result<()>) -> io::Re
     }
 }
 
+/// What `set`, the outcome of setting an option on `stream`, comes to, as
+/// in `mooringctl`'s `sockopt.rs`. macOS refuses every option, with EINVAL
+/// ("The socket has been shut down", `setsockopt(2)`), once both
+/// directions of a stream are shut, as a reset shuts them; Linux sets the
+/// option. Such a stream needs none of the options set here, the timeouts
+/// and linger: a read on it returns at once, with what had arrived, then
+/// the error that ended it if there is one, then the end, and a write
+/// fails at once. So that refusal, on a stream that has no peer left, is
+/// `Ok`, and the stream's next read or write reports it as it would have
+/// with the option set: a reset is what the measurement meets, as on
+/// Linux, never the tool's own failure. Any other refusal, and that one on
+/// a stream that still has its peer, is returned as it is.
+pub(crate) fn option_outcome(stream: &TcpStream, set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(refusal)
+            if refusal.kind() == io::ErrorKind::InvalidInput
+                && refusal.raw_os_error().is_some()
+                && stream.peer_addr().is_err() =>
+        {
+            Ok(())
+        }
+        set => set,
+    }
+}
+
 /// Why a connection was not made: the socket could not be set up (the
 /// tool's failure), or the connect itself failed (what is measured).
 #[derive(Debug)]
@@ -302,13 +327,22 @@ pub(crate) fn ask_reflector(
     reflector: SocketAddrV4,
     timeout: Duration,
 ) -> Result<Result<SocketAddrV4, Failure>, FieldkitError> {
-    let mut stream = match bind.connect(reflector, timeout) {
+    let stream = match bind.connect(reflector, timeout) {
         Ok(stream) => stream,
         Err(Connect::Setup(error)) => return Err(error),
         Err(Connect::Failed(error)) => return Ok(Err(Failure::of("connect", &error))),
     };
-    stream
-        .set_read_timeout(Some(timeout))
+    reflector_answer(stream, reflector, timeout)
+}
+
+/// The answer of the reflector at `reflector` on `stream`, connected to
+/// it: the source it sees, its line read within `timeout`.
+pub(crate) fn reflector_answer(
+    mut stream: TcpStream,
+    reflector: SocketAddrV4,
+    timeout: Duration,
+) -> Result<Result<SocketAddrV4, Failure>, FieldkitError> {
+    option_outcome(&stream, stream.set_read_timeout(Some(timeout)))
         .map_err(|source| FieldkitError::socket("set a read timeout", source))?;
     let line = match read_line(&mut stream, crate::wire::MAX_LINE) {
         Ok(Some(line)) => line,

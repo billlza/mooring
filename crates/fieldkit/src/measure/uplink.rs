@@ -24,7 +24,7 @@ use serde::Serialize;
 use socket2::SockRef;
 
 use crate::error::FieldkitError;
-use crate::net::{Bind, Connect, Failure, Nonces, exchange, now_unix, read_line};
+use crate::net::{Bind, Connect, Failure, Nonces, exchange, now_unix, option_outcome, read_line};
 use crate::output::Output;
 use crate::stats::{Spread, jain_index_permille, percentile};
 use crate::wire::{EchoKind, EchoRequest, MAX_REPORT, SinkReport, sink_line};
@@ -323,7 +323,7 @@ fn ping(
 
 /// What one flow measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FlowResult {
+pub(crate) struct FlowResult {
     /// Its rate after the warm-up, in bit/s.
     rate_bps: u64,
     /// The bytes the sink counted in its window.
@@ -335,24 +335,34 @@ struct FlowResult {
 /// One flow: sends until the sink's report arrives (so the line is busy
 /// for the sink's whole window), then stops.
 fn flow(bind: &Bind, plan: Plan) -> Result<Result<FlowResult, Failure>, FieldkitError> {
-    let mut stream = match bind.connect(plan.sink, Duration::from_secs(10)) {
+    let stream = match bind.connect(plan.sink, Duration::from_secs(10)) {
         Ok(stream) => stream,
         Err(Connect::Setup(error)) => return Err(error),
         Err(Connect::Failed(error)) => return Ok(Err(Failure::of("connect", &error))),
     };
-    let opened = stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .and_then(|()| stream.write_all(sink_line(plan.seconds).as_bytes()));
-    if let Err(error) = opened {
+    flow_over(stream, plan)
+}
+
+/// One flow on `stream`, connected to the sink. Its limits are set before
+/// its first byte, and a socket that refuses one is the tool's failure.
+pub(crate) fn flow_over(
+    mut stream: TcpStream,
+    plan: Plan,
+) -> Result<Result<FlowResult, Failure>, FieldkitError> {
+    let patience = Duration::from_secs(u64::from(plan.seconds) + 40);
+    option_outcome(&stream, stream.set_read_timeout(Some(patience)))
+        .map_err(|source| FieldkitError::socket("set a read timeout", source))?;
+    option_outcome(
+        &stream,
+        stream.set_write_timeout(Some(Duration::from_secs(2))),
+    )
+    .map_err(|source| FieldkitError::socket("set a write timeout", source))?;
+    if let Err(error) = stream.write_all(sink_line(plan.seconds).as_bytes()) {
         return Ok(Err(Failure::of("send", &error)));
     }
     let writer = stream
         .try_clone()
         .map_err(|source| FieldkitError::socket("clone the sink connection", source))?;
-    let patience = Duration::from_secs(u64::from(plan.seconds) + 40);
-    stream
-        .set_read_timeout(Some(patience))
-        .map_err(|source| FieldkitError::socket("set a read timeout", source))?;
     let stop = AtomicBool::new(false);
     let (line, written) = thread::scope(|scope| {
         let sending = scope.spawn(|| send(&writer, &stop, Instant::now() + patience));
@@ -363,14 +373,8 @@ fn flow(bind: &Bind, plan: Plan) -> Result<Result<FlowResult, Failure>, Fieldkit
             .unwrap_or(Err(io::Error::other("the sending thread panicked")));
         (line, written)
     });
-    // Abort rather than close: what the socket still holds would keep the
-    // line busy after the sample, slowing the next one and delaying its
-    // opening lines (measured on 2026-10-22). Discarding it is the point.
-    SockRef::from(&stream)
-        .set_linger(Some(Duration::ZERO))
-        .map_err(|source| FieldkitError::socket("set the linger time", source))?;
     drop(writer);
-    drop(stream);
+    abort(stream)?;
     let line = match line {
         Ok(Some(line)) => line,
         Ok(None) => {
@@ -393,6 +397,16 @@ fn flow(bind: &Bind, plan: Plan) -> Result<Result<FlowResult, Failure>, Fieldkit
         delivered: report.bytes_per_second.iter().sum(),
         written,
     }))
+}
+
+/// Aborts `stream` rather than closing it: what the socket still holds
+/// would keep the line busy after the sample, slowing the next one and
+/// delaying its opening lines (measured on 2026-10-22). Discarding it is
+/// the point. A stream that a reset has already ended holds nothing more.
+pub(crate) fn abort(stream: TcpStream) -> Result<(), FieldkitError> {
+    let linger = SockRef::from(&stream).set_linger(Some(Duration::ZERO));
+    option_outcome(&stream, linger)
+        .map_err(|source| FieldkitError::socket("set the linger time", source))
 }
 
 /// The rate in bit/s over the seconds after the first `warmup`; 0 when no

@@ -6,11 +6,11 @@
 //! late or slowly a flight that ends by the deadline comes, and the p95
 //! by nearest rank; no sample from a target that refuses the connection,
 //! does not answer the hello by the deadline, closes or resets it (a reset
-//! after the hello described as one, whether it comes before the flight's
-//! first read or during the flight), or is still sending its flight at the
-//! deadline; no connection at all without randomness; and the node's
-//! times, the design's. Tests that wait on a deadline give the sampler a
-//! short one.
+//! before the hello a failed send, and one after it a failed receive,
+//! whether it comes before the flight's first read or during the flight,
+//! on either system), or is still sending its flight at the deadline; no
+//! connection at all without randomness; and the node's times, the
+//! design's. Tests that wait on a deadline give the sampler a short one.
 
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -256,19 +256,54 @@ fn a_target_that_resets_the_connection_is_no_sample() {
     );
 }
 
-/// A connection to a target that resets it after the hello, once the
-/// reset has come, which leaves the socket with no peer.
-fn reset_after_the_hello() -> TcpStream {
-    let mut stream = TcpStream::connect(serve(Server::Reset, 1)).unwrap();
-    stream
-        .write_all(&sampler::client_hello(&host(), &random()))
-        .unwrap();
+/// Waits until a reset has reached `stream`, which leaves it with no peer.
+fn until_reset(stream: &TcpStream) {
     let started = Instant::now();
     while stream.peer_addr().is_ok() {
         assert!(started.elapsed() < Duration::from_secs(5), "no reset came");
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// A connection to a target that resets it after the hello, once the
+/// reset has come.
+fn reset_after_the_hello() -> TcpStream {
+    let mut stream = TcpStream::connect(serve(Server::Reset, 1)).unwrap();
     stream
+        .write_all(&sampler::client_hello(&host(), &random()))
+        .unwrap();
+    until_reset(&stream);
+    stream
+}
+
+/// A connection that its peer reset before the hello, once the reset has
+/// come: the peer closed with a byte of ours unread.
+fn reset_before_the_hello() -> TcpStream {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let mut stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    stream.write_all(b"x").unwrap();
+    let (peer, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    assert_eq!(peer.peek(&mut [0; 1]).unwrap(), 1, "our byte never came");
+    drop(peer);
+    until_reset(&stream);
+    stream
+}
+
+/// What a write reports on a stream that a reset has ended.
+fn reset_as_written() -> io::Error {
+    reset_before_the_hello().write(b"x").unwrap_err()
+}
+
+/// A reset before the hello: macOS then refuses the socket's option,
+/// Linux sets it, and either way the hello's send finds the reset.
+#[test]
+fn a_reset_before_the_hello_fails_its_send() {
+    let written = reset_as_written();
+    assert_eq!(
+        sampler::handshake(reset_before_the_hello(), &host(), NODE, &random()),
+        Err(format!("send: {written}"))
+    );
 }
 
 /// A reset that came before the flight's first read: macOS then refuses
@@ -284,36 +319,48 @@ fn a_reset_before_the_first_read_is_described_as_the_reset() {
     );
 }
 
-/// The refusal macOS gives a socket that a reset has closed is described
-/// as the reset, on either system.
+/// An outcome as these tests compare it: the error's kind, its operating
+/// system's code and its text.
+fn seen(outcome: io::Result<()>) -> Result<(), (io::ErrorKind, Option<i32>, String)> {
+    outcome.map_err(|error| (error.kind(), error.raw_os_error(), error.to_string()))
+}
+
+/// The refusal macOS gives a stream that a reset has ended is no failure,
+/// on either system: the stream's next read or write reports the reset.
 #[test]
-fn the_refusal_of_a_socket_a_reset_closed_is_the_reset() {
-    let reset = reset_as_read();
+fn the_refusal_of_a_stream_a_reset_has_ended_is_no_failure() {
     let refused = io::Error::from_raw_os_error(EINVAL);
     assert_eq!(
-        sampler::refused_timeout(&reset_after_the_hello(), &refused),
-        format!("receive: {reset}")
+        seen(sampler::option_outcome(
+            &reset_after_the_hello(),
+            Err(refused)
+        )),
+        Ok(())
     );
 }
 
-/// Any other refusal is described as itself, even on a socket that a
-/// reset has closed, and so is that refusal on a socket that holds no
-/// error.
+/// Any other refusal is passed on as it is, even on a stream that a reset
+/// has ended, and so is that refusal on a stream that still has its peer.
 #[test]
-fn any_other_refusal_is_the_refusal() {
+fn any_other_refusal_is_passed_on_as_it_is() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let sound = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     // std refuses a zero timeout itself, with no system call.
     let zero = sound.set_read_timeout(Some(Duration::ZERO)).unwrap_err();
     for refused in [zero, io::Error::from_raw_os_error(EACCES)] {
+        let passed_on = (refused.kind(), refused.raw_os_error(), refused.to_string());
         assert_eq!(
-            sampler::refused_timeout(&reset_after_the_hello(), &refused),
-            format!("socket: {refused}")
+            seen(sampler::option_outcome(
+                &reset_after_the_hello(),
+                Err(refused)
+            )),
+            Err(passed_on)
         );
     }
     let invalid = io::Error::from_raw_os_error(EINVAL);
+    let passed_on = (invalid.kind(), invalid.raw_os_error(), invalid.to_string());
     assert_eq!(
-        sampler::refused_timeout(&sound, &invalid),
-        format!("socket: {invalid}")
+        seen(sampler::option_outcome(&sound, Err(invalid))),
+        Err(passed_on)
     );
 }

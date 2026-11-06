@@ -42,6 +42,7 @@ mod profiles;
 mod relay_failures;
 mod router;
 mod runtime;
+mod sockopt;
 mod ssh;
 mod status;
 mod stub;
