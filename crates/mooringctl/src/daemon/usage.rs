@@ -15,7 +15,7 @@ use mooring_daemon_core::usage::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES, Node
 use mooring_model::iface::BsdName;
 use mooring_model::node::{Node, NodeLifecycle};
 use mooring_model::{Deployment, NodeId, UnixTime};
-use mooring_store::{read_user_usage, write_user_usage};
+use mooring_store::{StoreError, read_user_usage, write_user_usage};
 
 use crate::app::Env;
 use crate::error::{CommandError, LocalError};
@@ -34,6 +34,40 @@ pub(crate) fn pull_budget(next_probe_in: Option<Duration>) -> Option<Duration> {
         left.saturating_sub(PROBE_RESERVE).min(REQUEST_BUDGET)
     });
     (room >= Duration::from_secs(1)).then_some(room)
+}
+
+/// Why `usage/users.json` could not be read.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CollectedReadError {
+    /// The store could not read the file.
+    #[error(transparent)]
+    Store(StoreError),
+    /// The file holds no collected usage document.
+    #[error(transparent)]
+    Decode(UsageError),
+}
+
+impl CollectedReadError {
+    /// The usage view's reason for it.
+    pub(crate) const fn kind(&self) -> UsageErrorKind {
+        match self {
+            Self::Store(_) => UsageErrorKind::StoreUnavailable,
+            Self::Decode(error) => error.kind(),
+        }
+    }
+}
+
+/// The usage the daemon collected, in `support`'s `usage/users.json`, or
+/// an empty history when there is none yet. The daemon's [`Collector`] is
+/// its one writer and replaces it whole (the store's durable write), so a
+/// reader in another process sees one complete document.
+pub(crate) fn read_collected(support: &Path) -> Result<CollectedUsage, CollectedReadError> {
+    match read_user_usage(support, MAX_COLLECTED_USAGE_BYTES + 1)
+        .map_err(CollectedReadError::Store)?
+    {
+        Some(bytes) => CollectedUsage::decode(&bytes).map_err(CollectedReadError::Decode),
+        None => Ok(CollectedUsage::default()),
+    }
 }
 
 #[derive(Debug)]
@@ -80,16 +114,12 @@ impl Collector {
     /// A bad existing document blocks this writer; it is retained for
     /// diagnosis and never replaced by an empty history.
     pub(crate) fn open(support: &Path, interval: Duration) -> Self {
-        let loaded = read_user_usage(support, MAX_COLLECTED_USAGE_BYTES + 1)
-            .map_err(|error| (UsageErrorKind::StoreUnavailable, error.to_string()))
-            .and_then(|bytes| match bytes {
-                Some(bytes) => CollectedUsage::decode(&bytes)
-                    .map_err(|error| (error.kind(), error.to_string())),
-                None => Ok(CollectedUsage::default()),
-            });
-        let (store, failure) = match loaded {
+        let (store, failure) = match read_collected(support) {
             Ok(history) => (StoreState::Ready(history), None),
-            Err((kind, message)) => (StoreState::Unreadable { kind }, Some(message)),
+            Err(error) => (
+                StoreState::Unreadable { kind: error.kind() },
+                Some(error.to_string()),
+            ),
         };
         Self {
             support: support.to_path_buf(),

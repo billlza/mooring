@@ -13,6 +13,10 @@
 //!   builds the probe identity's outbounds that the Mac prober wraps.
 //! - [`shapes`] enumerates every shape the emitter can produce; `cargo
 //!   xtask acceptance` gates them against `contract/cfm-acceptance.toml`.
+//! - [`export_profiles`] writes the portal's profile bundle: the sing-box
+//!   file of every user to be served, refused while the agreement does not
+//!   cover the portal ([`profile_selection`] lists its users and secrets
+//!   first).
 //!
 //! Every emitted value domain is a subset of what both CFM importers accept;
 //! `docs/cfm-contract.md` maps each field to its model type and CFM rule.
@@ -24,6 +28,7 @@ mod clash;
 mod error;
 mod export;
 mod json;
+mod portal;
 mod proxy;
 mod shape;
 mod singbox;
@@ -32,11 +37,17 @@ mod text;
 mod tree;
 
 pub use cert::{CERT_SKEW_MARGIN_SECS, certificate_pins, check_certificate};
-pub use error::{ExportError, ExportErrorKind, NotApplied, TagRule};
+pub use error::{
+    ExportError, ExportErrorKind, NotApplied, ProfilesError, ProfilesErrorKind, TagRule,
+};
 pub use export::{
     ExportDocument, ExportFormat, ProbeOutbounds, export_secret_refs, export_user, probe_outbounds,
 };
 pub use json::exact_json;
+pub use portal::{
+    MAX_BUNDLE_BYTES, MAX_PROFILE_DOCUMENT_BYTES, Omission, ProfileBundle, ProfileSelection,
+    export_profiles, profile_selection,
+};
 pub use proxy::{ClientHello, Fingerprint, Protocol, line_name};
 pub use shape::{ProxyShape, Shape, shapes};
 pub use singbox::SingBoxOutbound;

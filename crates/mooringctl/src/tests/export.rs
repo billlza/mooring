@@ -18,7 +18,7 @@ use crate::error::EXIT_LOCAL;
 
 /// A harness holding `deployment` and every secret of the three-user
 /// fixture in its keychain, and an export folder `exports` in its home.
-fn exporting(deployment: Deployment) -> (Harness, PathBuf) {
+pub(crate) fn exporting(deployment: Deployment) -> (Harness, PathBuf) {
     let mut harness = harness_with(deployment);
     fill(&mut harness.secrets);
     let folder = harness.home.path().join("exports");
@@ -26,7 +26,7 @@ fn exporting(deployment: Deployment) -> (Harness, PathBuf) {
     (harness, folder)
 }
 
-fn fill(secrets: &mut InMemorySecretStore) {
+pub(crate) fn fill(secrets: &mut InMemorySecretStore) {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
     for secret_ref in fixture.secrets.refs() {
         let material = fixture.secrets.material(&secret_ref).unwrap();
@@ -55,11 +55,11 @@ fn expected(deployment: &Deployment, user: &UserId, format: ExportFormat) -> Vec
     .to_vec()
 }
 
-fn arg(path: &Path) -> &str {
+pub(crate) fn arg(path: &Path) -> &str {
     path.to_str().unwrap()
 }
 
-fn mode(path: &Path) -> u32 {
+pub(crate) fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 

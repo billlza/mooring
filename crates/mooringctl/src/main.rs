@@ -27,6 +27,15 @@
 //!   user's file for CFM with mode 0600, never overwriting one, reading
 //!   only that user's secrets and only once every check has passed.
 //!
+//! The user portal's two files (design §9.5, `docs/portal-contract.md`),
+//! both refused until a revision of the user agreement covers the portal:
+//!
+//! - `portal export --user <uid>... --out <path>` writes the snapshot of
+//!   the users named (status, usage this cycle, quota, expiry; no
+//!   credentials), from the state and the daemon's collected usage;
+//! - `user export-profiles --out <path>` writes the profile bundle: the CFM
+//!   file of every user to be served, naming each user left out.
+//!
 //! M5a adds the deployment's creation and the SIM line's records (design
 //! §7, §10.2):
 //!
@@ -85,11 +94,15 @@ mod error;
 #[cfg(target_os = "macos")]
 mod exit;
 #[cfg(target_os = "macos")]
+mod export_file;
+#[cfg(target_os = "macos")]
 mod keychain;
 #[cfg(target_os = "macos")]
 mod node;
 #[cfg(target_os = "macos")]
 mod paths;
+#[cfg(target_os = "macos")]
+mod portal;
 #[cfg(target_os = "macos")]
 mod prompt;
 #[cfg(target_os = "macos")]
@@ -151,6 +164,7 @@ fn main() -> ExitCode {
         meter_reader: &|| runtime::meter::kernel_reader(system_clock),
         probe: &runtime::probe::direct,
         redirect_stderr: &mooring_macsys::redirect_stderr,
+        portal_agreement: mooring_model::PortalAgreement::SHIPPED,
     };
     let code = run(
         cli.command,

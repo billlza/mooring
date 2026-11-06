@@ -5,7 +5,7 @@ This runbook is for the operator. It covers a user's first file, every later fil
 
 The rules come from design §9.2, §9.4, §13.4, §13.5 and §13.6, and from decisions F9–F11. The operator delegated those decisions to the recommended default on 2026-10-15 (§20.2).
 
-Of the commands named here `hdiutil`, `tmutil` and `mooringctl user add | alias | agree | export` exist today (the `mooringctl` ones since 2026-10-18, in the development build, which keeps its secrets in the login keychain until M5's data-protection keychain; they need the state that `exit init` will create). The other `mooringctl` commands below (`user reissue`, `node apply`, `apply`, `doctor`) arrive in M5, and so does the console's rotation tracker. Until then this runbook is the procedure they will follow.
+Of the commands named here `hdiutil`, `tmutil` and `mooringctl user add | alias | agree | export` exist today (the `mooringctl` ones since 2026-10-18, in the development build, which keeps its secrets in the login keychain until M5's data-protection keychain; they need the state that `exit init` will create). The other `mooringctl` commands below (`user reissue`, `node apply`, `apply`, `doctor`) arrive in M5, and so does the console's rotation tracker. Until then this runbook is the procedure they will follow. The portal's `mooringctl portal export` and `user export-profiles` (2026-11-06) exist too, but refuse to run until the agreement covers the portal (section 11).
 
 ## 0. Once, on the operator's Mac
 
@@ -131,3 +131,11 @@ Record nothing about the incident itself (what happened, where, to whom) in Moor
 ## 10. Requests about the user's records
 
 On the user's request, tell the user what is held about them (clause 4 of the agreement): on the operator's Mac the label, the alias, the client line, the policy, the usage history and totals, the last-active time, the status changes, the journal's operator actions that name the user (exports, reissues) and the acceptance; on each node the usage bins (48 hours), the monthly totals (until 7 days after the month), the last-active time and the user's row in the Mac report. A user who leaves may ask for the Mac's records to be deleted at once: revoke the user, then `user forget <uid>` (M5) once the user is `Revoked`, instead of waiting for the 13-month rule (§15.7). The nodes' records expire on their own schedule (§11.5); tell the user so.
+
+## 11. The user portal (not in use yet)
+
+Design §9.5 and `docs/portal-contract.md` describe the portal's two files. Both commands refuse to run until a revision of the user agreement covers the portal. Until then every file goes as sections 1 to 8 say. Once the gate is open:
+
+- `mooringctl portal export --user <uid> [--user <uid>...] --out <folder>/snapshot.json` writes the snapshot. Name only the users bound to a portal account; it holds no credentials. Import it with `mooring-portal import` on the portal's host.
+- `mooringctl user export-profiles --out <folder>/profiles.json` writes the profile bundle, which holds every served user's credentials. Write it into the folder of section 0, copy it to the portal's host over an encrypted connection, import it with `mooring-portal import-profiles`, and delete it on both machines. The users the command names as left out lose their profile at the portal, and their subscription link for good: once they are served again, they generate a new link at the portal and import it into CFM again. So after a new agreement revision, export the bundle once every bound user has accepted it, unless the others are to lose their links.
+- Export the bundle again after every change that changes a user's file (section 7), and whenever a user is added (once every node is applied), suspended, resumed, revoked, or accepts a new revision. A resumed user then generates a new link, since the portal stopped theirs. CFM does not update a profile by itself: the user chooses Update for it.

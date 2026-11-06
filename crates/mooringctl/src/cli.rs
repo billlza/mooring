@@ -45,6 +45,9 @@ pub(crate) enum Command {
     /// The VPS nodes.
     #[command(subcommand)]
     Node(NodeCommand),
+    /// The user portal: the files Mooring exports for it.
+    #[command(subcommand)]
+    Portal(PortalCommand),
     /// The console's status, from the daemon.
     Status {
         /// Keep printing each new status while it is fresh, until the
@@ -114,6 +117,37 @@ pub(crate) enum UserCommand {
         /// The file format.
         #[arg(long, value_enum, default_value_t = FormatArg::Singbox)]
         format: FormatArg,
+        /// The file to create, in a folder Time Machine excludes and outside
+        /// iCloud Drive, the Desktop and Documents.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+    /// Write the CFM file (sing-box JSON) of every user to be served into
+    /// one profile bundle for the portal, `mooring-portal import-profiles`,
+    /// to a new file with mode 0600 (never overwritten). It holds those
+    /// users' credentials. Refused until the user agreement covers the
+    /// portal.
+    ExportProfiles {
+        /// The file to create, in a folder Time Machine excludes and outside
+        /// iCloud Drive, the Desktop and Documents.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+    },
+}
+
+/// A portal command.
+#[derive(Debug, Subcommand)]
+pub(crate) enum PortalCommand {
+    /// Write the portal snapshot of the users named, for `mooring-portal
+    /// import`: their status, usage this billing cycle, quota and expiry,
+    /// by user id and without credentials, to a new file with mode 0600
+    /// (never overwritten). Refused until the user agreement covers the
+    /// portal.
+    Export {
+        /// A user to include; give one --user per user. Only the users
+        /// named are exported.
+        #[arg(long = "user", value_name = "USER_ID", required = true)]
+        users: Vec<UserId>,
         /// The file to create, in a folder Time Machine excludes and outside
         /// iCloud Drive, the Desktop and Documents.
         #[arg(long, value_name = "PATH")]

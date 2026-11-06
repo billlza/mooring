@@ -10,13 +10,14 @@ use std::path::PathBuf;
 
 use mooring_agent_proto::{AgentError, Sha256Hex};
 use mooring_daemon_core::ControlError;
+use mooring_daemon_core::PortalError;
 use mooring_daemon_core::RadioHistoryError;
 use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::MeterError;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_daemon_core::snapshot::SnapshotError;
-use mooring_export::ExportError;
+use mooring_export::{ExportError, ProfilesError};
 use mooring_keys::KeysError;
 use mooring_macsys::MacsysError;
 use mooring_model::dns::DnsName;
@@ -25,12 +26,13 @@ use mooring_model::ids::LocalLabel;
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretKind;
-use mooring_model::{CalendarDate, NodeId, PublicAlias, UserId};
+use mooring_model::{CalendarDate, NodeId, PortalNotCovered, PublicAlias, UserId};
 use mooring_render::RenderError;
 use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadError, StoreError};
 
 use crate::node::NodeError;
 use crate::node::adopt::Step;
+use crate::portal::UsageFault;
 use crate::router::error::RouterError;
 
 /// A failure on the Mac rather than at the M7.
@@ -158,6 +160,29 @@ pub(crate) enum LocalError {
         #[source]
         source: io::Error,
     },
+    /// The agreement revision this build ships does not cover the portal,
+    /// so no portal file is made (design §9.5).
+    #[error(
+        "no file was written: nothing goes to the portal before a revision of the user agreement covers it and the users accept that revision (docs/runbooks/user-agreement.md)"
+    )]
+    PortalNotCovered(#[source] PortalNotCovered),
+    /// The usage the daemon collected cannot be read or is inconsistent, so
+    /// no snapshot is written: it would show every figure as unknown and
+    /// hide the fault (design §9.5).
+    #[error(
+        "no file was written: the usage the daemon collected (usage/users.json) cannot be read or is inconsistent"
+    )]
+    PortalUsage(#[source] Box<UsageFault>),
+    /// `mooring-daemon-core` refused the portal snapshot.
+    #[error("no file was written: the portal snapshot was refused")]
+    PortalSnapshotRefused(#[source] Box<PortalError>),
+    /// `mooring-export` refused the portal's profile bundle.
+    #[error("no file was written: the profile bundle was refused")]
+    ProfilesRefused(#[source] Box<ProfilesError>),
+    /// The secrets of the bundle's users could not be read from the
+    /// keychain.
+    #[error("no file was written: reading the users' secrets from the keychain failed")]
+    ProfilesSecrets(#[source] Box<SnapshotReadError>),
     /// The kernel's interface, routing or neighbour tables could not be
     /// read.
     #[error("reading the kernel's network tables failed")]
