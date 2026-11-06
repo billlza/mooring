@@ -85,6 +85,8 @@ mod error;
 #[cfg(target_os = "macos")]
 mod exit;
 #[cfg(target_os = "macos")]
+mod export_file;
+#[cfg(target_os = "macos")]
 mod keychain;
 #[cfg(target_os = "macos")]
 mod node;
