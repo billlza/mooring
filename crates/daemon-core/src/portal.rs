@@ -203,12 +203,7 @@ pub fn snapshot(
     };
     let mut bytes = serde_json::to_vec_pretty(&document).map_err(PortalError::Encode)?;
     bytes.push(b'\n');
-    if bytes.len() > MAX_SNAPSHOT_BYTES {
-        return Err(PortalError::TooLarge {
-            bytes: bytes.len(),
-            limit: MAX_SNAPSHOT_BYTES,
-        });
-    }
+    fits(bytes.len(), MAX_SNAPSHOT_BYTES)?;
     Ok(PortalSnapshot {
         bytes,
         users: count,
@@ -245,4 +240,30 @@ fn selected<'a>(
         }
     }
     Ok(selected)
+}
+
+/// `TooLarge` when a snapshot of `bytes` is more than `limit`.
+const fn fits(bytes: usize, limit: usize) -> Result<(), PortalError> {
+    if bytes > limit {
+        return Err(PortalError::TooLarge { bytes, limit });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PortalError, fits};
+
+    /// The bound refuses only what is past it.
+    #[test]
+    fn the_size_bound_refuses_only_what_is_past_it() {
+        assert!(fits(10, 10).is_ok());
+        assert!(matches!(
+            fits(11, 10),
+            Err(PortalError::TooLarge {
+                bytes: 11,
+                limit: 10
+            })
+        ));
+    }
 }

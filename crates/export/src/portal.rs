@@ -202,6 +202,31 @@ pub fn export_profiles(
     now: UnixTime,
     agreement: PortalAgreement,
 ) -> Result<ProfileBundle, ProfilesError> {
+    bounded_profiles(deployment, secrets, now, agreement, PORTAL_BOUNDS)
+}
+
+/// The portal's bounds on one document in a bundle and on the bundle.
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    document: usize,
+    bundle: usize,
+}
+
+/// What the portal accepts.
+const PORTAL_BOUNDS: Bounds = Bounds {
+    document: MAX_PROFILE_DOCUMENT_BYTES,
+    bundle: MAX_BUNDLE_BYTES,
+};
+
+/// [`export_profiles`] against `bounds`: one function, so the tests reach
+/// both size refusals through the path every bundle takes.
+fn bounded_profiles(
+    deployment: &Deployment,
+    secrets: &SecretSnapshot,
+    now: UnixTime,
+    agreement: PortalAgreement,
+    bounds: Bounds,
+) -> Result<ProfileBundle, ProfilesError> {
     let selection = profile_selection(deployment, now, agreement)?;
     let mut profiles = Vec::with_capacity(selection.included.len());
     for (id, user) in deployment.users() {
@@ -212,7 +237,7 @@ pub fn export_profiles(
             .map_err(|source| user_error(id, source))?;
         let document = document_tree(&outbounds);
         let bytes = nested_len(&document).map_err(ProfilesError::Encode)?;
-        fits_document(id, bytes, MAX_PROFILE_DOCUMENT_BYTES)?;
+        fits_document(id, bytes, bounds.document)?;
         profiles.push(EntryV1 { user: id, document });
     }
     let bytes = exact_json(&BundleV1 {
@@ -222,7 +247,7 @@ pub fn export_profiles(
         profiles,
     })
     .map_err(ProfilesError::Encode)?;
-    fits_bundle(bytes.len(), MAX_BUNDLE_BYTES)?;
+    fits_bundle(bytes.len(), bounds.bundle)?;
     Ok(ProfileBundle { selection, bytes })
 }
 
@@ -409,6 +434,49 @@ mod tests {
             );
             assert!(document.len() <= MAX_PROFILE_DOCUMENT_BYTES);
         }
+    }
+
+    /// A document or a bundle past its bound refuses the bundle, on the
+    /// path every bundle takes; at the bound it is made.
+    #[test]
+    fn a_document_or_bundle_past_its_bound_refuses_the_bundle() {
+        let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+        let open = PortalAgreement::since(Some(AgreementVersion::CURRENT));
+        let now = mooring_fixtures::FIXTURE_NOW;
+        let make =
+            |bounds| bounded_profiles(&fixture.deployment, &fixture.secrets, now, open, bounds);
+        let made = make(PORTAL_BOUNDS).unwrap();
+        let largest = documents(std::str::from_utf8(made.expose_bytes()).unwrap())
+            .iter()
+            .map(|document| document.len())
+            .max()
+            .unwrap();
+        let total = made.expose_bytes().len();
+        assert!(
+            make(Bounds {
+                document: largest,
+                bundle: total
+            })
+            .is_ok()
+        );
+        let error = make(Bounds {
+            document: largest - 1,
+            bundle: total,
+        })
+        .unwrap_err();
+        assert!(
+            matches!(error, ProfilesError::DocumentTooLarge { bytes, limit, .. } if bytes == largest && limit == largest - 1),
+            "{error:?}"
+        );
+        let error = make(Bounds {
+            document: largest,
+            bundle: total - 1,
+        })
+        .unwrap_err();
+        assert!(
+            matches!(error, ProfilesError::BundleTooLarge { bytes, limit } if bytes == total && limit == total - 1),
+            "{error:?}"
+        );
     }
 
     /// The measure counts every byte and line break, and flushing keeps

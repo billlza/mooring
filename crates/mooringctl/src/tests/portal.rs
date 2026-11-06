@@ -17,7 +17,7 @@ use mooring_model::{AgreementVersion, Deployment, NodeId, PortalAgreement, UnixT
 use mooring_store::write_user_usage;
 
 use super::export::{arg, exporting, mode};
-use super::support::{Harness, NOW};
+use super::support::{BackupAnswer, Harness, NOW};
 use super::user::{fixture, harness_with, store};
 use crate::cli::Cli;
 use crate::error::EXIT_LOCAL;
@@ -172,6 +172,30 @@ fn without_usage_the_snapshot_holds_no_figures_and_says_why() {
             snapshot(&deployment, None, &named, UnixTime::from_secs(NOW), open()).unwrap();
         assert_eq!(fs::read(&out).unwrap(), expected.bytes());
     }
+}
+
+/// The snapshot's folder is checked as an export's is: one Time Machine
+/// backs up is warned about, and the file is written all the same.
+#[test]
+fn portal_export_warns_about_a_backed_up_folder() {
+    let deployment = fixture(|_| {});
+    let named = users(&deployment)[..1].to_vec();
+    let (mut harness, folder) = exporting(deployment.clone());
+    harness.portal_agreement = open();
+    with_usage(&harness, &collected(NOW, &named[0], 1));
+    harness.backups.answer = BackupAnswer::Included;
+    let out = folder.join("snapshot.json");
+    let outcome = run(&mut harness, &named, arg(&out));
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let dir = fs::canonicalize(&folder).unwrap();
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: warning: Time Machine backs up {dir}; exclude it with `tmutil addexclusion {dir}`\n",
+            dir = dir.display()
+        )
+    );
+    assert!(out.exists());
 }
 
 /// Until the agreement covers the portal nothing is written, whatever the

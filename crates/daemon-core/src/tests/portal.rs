@@ -319,6 +319,11 @@ fn every_status_has_its_contract_form() {
         users[0].status = UserStatus::RevokePending;
         users[1].status = suspended(SuspendReason::Operator);
         users[4].status = suspended(SuspendReason::AbuseReview);
+        users[4].policy.quota = Some(UserQuota {
+            cycle_served_bytes: NonZeroU64::new(5_000_000_000).unwrap(),
+            warn_percent: WarnPercent::new(75).unwrap(),
+            action: QuotaAction::Warn,
+        });
     });
     let made = snapshot(
         &deployment,
@@ -342,6 +347,11 @@ fn every_status_has_its_contract_form() {
             &json!({"suspended": {"reason": "operator", "since": 1_793_700_000}}),
             &json!({"suspended": {"reason": "abuse_review", "since": 1_793_700_000}}),
         ]
+    );
+    // A quota keeps its own share and action.
+    assert_eq!(
+        document["users"][2]["quota"],
+        json!({"cycle_served_bytes": 5_000_000_000_u64, "warn_percent": 75, "action": "warn"})
     );
     // None of them is served, so none counts REALITY at close.
     for user in document["users"].as_array().unwrap() {
@@ -555,6 +565,9 @@ fn a_report_or_suspension_after_the_snapshots_time_is_refused() {
             Ok(made) => {
                 assert!(accepted, "{through}");
                 assert_eq!(made.counted_through(), Some(through));
+                // The cycle is the report's, not the one the snapshot's
+                // time is in.
+                assert_eq!(made.cycle(), cycle);
             }
             Err(error) => {
                 assert!(!accepted, "{through}: {error}");
