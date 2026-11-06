@@ -25,14 +25,15 @@ const KEEP_ON_NODE: u64 = 48 * 3600;
 const REQUEST_BUDGET: Duration = Duration::from_secs(15);
 const PROBE_RESERVE: Duration = Duration::from_secs(2);
 
-/// Start a collection request only when its whole bounded SSH window fits.
-/// A four-second window can expire during a successful cellular SSH handshake;
-/// shortening it near a carrier probe also wastes a batch and its retry interval.
-/// Wait for the next gap instead, keeping two seconds before the carrier probe.
+/// Give collection as much of the current gap as its bounded SSH window needs.
+/// Cellular SSH can take longer than four seconds. Shorter probe cadences still
+/// get their available window, keeping two seconds before the carrier probe and
+/// deferring when less than one second remains for the request.
 pub(crate) fn pull_budget(next_probe_in: Option<Duration>) -> Option<Duration> {
-    next_probe_in
-        .is_none_or(|left| left >= REQUEST_BUDGET + PROBE_RESERVE)
-        .then_some(REQUEST_BUDGET)
+    let room = next_probe_in.map_or(REQUEST_BUDGET, |left| {
+        left.saturating_sub(PROBE_RESERVE).min(REQUEST_BUDGET)
+    });
+    (room >= Duration::from_secs(1)).then_some(room)
 }
 
 #[derive(Debug)]

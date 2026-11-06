@@ -27,15 +27,25 @@ use crate::node::NodeError;
 const INTERVAL: Duration = Duration::ZERO;
 
 #[test]
-fn collection_reserves_a_complete_ssh_window_without_delaying_a_carrier_probe() {
+fn collection_uses_the_available_ssh_window_without_delaying_a_carrier_probe() {
     let request = Duration::from_secs(15);
     assert_eq!(pull_budget(None), Some(request));
     assert_eq!(pull_budget(Some(Duration::from_secs(300))), Some(request));
     assert_eq!(pull_budget(Some(Duration::from_secs(17))), Some(request));
-    for left in [0, 1, 2, 5, 10, 16] {
+    for left in [0, 1, 2] {
         assert_eq!(pull_budget(Some(Duration::from_secs(left))), None);
     }
-    assert_eq!(pull_budget(Some(Duration::from_millis(16_999))), None);
+    for (left, available) in [(3, 1), (5, 3), (10, 8), (16, 14)] {
+        assert_eq!(
+            pull_budget(Some(Duration::from_secs(left))),
+            Some(Duration::from_secs(available))
+        );
+    }
+    assert_eq!(pull_budget(Some(Duration::from_millis(2_999))), None);
+    assert_eq!(
+        pull_budget(Some(Duration::from_millis(16_999))),
+        Some(Duration::from_millis(14_999))
+    );
 }
 
 #[test]
