@@ -51,9 +51,9 @@ fn forget_secrets(harness: &mut Harness, user: &UserId) {
 }
 
 /// The file is the export crate's bundle of the users named at now, with
-/// mode 0600; each user withheld is named with the reason, and the output
-/// says what the portal's import does to them and where the file goes.
-/// Withheld for their status, not for an acceptance, they bring no warning.
+/// mode 0600; each user withheld is named with the reason and what the
+/// portal's import does to their link (a suspension pauses it, a
+/// revocation ends it), and the output says where the file goes.
 #[test]
 fn export_profiles_writes_the_bundle_of_the_users_named() {
     let deployment = fixture(|parts| {
@@ -86,7 +86,7 @@ fn export_profiles_writes_the_bundle_of_the_users_named() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "wrote {}: CFM profiles of 1 user(s) and 2 withheld, sing-box-json, mode 0600\nwithheld: user {} (suspended)\nwithheld: user {} (being revoked)\nimporting it removes each withheld user's profile and ends their subscription link for good: once delivered again, they generate a new link\nimport it with `mooring-portal import-profiles` on the portal host, then delete it\n",
+            "wrote {}: CFM profiles of 1 user(s) and 2 withheld, sing-box-json, mode 0600\nwithheld: user {} (suspended); importing it pauses their subscription link until a bundle delivers them again\nwithheld: user {} (being revoked); importing it ends their subscription link for good\nimport it with `mooring-portal import-profiles` on the portal host, then delete it\n",
             out.display(),
             users[0],
             users[1]
@@ -131,14 +131,15 @@ fn export_profiles_holds_only_the_users_named() {
 
 /// A bundle that withholds every user named is written, reading no secret
 /// (the keychain is empty here): the portal stops serving them on import.
-/// Users withheld for want of the current acceptance bring a warning,
-/// since after a new revision such an export is most likely too early.
+/// A missing acceptance pauses the link, as a suspension does; a
+/// revocation ends it. Nothing is warned about: a paused link comes back
+/// once a bundle delivers the user again.
 #[test]
 fn a_bundle_withholding_everyone_is_written_without_reading_a_secret() {
     let deployment = fixture(|parts| {
-        for user in &mut parts.users {
-            user.agreement = None;
-        }
+        parts.users[0].agreement = None;
+        parts.users[1].status = UserStatus::Revoked;
+        parts.users[1].per_node.clear();
     });
     let users = ids(&deployment);
     let mut harness = harness_with(deployment);
@@ -148,23 +149,16 @@ fn a_bundle_withholding_everyone_is_written_without_reading_a_secret() {
     let out = folder.join("profiles.json");
     let outcome = run(&mut harness, &users[..2], arg(&out));
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stderr, "");
     assert_eq!(
-        outcome.stderr,
+        outcome.stdout,
         format!(
-            "mooringctl: warning: 2 user(s) named have not accepted agreement revision {}, the current one; importing this bundle ends their subscription links for good. To keep their links, delete the file and export again once they have accepted (docs/runbooks/delivery.md, section 11)\n",
-            AgreementVersion::CURRENT
-        )
-    );
-    assert!(
-        outcome.stdout.contains(&format!(
-            "CFM profiles of 0 user(s) and 2 withheld, sing-box-json, mode 0600\nwithheld: user {} (has not accepted agreement revision {}: no acceptance is recorded)\nwithheld: user {} (has not accepted agreement revision {}: no acceptance is recorded)\n",
+            "wrote {}: CFM profiles of 0 user(s) and 2 withheld, sing-box-json, mode 0600\nwithheld: user {} (has not accepted agreement revision {}: no acceptance is recorded); importing it pauses their subscription link until a bundle delivers them again\nwithheld: user {} (revoked); importing it ends their subscription link for good\nimport it with `mooring-portal import-profiles` on the portal host, then delete it\n",
+            out.display(),
             users[0],
             AgreementVersion::CURRENT,
-            users[1],
-            AgreementVersion::CURRENT
-        )),
-        "{}",
-        outcome.stdout
+            users[1]
+        )
     );
     assert!(
         fs::read_to_string(&out)

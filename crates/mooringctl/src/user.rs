@@ -294,7 +294,8 @@ pub(crate) fn export(
 /// checked as for `user export`, and only then are exactly the delivered
 /// users' secrets read from the keychain. A user to be delivered whose
 /// file cannot be made refuses the whole bundle; each user withheld is
-/// named with the reason, since the portal ends their subscription link.
+/// named with the reason and what the portal's import does to their
+/// subscription link.
 pub(crate) fn export_profiles(
     env: &Env<'_>,
     out: &mut dyn Write,
@@ -322,53 +323,43 @@ pub(crate) fn export_profiles(
     )
     .map_err(profiles_refused)?;
     export_file::write_new(path, bundle.expose_bytes())?;
-    if let Some(warning) = unaccepted_warning(bundle.selection()) {
-        err.write_all(warning.as_bytes()).map_err(output)?;
-    }
     out.write_all(profiles_summary(path, bundle.selection()).as_bytes())
         .map_err(output)
 }
 
-/// The warning when users are withheld for want of the current acceptance:
-/// the import ends their links for good, and after a new revision of the
-/// agreement such an export is most likely too early (delivery.md,
-/// section 11). `None` when no user is withheld for that.
-fn unaccepted_warning(selection: &ProfileSelection) -> Option<String> {
-    let required: Vec<AgreementVersion> = selection
-        .withheld()
-        .iter()
-        .filter_map(|(_, why)| match why {
-            Withheld::AgreementNotAccepted { required, .. } => Some(*required),
-            Withheld::Suspended | Withheld::BeingRevoked | Withheld::Revoked => None,
-        })
-        .collect();
-    let revision = required.first()?;
-    Some(format!(
-        "mooringctl: warning: {} user(s) named have not accepted agreement revision {revision}, the current one; importing this bundle ends their subscription links for good. To keep their links, delete the file and export again once they have accepted (docs/runbooks/delivery.md, section 11)\n",
-        required.len()
-    ))
-}
-
 /// What `user export-profiles` says once the bundle at `path` is written:
-/// how many users it delivers, each user it withholds and why, what the
-/// portal's import does to those, and where the file goes.
+/// how many users it delivers, each user it withholds, why, and what the
+/// portal's import does to their link, and where the file goes.
 fn profiles_summary(path: &Path, selection: &ProfileSelection) -> String {
     let withheld = selection.withheld();
     let named: String = withheld
         .iter()
-        .map(|(user, why)| format!("withheld: user {user} ({why})\n"))
+        .map(|(user, why)| {
+            format!(
+                "withheld: user {user} ({why}); importing it {}\n",
+                link_at_import(why)
+            )
+        })
         .collect();
-    let lost = if withheld.is_empty() {
-        ""
-    } else {
-        "importing it removes each withheld user's profile and ends their subscription link for good: once delivered again, they generate a new link\n"
-    };
     format!(
-        "wrote {}: CFM profiles of {} user(s) and {} withheld, sing-box-json, mode 0600\n{named}{lost}import it with `mooring-portal import-profiles` on the portal host, then delete it\n",
+        "wrote {}: CFM profiles of {} user(s) and {} withheld, sing-box-json, mode 0600\n{named}import it with `mooring-portal import-profiles` on the portal host, then delete it\n",
         path.display(),
         selection.delivered().len(),
         withheld.len(),
     )
+}
+
+/// What the portal's import does to the subscription link of a user
+/// withheld for `why` (the operator's decision, 2026-11-06): a suspension,
+/// whatever its reason, or a missing acceptance only pauses it, until a
+/// bundle delivers the user again; a revocation ends it for good.
+const fn link_at_import(why: &Withheld) -> &'static str {
+    match why {
+        Withheld::Suspended | Withheld::AgreementNotAccepted { .. } => {
+            "pauses their subscription link until a bundle delivers them again"
+        }
+        Withheld::BeingRevoked | Withheld::Revoked => "ends their subscription link for good",
+    }
 }
 
 /// A refusal of the profile bundle.
