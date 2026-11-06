@@ -369,27 +369,20 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if self.allow_sleep.is_none()
             && !matches!(&section.state, ExitState::Paused)
             && let Ok(egress) = egress_name.as_ref()
+            && let Some(room) = super::usage::pull_budget(
+                self.machine.next_probe_in(self.begun.elapsed(), deployment),
+            )
+            && let Some((node, poll)) = self.usage.tick(
+                self.env,
+                deployment,
+                egress,
+                now,
+                room,
+                self.intervals.usage_pull,
+            )
         {
-            let room = self
-                .machine
-                .next_probe_in(self.begun.elapsed(), deployment)
-                .map_or(Duration::from_secs(4), |left| {
-                    left.saturating_sub(Duration::from_secs(2))
-                        .min(Duration::from_secs(4))
-                });
-            if room >= Duration::from_secs(1)
-                && let Some((node, poll)) = self.usage.tick(
-                    self.env,
-                    deployment,
-                    egress,
-                    now,
-                    room,
-                    self.intervals.usage_pull,
-                )
-            {
-                self.unreachable.remove(&node);
-                self.polls.insert(node, poll);
-            }
+            self.unreachable.remove(&node);
+            self.polls.insert(node, poll);
         }
         note_failure(
             log,

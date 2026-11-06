@@ -22,6 +22,18 @@ use crate::error::{CommandError, LocalError};
 use crate::node::{NodeError, session::ops_session};
 
 const KEEP_ON_NODE: u64 = 48 * 3600;
+const REQUEST_BUDGET: Duration = Duration::from_secs(15);
+const PROBE_RESERVE: Duration = Duration::from_secs(2);
+
+/// Start a collection request only when its whole bounded SSH window fits.
+/// A four-second window can expire during a successful cellular SSH handshake;
+/// shortening it near a carrier probe also wastes a batch and its retry interval.
+/// Wait for the next gap instead, keeping two seconds before the carrier probe.
+pub(crate) fn pull_budget(next_probe_in: Option<Duration>) -> Option<Duration> {
+    next_probe_in
+        .is_none_or(|left| left >= REQUEST_BUDGET + PROBE_RESERVE)
+        .then_some(REQUEST_BUDGET)
+}
 
 #[derive(Debug)]
 enum StoreState {

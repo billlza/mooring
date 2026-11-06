@@ -20,11 +20,42 @@ use mooring_store::{USAGE_DIRECTORY, USER_USAGE_FILE, read_user_usage, write_use
 use super::deployed::status_reply;
 use super::support::{Answered, Expected, ExpectedRemote, Harness, NOW, PINNED, Sent, lo0_name};
 use super::user::{fixture, harness_with};
-use crate::daemon::usage::Collector;
+use crate::daemon::usage::{Collector, pull_budget};
 use crate::error::LocalError;
 use crate::node::NodeError;
 
 const INTERVAL: Duration = Duration::ZERO;
+
+#[test]
+fn collection_reserves_a_complete_ssh_window_without_delaying_a_carrier_probe() {
+    let request = Duration::from_secs(15);
+    assert_eq!(pull_budget(None), Some(request));
+    assert_eq!(pull_budget(Some(Duration::from_secs(300))), Some(request));
+    assert_eq!(pull_budget(Some(Duration::from_secs(17))), Some(request));
+    for left in [0, 1, 2, 5, 10, 16] {
+        assert_eq!(pull_budget(Some(Duration::from_secs(left))), None);
+    }
+    assert_eq!(pull_budget(Some(Duration::from_millis(16_999))), None);
+}
+
+#[test]
+fn a_scheduled_collection_does_not_cut_off_a_slow_but_live_management_path() {
+    let (mut harness, deployment, mut collector) = ready();
+    expect(&harness, RequestKind::Status, Ok(status_reply()));
+    let budget = pull_budget(Some(Duration::from_secs(20))).unwrap();
+    let began = Instant::now();
+    harness.with_env(|env| {
+        collector.tick(env, &deployment, &lo0_name(), now(), budget, INTERVAL);
+    });
+    let seen = harness.nodes.seen.borrow();
+    let (target, sent) = seen.last().unwrap();
+    assert!(matches!(sent, Sent::Request(LineRequest::Status)));
+    let deadline = target.deadline.unwrap();
+    // A real M7-bound management request took 14.2 seconds during acceptance.
+    assert!(deadline >= began + Duration::from_secs(15));
+    assert!(deadline <= Instant::now() + Duration::from_secs(15));
+    assert!(deadline < began + Duration::from_secs(18));
+}
 
 fn wire(at: u64) -> mooring_agent_proto::UnixTime {
     mooring_agent_proto::UnixTime::from_secs(at)
