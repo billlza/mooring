@@ -38,7 +38,7 @@ use std::fmt;
 
 use mooring_model::{
     AgreementVersion, CalendarDate, Deployment, PortalAgreement, RecordedAgreement, UnixTime, User,
-    UserId, UserStatus,
+    UserId, UserStatus, named_users,
 };
 
 use crate::period::BillingCycle;
@@ -101,12 +101,14 @@ impl PortalSnapshot {
 /// The snapshot of `users` made at `generated_at`, with `report`'s usage.
 ///
 /// Refused, in this order, while `agreement` does not cover the portal
-/// (`NotCovered`); when no user is named; when `generated_at` is past
-/// 9999-12-31; when a user is unknown, has not accepted the revision
-/// required or is named twice; when the report runs past `generated_at`
-/// or ends outside its own cycle; when the automatic quota cannot be
-/// evaluated; and for a user suspended after `generated_at`, expiring past
-/// 9999-12-31 or missing from the report. The users appear in id order.
+/// (`NotCovered`); when the users named are none, include an id no user
+/// has or name a user twice (`Named`, [`named_users`]); when
+/// `generated_at` is past 9999-12-31; when a user named, the first in id
+/// order, has not accepted the revision required; when the report runs
+/// past `generated_at` or ends outside its own cycle; when the automatic
+/// quota cannot be evaluated; and for a user suspended after
+/// `generated_at`, expiring past 9999-12-31 or missing from the report.
+/// The users appear in id order.
 ///
 /// `report` is the deployment's usage report, `None` when Mooring has none
 /// (every figure is then `null`). The cycle is the report's, or else the
@@ -142,13 +144,11 @@ fn bounded(
     limit: usize,
 ) -> Result<PortalSnapshot, PortalError> {
     let required = agreement.required()?;
-    if users.is_empty() {
-        return Err(PortalError::NoUsers);
-    }
+    let selected = named_users(deployment, users)?;
     if CalendarDate::utc_of(generated_at).is_err() {
         return Err(PortalError::GeneratedOutOfRange { at: generated_at });
     }
-    let selected = selected(deployment, users, required)?;
+    all_accepted(&selected, required)?;
     let (cycle, counted_through) = match report {
         Some(report) => {
             let periods = report.periods;
@@ -233,19 +233,13 @@ fn bounded(
     })
 }
 
-/// The named users, in id order, each known and with an acceptance of
-/// `required`, none named twice.
-fn selected<'a>(
-    deployment: &'a Deployment,
-    users: &[UserId],
+/// `AgreementNotAccepted` for the first of the `selected` users, in id
+/// order, without an acceptance of `required`.
+fn all_accepted(
+    selected: &BTreeMap<&UserId, &User>,
     required: AgreementVersion,
-) -> Result<BTreeMap<&'a UserId, &'a User>, PortalError> {
-    let mut selected = BTreeMap::new();
-    for id in users {
-        let (id, user) = deployment
-            .users()
-            .get_key_value(id)
-            .ok_or_else(|| PortalError::UnknownUser { user: id.clone() })?;
+) -> Result<(), PortalError> {
+    for (&id, user) in selected {
         user.accepted(required)
             .map_err(
                 |RecordedAgreement(recorded)| PortalError::AgreementNotAccepted {
@@ -254,11 +248,8 @@ fn selected<'a>(
                     required,
                 },
             )?;
-        if selected.insert(id, user).is_some() {
-            return Err(PortalError::DuplicateUser { user: id.clone() });
-        }
     }
-    Ok(selected)
+    Ok(())
 }
 
 /// `TooLarge` when a snapshot of `bytes` is more than `limit`.

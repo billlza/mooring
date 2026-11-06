@@ -1,23 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The user portal's gate on the user agreement (design §9.5).
+//! The user portal's gate on the user agreement, and the users a portal
+//! export holds (design §9.5).
 //!
 //! The portal keeps, on a host on the internet, what Mooring exports for
-//! it: a snapshot of the status, usage, quota and expiry of the users the
-//! operator names, and the CFM file, credentials included, of every user
-//! Mooring serves, which the portal hands out by download and by
-//! subscription link. The user agreement says where a user's data is kept
-//! and how files reach users; revision 1 names neither the portal's host
-//! (clause 4) nor a link (clauses 2 and 5). So nothing about a user may go
-//! to the portal until a revision that covers it is written and the user
-//! has accepted that revision.
+//! it about the users the operator names, those bound to a portal account
+//! ([`named_users`]): a snapshot of their status, usage, quota and expiry,
+//! and a bundle of their CFM files, credentials included, which the portal
+//! hands out by download and by subscription link. The user agreement says
+//! where a user's data is kept and how files reach users; revision 1 names
+//! neither the portal's host (clause 4) nor a link (clauses 2 and 5). So
+//! nothing about a user may go to the portal until a revision that covers
+//! it is written and the user has accepted that revision.
 //!
 //! Both portal exporters take a [`PortalAgreement`] and refuse everything
 //! while its [`PortalAgreement::required`] is an error. `mooringctl` passes
 //! [`PortalAgreement::SHIPPED`], which opens only once
 //! [`PORTAL_AGREEMENT_SINCE`] names a revision this build ships.
 
+mod named;
+
 use crate::user::AgreementVersion;
+
+pub use self::named::{NamedUsersError, NamedUsersErrorKind, named_users};
 
 /// The first revision of the user agreement whose text covers the portal:
 /// clause 4 says what the portal's host keeps, where and for how long, and

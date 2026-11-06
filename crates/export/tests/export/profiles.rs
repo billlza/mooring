@@ -1,35 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The portal's profile bundle (`docs/portal-contract.md`): its structure
-//! against the contract's golden, each document against the user's own
-//! export, who is left out and why, and every refusal.
+//! against the contract's goldens, each document against the user's own
+//! export, who is delivered and who is withheld and why, and every refusal.
 //!
-//! `contract/portal-fixtures/cfm-profiles-v1/pilot.json` is a copy of the
-//! portal repository's `contract/fixtures/cfm-profiles-v1/valid/pilot.json`
-//! at its commit c070413. Its values are synthetic and of a shape no export
-//! makes (a documentation address, a pin that is no SHA-256), so the bundle
-//! is compared with it key by key and type by type, as the contract says,
-//! not byte by byte.
+//! `contract/portal-fixtures/cfm-profiles-v2/` holds copies of the portal
+//! repository's `contract/fixtures/cfm-profiles-v2/valid/pilot.json` and
+//! `valid/all-withheld.json` at its commit 520c358. Their values are
+//! synthetic and of a shape no export makes (a documentation address, a
+//! pin that is no SHA-256), so a bundle is compared with them key by key
+//! and type by type, as the contract says, not byte by byte.
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
 use mooring_export::{
     ExportError, ExportErrorKind, ExportFormat, MAX_BUNDLE_BYTES, MAX_PROFILE_DOCUMENT_BYTES,
-    Omission, ProfilesError, ProfilesErrorKind, export_profiles, export_secret_refs, export_user,
+    ProfilesError, ProfilesErrorKind, Withheld, export_profiles, export_secret_refs, export_user,
     profile_selection,
 };
 use mooring_fixtures::FIXTURE_NOW;
 use mooring_model::{
     AgreementRecord, AgreementVersion, CalendarDate, ClientLine, ConfigGeneration, Deployment,
-    PortalAgreement, PortalNotCovered, SecretSnapshot, SuspendReason, UnixTime, UserId, UserStatus,
+    NamedUsersError, PortalAgreement, PortalNotCovered, SecretSnapshot, SuspendReason, UnixTime,
+    UserId, UserStatus,
 };
 use saphyr::YamlOwned;
 
 use crate::support::{edited, keys, parse, profile, two_nodes};
 
-const GOLDEN: &str =
-    include_str!("../../../../contract/portal-fixtures/cfm-profiles-v1/pilot.json");
+const PILOT: &str = include_str!("../../../../contract/portal-fixtures/cfm-profiles-v2/pilot.json");
+const ALL_WITHHELD: &str =
+    include_str!("../../../../contract/portal-fixtures/cfm-profiles-v2/all-withheld.json");
 
 /// The gate opened on the revision this build ships.
 fn open() -> PortalAgreement {
@@ -40,9 +42,10 @@ fn user_ids(deployment: &Deployment) -> Vec<UserId> {
     deployment.users().keys().cloned().collect()
 }
 
-fn bundle_text(deployment: &Deployment) -> String {
+/// The bundle of `users` of `deployment`, with the fixture's secrets.
+fn bundle_text(deployment: &Deployment, users: &[UserId]) -> String {
     let fixture = two_nodes();
-    let bundle = export_profiles(deployment, &fixture.secrets, FIXTURE_NOW, open()).unwrap();
+    let bundle = export_profiles(deployment, &fixture.secrets, users, FIXTURE_NOW, open()).unwrap();
     String::from_utf8(bundle.expose_bytes().to_vec()).unwrap()
 }
 
@@ -69,12 +72,8 @@ fn structure(value: &YamlOwned) -> String {
     }
 }
 
-fn profiles(bundle: &YamlOwned) -> &[YamlOwned] {
-    bundle
-        .as_mapping_get("profiles")
-        .unwrap()
-        .as_sequence()
-        .unwrap()
+fn list<'a>(bundle: &'a YamlOwned, key: &str) -> &'a [YamlOwned] {
+    bundle.as_mapping_get(key).unwrap().as_sequence().unwrap()
 }
 
 fn outbounds(entry: &YamlOwned) -> &[YamlOwned] {
@@ -91,42 +90,83 @@ fn kind(outbound: &YamlOwned) -> &str {
     outbound.as_mapping_get("type").unwrap().as_str().unwrap()
 }
 
-/// The bundle has the golden's keys in its order at every level, and each
-/// outbound of either protocol the golden's structure for that protocol.
-#[test]
-fn the_bundle_has_the_contract_goldens_structure() {
-    // Every user on the line the golden shows, without the ML-KEM key.
-    let deployment = edited(&two_nodes().deployment, |parts| {
-        for user in &mut parts.users {
-            user.client = profile(ClientLine::Cfm05, &[]);
-        }
-    });
-    let golden = parse(GOLDEN);
-    let made = parse(&bundle_text(&deployment));
-    assert_eq!(keys(&made), keys(&golden));
+fn text_of<'a>(entry: &'a YamlOwned, key: &str) -> &'a str {
+    entry.as_mapping_get(key).unwrap().as_str().unwrap()
+}
+
+/// The users listed under `key`, with the value of `field` for each.
+fn listed<'a>(bundle: &'a YamlOwned, key: &str, field: &str) -> Vec<(&'a str, String)> {
+    list(bundle, key)
+        .iter()
+        .map(|entry| {
+            let value = entry.as_mapping_get(field).unwrap();
+            let value = value
+                .as_str()
+                .map_or_else(|| structure(value), str::to_owned);
+            (text_of(entry, "user"), value)
+        })
+        .collect()
+}
+
+fn suspended(reason: SuspendReason) -> UserStatus {
+    UserStatus::Suspended {
+        reason,
+        since: UnixTime::from_secs(FIXTURE_NOW.as_secs() - 60),
+    }
+}
+
+/// The top level has the golden's keys in its order, with its format and
+/// version; `generated_at` is an integer.
+fn assert_top_level(made: &YamlOwned, golden: &YamlOwned) {
+    assert_eq!(keys(made), keys(golden));
     assert_eq!(
-        keys(&made),
-        ["format", "version", "generated_at", "profiles"]
+        keys(made),
+        ["format", "version", "generated_at", "profiles", "withheld"]
     );
     for key in ["format", "version"] {
         assert_eq!(
             made.as_mapping_get(key).unwrap(),
-            golden.as_mapping_get(key).unwrap()
+            golden.as_mapping_get(key).unwrap(),
+            "{key}"
         );
     }
+    assert_eq!(
+        made.as_mapping_get("version").unwrap().as_integer(),
+        Some(2)
+    );
     assert_eq!(
         structure(made.as_mapping_get("generated_at").unwrap()),
         "integer"
     );
+}
+
+/// A bundle delivering some users and withholding another has the pilot
+/// golden's keys in its order at every level: each outbound of either
+/// protocol has the golden's structure for that protocol, and a withheld
+/// entry the golden's.
+#[test]
+fn a_bundle_has_the_pilot_goldens_structure() {
+    // Every user on the line the golden shows, without the ML-KEM key; the
+    // last one suspended, as the golden's last user is.
+    let deployment = edited(&two_nodes().deployment, |parts| {
+        for user in &mut parts.users {
+            user.client = profile(ClientLine::Cfm05, &[]);
+        }
+        parts.users[2].status = suspended(SuspendReason::Operator);
+    });
+    let users = user_ids(&deployment);
+    let golden = parse(PILOT);
+    let made = parse(&bundle_text(&deployment, &users));
+    assert_top_level(&made, &golden);
     let mut seen = BTreeSet::new();
-    for entry in profiles(&made) {
+    for entry in list(&made, "profiles") {
         assert_eq!(keys(entry), ["user", "document"]);
         assert_eq!(
             keys(entry.as_mapping_get("document").unwrap()),
             ["outbounds"]
         );
         for outbound in outbounds(entry) {
-            let expected = profiles(&golden)
+            let expected = list(&golden, "profiles")
                 .iter()
                 .flat_map(outbounds)
                 .find(|candidate| kind(candidate) == kind(outbound))
@@ -145,16 +185,74 @@ fn the_bundle_has_the_contract_goldens_structure() {
         seen,
         BTreeSet::from(["hysteria2".to_owned(), "vless".to_owned()])
     );
+    let withheld = list(&made, "withheld");
+    assert_eq!(withheld.len(), 1);
+    assert_eq!(
+        structure(&withheld[0]),
+        structure(&list(&golden, "withheld")[0])
+    );
+    assert_eq!(keys(&withheld[0]), ["user", "reason"]);
+    assert_eq!(
+        listed(&made, "withheld", "reason"),
+        listed(&golden, "withheld", "reason")
+            .into_iter()
+            .map(|(_, reason)| (users[2].as_str(), reason))
+            .collect::<Vec<_>>()
+    );
 }
 
-/// Every user to be served is in the bundle, in id order, with the very
-/// document their own sing-box export holds, ML-KEM opt-in included; the
-/// bundle's time is the export's.
+/// A bundle that withholds every user named is still made, with no
+/// profile, and has the all-withheld golden's structure and reasons.
+#[test]
+fn a_bundle_withholding_everyone_has_the_all_withheld_goldens_structure() {
+    // As in the golden: the first user without an acceptance, the second
+    // revoked. The third is not named.
+    let deployment = edited(&two_nodes().deployment, |parts| {
+        parts.users[0].agreement = None;
+        parts.users[1].status = UserStatus::Revoked;
+        parts.users[1].per_node.clear();
+    });
+    let users = user_ids(&deployment);
+    let golden = parse(ALL_WITHHELD);
+    let made = parse(&bundle_text(&deployment, &users[..2]));
+    assert_top_level(&made, &golden);
+    assert!(list(&made, "profiles").is_empty());
+    assert_eq!(
+        structure(made.as_mapping_get("withheld").unwrap()),
+        structure(golden.as_mapping_get("withheld").unwrap())
+    );
+    let reasons = |bundle: &YamlOwned| {
+        listed(bundle, "withheld", "reason")
+            .into_iter()
+            .map(|(_, reason)| reason)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(reasons(&made), reasons(&golden));
+    assert_eq!(reasons(&made), ["agreement_not_accepted", "revoked"]);
+    assert_eq!(
+        listed(&made, "withheld", "reason")
+            .into_iter()
+            .map(|(user, _)| user)
+            .collect::<Vec<_>>(),
+        [users[0].as_str(), users[1].as_str()]
+    );
+}
+
+/// Every user named and to be delivered is in the bundle, in id order,
+/// with the very document their own sing-box export holds, ML-KEM opt-in
+/// included; the bundle's time is the export's.
 #[test]
 fn each_profile_is_the_users_own_sing_box_file() {
     let fixture = two_nodes();
-    let bundle =
-        export_profiles(&fixture.deployment, &fixture.secrets, FIXTURE_NOW, open()).unwrap();
+    let users = user_ids(&fixture.deployment);
+    let bundle = export_profiles(
+        &fixture.deployment,
+        &fixture.secrets,
+        &users,
+        FIXTURE_NOW,
+        open(),
+    )
+    .unwrap();
     let text = std::str::from_utf8(bundle.expose_bytes()).unwrap();
     assert!(text.ends_with("}\n") && !text.ends_with("\n\n"));
     let made = parse(text);
@@ -162,16 +260,13 @@ fn each_profile_is_the_users_own_sing_box_file() {
         made.as_mapping_get("generated_at").unwrap().as_integer(),
         Some(i64::try_from(FIXTURE_NOW.as_secs()).unwrap())
     );
-    let users = user_ids(&fixture.deployment);
-    assert_eq!(bundle.selection().included(), users.as_slice());
-    assert!(bundle.selection().omitted().is_empty());
-    let entries = profiles(&made);
+    assert_eq!(bundle.selection().delivered(), users.as_slice());
+    assert!(bundle.selection().withheld().is_empty());
+    assert!(list(&made, "withheld").is_empty());
+    let entries = list(&made, "profiles");
     assert_eq!(entries.len(), users.len());
     for (entry, user) in entries.iter().zip(&users) {
-        assert_eq!(
-            entry.as_mapping_get("user").unwrap().as_str(),
-            Some(user.as_str())
-        );
+        assert_eq!(text_of(entry, "user"), user.as_str());
         let own = export_user(
             &fixture.deployment,
             &fixture.secrets,
@@ -187,7 +282,7 @@ fn each_profile_is_the_users_own_sing_box_file() {
     assert_eq!(
         format!("{bundle:?}"),
         format!(
-            "ProfileBundle {{ included: 3, omitted: 0, len: {}, .. }}",
+            "ProfileBundle {{ delivered: 3, withheld: 0, len: {}, .. }}",
             bundle.expose_bytes().len()
         )
     );
@@ -197,66 +292,109 @@ fn each_profile_is_the_users_own_sing_box_file() {
     assert_eq!(MAX_PROFILE_DOCUMENT_BYTES, 65_536);
 }
 
-fn suspended() -> UserStatus {
-    UserStatus::Suspended {
-        reason: SuspendReason::Operator,
-        since: UnixTime::from_secs(FIXTURE_NOW.as_secs() - 60),
+/// Only the users named are in the bundle, in id order whatever the order
+/// named, and only their secrets are read: a user not named has no entry
+/// on either side.
+#[test]
+fn only_the_users_named_are_in_the_bundle() {
+    let fixture = two_nodes();
+    let users = user_ids(&fixture.deployment);
+    let named = [users[2].clone(), users[0].clone()];
+    let selection = profile_selection(&fixture.deployment, &named, FIXTURE_NOW, open()).unwrap();
+    assert_eq!(selection.delivered(), [users[0].clone(), users[2].clone()]);
+    assert!(selection.withheld().is_empty());
+    let mut expected = BTreeSet::new();
+    for user in [&users[0], &users[2]] {
+        expected.extend(export_secret_refs(&fixture.deployment, user, FIXTURE_NOW).unwrap());
     }
+    assert_eq!(selection.secret_refs(), &expected);
+    // The user not named has secrets of their own (the nodes' are shared),
+    // and so none of theirs is among those.
+    let not_named = export_secret_refs(&fixture.deployment, &users[1], FIXTURE_NOW).unwrap();
+    assert!(not_named.difference(&expected).next().is_some());
+    let made = parse(&bundle_text(&fixture.deployment, &named));
+    assert_eq!(
+        listed(&made, "profiles", "document")
+            .into_iter()
+            .map(|(user, _)| user)
+            .collect::<Vec<_>>(),
+        [users[0].as_str(), users[2].as_str()]
+    );
+    assert!(list(&made, "withheld").is_empty());
 }
 
-/// A suspended, revoking or revoked user is served nowhere, and an active
-/// user without an acceptance of the required revision gets no file, so
-/// neither is in the bundle; each is named with the reason, in id order,
-/// and their secrets are not read.
+/// A user named who is suspended (for any reason), being revoked or
+/// revoked is served nowhere, and an active user without an acceptance of
+/// the required revision gets no file: each is withheld with the reason,
+/// in id order, the contract's reason in the bundle, and none of their
+/// secrets is read. The status decides before the acceptance: a user who
+/// is not active is withheld for that, accepted or not, as a suspended
+/// user is likely to be right after the revision that opens the portal.
 #[test]
-fn users_not_to_be_served_are_left_out_and_named() {
+fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
     let fixture = mooring_fixtures::two_nodes_twenty_users().unwrap();
     let current = AgreementVersion::CURRENT;
     let other = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
+    let quota = SuspendReason::QuotaExceeded {
+        cycle_start: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
+    };
     let deployment = edited(&fixture.deployment, |parts| {
-        parts.users[0].status = suspended();
-        parts.users[1].status = UserStatus::RevokePending;
-        parts.users[2].status = UserStatus::Revoked;
-        parts.users[2].per_node.clear();
-        parts.users[3].agreement = None;
+        parts.users[0].status = suspended(SuspendReason::Operator);
+        parts.users[1].status = suspended(quota);
+        parts.users[2].status = suspended(SuspendReason::Expired);
+        parts.users[3].status = suspended(SuspendReason::AbuseReview);
+        parts.users[4].status = UserStatus::RevokePending;
+        parts.users[5].status = UserStatus::Revoked;
+        parts.users[5].per_node.clear();
+        parts.users[6].agreement = None;
+        parts.users[7].agreement = Some(AgreementRecord {
+            version: other,
+            accepted_on: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
+        });
+        // Not active, and without the acceptance either.
+        parts.users[1].agreement = None;
         parts.users[4].agreement = Some(AgreementRecord {
             version: other,
             accepted_on: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
         });
+        parts.users[5].agreement = None;
     });
     let users = user_ids(&deployment);
-    let selection = profile_selection(&deployment, FIXTURE_NOW, open()).unwrap();
-    let required = AgreementVersion::CURRENT;
+    let selection = profile_selection(&deployment, &users, FIXTURE_NOW, open()).unwrap();
+    let required = current;
+    let expected = [
+        Withheld::Suspended,
+        Withheld::Suspended,
+        Withheld::Suspended,
+        Withheld::Suspended,
+        Withheld::BeingRevoked,
+        Withheld::Revoked,
+        Withheld::AgreementNotAccepted {
+            recorded: None,
+            required,
+        },
+        Withheld::AgreementNotAccepted {
+            recorded: Some(other),
+            required,
+        },
+    ];
     assert_eq!(
-        selection.omitted(),
-        [
-            (users[0].clone(), Omission::Suspended),
-            (users[1].clone(), Omission::BeingRevoked),
-            (users[2].clone(), Omission::Revoked),
-            (
-                users[3].clone(),
-                Omission::AgreementNotAccepted {
-                    recorded: None,
-                    required
-                }
-            ),
-            (
-                users[4].clone(),
-                Omission::AgreementNotAccepted {
-                    recorded: Some(other),
-                    required
-                }
-            ),
-        ]
+        selection.withheld(),
+        users
+            .iter()
+            .cloned()
+            .zip(expected)
+            .collect::<Vec<_>>()
+            .as_slice()
     );
-    assert_eq!(selection.included(), &users[5..]);
+    assert_eq!(selection.delivered(), &users[8..]);
     let said: Vec<String> = selection
-        .omitted()
+        .withheld()
         .iter()
-        .map(|(_, omission)| omission.to_string())
+        .map(|(_, why)| why.to_string())
         .collect();
     assert_eq!(
-        said,
+        said[3..],
         [
             "suspended".to_owned(),
             "being revoked".to_owned(),
@@ -267,12 +405,12 @@ fn users_not_to_be_served_are_left_out_and_named() {
             ),
         ]
     );
-    // Exactly the included users' secrets are listed.
-    let mut expected = BTreeSet::new();
-    for user in selection.included() {
-        expected.extend(export_secret_refs(&deployment, user, FIXTURE_NOW).unwrap());
+    // Exactly the delivered users' secrets are listed.
+    let mut refs = BTreeSet::new();
+    for user in selection.delivered() {
+        refs.extend(export_secret_refs(&deployment, user, FIXTURE_NOW).unwrap());
     }
-    assert_eq!(selection.secret_refs(), &expected);
+    assert_eq!(selection.secret_refs(), &refs);
     // A snapshot of exactly those secrets makes the bundle.
     let mut secrets = SecretSnapshot::new();
     for secret_ref in selection.secret_refs() {
@@ -286,56 +424,109 @@ fn users_not_to_be_served_are_left_out_and_named() {
             )
             .unwrap();
     }
-    let bundle = export_profiles(&deployment, &secrets, FIXTURE_NOW, open()).unwrap();
+    let bundle = export_profiles(&deployment, &secrets, &users, FIXTURE_NOW, open()).unwrap();
     assert_eq!(bundle.selection(), &selection);
     let made = parse(std::str::from_utf8(bundle.expose_bytes()).unwrap());
-    let listed: Vec<&str> = profiles(&made)
-        .iter()
-        .map(|entry| entry.as_mapping_get("user").unwrap().as_str().unwrap())
-        .collect();
     assert_eq!(
-        listed,
-        users[5..].iter().map(UserId::as_str).collect::<Vec<_>>()
+        listed(&made, "profiles", "document")
+            .into_iter()
+            .map(|(user, _)| user)
+            .collect::<Vec<_>>(),
+        users[8..].iter().map(UserId::as_str).collect::<Vec<_>>()
+    );
+    let reasons = [
+        "suspended",
+        "suspended",
+        "suspended",
+        "suspended",
+        "revoked",
+        "revoked",
+        "agreement_not_accepted",
+        "agreement_not_accepted",
+    ];
+    assert_eq!(
+        listed(&made, "withheld", "reason"),
+        users
+            .iter()
+            .map(UserId::as_str)
+            .zip(reasons.map(str::to_owned))
+            .collect::<Vec<_>>()
     );
 }
 
 /// Nothing is made while the gate is closed: neither the selection nor the
-/// bundle, whatever the users accepted.
+/// bundle, whatever the users accepted. In particular no bundle withholds
+/// everyone for an acceptance that cannot be had yet, which the portal
+/// would take for every link to end.
 #[test]
 fn nothing_is_made_while_the_agreement_does_not_cover_the_portal() {
     let fixture = two_nodes();
+    let users = user_ids(&fixture.deployment);
     let closed = PortalAgreement::since(None);
-    let refused = profile_selection(&fixture.deployment, FIXTURE_NOW, closed).unwrap_err();
-    assert_eq!(refused.kind(), ProfilesErrorKind::NotCovered);
-    let refused =
-        export_profiles(&fixture.deployment, &fixture.secrets, FIXTURE_NOW, closed).unwrap_err();
-    assert_eq!(refused.kind(), ProfilesErrorKind::NotCovered);
-    assert_eq!(
-        refused.to_string(),
-        format!(
-            "agreement revision {}, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links",
-            AgreementVersion::CURRENT
-        )
-    );
-}
-
-/// A bundle holds at least one profile.
-#[test]
-fn no_bundle_is_made_without_a_user_to_serve() {
-    let fixture = two_nodes();
-    let deployment = edited(&fixture.deployment, |parts| {
+    let unaccepted = edited(&fixture.deployment, |parts| {
         for user in &mut parts.users {
-            user.status = suspended();
+            user.agreement = None;
         }
     });
-    let refused = profile_selection(&deployment, FIXTURE_NOW, open()).unwrap_err();
-    assert_eq!(refused.kind(), ProfilesErrorKind::NoProfiles);
-    assert_eq!(
-        refused.to_string(),
-        "no user is to be served: every user is suspended, being revoked, revoked or without an acceptance of the agreement revision the portal requires"
-    );
-    let refused = export_profiles(&deployment, &fixture.secrets, FIXTURE_NOW, open()).unwrap_err();
-    assert_eq!(refused.kind(), ProfilesErrorKind::NoProfiles);
+    for deployment in [&fixture.deployment, &unaccepted] {
+        let refused = profile_selection(deployment, &users, FIXTURE_NOW, closed).unwrap_err();
+        assert_eq!(refused.kind(), ProfilesErrorKind::NotCovered);
+        let refused =
+            export_profiles(deployment, &fixture.secrets, &users, FIXTURE_NOW, closed).unwrap_err();
+        assert_eq!(refused.kind(), ProfilesErrorKind::NotCovered);
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "agreement revision {}, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links",
+                AgreementVersion::CURRENT
+            )
+        );
+    }
+    // The gate comes before the list.
+    let refused = profile_selection(&fixture.deployment, &[], FIXTURE_NOW, closed).unwrap_err();
+    assert_eq!(refused.kind(), ProfilesErrorKind::NotCovered);
+}
+
+/// The users named must be distinct users of the deployment: an empty
+/// list, an id no user has and a user named twice are refused by the
+/// selection and the bundle alike, so no bundle names fewer users than the
+/// operator did. A withheld user counts as named.
+#[test]
+fn the_users_named_are_distinct_users_of_the_deployment() {
+    let fixture = two_nodes();
+    let users = user_ids(&fixture.deployment);
+    let deployment = edited(&fixture.deployment, |parts| {
+        parts.users[0].status = suspended(SuspendReason::Operator);
+    });
+    let unknown = UserId::parse("zzzzzzzzzz").unwrap();
+    assert!(!deployment.users().contains_key(&unknown));
+    for (named, error) in [
+        (Vec::new(), NamedUsersError::NoUsers),
+        (
+            vec![users[1].clone(), unknown.clone()],
+            NamedUsersError::UnknownUser { user: unknown },
+        ),
+        (
+            vec![users[0].clone(), users[1].clone(), users[0].clone()],
+            NamedUsersError::DuplicateUser {
+                user: users[0].clone(),
+            },
+        ),
+    ] {
+        let refused = profile_selection(&deployment, &named, FIXTURE_NOW, open()).unwrap_err();
+        assert!(
+            matches!(&refused, ProfilesError::Named(found) if *found == error),
+            "{refused:?}"
+        );
+        assert_eq!(refused.kind(), ProfilesErrorKind::Named);
+        assert_eq!(refused.to_string(), error.to_string());
+        let refused = export_profiles(&deployment, &fixture.secrets, &named, FIXTURE_NOW, open())
+            .unwrap_err();
+        assert!(
+            matches!(&refused, ProfilesError::Named(found) if *found == error),
+            "{refused:?}"
+        );
+    }
 }
 
 fn user_refusal(error: &ProfilesError) -> (&UserId, &ExportError) {
@@ -345,34 +536,55 @@ fn user_refusal(error: &ProfilesError) -> (&UserId, &ExportError) {
     }
 }
 
-/// A user to be served whose file cannot be made refuses the whole bundle,
-/// named with the export's own refusal: at the selection when a node has
-/// not confirmed the current generation, and when making the files when a
-/// secret is missing.
+/// A user to be delivered whose file cannot be made refuses the whole
+/// bundle, named with the export's own refusal: at the selection when a
+/// node has not confirmed the current generation, and when making the
+/// files when a secret is missing. A withheld user needs no file, so the
+/// same fault does not refuse a bundle that only withholds.
 #[test]
 fn a_user_whose_file_cannot_be_made_refuses_the_bundle() {
     let fixture = two_nodes();
     let users = user_ids(&fixture.deployment);
     let stale = edited(&fixture.deployment, |parts| {
         parts.config_generation = ConfigGeneration::INITIAL.next().unwrap();
+        parts.users[0].status = suspended(SuspendReason::Operator);
     });
-    let refused = profile_selection(&stale, FIXTURE_NOW, open()).unwrap_err();
+    let refused = profile_selection(&stale, &users, FIXTURE_NOW, open()).unwrap_err();
     let (user, source) = user_refusal(&refused);
-    assert_eq!(*user, users[0]);
+    assert_eq!(*user, users[1]);
     assert_eq!(source.kind(), ExportErrorKind::NodeNotApplied);
     assert_eq!(
         refused.to_string(),
-        format!("user {}'s file cannot be made", users[0])
+        format!("user {}'s file cannot be made", users[1])
     );
-    let refused = export_profiles(&stale, &fixture.secrets, FIXTURE_NOW, open()).unwrap_err();
+    let refused =
+        export_profiles(&stale, &fixture.secrets, &users, FIXTURE_NOW, open()).unwrap_err();
     assert_eq!(
         user_refusal(&refused).1.kind(),
         ExportErrorKind::NodeNotApplied
+    );
+    let only_withheld = &users[..1];
+    let selection = profile_selection(&stale, only_withheld, FIXTURE_NOW, open()).unwrap();
+    assert_eq!(
+        selection.withheld(),
+        [(users[0].clone(), Withheld::Suspended)]
+    );
+    assert!(selection.secret_refs().is_empty());
+    assert!(
+        export_profiles(
+            &stale,
+            &SecretSnapshot::new(),
+            only_withheld,
+            FIXTURE_NOW,
+            open()
+        )
+        .is_ok()
     );
     // Every check passes, but the snapshot holds no secret.
     let refused = export_profiles(
         &fixture.deployment,
         &SecretSnapshot::new(),
+        &users,
         FIXTURE_NOW,
         open(),
     )
@@ -395,7 +607,10 @@ fn every_profiles_error_kind_is_named() {
             }),
             ProfilesErrorKind::NotCovered,
         ),
-        (ProfilesError::NoProfiles, ProfilesErrorKind::NoProfiles),
+        (
+            ProfilesError::Named(NamedUsersError::NoUsers),
+            ProfilesErrorKind::Named,
+        ),
         (
             ProfilesError::User {
                 user: user.clone(),

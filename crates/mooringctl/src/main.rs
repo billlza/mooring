@@ -33,8 +33,9 @@
 //! - `portal export --user <uid>... --out <path>` writes the snapshot of
 //!   the users named (status, usage this cycle, quota, expiry; no
 //!   credentials), from the state and the daemon's collected usage;
-//! - `user export-profiles --out <path>` writes the profile bundle: the CFM
-//!   file of every user to be served, naming each user left out.
+//! - `user export-profiles --user <uid>... --out <path>` writes the profile
+//!   bundle of the users named, those bound to a portal account: each
+//!   one's CFM file, or why it is withheld.
 //!
 //! M5a adds the deployment's creation and the SIM line's records (design
 //! §7, §10.2):

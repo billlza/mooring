@@ -122,12 +122,18 @@ pub(crate) enum UserCommand {
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
     },
-    /// Write the CFM file (sing-box JSON) of every user to be served into
-    /// one profile bundle for the portal, `mooring-portal import-profiles`,
-    /// to a new file with mode 0600 (never overwritten). It holds those
-    /// users' credentials. Refused until the user agreement covers the
-    /// portal.
+    /// Write the portal's profile bundle, for `mooring-portal
+    /// import-profiles`: for each user named, the CFM file (sing-box JSON,
+    /// credentials included) or why it is withheld, to a new file with mode
+    /// 0600 (never overwritten). Name every user bound to a portal account:
+    /// the portal refuses a bundle that leaves one out, and `mooring-portal
+    /// bound-users` on its host prints them as --user arguments. Refused
+    /// until the user agreement covers the portal.
     ExportProfiles {
+        /// A user bound to a portal account; give one --user per user. Only
+        /// the users named are in the bundle.
+        #[arg(long = "user", value_name = "USER_ID", required = true)]
+        users: Vec<UserId>,
         /// The file to create, in a folder Time Machine excludes and outside
         /// iCloud Drive, the Desktop and Documents.
         #[arg(long, value_name = "PATH")]

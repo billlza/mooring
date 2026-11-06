@@ -73,7 +73,10 @@ pub use node::{
     HostFacts, Hy2Server, Node, NodeAddress, NodeLifecycle, NodeRole, RealityServer, SshPin,
 };
 pub use own_network::{OwnNetwork, OwnNetworkKind, OwnNetworks, PERSONAL_HOTSPOT_ROUTER};
-pub use portal::{PORTAL_AGREEMENT_SINCE, PortalAgreement, PortalNotCovered};
+pub use portal::{
+    NamedUsersError, NamedUsersErrorKind, PORTAL_AGREEMENT_SINCE, PortalAgreement,
+    PortalNotCovered, named_users,
+};
 pub use ports::{HopInterval, Hy2Listener, Hy2Obfs, ListenerIdx, Port, PortPlan, PortRange};
 pub use quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
 pub use secret::{
