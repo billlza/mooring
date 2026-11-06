@@ -24,6 +24,9 @@
     `PORTAL_AGREEMENT_SINCE` (crates/model/src/portal.rs) to revision 2;
     agreement_text.rs checks that the text names the portal (门户) exactly
     when that gate is open.
+  - The portal's commits cited here are on its branch
+    feature/cfm-subscription-links, which had not been published when these
+    notes were written; if that branch is rewritten, cite them again.
   - Clause 1 states the operator's payment decisions of 2026-11-06 (the
     portal's docs/payments.md):
     - Stripe, from the portal; a prepaid month, an auto-renewing month and
@@ -65,13 +68,14 @@
   - Clause 4 adds the portal's host: a UK VPS of its own, neither a node nor
     the Mac (the operator's decision of 2026-11-06). What it keeps is the
     portal's schema at 520c358 (accounts, sessions, bindings, snapshot
-    records, CFM profiles, links) and, once payment is built, its orders.
+    records, CFM profiles, links), the ban list (b094973's migration 3)
+    and, once payment is built, its orders.
     - The operator deletes a user's portal account, and with it everything
       there, when the user is revoked or leaves (delivery.md, section 10);
       orders go with the account.
     - No backup or host snapshot of the portal's database may outlive
-      these rules. The portal's 634e16e (not yet pushed when this was
-      written) meets the two preconditions a4359ea did not.
+      these rules. The portal's 634e16e meets the two preconditions a4359ea
+      did not.
       - Every command that deletes or overwrites rows then erases them
         (VACUUM, then wal_checkpoint(TRUNCATE)). When the database stays
         busy past 5 s, the command says what it did, fails, and names
@@ -80,11 +84,24 @@
       - Out of its reach (its docs/security.md §11): old backups, host
         snapshots, and what the file system and disk keep. Clause 4 says
         that the host's provider may see what the disk keeps.
-    - The ban list keeps an unkeyed, fast BLAKE2s digest of the email.
-      Whoever holds the data can test an address, and can find numeric
-      ones such as QQ addresses by trying them all, in minutes. Clause 4
-      says both. A slow digest (Argon2id) would prevent the second; it is
-      not built.
+    - The ban list keeps an Argon2id digest of the email (19 MiB, two
+      passes, one lane, a fixed public salt) since the portal's 1797f4e. A
+      sign-up computes the same digest to check the list, and keeps nothing
+      of it. No key kept out of the database and its backups is built, so a
+      copy of them can still test addresses. Clause 4 says how far:
+      - Whoever holds the data can test any addresses they have quickly:
+        about a million an hour on one eight-core computer (OpenSSL 4.1's
+        Argon2id, which reproduces the portal's pinned digest, on an M1
+        Max, 2026-11-06).
+      - Trying every numeric QQ address (fewer than 10^10) takes 7 to 10
+        core-years at 20 to 30 ms each: out of casual reach, but days on
+        rented computers. The salt being shared, one sweep finds every
+        entry at once, in any copy.
+    - Anyone who knows the portal's address can also ask its sign-up form,
+      which answers a banned address as it answers a taken one (the
+      portal's docs/security.md §10). It tells whether an email has an
+      account or was banned, at 10 tries an hour per client network (its
+      §5). Clause 4 says so under 「无法避免」.
     - The portal's command output names account numbers and Mooring ids.
       The operator runs those commands by hand and keeps their output out
       of cron, systemd and mail (delivery.md, section 0).
@@ -109,14 +126,14 @@
   - Clause 3 states the node's deny rules (design §8.2), and the ban.
     - The ban is the operator's decision of 2026-11-06, in their words:
       «额度用尽当然只暂停直到下一个计费周期，你用我的网从事非法活动被我抓了，我当然要封禁涉事账号。并且使其永远不得重复注册».
-      A ban refunds nothing (the same day, in the agreement's session).
+      A ban refunds nothing (the operator's decision, the same day).
     - Mooring's revocation records no reason, so a ban is the operator's
       own act at the portal, `mooring-portal ban` (portal b094973), beside
       the revocation in Mooring.
     - The portal deletes the account as for any revocation. It keeps for
-      good the BLAKE2s-256 digest of the email, trimmed and in lower case,
-      with the ban's time, and answers a registration with that email as
-      it answers one with a taken email. `unban` drops it.
+      good the Argon2id digest of the email (above), trimmed and in lower
+      case, with the ban's time, and answers a registration with that
+      email as it answers one with a taken email. `unban` drops it.
     - The ban stops nothing but that email; the operator's binding by
       account number is the real gate. A payment identity added later
       must join clause 4 before users confirm this revision.
@@ -242,6 +259,7 @@
 - 服务器提供商能看到你的 IP 地址、连接时间和流量大小；如果它控制了服务器，也能看到你访问的目标地址和域名，以及没有经过 HTTPS 加密的内容。
 - 门户所在服务器的提供商能看到连接门户的 IP 地址；如果它控制了这台服务器，也能看到门户上保存的全部内容，包括你的配置和凭据，以及磁盘上可能残留的、门户已经删除的记录。
 - 门户被攻破或数据外泄时，所有用户的登录邮箱、订单、配置和凭据会一起外泄。这时运营者会为所有用户更换凭据，你需要在门户上重新生成订阅链接并导入 CFM，或者重新下载配置文件。
+- 知道门户网址的人，可以在注册页输入一个邮箱，从门户的回答看出这个邮箱是否已有门户账号或被封禁过（这两种情况门户的回答相同）。门户限制了每个网络尝试的次数，但挡不住只核对几个邮箱的人。
 - 服务器通过 Cloudflare 的加密 DNS 服务（1.1.1.1 和 1.0.0.1）查询你访问的域名。Cloudflare 能看到这些域名和查询时间，但看到的是英国移动网络的地址，不是你的地址。
 - 英国移动运营商能看到目标 IP 地址，以及大多数加密连接开头的域名（SNI），看不到你的地址，也看不到 HTTPS 加密的内容。
 - 你访问的网站看到的是英国移动网络的地址。
@@ -251,7 +269,7 @@
 - 运营者的电脑上：五分钟粒度的流量记录保存 7 天，按小时汇总的保存 35 天，按日和按月的合计保存 13 个月。
 - 你的累计总量、最近一次使用的时间、账户状态变化和这些操作记录、付款记录、你接受本约定的记录，以及你的名字和别名，在你的账户作废 13 个月后全部删除。
 - 服务器上：流量明细保存 48 小时，每月合计在当月结束 7 天后删除，运营者的电脑会在此之前取回它们；你最近一次使用的时间在你的账户作废、服务器不再为你服务时删除。
-- 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会一直保留你登录邮箱的摘要和封禁的时间，用来拒绝这个邮箱再注册。门户不保存邮箱本身，但拿到门户数据的人，可以拿一个邮箱核对它是否被封禁过；像 QQ 号邮箱这样由数字组成的邮箱，还能被很快地逐个试出来。
+- 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会一直保留你登录邮箱的摘要和封禁的时间，用来拒绝这个邮箱再注册。门户不保存邮箱本身，但拿到门户数据的人，可以很快核对一个或一批邮箱是否被封禁过：一台普通电脑一两个小时就能核对一百万个。像 QQ 号邮箱这样由数字组成的邮箱，要把所有号码逐个试一遍，需要大量计算，随手做不到；但如果有人租用足够多的电脑，几天内就能试完，而且试完这一遍，就能同时认出所有被封禁过的这类邮箱。
 - Stripe 上：你的账户作废时，运营者会取消你的自动续费，并删除 Stripe 上保存的你的银行卡。付款记录本身由 Stripe 按它自己的规定保存，运营者不能删除。
 - 你可以随时请运营者告诉你，运营者保存了哪些关于你的记录。退出时，你可以请运营者立即删除运营者电脑上的这些记录，不必等 13 个月；门户上的记录在运营者删除你的门户账号时删除；服务器上的记录按上面的期限自动删除。
 
