@@ -1,6 +1,6 @@
 {
   "format": "mooring-portal-cfm-profiles",
-  "version": 1,
+  "version": 2,
   "generated_at": 1793955600,
   "profiles": [
     {
@@ -81,6 +81,12 @@
           }
         ]
       }
+    }
+  ],
+  "withheld": [
+    {
+      "user": "pilotuserc",
+      "reason": "suspended"
     }
   ]
 }

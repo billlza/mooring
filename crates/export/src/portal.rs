@@ -1,30 +1,38 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The portal's CFM profile bundle (design §9.5; contract
-//! `mooring-portal-cfm-profiles` version 1, `docs/portal-contract.md`): the
-//! sing-box JSON file of every user Mooring serves, in one document that
-//! the portal imports whole, keeps and hands to each user by download or
+//! `mooring-portal-cfm-profiles` version 2, `docs/portal-contract.md`): for
+//! each user the operator names, those bound to a portal account, either
+//! the user's sing-box JSON file or why it is withheld, in one document
+//! the portal imports whole, keeps, and hands to each user by download or
 //! subscription link.
 //!
 //! # Who is in it
 //!
-//! A bundle is the complete set: the portal drops the profile of every
-//! user it does not list. So it holds every user who is to be served:
-//! active, with an acceptance of the agreement revision the portal
-//! requires ([`PortalAgreement`]). Every other user is left out and named
-//! with the reason ([`Omission`]). A user who is to be served but whose
-//! file cannot be made (a node not applied, a certificate no longer
-//! current, no credentials) refuses the whole bundle, because leaving them
-//! out would take their profile away.
+//! Exactly the users named, each once ([`named_users`]). Mooring cannot
+//! tell who is bound to a portal account, and the portal refuses a bundle
+//! that leaves out a bound user, so the operator names them all; a list
+//! that names no one, an id no user has or a user twice is refused. A user
+//! named is delivered when active and with an acceptance of the agreement
+//! revision the portal requires ([`PortalAgreement`]). Every other user
+//! named is withheld, with the reason ([`Withheld`]); an exhaustive match
+//! puts each status on one side, so a status added later has to be placed
+//! there. A user to be delivered whose file cannot be made (a node not
+//! applied, a certificate no longer current, no credentials) refuses the
+//! whole bundle: withheld, they would lose their subscription link at the
+//! portal for good.
 //!
 //! # What it holds
 //!
-//! For each user, in id order, the document a user export writes in
-//! [`ExportFormat::SingBoxJson`](crate::ExportFormat::SingBoxJson), built by
-//! the same function from the same checked outbounds, as a JSON object.
-//! The credentials make the bundle a secret: it is written into a
-//! zeroizing buffer of exactly its size, and its `Debug` output gives
-//! counts and sizes only.
+//! For each user delivered, in id order, the document a user export writes
+//! in [`ExportFormat::SingBoxJson`](crate::ExportFormat::SingBoxJson),
+//! built by the same function from the same checked outbounds, as a JSON
+//! object; for each user withheld, in id order, the reason. The
+//! credentials make the bundle a secret: it is written into a zeroizing
+//! buffer of exactly its size, and its `Debug` output gives counts and
+//! sizes only.
+
+mod document;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -33,9 +41,8 @@ use std::io;
 use mooring_model::secret::{SecretRef, SecretSnapshot};
 use mooring_model::{
     AgreementVersion, Deployment, PortalAgreement, RecordedAgreement, UnixTime, User, UserId,
-    UserStatus,
+    UserStatus, named_users,
 };
-use serde::Serialize;
 use zeroize::Zeroizing;
 
 use crate::error::{ExportError, ProfilesError};
@@ -44,11 +51,7 @@ use crate::json::exact_json;
 use crate::singbox::document_tree;
 use crate::tree::{Scalar, Tree};
 
-/// What the document is, so that no other JSON is imported as a bundle.
-const FORMAT: &str = "mooring-portal-cfm-profiles";
-
-/// The contract's version.
-const VERSION: u32 = 1;
+use self::document::{BundleV2, EntryV2, FORMAT, ReasonV2, VERSION, WithheldV2};
 
 /// The most bytes of a bundle the portal reads.
 pub const MAX_BUNDLE_BYTES: usize = 1024 * 1024;
@@ -62,17 +65,19 @@ pub const MAX_PROFILE_DOCUMENT_BYTES: usize = 64 * 1024;
 /// the user's entry).
 const NESTED_INDENT: usize = 3 * 2;
 
-/// Why a user is not in a bundle.
+/// Why a user named is withheld from a bundle: Mooring does not serve
+/// them, or may not deliver their file through the portal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Omission {
-    /// The user is suspended, so served nowhere.
+pub enum Withheld {
+    /// The user is suspended, for whatever reason, so served nowhere; the
+    /// credentials are kept, and the user's file works again once resumed.
     Suspended,
     /// The user is being revoked.
     BeingRevoked,
     /// The user is revoked.
     Revoked,
     /// The user is active but has not accepted the revision the portal
-    /// requires.
+    /// requires, so no file of theirs is exported.
     AgreementNotAccepted {
         /// The revision the user accepted, if a record exists.
         recorded: Option<AgreementVersion>,
@@ -81,7 +86,7 @@ pub enum Omission {
     },
 }
 
-impl fmt::Display for Omission {
+impl fmt::Display for Withheld {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Suspended => f.write_str("suspended"),
@@ -96,30 +101,30 @@ impl fmt::Display for Omission {
     }
 }
 
-/// Who a bundle holds and which secrets making it reads, decided from the
-/// deployment before any secret is read.
+/// Who a bundle delivers, who it withholds and which secrets making it
+/// reads, decided from the deployment before any secret is read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSelection {
-    included: Vec<UserId>,
-    omitted: Vec<(UserId, Omission)>,
+    delivered: Vec<UserId>,
+    withheld: Vec<(UserId, Withheld)>,
     refs: BTreeSet<SecretRef>,
 }
 
 impl ProfileSelection {
-    /// The users the bundle holds, in id order.
+    /// The users whose file the bundle holds, in id order.
     #[must_use]
-    pub fn included(&self) -> &[UserId] {
-        &self.included
+    pub fn delivered(&self) -> &[UserId] {
+        &self.delivered
     }
 
-    /// The users left out, in id order, with why.
+    /// The users it withholds, in id order, with why.
     #[must_use]
-    pub fn omitted(&self) -> &[(UserId, Omission)] {
-        &self.omitted
+    pub fn withheld(&self) -> &[(UserId, Withheld)] {
+        &self.withheld
     }
 
-    /// Exactly the secrets the bundle's files need: those of each included
-    /// user's export.
+    /// Exactly the secrets the bundle's files need: those of each
+    /// delivered user's export.
     #[must_use]
     pub const fn secret_refs(&self) -> &BTreeSet<SecretRef> {
         &self.refs
@@ -127,7 +132,7 @@ impl ProfileSelection {
 }
 
 /// A bundle: pretty-printed JSON ending with one newline, holding every
-/// included user's credentials.
+/// delivered user's credentials.
 pub struct ProfileBundle {
     selection: ProfileSelection,
     bytes: Zeroizing<Vec<u8>>,
@@ -140,7 +145,7 @@ impl ProfileBundle {
         &self.bytes
     }
 
-    /// Who it holds and who it leaves out.
+    /// Who it delivers and who it withholds.
     #[must_use]
     pub const fn selection(&self) -> &ProfileSelection {
         &self.selection
@@ -150,59 +155,43 @@ impl ProfileBundle {
 impl fmt::Debug for ProfileBundle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProfileBundle")
-            .field("included", &self.selection.included.len())
-            .field("omitted", &self.selection.omitted.len())
+            .field("delivered", &self.selection.delivered.len())
+            .field("withheld", &self.selection.withheld.len())
             .field("len", &self.bytes.len())
             .finish_non_exhaustive()
     }
 }
 
-/// Who a bundle made at `now` holds, after every check making it makes
-/// before reading a secret, in this order: the agreement covers the portal
-/// (`NotCovered`), then, user by user in id order, whether the user is to
-/// be served and every check of its export (`User`, with
-/// [`export_secret_refs`]'s error), and last that some user is
-/// (`NoProfiles`).
+/// Who a bundle of `users` made at `now` delivers and withholds, after
+/// every check making it makes before reading a secret, in this order: the
+/// agreement covers the portal (`NotCovered`), the users named are
+/// distinct users of the deployment (`Named`, [`named_users`]), then, user
+/// by user in id order, whether the user is delivered and, if so, every
+/// check of its export (`User`, with [`export_secret_refs`]'s error).
 pub fn profile_selection(
     deployment: &Deployment,
+    users: &[UserId],
     now: UnixTime,
     agreement: PortalAgreement,
 ) -> Result<ProfileSelection, ProfilesError> {
-    let required = agreement.required()?;
-    let mut selection = ProfileSelection {
-        included: Vec::new(),
-        omitted: Vec::new(),
-        refs: BTreeSet::new(),
-    };
-    for (id, user) in deployment.users() {
-        if let Some(omission) = omission(user, required) {
-            selection.omitted.push((id.clone(), omission));
-            continue;
-        }
-        let refs =
-            export_secret_refs(deployment, id, now).map_err(|source| user_error(id, source))?;
-        selection.refs.extend(refs);
-        selection.included.push(id.clone());
-    }
-    if selection.included.is_empty() {
-        return Err(ProfilesError::NoProfiles);
-    }
-    Ok(selection)
+    sort(deployment, users, now, agreement).map(Sorted::into_selection)
 }
 
-/// The bundle of every user to be served at `now`, its files made from
-/// `secrets`, which must hold [`ProfileSelection::secret_refs`]. Refused as
-/// [`profile_selection`] refuses, then when a file cannot be made
+/// The bundle of `users` at `now`, the delivered users' files made from
+/// `secrets`, which must hold [`ProfileSelection::secret_refs`]. Refused
+/// as [`profile_selection`] refuses, then when a file cannot be made
 /// (`User`), when a user's document or the bundle is larger than the
 /// portal accepts (`DocumentTooLarge`, `BundleTooLarge`), or when encoding
-/// fails.
+/// fails. A bundle that withholds every user named is made: the portal
+/// stops serving them on its import.
 pub fn export_profiles(
     deployment: &Deployment,
     secrets: &SecretSnapshot,
+    users: &[UserId],
     now: UnixTime,
     agreement: PortalAgreement,
 ) -> Result<ProfileBundle, ProfilesError> {
-    bounded_profiles(deployment, secrets, now, agreement, PORTAL_BOUNDS)
+    bounded_profiles(deployment, secrets, users, now, agreement, PORTAL_BOUNDS)
 }
 
 /// The portal's bounds on one document in a bundle and on the bundle.
@@ -223,45 +212,113 @@ const PORTAL_BOUNDS: Bounds = Bounds {
 fn bounded_profiles(
     deployment: &Deployment,
     secrets: &SecretSnapshot,
+    users: &[UserId],
     now: UnixTime,
     agreement: PortalAgreement,
     bounds: Bounds,
 ) -> Result<ProfileBundle, ProfilesError> {
-    let selection = profile_selection(deployment, now, agreement)?;
-    let mut profiles = Vec::with_capacity(selection.included.len());
-    for (id, user) in deployment.users() {
-        if !selection.included.contains(id) {
-            continue;
-        }
+    let sorted = sort(deployment, users, now, agreement)?;
+    let mut profiles = Vec::with_capacity(sorted.delivered.len());
+    for &(id, user) in &sorted.delivered {
         let outbounds = user_outbounds(deployment, secrets, user, now)
             .map_err(|source| user_error(id, source))?;
         let document = document_tree(&outbounds);
         let bytes = nested_len(&document).map_err(ProfilesError::Encode)?;
         fits_document(id, bytes, bounds.document)?;
-        profiles.push(EntryV1 { user: id, document });
+        profiles.push(EntryV2 { user: id, document });
     }
-    let bytes = exact_json(&BundleV1 {
+    let withheld = sorted
+        .withheld
+        .iter()
+        .map(|&(user, why)| WithheldV2 {
+            user,
+            reason: ReasonV2::of(why),
+        })
+        .collect();
+    let bytes = exact_json(&BundleV2 {
         format: FORMAT,
         version: VERSION,
         generated_at: now,
         profiles,
+        withheld,
     })
     .map_err(ProfilesError::Encode)?;
     fits_bundle(bytes.len(), bounds.bundle)?;
-    Ok(ProfileBundle { selection, bytes })
+    Ok(ProfileBundle {
+        selection: sorted.into_selection(),
+        bytes,
+    })
 }
 
-/// Why `user` is left out, or `None` when it is to be served.
-fn omission(user: &User, required: AgreementVersion) -> Option<Omission> {
-    match user.status {
-        UserStatus::Active => {}
-        UserStatus::Suspended { .. } => return Some(Omission::Suspended),
-        UserStatus::RevokePending => return Some(Omission::BeingRevoked),
-        UserStatus::Revoked => return Some(Omission::Revoked),
+/// The users named, sorted: those delivered, with their records, and those
+/// withheld, with why, each in id order; and the secrets the delivered
+/// users' files need.
+struct Sorted<'a> {
+    delivered: Vec<(&'a UserId, &'a User)>,
+    withheld: Vec<(&'a UserId, Withheld)>,
+    refs: BTreeSet<SecretRef>,
+}
+
+impl Sorted<'_> {
+    fn into_selection(self) -> ProfileSelection {
+        ProfileSelection {
+            delivered: self
+                .delivered
+                .into_iter()
+                .map(|(id, _)| id.clone())
+                .collect(),
+            withheld: self
+                .withheld
+                .into_iter()
+                .map(|(id, why)| (id.clone(), why))
+                .collect(),
+            refs: self.refs,
+        }
     }
-    user.accepted(required)
-        .err()
-        .map(|RecordedAgreement(recorded)| Omission::AgreementNotAccepted { recorded, required })
+}
+
+/// [`profile_selection`]'s checks, keeping the users' records for making
+/// the files.
+fn sort<'a>(
+    deployment: &'a Deployment,
+    users: &[UserId],
+    now: UnixTime,
+    agreement: PortalAgreement,
+) -> Result<Sorted<'a>, ProfilesError> {
+    let required = agreement.required()?;
+    let named = named_users(deployment, users)?;
+    let mut sorted = Sorted {
+        delivered: Vec::new(),
+        withheld: Vec::new(),
+        refs: BTreeSet::new(),
+    };
+    for (id, user) in named {
+        if let Some(why) = withheld(user, required) {
+            sorted.withheld.push((id, why));
+            continue;
+        }
+        let refs =
+            export_secret_refs(deployment, id, now).map_err(|source| user_error(id, source))?;
+        sorted.refs.extend(refs);
+        sorted.delivered.push((id, user));
+    }
+    Ok(sorted)
+}
+
+/// Why `user` is withheld, or `None` when it is delivered: every status
+/// named, none by a wildcard.
+fn withheld(user: &User, required: AgreementVersion) -> Option<Withheld> {
+    match user.status {
+        UserStatus::Active => user
+            .accepted(required)
+            .err()
+            .map(
+                |RecordedAgreement(recorded)| Withheld::AgreementNotAccepted { recorded, required },
+            ),
+        UserStatus::Suspended { .. } => Some(Withheld::Suspended),
+        UserStatus::RevokePending => Some(Withheld::BeingRevoked),
+        UserStatus::Revoked => Some(Withheld::Revoked),
+    }
 }
 
 fn user_error(user: &UserId, source: ExportError) -> ProfilesError {
@@ -320,22 +377,6 @@ impl io::Write for Measure {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
-}
-
-/// The bundle of contract version 1: every key always present, none other.
-#[derive(Debug, Serialize)]
-struct BundleV1<'a> {
-    format: &'static str,
-    version: u32,
-    generated_at: UnixTime,
-    profiles: Vec<EntryV1<'a>>,
-}
-
-/// One user's entry: its id and its file's document.
-#[derive(Debug, Serialize)]
-struct EntryV1<'a> {
-    user: &'a UserId,
-    document: Tree<Scalar>,
 }
 
 #[cfg(test)]
@@ -415,7 +456,9 @@ mod tests {
         let fixture = mooring_fixtures::two_nodes_twenty_users().unwrap();
         let open = PortalAgreement::since(Some(AgreementVersion::CURRENT));
         let now = mooring_fixtures::FIXTURE_NOW;
-        let bundle = export_profiles(&fixture.deployment, &fixture.secrets, now, open).unwrap();
+        let users: Vec<UserId> = fixture.deployment.users().keys().cloned().collect();
+        let bundle =
+            export_profiles(&fixture.deployment, &fixture.secrets, &users, now, open).unwrap();
         let text = std::str::from_utf8(bundle.expose_bytes()).unwrap();
         let documents = documents(text);
         assert_eq!(documents.len(), fixture.deployment.users().len());
@@ -439,8 +482,17 @@ mod tests {
         let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
         let open = PortalAgreement::since(Some(AgreementVersion::CURRENT));
         let now = mooring_fixtures::FIXTURE_NOW;
-        let make =
-            |bounds| bounded_profiles(&fixture.deployment, &fixture.secrets, now, open, bounds);
+        let users: Vec<UserId> = fixture.deployment.users().keys().cloned().collect();
+        let make = |bounds| {
+            bounded_profiles(
+                &fixture.deployment,
+                &fixture.secrets,
+                &users,
+                now,
+                open,
+                bounds,
+            )
+        };
         let made = make(PORTAL_BOUNDS).unwrap();
         let largest = documents(std::str::from_utf8(made.expose_bytes()).unwrap())
             .iter()

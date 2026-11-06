@@ -10,8 +10,8 @@ use std::fmt;
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretSnapshotError;
 use mooring_model::{
-    AgreementVersion, Capability, ClientLine, ConfigGeneration, ModelError, NodeId,
-    PortalNotCovered, RecordedAgreement, UnixTime, UserId,
+    AgreementVersion, Capability, ClientLine, ConfigGeneration, ModelError, NamedUsersError,
+    NodeId, PortalNotCovered, RecordedAgreement, UnixTime, UserId,
 };
 
 use mooring_model::kinds;
@@ -243,15 +243,15 @@ pub enum ProfilesError {
     /// The agreement revision this build ships does not cover the portal.
     #[error(transparent)]
     NotCovered(#[from] PortalNotCovered),
-    /// No user is to be served through the portal, and a bundle holds at
-    /// least one profile.
-    #[error(
-        "no user is to be served: every user is suspended, being revoked, revoked or without an acceptance of the agreement revision the portal requires"
-    )]
-    NoProfiles,
-    /// A user who is to be served cannot have a file. The whole bundle is
-    /// refused: the portal drops the profile of every user a bundle leaves
-    /// out, so leaving this user out would take their profile away.
+    /// The users named are not a list of distinct users of the
+    /// deployment ([`mooring_model::named_users`]): none, an id no user
+    /// has, or one user twice. A bundle holds exactly the users named.
+    #[error(transparent)]
+    Named(#[from] NamedUsersError),
+    /// A user named who is to be delivered cannot have a file. The whole
+    /// bundle is refused: withheld, the user would lose their subscription
+    /// link at the portal for good, and left out, the portal would refuse
+    /// the bundle.
     #[error("user {user}'s file cannot be made")]
     User {
         /// The user.
@@ -291,8 +291,8 @@ kinds! {
     pub enum ProfilesErrorKind {
         /// See [`ProfilesError::NotCovered`].
         NotCovered,
-        /// See [`ProfilesError::NoProfiles`].
-        NoProfiles,
+        /// See [`ProfilesError::Named`].
+        Named,
         /// See [`ProfilesError::User`].
         User,
         /// See [`ProfilesError::DocumentTooLarge`].
@@ -310,7 +310,7 @@ impl ProfilesError {
     pub const fn kind(&self) -> ProfilesErrorKind {
         match self {
             Self::NotCovered(_) => ProfilesErrorKind::NotCovered,
-            Self::NoProfiles => ProfilesErrorKind::NoProfiles,
+            Self::Named(_) => ProfilesErrorKind::Named,
             Self::User { .. } => ProfilesErrorKind::User,
             Self::DocumentTooLarge { .. } => ProfilesErrorKind::DocumentTooLarge,
             Self::BundleTooLarge { .. } => ProfilesErrorKind::BundleTooLarge,

@@ -10,8 +10,8 @@ use std::io::Write;
 use std::path::Path;
 
 use mooring_export::{
-    ExportError, ExportErrorKind, ExportFormat, ProfilesError, export_secret_refs, export_user,
-    profile_selection,
+    ExportError, ExportErrorKind, ExportFormat, ProfileSelection, ProfilesError,
+    export_secret_refs, export_user, profile_selection,
 };
 use mooring_keys::credentials;
 use mooring_model::ids::MAX_LABEL_CHARS;
@@ -283,21 +283,23 @@ pub(crate) fn export(
     .map_err(output)
 }
 
-/// `user export-profiles --out <path>` (design §9.5): writes the portal's
-/// profile bundle, the CFM file of every user to be served, to a new file
-/// with mode 0600, never overwriting one.
+/// `user export-profiles --user <id>... --out <path>` (design §9.5): writes
+/// the portal's profile bundle of the users named, each one's CFM file or
+/// why it is withheld, to a new file with mode 0600, never overwriting one.
 ///
 /// Refused first while the agreement this build ships does not cover the
 /// portal. Then every check `mooring-export` makes before reading a secret
-/// runs for every user to be served (`profile_selection`), the file and its
-/// folder are checked as for `user export`, and only then are exactly
-/// those users' secrets read from the keychain. A user to be served whose
-/// file cannot be made refuses the whole bundle; each user left out is
-/// named with the reason, since the portal drops their profile.
+/// runs (`profile_selection`): the users named are distinct users, and
+/// each one to be delivered can have a file. The file and its folder are
+/// checked as for `user export`, and only then are exactly the delivered
+/// users' secrets read from the keychain. A user to be delivered whose
+/// file cannot be made refuses the whole bundle; each user withheld is
+/// named with the reason, since the portal ends their subscription link.
 pub(crate) fn export_profiles(
     env: &Env<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
+    users: &[UserId],
     path: &Path,
 ) -> Result<(), CommandError> {
     env.portal_agreement
@@ -306,30 +308,44 @@ pub(crate) fn export_profiles(
     let store = Store::new(support_dir(env)?);
     let state = load(&store)?;
     let now = (env.clock)()?;
-    let selection = profile_selection(&state.deployment, now, env.portal_agreement)
+    let selection = profile_selection(&state.deployment, users, now, env.portal_agreement)
         .map_err(profiles_refused)?;
     export_file::prepare(env, err, path)?;
     let secrets = read_snapshot(&*env.secrets, selection.secret_refs())
         .map_err(|error| LocalError::ProfilesSecrets(Box::new(error)))?;
-    let bundle =
-        mooring_export::export_profiles(&state.deployment, &secrets, now, env.portal_agreement)
-            .map_err(profiles_refused)?;
-    export_file::write_new(path, bundle.expose_bytes())?;
-    let left_out: String = bundle
-        .selection()
-        .omitted()
-        .iter()
-        .map(|(user, omission)| format!("left out: user {user} ({omission})\n"))
-        .collect();
-    out.write_all(
-        format!(
-            "wrote {}: CFM profiles of {} user(s), sing-box-json, mode 0600\n{left_out}import it with `mooring-portal import-profiles` on the portal host, then delete it; the portal drops the profile of every user left out\n",
-            path.display(),
-            bundle.selection().included().len(),
-        )
-        .as_bytes(),
+    let bundle = mooring_export::export_profiles(
+        &state.deployment,
+        &secrets,
+        users,
+        now,
+        env.portal_agreement,
     )
-    .map_err(output)
+    .map_err(profiles_refused)?;
+    export_file::write_new(path, bundle.expose_bytes())?;
+    out.write_all(profiles_summary(path, bundle.selection()).as_bytes())
+        .map_err(output)
+}
+
+/// What `user export-profiles` says once the bundle at `path` is written:
+/// how many users it delivers, each user it withholds and why, what the
+/// portal's import does to those, and where the file goes.
+fn profiles_summary(path: &Path, selection: &ProfileSelection) -> String {
+    let withheld = selection.withheld();
+    let named: String = withheld
+        .iter()
+        .map(|(user, why)| format!("withheld: user {user} ({why})\n"))
+        .collect();
+    let lost = if withheld.is_empty() {
+        ""
+    } else {
+        "importing it removes each withheld user's profile and ends their subscription link for good: once delivered again, they generate a new link\n"
+    };
+    format!(
+        "wrote {}: CFM profiles of {} user(s) and {} withheld, sing-box-json, mode 0600\n{named}{lost}import it with `mooring-portal import-profiles` on the portal host, then delete it\n",
+        path.display(),
+        selection.delivered().len(),
+        withheld.len(),
+    )
 }
 
 /// A refusal of the profile bundle.

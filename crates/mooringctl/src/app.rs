@@ -122,8 +122,8 @@ pub(crate) fn run(
             format,
             out: path,
         }) => crate::user::export(env, out, err, &user, format.into(), &path),
-        Command::User(UserCommand::ExportProfiles { out: path }) => {
-            crate::user::export_profiles(env, out, err, &path)
+        Command::User(UserCommand::ExportProfiles { users, out: path }) => {
+            crate::user::export_profiles(env, out, err, &users, &path)
         }
         Command::Portal(PortalCommand::Export { users, out: path }) => {
             crate::portal::export(env, out, err, &users, &path)

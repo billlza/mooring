@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 
 use mooring_model::{
-    AgreementRecord, AgreementVersion, AutoQuotaPolicy, CalendarDate, PortalAgreement,
-    PortalNotCovered, UnixTime, User, UserId, UserStatus,
+    AgreementRecord, AgreementVersion, AutoQuotaPolicy, CalendarDate, NamedUsersError,
+    PortalAgreement, PortalNotCovered, UnixTime, User, UserId, UserStatus,
 };
 use serde::ser::Error as _;
 
@@ -75,31 +75,43 @@ fn a_user_without_the_required_acceptance_is_refused() {
     }
 }
 
-/// The operator names at least one user, each known and once.
+/// The operator names at least one user, each known and once, by the
+/// rule every portal export follows (`mooring_model::named_users`); a
+/// list that breaks it is refused before any acceptance is looked at.
 #[test]
 fn users_are_named_at_least_once_each_and_known() {
-    let deployment = pilots(|_| {});
-    let refused = |users: &[&str]| {
-        snapshot(&deployment, None, &ids(users), GENERATED_AT, open()).unwrap_err()
-    };
-    let none = refused(&[]);
-    assert_eq!(none.kind(), PortalErrorKind::NoUsers);
+    // pilotuserb has accepted nothing, so only the list's own fault can
+    // be what refuses it.
+    let deployment = pilots(|users| users[1].agreement = None);
+    for (users, named) in [
+        (&[][..], NamedUsersError::NoUsers),
+        (
+            &["pilotuserb", "pilotusera", "pilotuserb"][..],
+            NamedUsersError::DuplicateUser {
+                user: id("pilotuserb"),
+            },
+        ),
+        (
+            &["pilotuserb", "pilotuserz"][..],
+            NamedUsersError::UnknownUser {
+                user: id("pilotuserz"),
+            },
+        ),
+    ] {
+        let error = snapshot(&deployment, None, &ids(users), GENERATED_AT, open()).unwrap_err();
+        assert!(
+            matches!(&error, PortalError::Named(found) if *found == named),
+            "{error:?}"
+        );
+        assert_eq!(error.kind(), PortalErrorKind::Named);
+        assert_eq!(error.to_string(), named.to_string());
+    }
     assert_eq!(
-        none.to_string(),
-        "no user was named; a snapshot holds only the users named"
+        snapshot(&deployment, None, &ids(&[]), GENERATED_AT, open())
+            .unwrap_err()
+            .to_string(),
+        "no user was named; a portal export holds only the users named"
     );
-    let twice = refused(&["pilotusera", "pilotuserb", "pilotusera"]);
-    assert!(
-        matches!(&twice, PortalError::DuplicateUser { user } if *user == id("pilotusera")),
-        "{twice:?}"
-    );
-    assert_eq!(twice.to_string(), "user pilotusera is named twice");
-    let unknown = refused(&["pilotusera", "pilotuserz"]);
-    assert!(
-        matches!(&unknown, PortalError::UnknownUser { user } if *user == id("pilotuserz")),
-        "{unknown:?}"
-    );
-    assert_eq!(unknown.to_string(), "unknown user pilotuserz");
 }
 
 /// The contract's cross-field rules hold for every snapshot made: a
@@ -316,14 +328,9 @@ fn every_error_has_its_kind() {
             }),
             PortalErrorKind::NotCovered,
         ),
-        (PortalError::NoUsers, PortalErrorKind::NoUsers),
         (
-            PortalError::DuplicateUser { user: user.clone() },
-            PortalErrorKind::DuplicateUser,
-        ),
-        (
-            PortalError::UnknownUser { user: user.clone() },
-            PortalErrorKind::UnknownUser,
+            PortalError::Named(NamedUsersError::NoUsers),
+            PortalErrorKind::Named,
         ),
         (
             PortalError::AgreementNotAccepted {

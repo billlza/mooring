@@ -5,7 +5,8 @@
 
 use mooring_model::kinds;
 use mooring_model::{
-    AgreementVersion, ModelError, PortalNotCovered, RecordedAgreement, UnixTime, UserId,
+    AgreementVersion, ModelError, NamedUsersError, PortalNotCovered, RecordedAgreement, UnixTime,
+    UserId,
 };
 
 use crate::error::PolicyError;
@@ -16,22 +17,12 @@ pub enum PortalError {
     /// The agreement revision this build ships does not cover the portal.
     #[error(transparent)]
     NotCovered(#[from] PortalNotCovered),
-    /// No user was named: a snapshot holds only the users the operator
-    /// names, never every user by default.
-    #[error("no user was named; a snapshot holds only the users named")]
-    NoUsers,
-    /// A user was named twice.
-    #[error("user {user} is named twice")]
-    DuplicateUser {
-        /// The user.
-        user: UserId,
-    },
-    /// No user has this id.
-    #[error("unknown user {user}")]
-    UnknownUser {
-        /// The id given.
-        user: UserId,
-    },
+    /// The users named are not a list of distinct users of the
+    /// deployment ([`mooring_model::named_users`]): none, an id no user
+    /// has, or one user twice. A snapshot holds only the users the
+    /// operator names, never every user by default.
+    #[error(transparent)]
+    Named(#[from] NamedUsersError),
     /// The user has not accepted the revision the portal requires.
     #[error(
         "user {user} has not accepted agreement revision {required}: {}",
@@ -118,12 +109,8 @@ kinds! {
     pub enum PortalErrorKind {
         /// See [`PortalError::NotCovered`].
         NotCovered,
-        /// See [`PortalError::NoUsers`].
-        NoUsers,
-        /// See [`PortalError::DuplicateUser`].
-        DuplicateUser,
-        /// See [`PortalError::UnknownUser`].
-        UnknownUser,
+        /// See [`PortalError::Named`].
+        Named,
         /// See [`PortalError::AgreementNotAccepted`].
         AgreementNotAccepted,
         /// See [`PortalError::GeneratedOutOfRange`].
@@ -155,9 +142,7 @@ impl PortalError {
     pub const fn kind(&self) -> PortalErrorKind {
         match self {
             Self::NotCovered(_) => PortalErrorKind::NotCovered,
-            Self::NoUsers => PortalErrorKind::NoUsers,
-            Self::DuplicateUser { .. } => PortalErrorKind::DuplicateUser,
-            Self::UnknownUser { .. } => PortalErrorKind::UnknownUser,
+            Self::Named(_) => PortalErrorKind::Named,
             Self::AgreementNotAccepted { .. } => PortalErrorKind::AgreementNotAccepted,
             Self::GeneratedOutOfRange { .. } => PortalErrorKind::GeneratedOutOfRange,
             Self::ExpiryOutOfRange { .. } => PortalErrorKind::ExpiryOutOfRange,

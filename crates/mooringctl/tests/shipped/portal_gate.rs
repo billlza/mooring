@@ -31,7 +31,14 @@ fn the_built_binary_passes_the_gate_it_ships() {
     let path = out.to_str().unwrap();
     for args in [
         vec!["portal", "export", "--user", "aaaaaaaaaa", "--out", path],
-        vec!["user", "export-profiles", "--out", path],
+        vec![
+            "user",
+            "export-profiles",
+            "--user",
+            "aaaaaaaaaa",
+            "--out",
+            path,
+        ],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_mooringctl"))
             .args(&args)
