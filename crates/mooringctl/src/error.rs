@@ -32,6 +32,7 @@ use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadEr
 
 use crate::node::NodeError;
 use crate::node::adopt::Step;
+use crate::portal::UsageFault;
 use crate::router::error::RouterError;
 
 /// A failure on the Mac rather than at the M7.
@@ -165,6 +166,13 @@ pub(crate) enum LocalError {
         "no file was written: nothing goes to the portal before a revision of the user agreement covers it and the users accept that revision (docs/runbooks/user-agreement.md)"
     )]
     PortalNotCovered(#[source] PortalNotCovered),
+    /// The usage the daemon collected cannot be read or is inconsistent, so
+    /// no snapshot is written: it would show every figure as unknown and
+    /// hide the fault (design §9.5).
+    #[error(
+        "no file was written: the usage the daemon collected (usage/users.json) cannot be read or is inconsistent"
+    )]
+    PortalUsage(#[source] Box<UsageFault>),
     /// `mooring-daemon-core` refused the portal snapshot.
     #[error("no file was written: the portal snapshot was refused")]
     PortalSnapshotRefused(#[source] Box<PortalError>),

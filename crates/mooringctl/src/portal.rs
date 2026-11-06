@@ -7,7 +7,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use mooring_daemon_core::error::UsageError;
+use mooring_daemon_core::error::{UsageError, UsageErrorKind};
 use mooring_daemon_core::portal::snapshot;
 use mooring_daemon_core::usage::UsageReport;
 use mooring_model::{Deployment, UnixTime, UserId};
@@ -23,17 +23,18 @@ use crate::state::{load, output};
 /// `users` to a new file with mode 0600, never overwriting one.
 ///
 /// Refused first while the agreement this build ships does not cover the
-/// portal, then for anything `mooring-daemon-core` refuses (an unknown
-/// user, one without an acceptance of the required revision, a user named
-/// twice, a record dated after now), and only then are the file and its
-/// folder checked, as for `user export`.
+/// portal; then when the daemon's collected usage cannot be read or is
+/// inconsistent (`PortalUsage`); then for anything `mooring-daemon-core`
+/// refuses (an unknown user, one without an acceptance of the required
+/// revision, a user named twice, a record dated after now). Only then are
+/// the file and its folder checked, as for `user export`.
 ///
 /// The usage is the daemon's collected usage aggregated at now, as the
-/// status line aggregates it. When there is none to aggregate (the daemon
-/// has not pulled the nodes' usage within the last three minutes, or the
-/// file cannot be read), the snapshot says so: every figure is `null`, the
-/// portal shows each user's usage as unknown, and the reason is warned
-/// about on `err`.
+/// status line aggregates it. When the collection is behind, so that there
+/// is no report (a serving node the daemon has not collected yet, or not
+/// within the last three minutes, as when it is stopped), the snapshot says
+/// so: every figure is `null`, the portal shows each user's usage as
+/// unknown, and the reason is warned about on `err`.
 pub(crate) fn export(
     env: &Env<'_>,
     out: &mut dyn Write,
@@ -47,17 +48,16 @@ pub(crate) fn export(
     let support = support_dir(env)?;
     let state = load(&Store::new(&support))?;
     let now = (env.clock)()?;
-    let usage = usage_report(&support, &state.deployment, now);
-    let made = snapshot(
-        &state.deployment,
-        usage.as_ref().ok(),
-        users,
-        now,
-        env.portal_agreement,
-    )
-    .map_err(|error| LocalError::PortalSnapshotRefused(Box::new(error)))?;
+    let usage = usage(&support, &state.deployment, now)
+        .map_err(|fault| LocalError::PortalUsage(Box::new(fault)))?;
+    let report = match &usage {
+        Usage::Report(report) => Some(report),
+        Usage::Behind(_) => None,
+    };
+    let made = snapshot(&state.deployment, report, users, now, env.portal_agreement)
+        .map_err(|error| LocalError::PortalSnapshotRefused(Box::new(error)))?;
     export_file::prepare(env, err, path)?;
-    if let Err(reason) = &usage {
+    if let Usage::Behind(reason) = &usage {
         err.write_all(
             format!(
                 "mooringctl: warning: the snapshot holds no usage figures ({reason}); the portal shows each user's usage as unknown\n"
@@ -84,26 +84,46 @@ pub(crate) fn export(
     .map_err(output)
 }
 
-/// Why a snapshot has no usage report.
-#[derive(Debug, thiserror::Error)]
-enum NoReport {
-    /// `usage/users.json` cannot be read.
-    #[error(transparent)]
-    Read(CollectedReadError),
-    /// The collected usage gives no report at now, as when the daemon has
-    /// not pulled a node's usage within the report's freshness bound.
-    #[error(transparent)]
-    Aggregate(UsageError),
+/// What the daemon's collected usage gives at the export's time.
+#[derive(Debug)]
+enum Usage {
+    /// The usage report.
+    Report(UsageReport),
+    /// No report, because the collection is behind: the daemon has not
+    /// collected a serving node's usage yet (`MissingLedger`), or not within
+    /// the report's freshness bound (`NotCoveredThrough`).
+    Behind(UsageError),
 }
 
-/// The usage report at `now` of the usage the daemon collected.
-fn usage_report(
-    support: &Path,
-    deployment: &Deployment,
-    now: UnixTime,
-) -> Result<UsageReport, NoReport> {
-    read_collected(support)
-        .map_err(NoReport::Read)?
+/// Why the collected usage cannot be used at all. A fault is never read as
+/// usage that is behind: that would replace every user's figures at the
+/// portal with "unknown" and hide it.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum UsageFault {
+    /// `usage/users.json` cannot be read, or holds no collected usage
+    /// document.
+    #[error(transparent)]
+    Read(CollectedReadError),
+    /// The collected usage contradicts itself or the deployment.
+    #[error(transparent)]
+    Inconsistent(UsageError),
+}
+
+/// The collected usage aggregated at `now`.
+fn usage(support: &Path, deployment: &Deployment, now: UnixTime) -> Result<Usage, UsageFault> {
+    match read_collected(support)
+        .map_err(UsageFault::Read)?
         .aggregate(deployment, now)
-        .map_err(NoReport::Aggregate)
+    {
+        Ok(report) => Ok(Usage::Report(report)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                UsageErrorKind::MissingLedger | UsageErrorKind::NotCoveredThrough
+            ) =>
+        {
+            Ok(Usage::Behind(error))
+        }
+        Err(error) => Err(UsageFault::Inconsistent(error)),
+    }
 }

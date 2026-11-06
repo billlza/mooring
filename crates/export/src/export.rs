@@ -9,8 +9,8 @@ use mooring_model::cert::CertPins;
 use mooring_model::ports::ListenerIdx;
 use mooring_model::secret::{SecretRef, SecretSnapshot};
 use mooring_model::{
-    AgreementVersion, Deployment, Node, NodeId, NodeRole, ShortId, UnixTime, User, UserId,
-    UserStatus,
+    AgreementVersion, Deployment, Node, NodeId, NodeRole, RecordedAgreement, ShortId, UnixTime,
+    User, UserId, UserStatus,
 };
 use zeroize::Zeroizing;
 
@@ -315,14 +315,14 @@ pub(crate) fn user_outbounds(
 /// it is a calendar day without a time zone, and `user agree` dates it.
 fn require_agreement(user: &User) -> Result<(), ExportError> {
     let required = AgreementVersion::CURRENT;
-    match user.agreement {
-        Some(record) if record.version == required => Ok(()),
-        recorded => Err(ExportError::AgreementNotAccepted {
-            user: user.id.clone(),
-            recorded: recorded.map(|record| record.version),
-            required,
-        }),
-    }
+    user.accepted(required)
+        .map_err(
+            |RecordedAgreement(recorded)| ExportError::AgreementNotAccepted {
+                user: user.id.clone(),
+                recorded,
+                required,
+            },
+        )
 }
 
 /// Primary nodes come first in an export.

@@ -20,10 +20,11 @@ Revision 1 of the user agreement (`docs/runbooks/user-agreement.md`) does not co
 - Clause 2 tells users never to paste a link.
 - Clause 5 says the service has no subscription link.
 
-So both commands refuse everything until a revision that covers the portal is written and accepted. The refusal is a structure, not a convention:
+So both commands refuse everything until a revision that covers the portal is written and accepted. The refusal is built into the exporters' types and checked on the built binary:
 
 - `mooring_model::PORTAL_AGREEMENT_SINCE` names the first revision that covers the portal. It is `None`, so `PortalAgreement::SHIPPED`, which the binary passes to both exporters, is closed.
 - Both commands check the gate first, before they read the state. The pure exporters check it again (`mooring-daemon-core`'s `portal::snapshot` and `mooring-export`'s `profile_selection` and `export_profiles`).
+- `PortalAgreement::since` builds a gate from an explicit revision, which tests use to open it. No product code calls it; `crates/mooringctl/tests/shipped/portal_gate.rs` runs the built binary and requires both commands to refuse with the gate's message, so what `main` passes is checked, not only the types.
 - Once the gate opens, the users who may be exported are those who accepted that revision, `AgreementVersion::CURRENT`. A user export requires the same (decision F9).
 - `crates/export/tests/export/agreement_text.rs` ties the gate to the text. The gate is open exactly when the user-visible text names the portal (门户). The text's SHA-256 is pinned in the same file, so a revised text needs a new revision.
 
@@ -72,7 +73,9 @@ Mooring refuses to write a snapshot that breaks one; the portal refuses it on im
 
 The command aggregates the usage the daemon collected (`usage/users.json`) at the export's time, exactly as the status line does (`CollectedUsage::aggregate`). The daemon pulls each node's usage about once a minute, and a report needs every serving node's latest sample to be at most three minutes old.
 
-When there is no report, the snapshot is still written, without usage figures. This happens when the daemon has not pulled the usage recently (it is stopped, or a node is unreachable), and when the file cannot be read. Every figure and `counted_through` is then `null`, the portal shows each user's usage as unknown, and the command prints the reason as a warning.
+When the collection is behind, there is no report, and the snapshot is still written without usage figures. That is the case when the daemon has not collected a serving node's usage yet, or not within those three minutes (it is stopped, or a node is unreachable). Every figure and `counted_through` is then `null`, the portal shows each user's usage as unknown, and the command prints the reason as a warning.
+
+A fault is different. The file cannot be read, does not decode, or its figures contradict each other or the deployment. Then nothing is written, because null figures at the portal would replace each user's last good figures and hide the fault.
 
 ### 2.4 Goldens
 
@@ -99,9 +102,12 @@ A bundle is a complete set. On import the portal deletes the stored profile of e
 
 - **In it:** every `Active` user with an acceptance of the required revision (§1). Each passes every check of `user export` (design §9.2): its capabilities, its credentials, and each node's generation, certificate and address.
 - **Left out, and named in the output with the reason:** a suspended user, a user being revoked or revoked, and an active user without the acceptance.
+- **Also in it:** users who have no account at the portal. The portal discards their documents on import, but the file carries their credentials to its host. The snapshot instead covers only the users named. Whether the bundle should also be limited to users with an account is a decision for the operator.
 - **Refused:** a bundle in which a user who is to be served cannot have a file (a node not applied at the current generation, a certificate no longer current, no credentials). Leaving that user out would take their profile away, so nothing is written. The same holds for a bundle with no user to serve.
 
 As for `user export`, every check runs before the file is looked at, and the file is checked before the keychain is read. Then exactly the included users' secrets are read (`ProfileSelection::secret_refs`).
+
+Because a bundle is a complete set, it is exported again whenever the set or a file in it changes: a user is added (once every node is applied), suspended, resumed, revoked, or accepts a new revision, and after every change that changes a user's file (`delivery.md`, section 7).
 
 ### 3.3 Goldens
 

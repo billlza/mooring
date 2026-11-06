@@ -338,6 +338,17 @@ impl User {
         self.status == UserStatus::Active && self.per_node.contains_key(node)
     }
 
+    /// Whether the user accepted agreement revision `required`: a record of
+    /// exactly that revision (decision F9). `Err` gives what is recorded
+    /// instead, for the refusal to name. A user export, the portal snapshot
+    /// and the portal bundle all check an acceptance with this one rule.
+    pub fn accepted(&self, required: AgreementVersion) -> Result<(), RecordedAgreement> {
+        match self.agreement {
+            Some(record) if record.version == required => Ok(()),
+            recorded => Err(RecordedAgreement(recorded.map(|record| record.version))),
+        }
+    }
+
     /// The nodes that still have to commit this user's revocation, in id
     /// order: every node holding credentials while `RevokePending`, and none
     /// otherwise.
@@ -427,6 +438,30 @@ mod tests {
         assert_eq!(
             AgreementVersion::new(NonZeroU16::new(12).unwrap()).to_string(),
             "12"
+        );
+    }
+
+    /// An acceptance counts for exactly its revision; the refusal names
+    /// what is recorded instead.
+    #[test]
+    fn an_acceptance_counts_for_exactly_its_revision() {
+        let first = AgreementVersion::CURRENT;
+        let second = AgreementVersion::new(NonZeroU16::new(2).unwrap());
+        let mut user = user();
+        assert_eq!(user.accepted(first), Err(RecordedAgreement(None)));
+        user.agreement = Some(AgreementRecord {
+            version: first,
+            accepted_on: date("2026-10-20"),
+        });
+        assert_eq!(user.accepted(first), Ok(()));
+        assert_eq!(user.accepted(second), Err(RecordedAgreement(Some(first))));
+        assert_eq!(
+            RecordedAgreement(None).to_string(),
+            "no acceptance is recorded"
+        );
+        assert_eq!(
+            RecordedAgreement(Some(first)).to_string(),
+            "the recorded acceptance is of revision 1"
         );
     }
 

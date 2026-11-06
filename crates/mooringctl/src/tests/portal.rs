@@ -120,9 +120,9 @@ fn portal_export_writes_the_snapshot_of_the_users_named() {
     assert_eq!(store(&harness).load().unwrap().deployment, deployment);
 }
 
-/// Without usage to report, from a store the daemon never wrote, a file it
-/// cannot read, or usage it has not pulled for more than three minutes,
-/// the snapshot holds no figures, and the warning says why.
+/// When the collection is behind, because the daemon never wrote the store
+/// or has not pulled a node's usage for more than three minutes, there is
+/// no report: the snapshot holds no figures, and the warning says why.
 #[test]
 fn without_usage_the_snapshot_holds_no_figures_and_says_why() {
     let deployment = fixture(|_| {});
@@ -134,18 +134,15 @@ fn without_usage_the_snapshot_holds_no_figures_and_says_why() {
             0,
             "(ams1 may have counted traffic, but no usage ledger is given for it)",
         ),
-        (1, "(the collected usage ledger is invalid: "),
         (
-            2,
+            1,
             "(ams1's usage is recorded to @1791919019, before @1791919200)",
         ),
     ] {
         let (mut harness, folder) = exporting(deployment.clone());
         harness.portal_agreement = open();
-        match case {
-            0 => {}
-            1 => write_user_usage(&harness.support_dir(), b"not a ledger").unwrap(),
-            _ => with_usage(&harness, &stale),
+        if case == 1 {
+            with_usage(&harness, &stale);
         }
         let out = folder.join("snapshot.json");
         let outcome = run(&mut harness, &named, arg(&out));
@@ -171,6 +168,47 @@ fn without_usage_the_snapshot_holds_no_figures_and_says_why() {
         let expected =
             snapshot(&deployment, None, &named, UnixTime::from_secs(NOW), open()).unwrap();
         assert_eq!(fs::read(&out).unwrap(), expected.bytes());
+    }
+}
+
+/// Collected usage that cannot be read, does not decode or contradicts
+/// itself is a fault, not usage that is behind: nothing is written, since
+/// null figures at the portal would hide it.
+#[test]
+fn a_usage_fault_refuses_the_snapshot() {
+    let deployment = fixture(|_| {});
+    let named = users(&deployment)[..1].to_vec();
+    let top = "mooringctl: no file was written: the usage the daemon collected (usage/users.json) cannot be read or is inconsistent\n  caused by: ";
+    for (case, cause) in [
+        (
+            "undecodable",
+            Some("the collected usage ledger is invalid: "),
+        ),
+        (
+            "a sample after now",
+            Some("the collected usage ledger is invalid: node accounting sample is in the future"),
+        ),
+        ("unreadable", None),
+    ] {
+        let (mut harness, folder) = exporting(deployment.clone());
+        harness.portal_agreement = open();
+        let support = harness.support_dir();
+        match case {
+            "undecodable" => write_user_usage(&support, b"not a ledger").unwrap(),
+            "a sample after now" => with_usage(&harness, &collected(NOW + 60, &named[0], 1)),
+            _ => fs::write(support.join("usage"), b"not a folder").unwrap(),
+        }
+        let out = folder.join("snapshot.json");
+        let outcome = run(&mut harness, &named, arg(&out));
+        assert_eq!(outcome.code, EXIT_LOCAL, "{case}");
+        assert_eq!(outcome.stdout, "", "{case}");
+        assert!(
+            outcome.stderr.starts_with(top)
+                && cause.is_none_or(|cause| outcome.stderr[top.len()..].starts_with(cause)),
+            "{case}: {}",
+            outcome.stderr
+        );
+        assert!(!out.exists(), "{case}");
     }
 }
 
@@ -264,9 +302,10 @@ fn a_refused_snapshot_writes_nothing() {
 }
 
 /// The command names its users: without one `--user` it is a usage error,
-/// so no snapshot of every user is ever made by default.
+/// so no snapshot of every user is ever made by default; and a public
+/// alias is not a user id, so it is refused before anything runs.
 #[test]
-fn portal_export_needs_at_least_one_user() {
+fn portal_export_needs_at_least_one_user_id() {
     use clap::Parser as _;
     let error =
         Cli::try_parse_from(["mooringctl", "portal", "export", "--out", "x.json"]).unwrap_err();
@@ -274,4 +313,15 @@ fn portal_export_needs_at_least_one_user() {
         error.kind(),
         clap::error::ErrorKind::MissingRequiredArgument
     );
+    let error = Cli::try_parse_from([
+        "mooringctl",
+        "portal",
+        "export",
+        "--user",
+        "k7qd-m2xa",
+        "--out",
+        "x.json",
+    ])
+    .unwrap_err();
+    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
 }

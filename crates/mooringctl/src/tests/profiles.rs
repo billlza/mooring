@@ -42,6 +42,12 @@ fn export_profiles_writes_the_bundle_of_every_user_to_be_served() {
     let left_out: UserId = deployment.users().keys().next().unwrap().clone();
     let (mut harness, folder) = exporting(deployment.clone());
     harness.portal_agreement = open();
+    // The user left out needs no secret: none of theirs is read.
+    for secret_ref in two_nodes_three_users().unwrap().secrets.refs() {
+        if secret_ref.to_string().contains(left_out.as_str()) {
+            harness.secrets.delete(&secret_ref).unwrap();
+        }
+    }
     let out = folder.join("profiles.json");
     let outcome = run(&mut harness, arg(&out));
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
@@ -78,6 +84,24 @@ fn export_profiles_is_refused_until_the_agreement_covers_the_portal() {
     assert_eq!(
         outcome.stderr,
         "mooringctl: no file was written: nothing goes to the portal before a revision of the user agreement covers it and the users accept that revision (docs/runbooks/user-agreement.md)\n  caused by: agreement revision 1, the one this build ships, does not cover the portal: it names neither the portal's host nor subscription links\n"
+    );
+    assert!(!out.exists());
+}
+
+/// The gate comes before anything is read: with no state at all the
+/// refusal is still the agreement's.
+#[test]
+fn export_profiles_checks_the_gate_before_reading_anything() {
+    let mut bare = Harness::new(0);
+    let out = bare.home.path().join("profiles.json");
+    let outcome = run(&mut bare, arg(&out));
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: no file was written: nothing goes to the portal"),
+        "{}",
+        outcome.stderr
     );
     assert!(!out.exists());
 }

@@ -37,7 +37,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use mooring_model::{
-    AgreementVersion, CalendarDate, Deployment, PortalAgreement, UnixTime, User, UserId, UserStatus,
+    AgreementVersion, CalendarDate, Deployment, PortalAgreement, RecordedAgreement, UnixTime, User,
+    UserId, UserStatus,
 };
 
 use crate::period::BillingCycle;
@@ -119,6 +120,26 @@ pub fn snapshot(
     users: &[UserId],
     generated_at: UnixTime,
     agreement: PortalAgreement,
+) -> Result<PortalSnapshot, PortalError> {
+    bounded(
+        deployment,
+        report,
+        users,
+        generated_at,
+        agreement,
+        MAX_SNAPSHOT_BYTES,
+    )
+}
+
+/// [`snapshot`] refused past `limit` bytes: one function, so the tests reach
+/// the bound on the path every snapshot takes.
+fn bounded(
+    deployment: &Deployment,
+    report: Option<&UsageReport>,
+    users: &[UserId],
+    generated_at: UnixTime,
+    agreement: PortalAgreement,
+    limit: usize,
 ) -> Result<PortalSnapshot, PortalError> {
     let required = agreement.required()?;
     if users.is_empty() {
@@ -203,7 +224,7 @@ pub fn snapshot(
     };
     let mut bytes = serde_json::to_vec_pretty(&document).map_err(PortalError::Encode)?;
     bytes.push(b'\n');
-    fits(bytes.len(), MAX_SNAPSHOT_BYTES)?;
+    fits(bytes.len(), limit)?;
     Ok(PortalSnapshot {
         bytes,
         users: count,
@@ -225,16 +246,14 @@ fn selected<'a>(
             .users()
             .get_key_value(id)
             .ok_or_else(|| PortalError::UnknownUser { user: id.clone() })?;
-        match user.agreement {
-            Some(record) if record.version == required => {}
-            recorded => {
-                return Err(PortalError::AgreementNotAccepted {
+        user.accepted(required)
+            .map_err(
+                |RecordedAgreement(recorded)| PortalError::AgreementNotAccepted {
                     user: id.clone(),
-                    recorded: recorded.map(|record| record.version),
+                    recorded,
                     required,
-                });
-            }
-        }
+                },
+            )?;
         if selected.insert(id, user).is_some() {
             return Err(PortalError::DuplicateUser { user: id.clone() });
         }
@@ -252,18 +271,23 @@ const fn fits(bytes: usize, limit: usize) -> Result<(), PortalError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PortalError, fits};
+    use mooring_fixtures::{FIXTURE_NOW, two_nodes_three_users};
+    use mooring_model::{AgreementVersion, PortalAgreement, UserId};
 
-    /// The bound refuses only what is past it.
+    use super::{MAX_SNAPSHOT_BYTES, PortalError, bounded};
+
+    /// The bound counts every byte written, the last newline included, and
+    /// refuses only what is past it.
     #[test]
-    fn the_size_bound_refuses_only_what_is_past_it() {
-        assert!(fits(10, 10).is_ok());
-        assert!(matches!(
-            fits(11, 10),
-            Err(PortalError::TooLarge {
-                bytes: 11,
-                limit: 10
-            })
-        ));
+    fn the_size_bound_counts_every_byte_and_refuses_only_what_is_past_it() {
+        let fixture = two_nodes_three_users().unwrap();
+        let users: Vec<UserId> = fixture.deployment.users().keys().cloned().collect();
+        let open = PortalAgreement::since(Some(AgreementVersion::CURRENT));
+        let make = |limit| bounded(&fixture.deployment, None, &users, FIXTURE_NOW, open, limit);
+        let len = make(MAX_SNAPSHOT_BYTES).unwrap().bytes().len();
+        assert!(make(len).is_ok());
+        assert!(
+            matches!(make(len - 1), Err(PortalError::TooLarge { bytes, limit }) if bytes == len && limit == len - 1)
+        );
     }
 }

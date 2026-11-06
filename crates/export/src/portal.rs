@@ -259,13 +259,9 @@ fn omission(user: &User, required: AgreementVersion) -> Option<Omission> {
         UserStatus::RevokePending => return Some(Omission::BeingRevoked),
         UserStatus::Revoked => return Some(Omission::Revoked),
     }
-    match user.agreement {
-        Some(record) if record.version == required => None,
-        recorded => Some(Omission::AgreementNotAccepted {
-            recorded: recorded.map(|record| record.version),
-            required,
-        }),
-    }
+    user.accepted(required)
+        .err()
+        .map(|RecordedAgreement(recorded)| Omission::AgreementNotAccepted { recorded, required })
 }
 
 fn user_error(user: &UserId, source: ExportError) -> ProfilesError {
