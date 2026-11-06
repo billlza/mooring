@@ -327,7 +327,9 @@ fn only_the_users_named_are_in_the_bundle() {
 /// revoked is served nowhere, and an active user without an acceptance of
 /// the required revision gets no file: each is withheld with the reason,
 /// in id order, the contract's reason in the bundle, and none of their
-/// secrets is read.
+/// secrets is read. The status decides before the acceptance: a user who
+/// is not active is withheld for that, accepted or not, as a suspended
+/// user is likely to be right after the revision that opens the portal.
 #[test]
 fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
     let fixture = mooring_fixtures::two_nodes_twenty_users().unwrap();
@@ -349,6 +351,13 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             version: other,
             accepted_on: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
         });
+        // Not active, and without the acceptance either.
+        parts.users[1].agreement = None;
+        parts.users[4].agreement = Some(AgreementRecord {
+            version: other,
+            accepted_on: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
+        });
+        parts.users[5].agreement = None;
     });
     let users = user_ids(&deployment);
     let selection = profile_selection(&deployment, &users, FIXTURE_NOW, open()).unwrap();

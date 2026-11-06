@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::Path;
 
 use mooring_export::{
-    ExportError, ExportErrorKind, ExportFormat, ProfileSelection, ProfilesError,
+    ExportError, ExportErrorKind, ExportFormat, ProfileSelection, ProfilesError, Withheld,
     export_secret_refs, export_user, profile_selection,
 };
 use mooring_keys::credentials;
@@ -322,8 +322,31 @@ pub(crate) fn export_profiles(
     )
     .map_err(profiles_refused)?;
     export_file::write_new(path, bundle.expose_bytes())?;
+    if let Some(warning) = unaccepted_warning(bundle.selection()) {
+        err.write_all(warning.as_bytes()).map_err(output)?;
+    }
     out.write_all(profiles_summary(path, bundle.selection()).as_bytes())
         .map_err(output)
+}
+
+/// The warning when users are withheld for want of the current acceptance:
+/// the import ends their links for good, and after a new revision of the
+/// agreement such an export is most likely too early (delivery.md,
+/// section 11). `None` when no user is withheld for that.
+fn unaccepted_warning(selection: &ProfileSelection) -> Option<String> {
+    let required: Vec<AgreementVersion> = selection
+        .withheld()
+        .iter()
+        .filter_map(|(_, why)| match why {
+            Withheld::AgreementNotAccepted { required, .. } => Some(*required),
+            Withheld::Suspended | Withheld::BeingRevoked | Withheld::Revoked => None,
+        })
+        .collect();
+    let revision = required.first()?;
+    Some(format!(
+        "mooringctl: warning: {} user(s) named have not accepted agreement revision {revision}, the current one; importing this bundle ends their subscription links for good. To keep their links, delete the file and export again once they have accepted (docs/runbooks/delivery.md, section 11)\n",
+        required.len()
+    ))
 }
 
 /// What `user export-profiles` says once the bundle at `path` is written:

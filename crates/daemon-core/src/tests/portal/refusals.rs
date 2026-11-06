@@ -38,9 +38,26 @@ fn nothing_is_made_while_the_agreement_does_not_cover_the_portal() {
 }
 
 /// A user goes to the portal only with an acceptance of the revision it
-/// requires: none, or one of another revision, is refused by name.
+/// requires: none, or one of another revision, is refused by name; of
+/// several such users, the first in id order, whatever the order named.
 #[test]
 fn a_user_without_the_required_acceptance_is_refused() {
+    let deployment = pilots(|users| {
+        users[1].agreement = None;
+        users[3].agreement = None;
+    });
+    let error = snapshot(
+        &deployment,
+        None,
+        &ids(&["pilotuserd", "pilotuserb"]),
+        GENERATED_AT,
+        open(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&error, PortalError::AgreementNotAccepted { user, .. } if *user == id("pilotuserb")),
+        "{error:?}"
+    );
     let current = AgreementVersion::CURRENT;
     let other = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
     for (record, said) in [
@@ -112,6 +129,16 @@ fn users_are_named_at_least_once_each_and_known() {
             .to_string(),
         "no user was named; a portal export holds only the users named"
     );
+    // The list comes before the snapshot's time, too.
+    let past = UnixTime::from_secs(
+        CalendarDate::parse("9999-12-31")
+            .unwrap()
+            .utc_start()
+            .as_secs()
+            + 86_400,
+    );
+    let error = snapshot(&deployment, None, &ids(&[]), past, open()).unwrap_err();
+    assert_eq!(error.kind(), PortalErrorKind::Named, "{error:?}");
 }
 
 /// The contract's cross-field rules hold for every snapshot made: a

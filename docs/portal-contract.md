@@ -10,7 +10,7 @@ The user portal is a separate web application. It shows each user who has an acc
 
 Both files hold only the users the operator names, those bound to an account at the portal. A user with no account there, delivered by file only, is never named, so nothing about them reaches the portal's host.
 
-This page is Mooring's statement of both formats, complete without the portal's repository. The portal defines them, in its `docs/contract/portal-snapshot-v1.md` and `docs/contract/cfm-profiles-v2.md`. This page follows those documents at the portal's commit `520c358`. The snapshot's format and valid goldens there are the same as at `c070413`, where its copies below were taken; the bundle's copies were taken at `520c358`. Changing a key, a value or a rule is a new version in the portal's contract, and then here.
+This page is Mooring's statement of both formats, complete without the portal's repository. The portal defines them, in its `docs/contract/portal-snapshot-v1.md` and `docs/contract/cfm-profiles-v2.md`. This page follows those documents at the portal's commit `ac7e285`. The snapshot's format and valid goldens there are the same as at `c070413`, where its copies below were taken. The bundle's format and valid goldens are those of `520c358`, where its copies were taken; `ac7e285` only records the operator's decision that a withheld user's link ends for good whatever the reason (§3.2). Changing a key, a value or a rule is a new version in the portal's contract, and then here.
 
 Design §9.5 places the exporters in Mooring.
 
@@ -114,7 +114,7 @@ Each user named is on exactly one side. An exhaustive match on `UserStatus`, wit
 - **Withheld (`withheld`), and named in the output with the reason:** a suspended user, whatever the reason, as `suspended` (the snapshot carries the reason); a user being revoked or revoked as `revoked`, as in the snapshot; an active user without the acceptance as `agreement_not_accepted`.
 - **Refused:** a bundle in which a user to be delivered cannot have a file (a node not applied at the current generation, a certificate no longer current, no credentials). Withheld, that user would lose their link for good, so nothing is written.
 
-A bundle that withholds every user named is still written, with `profiles` empty: the portal stops serving them on import.
+A bundle that withholds every user named is still written, with `profiles` empty: the portal stops serving them on import. When users are withheld for want of the current acceptance, the command also warns on standard error that the import ends their links: after a new revision of the agreement, such an export is most likely too early.
 
 On import, a bound user who is withheld loses their stored profile, and their subscription link ends in the same transaction, whatever the reason: the operator kept that rule on 2026-11-06 for suspensions too, those for quota or expiry included. A later bundle that delivers them again does not bring the old link back: the user generates a new one at the portal and imports it into CFM again. A user named but bound to no account is not stored, and the portal reports them; if they were delivered, the file has carried their credentials to its host, and the import says to delete it at once.
 

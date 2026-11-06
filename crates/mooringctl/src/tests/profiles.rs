@@ -51,8 +51,9 @@ fn forget_secrets(harness: &mut Harness, user: &UserId) {
 }
 
 /// The file is the export crate's bundle of the users named at now, with
-/// mode 0600; a user withheld is named with the reason, and the output
+/// mode 0600; each user withheld is named with the reason, and the output
 /// says what the portal's import does to them and where the file goes.
+/// Withheld for their status, not for an acceptance, they bring no warning.
 #[test]
 fn export_profiles_writes_the_bundle_of_the_users_named() {
     let deployment = fixture(|parts| {
@@ -60,12 +61,14 @@ fn export_profiles_writes_the_bundle_of_the_users_named() {
             reason: SuspendReason::Operator,
             since: UnixTime::from_secs(NOW - 60),
         };
+        parts.users[1].status = UserStatus::RevokePending;
     });
     let users = ids(&deployment);
     let (mut harness, folder) = exporting(deployment.clone());
     harness.portal_agreement = open();
-    // The user withheld needs no secret: none of theirs is read.
+    // The users withheld need no secret: none of theirs is read.
     forget_secrets(&mut harness, &users[0]);
+    forget_secrets(&mut harness, &users[1]);
     let out = folder.join("profiles.json");
     let outcome = run(&mut harness, &users, arg(&out));
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
@@ -83,9 +86,10 @@ fn export_profiles_writes_the_bundle_of_the_users_named() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "wrote {}: CFM profiles of 2 user(s) and 1 withheld, sing-box-json, mode 0600\nwithheld: user {} (suspended)\nimporting it removes each withheld user's profile and ends their subscription link for good: once delivered again, they generate a new link\nimport it with `mooring-portal import-profiles` on the portal host, then delete it\n",
+            "wrote {}: CFM profiles of 1 user(s) and 2 withheld, sing-box-json, mode 0600\nwithheld: user {} (suspended)\nwithheld: user {} (being revoked)\nimporting it removes each withheld user's profile and ends their subscription link for good: once delivered again, they generate a new link\nimport it with `mooring-portal import-profiles` on the portal host, then delete it\n",
             out.display(),
-            users[0]
+            users[0],
+            users[1]
         )
     );
     // An export changes no state.
@@ -127,6 +131,8 @@ fn export_profiles_holds_only_the_users_named() {
 
 /// A bundle that withholds every user named is written, reading no secret
 /// (the keychain is empty here): the portal stops serving them on import.
+/// Users withheld for want of the current acceptance bring a warning,
+/// since after a new revision such an export is most likely too early.
 #[test]
 fn a_bundle_withholding_everyone_is_written_without_reading_a_secret() {
     let deployment = fixture(|parts| {
@@ -140,12 +146,21 @@ fn a_bundle_withholding_everyone_is_written_without_reading_a_secret() {
     let folder = harness.home.path().join("exports");
     fs::create_dir(&folder).unwrap();
     let out = folder.join("profiles.json");
-    let outcome = run(&mut harness, &users[..1], arg(&out));
+    let outcome = run(&mut harness, &users[..2], arg(&out));
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: warning: 2 user(s) named have not accepted agreement revision {}, the current one; importing this bundle ends their subscription links for good. To keep their links, delete the file and export again once they have accepted (docs/runbooks/delivery.md, section 11)\n",
+            AgreementVersion::CURRENT
+        )
+    );
     assert!(
         outcome.stdout.contains(&format!(
-            "CFM profiles of 0 user(s) and 1 withheld, sing-box-json, mode 0600\nwithheld: user {} (has not accepted agreement revision {}: no acceptance is recorded)\n",
+            "CFM profiles of 0 user(s) and 2 withheld, sing-box-json, mode 0600\nwithheld: user {} (has not accepted agreement revision {}: no acceptance is recorded)\nwithheld: user {} (has not accepted agreement revision {}: no acceptance is recorded)\n",
             users[0],
+            AgreementVersion::CURRENT,
+            users[1],
             AgreementVersion::CURRENT
         )),
         "{}",

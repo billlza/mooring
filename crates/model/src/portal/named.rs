@@ -131,6 +131,7 @@ mod tests {
                 NamedUsersErrorKind::DuplicateUser,
             ),
         ];
+        assert_eq!(cases.len(), NamedUsersErrorKind::ALL.len());
         for (users, error, kind) in cases {
             assert_eq!(named_users(&deployment, &users), Err(error.clone()));
             assert_eq!(error.kind(), kind);
