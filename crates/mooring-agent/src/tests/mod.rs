@@ -46,6 +46,9 @@ pub(crate) const EISDIR: i32 = 21;
 pub(crate) const EACCES: i32 = 13;
 /// An operation only the owner, or root, may do.
 pub(crate) const EPERM: i32 = 1;
+/// An argument the call refuses, as macOS refuses a read timeout on a
+/// socket that a reset has closed.
+pub(crate) const EINVAL: i32 = 22;
 
 /// What the stand-in node answers for one tool call.
 pub(crate) type Responder = Box<dyn Fn(Tool, &[&str]) -> io::Result<ToolOutput>>;

@@ -164,7 +164,7 @@ pub(crate) fn sample(
 /// must also have come by the deadline. Each read waits only for what is
 /// left until the next of those, so nothing (a signal that interrupts a
 /// read included) holds the flight past [`Timing::bound`].
-fn first_flight(
+pub(crate) fn first_flight(
     stream: &mut TcpStream,
     sent: Instant,
     timing: Timing,
@@ -186,7 +186,7 @@ fn first_flight(
         }
         stream
             .set_read_timeout(Some(left))
-            .map_err(|error| format!("socket: {error}"))?;
+            .map_err(|error| refused_timeout(stream, &error))?;
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
@@ -214,6 +214,23 @@ fn first_flight(
     }
     let last = last.ok_or_else(|| "the target closed without an answer".to_owned())?;
     Ok((flight, last))
+}
+
+/// Why `stream` refused its read timeout with `error`. macOS refuses the
+/// timeout with EINVAL on a socket that a reset has closed and keeps the
+/// reset in the socket for the next read, while Linux sets the timeout and
+/// the read finds the reset. So that refusal is described by the error
+/// waiting in the socket, as the read would have reported it, and a reset
+/// is the same receive failure on both, whether it came before the
+/// flight's first read or during the flight. The error is taken from the
+/// socket, so nothing may read on after this. Any other refusal, or that
+/// one when no error can be taken, is described as itself.
+pub(crate) fn refused_timeout(stream: &TcpStream, error: &io::Error) -> String {
+    let closed = error.kind() == io::ErrorKind::InvalidInput && error.raw_os_error().is_some();
+    if closed && let Ok(Some(ended)) = stream.take_error() {
+        return format!("receive: {ended}");
+    }
+    format!("socket: {error}")
 }
 
 /// `SHA-256("HelloRetryRequest")`, the random of a ServerHello that asks
