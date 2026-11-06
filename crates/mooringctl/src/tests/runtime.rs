@@ -560,7 +560,9 @@ fn lo0() -> InterfaceIndex {
 /// A reflector answers and closes at once; on loopback its close can come
 /// before the connect's poll looks, which socket2 reports as a hang-up
 /// with no error (about 1 connect in 170 here). Every probe still reads
-/// its answer.
+/// its answer. A run need not meet that race: three of nine coverage runs
+/// on 2026-11-06 met it in none of their 1000 connects. `tests::probe`
+/// pins how the report is read.
 #[test]
 fn a_reflector_that_closes_before_the_connect_is_polled_is_still_read() {
     for _ in 0..1000 {
