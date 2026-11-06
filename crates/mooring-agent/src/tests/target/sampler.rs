@@ -5,10 +5,12 @@
 //! sample timed to the flight's last byte and counting all of it, however
 //! late or slowly a flight that ends by the deadline comes, and the p95
 //! by nearest rank; no sample from a target that refuses the connection,
-//! does not answer the hello by the deadline, closes or resets it, or is
-//! still sending its flight at the deadline; no connection at all without
-//! randomness; and the node's times, the design's. Tests that wait on a
-//! deadline give the sampler a short one.
+//! does not answer the hello by the deadline, closes or resets it (a reset
+//! after the hello described as one, whether it comes before the flight's
+//! first read or during the flight), or is still sending its flight at the
+//! deadline; no connection at all without randomness; and the node's
+//! times, the design's. Tests that wait on a deadline give the sampler a
+//! short one.
 
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -18,7 +20,7 @@ use mooring_agent_proto::{AgentError, StderrTail, TargetTool};
 
 use super::world::{Server, closed_port, flight, host, serve};
 use crate::target::sampler::{self, NODE, RANDOM_BYTES, Timing};
-use crate::tests::EACCES;
+use crate::tests::{EACCES, EINVAL};
 
 /// The node's timing with a 200 ms deadline and a quiet longer than it,
 /// so that only the deadline can end a flight.
@@ -233,17 +235,85 @@ fn randomness_the_sampler_cannot_have_ends_it_before_any_connection() {
     );
 }
 
-#[test]
-fn a_target_that_resets_the_connection_is_no_sample() {
-    // What a reset reads as on this OS.
+/// What a reset reads as on this OS: the read after the hello, on a
+/// connection to a target that resets it.
+fn reset_as_read() -> io::Error {
     let mut probe = TcpStream::connect(serve(Server::Reset, 1)).unwrap();
     probe
         .write_all(&sampler::client_hello(&host(), &random()))
         .unwrap();
     let reset = probe.read(&mut [0; 16]).unwrap_err();
     assert_eq!(reset.kind(), io::ErrorKind::ConnectionReset);
+    reset
+}
+
+#[test]
+fn a_target_that_resets_the_connection_is_no_sample() {
+    let reset = reset_as_read();
     assert_eq!(
         sampler::sample(serve(Server::Reset, 1), &host(), NODE, &random()),
         Err(format!("receive: {reset}"))
+    );
+}
+
+/// A connection to a target that resets it after the hello, once the
+/// reset has come, which leaves the socket with no peer.
+fn reset_after_the_hello() -> TcpStream {
+    let mut stream = TcpStream::connect(serve(Server::Reset, 1)).unwrap();
+    stream
+        .write_all(&sampler::client_hello(&host(), &random()))
+        .unwrap();
+    let started = Instant::now();
+    while stream.peer_addr().is_ok() {
+        assert!(started.elapsed() < Duration::from_secs(5), "no reset came");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    stream
+}
+
+/// A reset that came before the flight's first read: macOS then refuses
+/// the read timeout, Linux sets it and the read finds the reset. Either
+/// way the reset is what is described.
+#[test]
+fn a_reset_before_the_first_read_is_described_as_the_reset() {
+    let reset = reset_as_read();
+    let mut stream = reset_after_the_hello();
+    assert_eq!(
+        sampler::first_flight(&mut stream, Instant::now(), NODE),
+        Err(format!("receive: {reset}"))
+    );
+}
+
+/// The refusal macOS gives a socket that a reset has closed is described
+/// as the reset, on either system.
+#[test]
+fn the_refusal_of_a_socket_a_reset_closed_is_the_reset() {
+    let reset = reset_as_read();
+    let refused = io::Error::from_raw_os_error(EINVAL);
+    assert_eq!(
+        sampler::refused_timeout(&reset_after_the_hello(), &refused),
+        format!("receive: {reset}")
+    );
+}
+
+/// Any other refusal is described as itself, even on a socket that a
+/// reset has closed, and so is that refusal on a socket that holds no
+/// error.
+#[test]
+fn any_other_refusal_is_the_refusal() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let sound = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    // std refuses a zero timeout itself, with no system call.
+    let zero = sound.set_read_timeout(Some(Duration::ZERO)).unwrap_err();
+    for refused in [zero, io::Error::from_raw_os_error(EACCES)] {
+        assert_eq!(
+            sampler::refused_timeout(&reset_after_the_hello(), &refused),
+            format!("socket: {refused}")
+        );
+    }
+    let invalid = io::Error::from_raw_os_error(EINVAL);
+    assert_eq!(
+        sampler::refused_timeout(&sound, &invalid),
+        format!("socket: {invalid}")
     );
 }
