@@ -74,36 +74,47 @@ fn today() -> CalendarDate {
     CalendarDate::utc_of(UnixTime::from_secs(NOW)).unwrap()
 }
 
+/// From no record, and from a record of revision 1, the revision every
+/// pilot user accepted before revision 2 (2026-11-06), `user agree` records
+/// the current revision on today's UTC day.
 #[test]
 fn agree_records_the_current_revision_on_the_utc_day_and_keeps_every_confirmation() {
-    let deployment = fixture(|parts| parts.users[0].agreement = None);
-    let user = first_user(&deployment);
-    let mut harness = harness_with(deployment.clone());
-    let outcome = harness.run(&["user", "agree", user.as_str()]);
-    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
-    assert_eq!(outcome.stderr, "");
-    assert_eq!(
-        outcome.stdout,
-        format!(
-            "recorded: user {user} accepted agreement revision 1 on {} (UTC); no node apply is needed\n",
-            today()
-        )
-    );
-    let after = store(&harness).load().unwrap().deployment;
-    assert_eq!(
-        after.users()[&user].agreement,
-        Some(AgreementRecord {
-            version: AgreementVersion::CURRENT,
-            accepted_on: today(),
-        })
-    );
-    // A bookkeeping record: the generation and every node's confirmation
-    // stay, so no node goes stale and the export needs no apply.
-    assert_eq!(after.config_generation(), deployment.config_generation());
-    assert_eq!(after.nodes(), deployment.nodes());
-    let mut expected = deployment.into_parts();
-    expected.users[0].agreement = after.users()[&user].agreement;
-    assert_eq!(after, Deployment::try_from(expected).unwrap());
+    let first = AgreementRecord {
+        version: AgreementVersion::new(NonZeroU16::MIN),
+        accepted_on: CalendarDate::parse("2026-10-18").unwrap(),
+    };
+    assert!(first.version < AgreementVersion::CURRENT);
+    for recorded in [None, Some(first)] {
+        let deployment = fixture(|parts| parts.users[0].agreement = recorded);
+        let user = first_user(&deployment);
+        let mut harness = harness_with(deployment.clone());
+        let outcome = harness.run(&["user", "agree", user.as_str()]);
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert_eq!(outcome.stderr, "");
+        assert_eq!(
+            outcome.stdout,
+            format!(
+                "recorded: user {user} accepted agreement revision {} on {} (UTC); no node apply is needed\n",
+                AgreementVersion::CURRENT,
+                today()
+            )
+        );
+        let after = store(&harness).load().unwrap().deployment;
+        assert_eq!(
+            after.users()[&user].agreement,
+            Some(AgreementRecord {
+                version: AgreementVersion::CURRENT,
+                accepted_on: today(),
+            })
+        );
+        // A bookkeeping record: the generation and every node's confirmation
+        // stay, so no node goes stale and the export needs no apply.
+        assert_eq!(after.config_generation(), deployment.config_generation());
+        assert_eq!(after.nodes(), deployment.nodes());
+        let mut expected = deployment.into_parts();
+        expected.users[0].agreement = after.users()[&user].agreement;
+        assert_eq!(after, Deployment::try_from(expected).unwrap());
+    }
 }
 
 /// A record of the current revision is kept with its first day, and the
@@ -120,7 +131,8 @@ fn agree_keeps_an_existing_record_of_the_current_revision() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "kept: user {user} already accepted agreement revision 1 on {}\n",
+            "kept: user {user} already accepted agreement revision {} on {}\n",
+            AgreementVersion::CURRENT,
             recorded.accepted_on
         )
     );
@@ -136,9 +148,11 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
         parts.users[0].status = UserStatus::Revoked;
         parts.users[0].per_node.clear();
     });
+    let current = AgreementVersion::CURRENT;
+    let later = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
     let newer = fixture(|parts| {
         parts.users[0].agreement = Some(AgreementRecord {
-            version: AgreementVersion::new(NonZeroU16::new(2).unwrap()),
+            version: later,
             accepted_on: CalendarDate::parse("2026-11-02").unwrap(),
         });
     });
@@ -159,7 +173,7 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
             newer,
             &user,
             format!(
-                "user {user} accepted agreement revision 2; refusing to record the older revision 1"
+                "user {user} accepted agreement revision {later}; refusing to record the older revision {current}"
             ),
         ),
         (fixture(|_| {}), &unknown, format!("unknown user {unknown}")),

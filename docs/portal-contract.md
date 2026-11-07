@@ -16,22 +16,22 @@ Design §9.5 places the exporters in Mooring.
 
 ## 1. The agreement comes first
 
-Revision 1 of the user agreement (`docs/runbooks/user-agreement.md`) does not cover the portal:
+Revision 1 of the user agreement did not cover the portal:
 
-- Clause 4 lists every place a user's data is kept, and the portal's host on the internet is not among them.
-- Clause 2 tells users never to paste a link.
-- Clause 5 says the service has no subscription link.
+- Its clause 4 listed every place a user's data is kept, and the portal's host on the internet was not among them.
+- Its clause 2 told users never to paste a link.
+- Its clause 5 said the service had no subscription link.
 
-So both commands refuse everything until a revision that covers the portal is written and accepted. The refusal is built into the exporters' types and checked on the built binary:
+Revision 2 (2026-11-06, `docs/runbooks/user-agreement.md`) covers it. Clause 4 says what the portal's host keeps, where and for how long. Clauses 2 and 5 say how a subscription link is used and kept, and what to do when one leaks. Nothing about a user goes to the portal before the user has accepted it. The gate is built into the exporters' types and checked on the built binary:
 
-- `mooring_model::PORTAL_AGREEMENT_SINCE` names the first revision that covers the portal. It is `None`, so `PortalAgreement::SHIPPED`, which the binary passes to both exporters, is closed.
+- `mooring_model::PORTAL_AGREEMENT_SINCE` names the first revision that covers the portal, revision 2. `PortalAgreement::SHIPPED`, which the binary passes to both exporters, is open because `AgreementVersion::CURRENT` is that revision.
 - Both commands check the gate first, before they read the state. The pure exporters check it again (`mooring-daemon-core`'s `portal::snapshot` and `mooring-export`'s `profile_selection` and `export_profiles`).
-- `PortalAgreement::since` builds a gate from an explicit revision, which tests use to open it. No product code calls it; `crates/mooringctl/tests/shipped/portal_gate.rs` runs the built binary and requires both commands to refuse with the gate's message, so what `main` passes is checked, not only the types.
-- Once the gate opens, a user's data and file go to the portal only once the user has accepted that revision, `AgreementVersion::CURRENT`: the snapshot refuses a user named without that acceptance, and the bundle withholds them (§3.2). A user export requires the same (decision F9).
-- While the gate is closed, the bundle is refused whole. It is never written with every user withheld for want of an acceptance that cannot be had yet: such a bundle is valid, and its import would pause every bound user's subscription link.
+- `PortalAgreement::since` builds a gate from an explicit revision, which tests use to close or open it. No product code calls it. `crates/mooringctl/tests/shipped/portal_gate.rs` runs the built binary and requires both commands to pass the gate it ships, so what `main` passes is checked, not only the types.
+- A user's data and file go to the portal only once the user has accepted `AgreementVersion::CURRENT`: the snapshot refuses a user named without that acceptance, and the bundle withholds them (§3.2). A user export requires the same (decision F9).
+- With the gate closed, as before revision 2 and in the tests that close it, the bundle is refused whole. It is never written with every user withheld for want of an acceptance that cannot be had yet: such a bundle is valid, and its import would pause every bound user's subscription link.
 - `crates/export/tests/export/agreement_text.rs` ties the gate to the text. The gate is open exactly when the user-visible text names the portal (门户). The text's SHA-256 is pinned in the same file, so a revised text needs a new revision.
 
-Writing the revision (see the operator notes of `user-agreement.md`) sets `PORTAL_AGREEMENT_SINCE`, raises `AgreementVersion::CURRENT` and records the new digest, all in one commit. Every user then accepts it again (`user agree`) before anything about them goes to the portal.
+Revision 2 set `PORTAL_AGREEMENT_SINCE`, raised `AgreementVersion::CURRENT` and recorded the text's digest, all in one commit. Every user accepts it (`user agree`) before anything about them goes to the portal.
 
 ## 2. The snapshot
 
