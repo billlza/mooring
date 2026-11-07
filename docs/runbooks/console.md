@@ -96,7 +96,7 @@ The colours on RSRP and SINR are rules of thumb for placing the antenna, not lim
 - **Exit:** the state since when, latched violations with their evidence, the egress interface and link, the carrier check, `mooring-exit` and `mooring-probe`, the Mac's power and any foreign network.
 - **SIM:** the billing cycle, bytes received and sent, the meter's accuracy, the warning, the stop policy and the plan's line, and the forecast with each threshold's crossing.
 - **Nodes:** per node, its role, stage and generation, the in-chain verdicts, and its agent's report (gate, holds, halt, handshake and watch ages, conditions, engines, host and this month's transfer), or why it could not be polled.
-- **Users:** one row per opaque id and alias; select a row for its figures, quota and expiry. This build does not read the nodes' usage, so the screen says so and the figures say "not read"; status, activity and last seen are live. When a build that reads usage has no usage report, the figures say "unavailable" with its reason, never zeros.
+- **Users:** one row per opaque id and alias; select a row for its figures, quota and expiry. A daemon built since 2026-11-05 reads the nodes' usage. When it has no usage report, the screen says "Usage unavailable" with its reason, never zeros. A daemon built before reads none, so the screen says so and the figures say "not read". Status, activity and last seen are live either way.
 - **Capacity:** the egress rates, the uplink's use against its baseline, the loaded latency and saturation.
 - **Events:** not read by this build; the open alerts are on the overview.
 

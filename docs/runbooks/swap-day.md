@@ -5,7 +5,7 @@ This runbook is for the operator. It takes the pilot from "the 1pMobile SIM has 
 
 The design is §7 (the plan and its cycles), §10.1 and §10.2 (the daemon, preflight, probes, latches), §13.2 (provisioning) and §15.6 (the M7). Every command runs from Terminal.app's own shell in the workspace root, with the signed `mooringctl` (`cargo xtask mooringctl` builds `./target/signed/mooringctl`; below it is written `mooringctl`). `en9` stands for the Mac's interface to the M7, the USB Ethernet adapter: check it with `ifconfig`, it is the one with the address `192.168.1.x`.
 
-What this build does not do yet: per-user usage (the status's usage view is `not_pulled`, and the console says the build does not read it), the Mac's report to the phone, and the alert notices. None of them is needed for traffic to flow.
+What this build does not do yet: the Mac's report to the phone, and the alert notices. Neither is needed for traffic to flow. Per-user usage has been read since 2026-11-05 (design §10.5).
 
 ## 0. Before the SIM arrives
 
