@@ -8,6 +8,13 @@
     the two English messages quoted in section 4 and section 8
     (crates/cfw-engine-api/src/lib.rs). M6 still checks every CFM step
     against the real build (design §22).
+  - The 「凭据」 step in section 3 needs the core stopped, not just both
+    switches off. The profile menu's 「凭据」 waits until the core is off
+    (apps/cfw-tauri-shell/ui/src/app.js:1059 and 1098-1100 at v0.5.0, 1095
+    and 1134-1136 at release/0.5.1). Turning both switches off keeps a
+    ready core running as a local proxy (src/engine.rs:64-74 at v0.5.0,
+    66-76 at release/0.5.1). The core stops with 「停止内核」 on the 「常规」
+    page (ui/src/general.js:141 at v0.5.0, 149 at release/0.5.1).
   - Send users the text from the title on, never these notes (delivery.md,
     step 3 of section 1).
 -->
@@ -46,7 +53,7 @@
 ## 3. 导入
 
 1. 打开 CFM，进入「配置文件」，点「导入文件」，选择映像里或「下载」文件夹里的 .json 文件（如果运营者给的是 .yaml，就选 .yaml）。
-2. 在「配置文件」页右键点按（或双指点按）新导入的配置文件，选「凭据」，应能看到全部凭据都已存入「钥匙串凭据库」。这一项需要先关闭「系统代理」和「TUN 模式」。
+2. 在「配置文件」页右键点按（或双指点按）新导入的配置文件，选「凭据」，应能看到全部凭据都已存入「钥匙串凭据库」。这一项需要内核已经停止：「常规」页上的按钮是「停止内核」时，先点它。
 3. 不要用「导入链接」，也不要把文件内容粘贴进输入框。
 
 ## 4. 打开“中国大陆直连”
