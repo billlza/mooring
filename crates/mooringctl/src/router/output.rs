@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! What `router status` prints: a human summary, or one JSON line of the
-//! `RouterReading` (`--json`; `router history` prints its document through
-//! the same line). Enum values print as the M7 spells them, so
+//! `RouterReading` (`--json`; `router history` and `user usage` print their
+//! documents through the same line, and the summaries their times through
+//! the same stamps). Enum values print as the M7 spells them, so
 //! the operator can compare with its web interface. Text the M7 reports
 //! (the firmware and web app versions, the network's and the SIM's names)
 //! prints in double quotes, so nothing it holds can read as the summary's
@@ -167,6 +168,12 @@ pub(crate) fn utc_stamp(time: UnixTime) -> Result<String, ModelError> {
         of_day % 3600 / 60,
         of_day % 60
     ))
+}
+
+/// `<yyyy-mm-dd> <hh>:00`, the hour `start` begins.
+pub(crate) fn hour_stamp(start: UnixTime) -> Result<String, ModelError> {
+    let date = CalendarDate::utc_of(start)?;
+    Ok(format!("{date} {:02}:00", start.as_secs() % 86_400 / 3_600))
 }
 
 /// The human summary of `status`, read at `polled_at` on `interface` when

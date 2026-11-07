@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use mooring_agent_proto::{Inbound, Principal, StatsEmail, Traffic, UsageMonth};
 use mooring_model::{Deployment, NodeId, UnixTime};
 
-use super::{CollectedUsage, Counters, NodeUsageHistory, add_counters, corrupt};
+use super::{CollectedUsage, Counters, NodeUsageHistory, add_counters, corrupt, principal_of};
 use crate::error::UsageError;
 use crate::period::UsagePeriods;
 use crate::usage::{
@@ -22,7 +22,9 @@ use crate::usage::{
 /// minutes (one-minute pulls and node polls, with a bounded probe-slot wait).
 const FRESH_SECS: u64 = 180;
 
-struct Metric {
+/// A period's counters: its total, less a proven prefix, unknown for the
+/// emails whose `uncertain` share is not zero.
+pub(super) struct Metric {
     total: Counters,
     prefix: Counters,
     uncertain: Counters,
@@ -41,7 +43,12 @@ fn subtract(node: &NodeId, total: Traffic, old: Traffic) -> Result<Traffic, Usag
 }
 
 impl Metric {
-    fn value(&self, node: &NodeId, email: &StatsEmail) -> Result<Option<Traffic>, UsageError> {
+    /// `email`'s bytes in the period: `None` when they cannot be told.
+    pub(super) fn value(
+        &self,
+        node: &NodeId,
+        email: &StatsEmail,
+    ) -> Result<Option<Traffic>, UsageError> {
         if self
             .uncertain
             .get(email)
@@ -74,11 +81,7 @@ impl NodeUsageHistory {
             let Some(sample) = self.months.get(&first) else {
                 return Ok(None);
             };
-            if first < last
-                && first
-                    .next()
-                    .is_none_or(|next| sample.received_at.as_secs() < next.start().as_secs())
-            {
+            if first < last && !sample.is_final() {
                 return Ok(None);
             }
             add_counters(&mut total, &sample.sample.traffic)?;
@@ -158,7 +161,12 @@ impl NodeUsageHistory {
         }))
     }
 
-    fn lifetime(&self, current: UsageMonth) -> Result<Option<Metric>, UsageError> {
+    /// Everything the node counted from its origin through `current`:
+    /// `None` unless its lifetime is complete (a recorded origin, and every
+    /// month folded since final when it was folded), no month is held from
+    /// before it, and every month from the first one kept through `current`
+    /// is held, each but `current` final.
+    pub(super) fn lifetime(&self, current: UsageMonth) -> Result<Option<Metric>, UsageError> {
         if !self.lifetime_complete {
             return Ok(None);
         }
@@ -169,6 +177,18 @@ impl NodeUsageHistory {
             UsageMonth::containing(mooring_agent_proto::UnixTime::from_secs(origin.as_secs()))
                 .map_err(|_| corrupt("origin outside calendar"))?,
         );
+        // A month from before the recorded origin was counted before it (a
+        // VPS adopted again with its old files, or a clock that ran ahead
+        // when the origin was recorded): a sum from the origin would leave
+        // it out.
+        if self
+            .months
+            .keys()
+            .next()
+            .is_some_and(|month| *month < first)
+        {
+            return Ok(None);
+        }
         let Some(mut total) = self.months_between(first, current)? else {
             return Ok(None);
         };
@@ -333,11 +353,7 @@ impl CollectedUsage {
                     };
                     continue;
                 }
-                let principal = Principal::User(
-                    id.as_str()
-                        .parse()
-                        .map_err(|_| corrupt("user id cannot be an accounting principal"))?,
-                );
+                let principal = principal_of(id)?;
                 for &inbound in Inbound::ALL {
                     let email = StatsEmail {
                         principal: principal.clone(),

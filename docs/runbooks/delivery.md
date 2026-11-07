@@ -11,7 +11,7 @@ The rules come from design §9.2, §9.4, §9.5, §13.4, §13.5 and §13.6, and f
 Users are asked to accept revision 2 only once payment is built (the operator notes of `user-agreement.md`).
 
 **What exists today.**
-- `hdiutil`, `tmutil` and `mooringctl user add | alias | agree | export | export-profiles` and `mooringctl portal export` (the `mooringctl` ones since 2026-10-18, the portal's since 2026-11-06, in the development build, which keeps its secrets in the login keychain until M5's data-protection keychain; they need the state that `exit init` will create).
+- `hdiutil`, `tmutil` and `mooringctl user add | alias | agree | export | export-profiles | usage` and `mooringctl portal export` (the `mooringctl` ones since 2026-10-18, the portal's since 2026-11-06 and `user usage` since 2026-11-07, in the development build, which keeps its secrets in the login keychain until M5's data-protection keychain; they need the state that `exit init` will create).
 - The portal's commands (`mooring-portal bind | bound-users | import | import-profiles | delete-account | ban | unban`) run on the portal's host.
 
 **What is still to come.**
@@ -178,7 +178,7 @@ Record nothing about the incident itself (what happened, where, to whom) in Moor
 ## 10. Requests about the user's records
 
 On the user's request, tell the user what is held about them (clause 4 of the agreement):
-- **On the operator's Mac:** the label, the alias, the client line, the policy, the usage history and totals, the last-active time, the status changes, the journal's operator actions that name the user (exports, reissues), the payments pulled from the portal (with the payment work) and the acceptance.
+- **On the operator's Mac:** the label, the alias, the client line, the policy, the usage history and totals (`mooringctl user usage <uid>` prints them: each node's hourly and daily bins and its monthly, folded and lifetime totals, by id and alias and never the label; the five-minute bins, kept 7 days, are not printed), the last-active time, the status changes, the journal's operator actions that name the user (exports, reissues), the payments pulled from the portal (with the payment work) and the acceptance.
 - **On each node:** the usage bins (48 hours), the monthly totals (until 7 days after the month), the last-active time and the user's row in the Mac report.
 - **At the portal:** the account (number, email, password hash, the registration and password-change times), the sessions (token digests, login and expiry times), the link's token digest and its time, the binding and its time, the latest snapshot record, the CFM profile, and the orders (with the payment work). After a ban, only the email's digest, the Stripe fingerprints of the cards the user paid with (with the payment work) and the ban's time, until the service ends.
 - **After a ban, in the ban record on the operator's Mac:** the label, the phone number or Apple ID of the FaceTime calls, the ban's day, the copies of the user's hourly and daily usage and of their payments, and what the Stripe Dashboard showed of those payments (IP address, location, device) (below).
