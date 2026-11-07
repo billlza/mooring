@@ -1630,9 +1630,14 @@ The L7 lab cannot prove the bypass, because a VM subnet is a connected route tha
   - `GateSet` on a sleep drain or a violation;
   - `Shutdown` on `EgressIsNodeAddress`;
   - `ClearHold` on Retry;
-  - a `Status`/`Usage` poll every 10 minutes (*built 2026-10-23, M5d:* `Status`, in the slot after a direct-probe round; a node that does not answer is shown unreachable since its first failed poll in a row, with its cause, and one whose watch had not written for more than 30 s by its own clock degrades a serving exit as `WatchStale`; ssh's own failures are one `Transport` until the runner tells a changed host key apart);
-  - *(revision 5; plan, M5)* with that poll, or on `PollNow`, an incremental `UsageSeries` pull from the last stored bin and an `Events{since}` read from the last stored event (§11.1, §15);
-  - *(revision 6; plan, M5)* with that poll, a `PutMacReport` push of the remote viewer's report to each node (F5, §15.9), and, once M4 adds the request, the notices the Mac rendered (§15.8).
+  - a `Status` poll every 10 minutes (*built 2026-10-23, M5d:* in the slot after a direct-probe round; a node that does not answer is shown unreachable since its first failed poll in a row, with its cause, and one whose watch had not written for more than 30 s by its own clock degrades a serving exit as `WatchStale`; ssh's own failures are one `Transport` until the runner tells a changed host key apart);
+  - *(built 2026-11-05)* the usage collection of each adopted or applied node, a batch starting a minute after its last one ended (`Intervals::DAEMON.usage_pull`). It sends one request per loop tick, in the room the next direct-probe round leaves (`pull_budget`: at most 15 s, keeping 2 s before the probe), and none while the exit is paused, a drained sleep is about to proceed, or the M7's interface is not found. A batch is:
+    - a `Status`, which also counts as the node's poll;
+    - the previous month's `Usage`, during the current month's first 7 days;
+    - `UsageSeries` five-minute pages from the last stored bin, at most the node's 48 hours;
+    - the current month's `Usage` (§11.5, §15);
+  - *(revision 5; plan, M5)* on `PollNow` (§10.1), a collection at once, and an `Events{since}` read from the last stored event (§11.1, §15);
+  - *(revision 6; plan, M5)* with the `Status` poll, a `PutMacReport` push of the remote viewer's report to each node (F5, §15.9), and, once M4 adds the request, the notices the Mac rendered (§15.8).
 
   Everything else is an explicit CLI action.
 - Every call leaves over a connection bound to the M7's interface, never over Wi-Fi or Janet (P0-2, §10.2).
@@ -1822,7 +1827,7 @@ The reflector answers every source on purpose (§1.3). The visible IP-echo servi
 - Deltas are monotonic, and an Xray restart is detected when uptime decreases.
 - Bytes are recorded per opaque email (`<uid>@reality`, `<uid>@hy2`; the probe's `probe@…` separately) into `/var/lib/mooring/usage/<YYYY-MM>.json`, written atomically. Xray keys the counters `user>>>EMAIL>>>traffic>>>uplink|downlink` and keeps the email's case, so agent-proto's `StatsEmail`, which the renderer also uses to write the emails, is case-sensitive.
 - No destinations and no IPs are stored. Up to one poll interval can be lost on a crash.
-- The same polls feed the time series that `UsageSeries` serves (five-minute, hour and day bins of non-zero growth) and `StatusV1.last_active`. The agent keeps each bin for 48 hours after it ends (F7, decided 2026-10-15 by delegation, §20.2); the Mac pulls every poll, so it holds them long before. Whatever the agent keeps, it refuses a range it does not hold completely (`SeriesNotRecorded`) rather than report missing bins as zero. Xray adds spliced REALITY downloads to a counter only when the connection closes, so bins and `last_active` lag long downloads.
+- The same polls feed the time series that `UsageSeries` serves (five-minute, hour and day bins of non-zero growth) and `StatusV1.last_active`. The agent keeps each bin for 48 hours after it ends (F7, decided 2026-10-15 by delegation, §20.2); the Mac pulls them about once a minute (§10.5), so it holds them long before. Whatever the agent keeps, it refuses a range it does not hold completely (`SeriesNotRecorded`) rather than report missing bins as zero. Xray adds spliced REALITY downloads to a counter only when the connection closes, so bins and `last_active` lag long downloads.
 - The Mac merges usage from all nodes next to the SIM meter.
 - **Quotas** are records, not revocations (revision 5). `UserPolicy` (§7) holds a quota and an expiry.
   - A user over quota or past expiry is moved to `Suspended{QuotaExceeded | Expired}`. Suspension keeps the credentials, so a later resume delivers nothing new into China.
@@ -2151,7 +2156,7 @@ Sources: **X** Xray's counters, read by the node's watch; **A** the node's `Stat
 ### 15.4 Freshness and accuracy limits
 
 The console shows these beside the numbers they affect.
-- **Cadence.** A node's accounting tick is 60 s (`ACCOUNTING_INTERVAL_SECS`). The Mac polls every 10 minutes (§10.5), or at once on `PollNow`.
+- **Cadence.** A node's accounting tick is 60 s (`ACCOUNTING_INTERVAL_SECS`). The Mac collects each node's usage about once a minute, in the room the probes leave, and polls its `Status` every 10 minutes (§10.5); `PollNow`, planned with M5, is to collect at once. A usage figure is shown only while the latest monthly sample of each node past `Planned` is at most 3 minutes old (`FRESH_SECS`); otherwise usage is unavailable (`NotCoveredThrough`).
 - **Splice lag (§11.5).** REALITY+Vision downloads are counted when the connection closes. So (critique C-6):
   - long downloads appear late, and an Xray crash loses the bytes in flight;
   - `last_active`, "active now", the rotation tracker and five-minute bins can miss a user who is streaming over REALITY;
