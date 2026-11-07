@@ -208,14 +208,17 @@ On the user's request, tell the user what is held about them (clause 4 of the ag
     - the user's label;
     - the phone number or Apple ID of the FaceTime calls;
     - the ban's day;
-    - copies of what the Mac holds of the user's hourly and daily usage (bytes by node and protocol) and of their payments, taken after the last payment pull. No command prints one user's usage yet; one is to be built before the first ban.
+    - copies of what the Mac holds of the user's hourly and daily usage (bytes by node and protocol) and of their payments, taken after the last payment pull.
+      - For the usage, run `mooringctl user usage <uid>` until its first line says `revoked`, which it says once every node has removed the user, and note the time on that line. Once each node listed as `applied` has a held hourly range covering that time's hour (or the next hour, if the time is in an hour's last minute), write the copy with `mooringctl user usage <uid> --bins-only --out <bans>/<file>`. With the daemon serving, that is a few minutes after the hour.
+      - A node keeps its bins for 48 hours after they end (design §11.5). If a node's range does not reach that hour by then, for example because the node cannot be reached, write the copy all the same: its held ranges show the gap.
+      - The copy holds whole hours and days only, since five-minute bins are not printed. It names the user by id and alias, never the label. It is a new file with mode 0600, which Mooring never deletes: it is part of the ban record and is deleted with it. Its `retention` field describes the Mac's own history, not the copy.
     - what the Stripe Dashboard shows of those payments: IP address, location and device. Each payment carries the portal's order number, which Stripe keeps as the Checkout Session's `client_reference_id` (the portal's `docs/payments.md` §2), so they can still be found once the portal's orders are gone.
   - Never write in it the portal login email: that would undo the portal's digest. When the FaceTime Apple ID is that same address, record it as the FaceTime contact all the same.
   - Never write in it what happened or any evidence (section 8), links or credentials.
 - **Recognising a banned person** (clause 4). Compare every new user with the ban records:
   - before `user add` (section 1);
   - at their payments: the card, and the IP address, location and device the Stripe Dashboard shows;
-  - while they are served: their hourly and daily usage and payments, against the copies.
+  - while they are served: their hourly and daily usage (`mooringctl user usage <uid>`) and payments, against the copies.
 
   The line's own address and Safari on a Mac are no likeness (section 1, step 6). A likeness is a reason to check, never a ban by itself: ban only once you have confirmed that it is the same person.
 - A user who leaves may ask for the Mac's records to be deleted at once: revoke the user, then `user forget <uid>` (M5) once the user is `Revoked`, instead of waiting for the 13-month rule (§15.7). A ban record stays (clause 4).

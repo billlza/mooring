@@ -214,7 +214,9 @@
       - what a ban found to be a mistake undoes.
       The client line is left out, since every user is on Cfm05
       (delivery.md, section 1), so it tells no one apart. The record copies
-      hourly and daily figures, not five-minute ones.
+      hourly and daily figures, not five-minute ones, which is what
+      `mooringctl user usage <uid> --bins-only --out` writes (delivery.md,
+      section 10).
     - Mooring's revocation records no reason, so a ban is the operator's
       own act at the portal, `mooring-portal ban` (portal 852eb24), beside
       the revocation in Mooring, with the ban record kept outside
