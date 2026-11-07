@@ -226,8 +226,8 @@ impl Retention {
     }
 }
 
-/// A node's stage past `Planned`, the only nodes that may have counted
-/// traffic.
+/// A node's stage past `Planned`, the only nodes whose agents may hold
+/// records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStage {
@@ -244,8 +244,8 @@ pub enum NodeStage {
 }
 
 impl NodeStage {
-    /// The stage of a node that may have counted traffic; `None` for a
-    /// planned one, which never served.
+    /// The stage of a node whose agent may hold records; `None` for a
+    /// planned one, not adopted yet.
     pub(super) const fn of(stage: LifecycleStage) -> Option<Self> {
         match stage {
             LifecycleStage::Planned => None,

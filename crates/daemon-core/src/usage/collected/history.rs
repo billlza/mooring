@@ -124,8 +124,10 @@ impl CollectedUsage {
     }
 }
 
-/// The deployment's nodes that may have counted traffic, every one past
-/// `Planned`, with their stages.
+/// The deployment's nodes whose agents may hold records, every one past
+/// `Planned`, with their stages. An adopted one holds none of a client's
+/// bytes unless its host ran Mooring before
+/// ([`CollectedUsage::observe_unserved_nodes`]).
 fn served(deployment: &Deployment) -> BTreeMap<&NodeId, NodeStage> {
     deployment
         .nodes()

@@ -14,6 +14,7 @@ use mooring_agent_proto::{
 use mooring_daemon_core::error::UsageErrorKind;
 use mooring_daemon_core::snapshot::Ledgers;
 use mooring_daemon_core::usage::{CollectedUsage, NodeUsageHistory};
+use mooring_model::node::NodeLifecycle;
 use mooring_model::{Deployment, NodeId, UnixTime, UserStatus};
 use mooring_store::{USAGE_DIRECTORY, USER_USAGE_FILE, read_user_usage, write_user_usage};
 
@@ -511,5 +512,195 @@ fn a_future_monthly_sample_and_an_unknown_principal_are_refused() {
         complete(&mut harness, &mut collector, &deployment);
         assert!(collector.failure().is_some());
         assert_eq!(document(&collector), collected);
+    }
+}
+
+/// Each maintenance sees a planned or adopted node unserved, so its origin
+/// follows the latest one until the Mac holds anything from it; an applied
+/// node gets no origin.
+#[test]
+fn maintenance_moves_the_origin_of_a_planned_or_adopted_node_and_gives_an_applied_one_none() {
+    let unserved = fixture(|parts| {
+        for node in &mut parts.nodes {
+            node.lifecycle = match &node.lifecycle {
+                NodeLifecycle::Applied { site, .. } if node.id.as_str() == "ams1" => {
+                    NodeLifecycle::Adopted { site: site.clone() }
+                }
+                _ => NodeLifecycle::Planned,
+            };
+        }
+    });
+    let harness = harness_with(unserved.clone());
+    let mut collector = Collector::open(&harness.support_dir(), INTERVAL);
+    let origins = |collector: &Collector| {
+        let json = serde_json::to_value(document(collector)).unwrap();
+        ["lon1", "ams1"].map(|node| json["nodes"][node]["origin"].clone())
+    };
+    let both = |at: u64| [serde_json::json!(at), serde_json::json!(at)];
+    collector.maintain(&unserved, UnixTime::from_secs(NOW - 86_400), INTERVAL);
+    assert_eq!(origins(&collector), both(NOW - 86_400));
+    collector.maintain(&unserved, now(), INTERVAL);
+    assert_eq!(origins(&collector), both(NOW));
+    collector.maintain(&fixture(|_| {}), UnixTime::from_secs(NOW + 60), INTERVAL);
+    assert_eq!(
+        origins(&collector),
+        both(NOW),
+        "an applied node is not unserved"
+    );
+
+    // The harness keeps the support directory while it lives.
+    let (_kept, applied, mut fresh) = ready();
+    fresh.maintain(&applied, now(), INTERVAL);
+    assert!(
+        document(&fresh)
+            .node(&NodeId::parse("lon1").unwrap())
+            .is_none()
+    );
+}
+
+/// The deployment with its applied nodes adopted instead.
+fn adopted() -> Deployment {
+    fixture(|parts| {
+        for node in &mut parts.nodes {
+            if let NodeLifecycle::Applied { site, .. } = &node.lifecycle {
+                node.lifecycle = NodeLifecycle::Adopted { site: site.clone() };
+            }
+        }
+    })
+}
+
+/// A first apply's window: the agent polls while the Mac still says
+/// adopted, so a batch can hold the node's first month, empty. From then
+/// the origin stays, though the node is still adopted.
+#[test]
+fn an_adopted_node_keeps_its_origin_once_a_batch_held_anything() {
+    let deployment = adopted();
+    let mut harness = harness_with(deployment.clone());
+    harness.pin(PINNED);
+    let mut collector = Collector::open(&harness.support_dir(), INTERVAL);
+    collector.maintain(&deployment, UnixTime::from_secs(NOW - 3600), INTERVAL);
+    // ams1 sorts first, so the batch is its.
+    script_batch(&harness, &BTreeMap::new());
+    complete(&mut harness, &mut collector, &deployment);
+    assert!(collector.failure().is_none(), "{:?}", collector.failure());
+    let next_month = NOW + 30 * 86_400;
+    collector.maintain(&deployment, UnixTime::from_secs(next_month), INTERVAL);
+    let json = serde_json::to_value(document(&collector)).unwrap();
+    assert_eq!(json["nodes"]["ams1"]["origin"], NOW - 3600);
+    assert_eq!(
+        json["nodes"]["lon1"]["origin"], next_month,
+        "lon1 holds nothing"
+    );
+}
+
+/// A batch copies a node's history when it starts and installs the copy
+/// when it ends. A sighting made in between, while the node held nothing,
+/// is kept: the latest sighting wins, so one taken with the clock fast just
+/// before the batch does not outlast it.
+#[test]
+fn a_batch_keeps_a_sighting_made_while_it_ran() {
+    let deployment = adopted();
+    let mut harness = harness_with(deployment.clone());
+    harness.pin(PINNED);
+    let mut collector = Collector::open(&harness.support_dir(), INTERVAL);
+    let origin = |collector: &Collector| {
+        serde_json::to_value(document(collector)).unwrap()["nodes"]["ams1"]["origin"].clone()
+    };
+    // Six hours fast.
+    collector.maintain(&deployment, UnixTime::from_secs(NOW + 6 * 3600), INTERVAL);
+    // ams1 sorts first, so the batch is its; its first request is the status.
+    script_batch(&harness, &BTreeMap::new());
+    tick(&mut harness, &mut collector, &deployment);
+    collector.maintain(&deployment, UnixTime::from_secs(NOW - 60), INTERVAL);
+    assert_eq!(origin(&collector), NOW - 60);
+    complete(&mut harness, &mut collector, &deployment);
+    assert!(collector.failure().is_none(), "{:?}", collector.failure());
+    assert_eq!(origin(&collector), NOW - 60);
+    let held = serde_json::to_value(document(&collector)).unwrap();
+    assert_eq!(
+        held["nodes"]["ams1"]["months"]
+            .as_object()
+            .map(serde_json::Map::len),
+        Some(1),
+        "the batch's month is installed"
+    );
+}
+
+/// A write that fails leaves its candidate to be retried at the next
+/// maintenance, which sights the unserved nodes again: ams1, applied by
+/// then, keeps the candidate's origin, and lon1, still adopted, gets the
+/// retry's.
+#[test]
+fn a_retried_write_holds_the_retrys_sighting() {
+    let deployment = adopted();
+    let harness = harness_with(deployment.clone());
+    let support = harness.support_dir();
+    let mut collector = Collector::open(&support, INTERVAL);
+    fs::write(support.join(USAGE_DIRECTORY), b"blocked path").unwrap();
+    collector.maintain(&deployment, UnixTime::from_secs(NOW - 60), INTERVAL);
+    assert!(matches!(
+        collector.ledgers(),
+        Ledgers::Unavailable(UsageErrorKind::StoreUnavailable)
+    ));
+    fs::remove_file(support.join(USAGE_DIRECTORY)).unwrap();
+    let ams1_applied = fixture(|parts| {
+        for node in &mut parts.nodes {
+            if let NodeLifecycle::Applied { site, .. } = &node.lifecycle
+                && node.id.as_str() == "lon1"
+            {
+                node.lifecycle = NodeLifecycle::Adopted { site: site.clone() };
+            }
+        }
+    });
+    collector.maintain(&ams1_applied, now(), INTERVAL);
+    let json = serde_json::to_value(document(&collector)).unwrap();
+    assert_eq!(json["nodes"]["ams1"]["origin"], NOW - 60);
+    assert_eq!(json["nodes"]["lon1"]["origin"], NOW);
+}
+
+/// `usage/users.json` as an earlier build wrote it: lon1 sighted planned a
+/// month before, and ams1 collected while adopted, never sighted, holding
+/// nothing. Each gets the next maintenance as its origin while unserved,
+/// and keeps what it has once applied.
+#[test]
+fn a_stored_origin_moves_while_the_node_is_unserved_and_stays_once_it_is_applied() {
+    let month_ago = NOW - 30 * 86_400;
+    let empty = r#""months":{},"five_min":{},"hour":{},"day":{},"folded":{}"#;
+    let bytes = format!(
+        r#"{{"version":1,"nodes":{{"ams1":{{{empty},"origin":null,"folded_before":null,"lifetime_complete":false}},"lon1":{{{empty},"origin":{month_ago},"folded_before":null,"lifetime_complete":true}}}},"last_nonrevoked":{{}}}}"#
+    );
+    let unserved = fixture(|parts| {
+        for node in &mut parts.nodes {
+            node.lifecycle = match &node.lifecycle {
+                NodeLifecycle::Applied { site, .. } if node.id.as_str() == "ams1" => {
+                    NodeLifecycle::Adopted { site: site.clone() }
+                }
+                _ => NodeLifecycle::Planned,
+            };
+        }
+    });
+    let stored = |node: &str, json: &serde_json::Value| {
+        let node = &json["nodes"][node];
+        (node["origin"].clone(), node["lifetime_complete"].clone())
+    };
+    for (deployment, lon1, ams1) in [
+        (
+            unserved,
+            (NOW.into(), true.into()),
+            (NOW.into(), true.into()),
+        ),
+        (
+            fixture(|_| {}),
+            (month_ago.into(), true.into()),
+            (serde_json::Value::Null, false.into()),
+        ),
+    ] {
+        let harness = harness_with(deployment.clone());
+        write_user_usage(&harness.support_dir(), bytes.as_bytes()).unwrap();
+        let mut collector = Collector::open(&harness.support_dir(), INTERVAL);
+        collector.maintain(&deployment, now(), INTERVAL);
+        let json = serde_json::to_value(document(&collector)).unwrap();
+        assert_eq!(stored("lon1", &json), lon1);
+        assert_eq!(stored("ams1", &json), ams1);
     }
 }
