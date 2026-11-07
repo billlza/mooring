@@ -15,8 +15,8 @@ use mooring_model::node::{AppliedConfig, LifecycleStage, NodeLifecycle};
 use mooring_model::user::{SuspendReason, UserStatus};
 
 use super::builders::{
-    adopted_store, applied_record, initialised, node_id, planned_node, site, user, with_lifecycle,
-    with_node, with_user,
+    added_refs, adopted_store, applied_record, entries_for, initialised, node_id, planned_node,
+    site, user, with_lifecycle, with_node, with_user,
 };
 use super::{state_bytes, store_error};
 use crate::error::{ChangeError, ChangeErrorKind, StoreError, StoreErrorKind};
@@ -202,7 +202,8 @@ fn every_closure_change_bumps_the_generation() {
 /// Only a `Bookkeeping::Applied` record sets a node's confirmed generation
 /// (design §7). A closure can neither forge a confirmation, not even at the
 /// generation the store is about to stamp, nor lower, raise or replace one,
-/// through either write; it can still move a node out of `Applied`.
+/// through either write; it can still move a node on from `Applied`, to
+/// retire it.
 #[test]
 fn only_a_record_sets_a_confirmed_generation() {
     let (_dir, store, before, mut secrets) = adopted_store();
@@ -704,4 +705,259 @@ fn a_closure_changes_a_status_only_along_the_user_transitions() {
     assert_eq!(state_bytes(&store), on_disk);
     let removed = store.update_config(current, remove).unwrap();
     assert!(removed.deployment.users().is_empty());
+}
+
+/// lon1 on its site at `stage`; an applied lon1 confirmed `generation`.
+fn lon1_at(stage: LifecycleStage, generation: ConfigGeneration) -> NodeLifecycle {
+    let at = site([45, 67, 89, 10]);
+    match stage {
+        LifecycleStage::Planned => NodeLifecycle::Planned,
+        LifecycleStage::Adopted => NodeLifecycle::Adopted { site: at },
+        LifecycleStage::Applied => NodeLifecycle::Applied {
+            site: at,
+            applied: AppliedConfig {
+                config_generation: generation,
+                digest: Sha256Digest::from_bytes([0xab; 32]),
+            },
+        },
+        LifecycleStage::Retiring => NodeLifecycle::Retiring { site: at },
+        LifecycleStage::RetiredPendingProviderDeletion => {
+            NodeLifecycle::RetiredPendingProviderDeletion {
+                address: at.address,
+            }
+        }
+        LifecycleStage::Retired => NodeLifecycle::Retired,
+    }
+}
+
+/// Parts with node `id` removed, and every user's credentials on it with
+/// it, so that the model accepts them.
+fn without_node(mut parts: DeploymentParts, id: &str) -> DeploymentParts {
+    let node = node_id(id);
+    parts.nodes.retain(|candidate| candidate.id != node);
+    for user in &mut parts.users {
+        user.per_node.remove(&node);
+    }
+    parts
+}
+
+/// A closure moves a node only on along its lifecycle, never back, and
+/// removes none (design §7): a node seen planned or adopted has served no
+/// client, which the usage collector's lifetime origin relies on.
+///
+/// lon1 walks the lifecycle from adopted on, each step by the write that
+/// takes it. At each stage, a move back to every earlier stage, and lon1's
+/// removal, are refused through either write. That holds even when the ordered
+/// write brings every secret the change would reference, and nothing is
+/// written. A move back into `Applied` would forge a confirmation, so it
+/// stays `AppliedEdited`.
+#[test]
+fn a_closure_moves_a_node_only_forward_along_its_lifecycle() {
+    use LifecycleStage::{
+        Adopted, Applied, Planned, Retired, RetiredPendingProviderDeletion, Retiring,
+    };
+    let (_dir, store, adopted, mut secrets) = adopted_store();
+    let lon1 = node_id("lon1");
+    let order = [
+        Planned,
+        Adopted,
+        Applied,
+        Retiring,
+        RetiredPendingProviderDeletion,
+        Retired,
+    ];
+    let mut state = adopted;
+    for (place, &stage) in order.iter().enumerate().skip(1) {
+        let at = state.deployment.config_generation();
+        let move_to =
+            |to| move |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", lon1_at(to, at)));
+        state = match stage {
+            Planned | Adopted => state,
+            Applied => store.record(at, applied_record("lon1", at)).unwrap(),
+            Retiring | Retired => store.update_config(at, move_to(stage)).unwrap(),
+            RetiredPendingProviderDeletion => record_with_secrets(
+                &store,
+                &mut secrets,
+                at,
+                Bookkeeping::RetirementShutDown { node: lon1.clone() },
+            )
+            .unwrap(),
+        };
+        assert_eq!(
+            state.deployment.node(&lon1).unwrap().lifecycle.stage(),
+            stage
+        );
+        let current = state.deployment.config_generation();
+        let on_disk = state_bytes(&store);
+        let held = secrets.refs();
+        let back = order[..place].iter().copied().map(Some);
+        for to in back.chain([None]) {
+            let change = |parts| match to {
+                Some(to) => with_lifecycle(parts, "lon1", lon1_at(to, current)),
+                None => without_node(parts, "lon1"),
+            };
+            let refused = |error: StoreError| {
+                if to == Some(Applied) {
+                    assert!(
+                        matches!(&error, StoreError::AppliedEdited { node } if *node == lon1),
+                        "{stage:?} -> {to:?}: {error:?}"
+                    );
+                    assert_eq!(error.kind(), StoreErrorKind::AppliedEdited);
+                } else {
+                    assert!(
+                        matches!(
+                            &error,
+                            StoreError::NodeLifecycleEdited { node, from, to: found }
+                                if *node == lon1 && *from == stage && *found == to
+                        ),
+                        "{stage:?} -> {to:?}: {error:?}"
+                    );
+                    assert_eq!(error.kind(), StoreErrorKind::NodeLifecycleEdited);
+                }
+            };
+            refused(store_error(
+                store
+                    .update_config(current, |parts| Ok::<_, Infallible>(change(parts)))
+                    .unwrap_err(),
+            ));
+            let refs = added_refs(&state.deployment, change);
+            refused(store_error(
+                update_config_with_secrets(
+                    &store,
+                    &mut secrets,
+                    current,
+                    entries_for(&refs, 3),
+                    |parts| Ok::<_, Infallible>(change(parts)),
+                )
+                .unwrap_err(),
+            ));
+            assert_eq!(state_bytes(&store), on_disk);
+            assert_eq!(secrets.refs(), held);
+        }
+    }
+}
+
+/// A closure that writes back parts read before a confirmation was
+/// recorded would undo the confirmation, moving the node back to adopted.
+/// It is refused. A record keeps the generation, so the stale parts carry
+/// the one the store expects.
+#[test]
+fn stale_parts_cannot_undo_a_recorded_confirmation() {
+    let (_dir, store, before, _secrets) = adopted_store();
+    let current = before.deployment.config_generation();
+    store
+        .record(current, applied_record("lon1", current))
+        .unwrap();
+    let on_disk = state_bytes(&store);
+    let stale = before.deployment.into_parts();
+    let error = store_error(
+        store
+            .update_config(current, |_| Ok::<_, Infallible>(stale))
+            .unwrap_err(),
+    );
+    assert!(
+        matches!(
+            &error,
+            StoreError::NodeLifecycleEdited {
+                node,
+                from: LifecycleStage::Applied,
+                to: Some(LifecycleStage::Adopted),
+            } if *node == node_id("lon1")
+        ),
+        "{error:?}"
+    );
+    assert_eq!(state_bytes(&store), on_disk);
+}
+
+/// The store follows a node by its id. A closure that removes lon1 and
+/// adds it back planned, or that swaps its id with planned ams1's, moves
+/// lon1 back to planned, and is refused through either write. ams1, which
+/// comes first and moves on, does not stop the check. Nor may planned ams1
+/// be removed.
+#[test]
+fn a_node_is_followed_by_its_id() {
+    let (_dir, store, adopted, mut secrets) = adopted_store();
+    let add = |parts| with_node(parts, planned_node("ams1", 2, 20));
+    let refs = added_refs(&adopted.deployment, add);
+    let state = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        adopted.deployment.config_generation(),
+        entries_for(&refs, 4),
+        |parts| Ok::<_, Infallible>(add(parts)),
+    )
+    .unwrap();
+    let current = state.deployment.config_generation();
+    let on_disk = state_bytes(&store);
+    let held = secrets.refs();
+    let replanned = |mut parts: DeploymentParts| {
+        parts.nodes.retain(|node| node.id != node_id("lon1"));
+        parts.nodes.push(planned_node("lon1", 1, 10));
+        parts
+    };
+    let swapped = |mut parts: DeploymentParts| {
+        for node in &mut parts.nodes {
+            node.id = if node.id == node_id("lon1") {
+                node_id("ams1")
+            } else {
+                node_id("lon1")
+            };
+        }
+        parts
+    };
+    let refused = |error: StoreError| {
+        assert!(
+            matches!(
+                &error,
+                StoreError::NodeLifecycleEdited {
+                    node,
+                    from: LifecycleStage::Adopted,
+                    to: Some(LifecycleStage::Planned),
+                } if *node == node_id("lon1")
+            ),
+            "{error:?}"
+        );
+    };
+    for change in [replanned, swapped] {
+        refused(store_error(
+            store
+                .update_config(current, |parts| Ok::<_, Infallible>(change(parts)))
+                .unwrap_err(),
+        ));
+        let refs = added_refs(&state.deployment, change);
+        refused(store_error(
+            update_config_with_secrets(
+                &store,
+                &mut secrets,
+                current,
+                entries_for(&refs, 5),
+                |parts| Ok::<_, Infallible>(change(parts)),
+            )
+            .unwrap_err(),
+        ));
+        assert_eq!(state_bytes(&store), on_disk);
+        assert_eq!(secrets.refs(), held);
+    }
+    let removed = |error: StoreError| {
+        assert!(
+            matches!(
+                &error,
+                StoreError::NodeLifecycleEdited {
+                    node,
+                    from: LifecycleStage::Planned,
+                    to: None,
+                } if *node == node_id("ams1")
+            ),
+            "{error:?}"
+        );
+    };
+    let remove = |parts| Ok::<_, Infallible>(without_node(parts, "ams1"));
+    removed(store_error(
+        store.update_config(current, remove).unwrap_err(),
+    ));
+    removed(store_error(
+        update_config_with_secrets(&store, &mut secrets, current, Vec::new(), remove).unwrap_err(),
+    ));
+    assert_eq!(state_bytes(&store), on_disk);
+    assert_eq!(secrets.refs(), held);
 }
