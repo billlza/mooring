@@ -121,6 +121,18 @@ fn deployment(edit: impl FnOnce(&mut DeploymentParts)) -> Deployment {
     })
 }
 
+/// The deployment with lon1 still planned, as the daemon saw it before lon1
+/// served: a sighting then gives lon1 its lifetime origin.
+fn lon1_planned() -> Deployment {
+    deployment(|parts| {
+        for node in &mut parts.nodes {
+            if node.id.as_str() == "lon1" {
+                node.lifecycle = mooring_model::node::NodeLifecycle::Planned;
+            }
+        }
+    })
+}
+
 /// lon1's October so far.
 fn lon1_october(deployment: &Deployment) -> Entries {
     let ids = ids(deployment);
@@ -580,10 +592,7 @@ fn the_summary_shows_final_and_folded_months_and_the_lifetime() {
     let subject = ids(&deployment)[0].clone();
     let mut usage = CollectedUsage::default();
     // lon1 was observed before it served, on 2026-09-01.
-    usage.observe_unserved(
-        NodeId::parse("lon1").unwrap(),
-        UnixTime::from_secs(1_788_220_800),
-    );
+    usage.observe_unserved_nodes(&lon1_planned(), UnixTime::from_secs(1_788_220_800));
     let mut lon = usage.node(&NodeId::parse("lon1").unwrap()).unwrap().clone();
     record(
         &mut lon,
@@ -644,7 +653,7 @@ fn a_folded_total_is_complete_when_every_month_was_held() {
     let lon1 = NodeId::parse("lon1").unwrap();
     let mut scratch = CollectedUsage::default();
     // 2025-08-01T00:00:00Z.
-    scratch.observe_unserved(lon1.clone(), UnixTime::from_secs(1_754_006_400));
+    scratch.observe_unserved_nodes(&lon1_planned(), UnixTime::from_secs(1_754_006_400));
     let mut lon = scratch.node(&lon1).unwrap().clone();
     let mut month: UsageMonth = "2025-08".parse().unwrap();
     let current: UsageMonth = "2026-10".parse().unwrap();

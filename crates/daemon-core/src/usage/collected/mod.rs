@@ -13,7 +13,8 @@ use std::collections::BTreeMap;
 use mooring_agent_proto::{
     Principal, Resolution, StatsEmail, Traffic, UsageMonth, UsageSeriesV1, UsageV1,
 };
-use mooring_model::{NodeId, UnixTime, UserId};
+use mooring_model::node::LifecycleStage;
+use mooring_model::{Deployment, NodeId, UnixTime, UserId};
 use serde::{Deserialize, Serialize};
 
 use super::add;
@@ -129,23 +130,88 @@ impl CollectedUsage {
     }
 
     /// Installs one completely collected node batch after its durable write
-    /// has been prepared by the caller.
-    pub fn set_node(&mut self, node: NodeId, history: NodeUsageHistory) {
+    /// has been prepared by the caller. The batch began from a copy of the
+    /// node's history. While the stored history holds nothing, a sighting
+    /// made since may have replaced its origin; the batch keeps that
+    /// sighting, as the latest sighting wins ([`Self::observe_unserved_nodes`]).
+    pub fn set_node(&mut self, node: NodeId, mut history: NodeUsageHistory) {
+        if let Some(stored) = self.nodes.get(&node)
+            && stored.holds_nothing()
+        {
+            history.origin = stored.origin;
+            history.lifetime_complete = stored.lifetime_complete;
+        }
         self.nodes.insert(node, history);
     }
 
-    /// Records a node observed while still planned, before it could serve.
-    /// Existing applied nodes deliberately retain an unknown lifetime origin.
-    pub fn observe_unserved(&mut self, node: NodeId, at: UnixTime) {
-        self.nodes.entry(node).or_insert_with(|| NodeUsageHistory {
-            origin: Some(at),
-            lifetime_complete: true,
-            ..NodeUsageHistory::default()
-        });
+    /// Records that the daemon saw, at `at`, each node of `deployment` that
+    /// has served no client yet: a planned node, or an adopted one not yet
+    /// recorded applied. On a host new to Mooring, no client reaches a node
+    /// before the Mac records it applied: an export needs the node's
+    /// confirmed generation, and the Mac's exit and prober cover applied
+    /// nodes only. So such a node counted no client's bytes before `at`.
+    /// That needs the lifecycle to move only forward: no command moves a
+    /// node back to planned or adopted, but the store does not refuse such
+    /// an edit, which would give the node a late origin. A host that ran
+    /// Mooring before breaks it too: adoption keeps its usage files, which
+    /// may hold bytes from before `at`, and its old generation, which Xray
+    /// keeps running, or runs again from the host's next boot. The guard in
+    /// `aggregate.rs` catches only bytes of a month before the origin's.
+    ///
+    /// A node's agent records its first month once Xray runs, normally at
+    /// its first apply, which can come months after the node was planned.
+    /// So while the Mac holds nothing from the node, each sighting becomes
+    /// its origin, and its lifetime counts from that sighting's month. The
+    /// latest sighting wins, not the latest time, so a sighting taken with
+    /// the clock fast does not outlast the next one. While the Mac holds
+    /// anything from the node, the origin stays: it is the last sighting
+    /// before the Mac's first record, until every record has expired. A
+    /// node applied before the collector existed keeps its unknown origin.
+    pub fn observe_unserved_nodes(&mut self, deployment: &Deployment, at: UnixTime) {
+        for (id, node) in deployment.nodes() {
+            if unserved(node.lifecycle.stage()) {
+                self.observe_unserved(id.clone(), at);
+            }
+        }
+    }
+
+    /// One sighting of `node` unserved at `at`
+    /// ([`Self::observe_unserved_nodes`]).
+    pub(crate) fn observe_unserved(&mut self, node: NodeId, at: UnixTime) {
+        let history = self.nodes.entry(node).or_default();
+        if history.holds_nothing() {
+            history.origin = Some(at);
+            history.lifetime_complete = true;
+        }
+    }
+}
+
+/// Whether a node at `stage` has served no client yet: planned, or adopted
+/// and not yet recorded applied ([`CollectedUsage::observe_unserved_nodes`]).
+/// The match names every stage, so a new one must be decided here.
+const fn unserved(stage: LifecycleStage) -> bool {
+    match stage {
+        LifecycleStage::Planned | LifecycleStage::Adopted => true,
+        LifecycleStage::Applied
+        | LifecycleStage::Retiring
+        | LifecycleStage::RetiredPendingProviderDeletion
+        | LifecycleStage::Retired => false,
     }
 }
 
 impl NodeUsageHistory {
+    /// Whether the Mac holds nothing from the node: every field but the
+    /// origin and its completeness is as a new history has it, so a field
+    /// added later counts as held without an edit here.
+    fn holds_nothing(&self) -> bool {
+        *self
+            == Self {
+                origin: self.origin,
+                lifetime_complete: self.lifetime_complete,
+                ..Self::default()
+            }
+    }
+
     /// Latest fully received five-minute bin boundary, for the next pull.
     pub fn detail_through(&self) -> Option<u64> {
         self.five_min.last_key_value().map(|(at, _)| at + 300)
