@@ -19,15 +19,15 @@ use std::path::Path;
 use mooring_daemon_core::radio_history::{
     HourBin, RadioEventKind, RadioHistory, RadioPoll, RadioSample, Stats, decode_line, hourly,
 };
+use mooring_model::CalendarDate;
 use mooring_model::error::ModelError;
-use mooring_model::{CalendarDate, UnixTime};
 use mooring_store::{RadioDay, radio_day_path, read_radio_day};
 
 use crate::app::{Env, support_dir};
 use crate::daemon::radio::RADIO_HISTORY_DAYS;
 use crate::error::{CommandError, LocalError};
 use crate::router::error::reason_phrase;
-use crate::router::output::{Tenths, json_line, utc_stamp};
+use crate::router::output::{Tenths, hour_stamp, json_line, utc_stamp};
 
 /// One day of the range as read.
 struct Day {
@@ -207,12 +207,6 @@ fn summary(history: &RadioHistory, days: &[Day]) -> Result<String, ModelError> {
         }
     }
     Ok(text)
-}
-
-/// `<yyyy-mm-dd> <hh>:00`, the hour `start` begins.
-fn hour_stamp(start: UnixTime) -> Result<String, ModelError> {
-    let date = CalendarDate::utc_of(start)?;
-    Ok(format!("{date} {:02}:00", start.as_secs() % 86_400 / 3_600))
 }
 
 /// `min/median/max <unit>`, or "not reported".

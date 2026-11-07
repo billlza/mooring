@@ -54,3 +54,4 @@ mod units;
 mod upgrade;
 mod usage_collection;
 mod user;
+mod user_usage;

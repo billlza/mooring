@@ -5,16 +5,20 @@
 //! with invented zero bins. Aggregation and retention live separately.
 
 mod aggregate;
+pub mod history;
 mod retention;
 
 use std::collections::BTreeMap;
 
-use mooring_agent_proto::{Resolution, StatsEmail, Traffic, UsageMonth, UsageSeriesV1, UsageV1};
+use mooring_agent_proto::{
+    Principal, Resolution, StatsEmail, Traffic, UsageMonth, UsageSeriesV1, UsageV1,
+};
 use mooring_model::{NodeId, UnixTime, UserId};
 use serde::{Deserialize, Serialize};
 
 use super::add;
 use crate::error::UsageError;
+use crate::wire::accounting_principal;
 
 /// Bound on the complete persisted document, including every node.
 pub const MAX_COLLECTED_USAGE_BYTES: usize = 32 * 1024 * 1024;
@@ -28,6 +32,17 @@ type Bins = BTreeMap<u64, Counters>;
 struct MonthlyRecord {
     sample: UsageV1,
     received_at: UnixTime,
+}
+
+impl MonthlyRecord {
+    /// Whether the record is its month's final total: it was received once
+    /// the month had ended. One received earlier may still grow.
+    fn is_final(&self) -> bool {
+        self.sample
+            .month
+            .next()
+            .is_some_and(|next| self.received_at.as_secs() >= next.start().as_secs())
+    }
 }
 
 /// The Mac's history of a node. Constructors and ingestion validate the
@@ -72,6 +87,12 @@ fn corrupt(message: impl Into<String>) -> UsageError {
     UsageError::LedgerCorrupt {
         message: message.into(),
     }
+}
+
+/// The accounting principal of `user` ([`accounting_principal`]), whose
+/// failure would be a drift between the id rules, not a fault of a node.
+fn principal_of(user: &UserId) -> Result<Principal, UsageError> {
+    accounting_principal(user).map_err(|_| corrupt("user id cannot be an accounting principal"))
 }
 
 impl CollectedUsage {

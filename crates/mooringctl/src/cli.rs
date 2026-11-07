@@ -122,6 +122,30 @@ pub(crate) enum UserCommand {
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
     },
+    /// Print what this Mac holds about one user's traffic: the hourly and
+    /// daily bins of each node that may have counted it, and the monthly,
+    /// folded and lifetime totals, as the daemon would keep them now. It
+    /// names the user by id and alias, never by label, and changes
+    /// nothing; only --out writes, to a new file with mode 0600 (never
+    /// overwritten).
+    Usage {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// Print the document as one JSON line instead of a summary.
+        #[arg(long)]
+        json: bool,
+        /// Leave out the monthly, folded and lifetime totals: the bins
+        /// alone.
+        #[arg(long)]
+        bins_only: bool,
+        /// Write the document, pretty-printed, to this new file instead of
+        /// printing it, in a folder Time Machine excludes and outside
+        /// iCloud Drive, the Desktop and Documents. Mooring never deletes
+        /// the file: the retention of usage/users.json does not reach it.
+        #[arg(long, value_name = "PATH", conflicts_with = "json")]
+        out: Option<PathBuf>,
+    },
     /// Write the portal's profile bundle, for `mooring-portal
     /// import-profiles`: for each user named, the CFM file (sing-box JSON,
     /// credentials included) or why it is withheld, to a new file with mode

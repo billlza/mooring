@@ -14,7 +14,8 @@ use super::support::{
 use crate::error::{UsageError, UsageErrorKind};
 use crate::usage::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES, NodeUsageHistory, UserUsage};
 
-fn month(text: &str, updated: UnixTime, entries: Vec<(StatsEmail, Traffic)>) -> UsageV1 {
+/// A node's month `text` as sampled at `updated`, with `entries`.
+pub(super) fn month(text: &str, updated: UnixTime, entries: Vec<(StatsEmail, Traffic)>) -> UsageV1 {
     UsageV1 {
         month: text.parse::<UsageMonth>().unwrap(),
         updated_at: wire(updated),

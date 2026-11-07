@@ -1,0 +1,106 @@
+{
+  "format": "mooring-user-usage",
+  "version": 1,
+  "scope": "bins_only",
+  "generated_at": 1793880000,
+  "user": "fxuseraaab",
+  "alias": "tmmg-2dsv",
+  "status": "active",
+  "retention": "tiered",
+  "nodes": [
+    {
+      "node": "ams1",
+      "stage": "applied",
+      "hourly": {
+        "held": [],
+        "bins": []
+      },
+      "daily": {
+        "held": [],
+        "bins": []
+      },
+      "totals": null
+    },
+    {
+      "node": "lon1",
+      "stage": "applied",
+      "hourly": {
+        "held": [
+          {
+            "from": 1793664000,
+            "to": 1793750400
+          },
+          {
+            "from": 1793793600,
+            "to": 1793880000
+          }
+        ],
+        "bins": [
+          {
+            "start": 1793736000,
+            "bytes": {
+              "reality": {
+                "uplink": 1200,
+                "downlink": 34000
+              },
+              "hy2": {
+                "uplink": 0,
+                "downlink": 0
+              }
+            }
+          },
+          {
+            "start": 1793739600,
+            "bytes": {
+              "reality": {
+                "uplink": 0,
+                "downlink": 0
+              },
+              "hy2": {
+                "uplink": 300,
+                "downlink": 4100
+              }
+            }
+          },
+          {
+            "start": 1793869200,
+            "bytes": {
+              "reality": {
+                "uplink": 80,
+                "downlink": 2400
+              },
+              "hy2": {
+                "uplink": 7,
+                "downlink": 90
+              }
+            }
+          }
+        ]
+      },
+      "daily": {
+        "held": [
+          {
+            "from": 1793664000,
+            "to": 1793750400
+          }
+        ],
+        "bins": [
+          {
+            "start": 1793664000,
+            "bytes": {
+              "reality": {
+                "uplink": 1200,
+                "downlink": 34000
+              },
+              "hy2": {
+                "uplink": 300,
+                "downlink": 4100
+              }
+            }
+          }
+        ]
+      },
+      "totals": null
+    }
+  ]
+}

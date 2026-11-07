@@ -25,8 +25,8 @@
 //!   [`DataService`], of the same meaning, matched exhaustively here.
 
 use mooring_agent_proto::{
-    MacAlertKind, NodeName, OpaqueUserId, ReportBandNumber, ReportDataService, ReportUserId,
-    UnixTime as WireTime, ValueError,
+    MacAlertKind, NodeName, OpaqueUserId, Principal, ReportBandNumber, ReportDataService,
+    ReportUserId, UnixTime as WireTime, ValueError,
 };
 use mooring_model::{ModelError, NodeId, UnixTime, UserId};
 
@@ -128,6 +128,14 @@ pub(crate) fn accounting_user(principal: &OpaqueUserId) -> Result<UserId, ModelE
     UserId::parse(principal.as_str())
 }
 
+/// The accounting principal of `user`: the renderer names its accounting
+/// emails by its id, so it is that id as an opaque one. Every user id is
+/// one (the test below checks each), so `ValueError` would be a drift
+/// between the model's id rule and agent-proto's.
+pub(crate) fn accounting_principal(user: &UserId) -> Result<Principal, ValueError> {
+    user.as_str().parse().map(Principal::User)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -210,10 +218,14 @@ mod tests {
         #[test]
         fn every_user_id_comes_back_from_its_accounting_name(bits in any::<u64>(), reality in any::<bool>()) {
             let user = UserId::from_low_bits(bits);
-            let principal = OpaqueUserId::new(user.as_str()).unwrap();
-            prop_assert_eq!(accounting_user(&principal), Ok(user.clone()));
+            let principal = accounting_principal(&user).unwrap();
+            let Principal::User(opaque) = &principal else {
+                return Err(TestCaseError::fail("a user's principal is the probe"));
+            };
+            prop_assert_eq!(opaque.as_str(), user.as_str());
+            prop_assert_eq!(accounting_user(opaque), Ok(user.clone()));
             let inbound = if reality { Inbound::Reality } else { Inbound::Hy2 };
-            let email = StatsEmail { principal: Principal::User(principal), inbound };
+            let email = StatsEmail { principal, inbound };
             let reported: StatsEmail = email.to_string().parse().unwrap();
             let Principal::User(read) = reported.principal else {
                 return Err(TestCaseError::fail("a user's email read back as the probe"));

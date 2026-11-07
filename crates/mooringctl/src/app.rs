@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooring_daemon_core::router::RouterReading;
 use mooring_daemon_core::router::netgear::RedactedModelJson;
+use mooring_daemon_core::usage::history::UsageScope;
 use mooring_model::iface::BsdName;
 use mooring_model::secret::{SecretEntry, SecretRef};
 use mooring_model::time::UnixTime;
@@ -34,6 +35,7 @@ use crate::paths;
 use crate::prompt::{self, Answer, Console};
 use crate::router::output::{json_line, summary};
 use crate::router::{self, PinDecision, RouterEnv, decide_pin};
+use crate::user_history::Output;
 
 /// What a command runs against.
 pub(crate) struct Env<'a> {
@@ -125,6 +127,28 @@ pub(crate) fn run(
         Command::User(UserCommand::ExportProfiles { users, out: path }) => {
             crate::user::export_profiles(env, out, err, &users, &path)
         }
+        Command::User(UserCommand::Usage {
+            user,
+            json,
+            bins_only,
+            out: path,
+        }) => crate::user_history::usage(
+            env,
+            out,
+            err,
+            &user,
+            if bins_only {
+                UsageScope::BinsOnly
+            } else {
+                UsageScope::All
+            },
+            // clap refuses `--json` with `--out`.
+            match path.as_deref() {
+                Some(path) => Output::File(path),
+                None if json => Output::Json,
+                None => Output::Summary,
+            },
+        ),
         Command::Portal(PortalCommand::Export { users, out: path }) => {
             crate::portal::export(env, out, err, &users, &path)
         }

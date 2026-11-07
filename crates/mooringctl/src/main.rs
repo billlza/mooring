@@ -25,7 +25,13 @@
 //!   that keeps the configuration generation;
 //! - `user export <uid> [--format singbox|clash] --out <path>` writes the
 //!   user's file for CFM with mode 0600, never overwriting one, reading
-//!   only that user's secrets and only once every check has passed.
+//!   only that user's secrets and only once every check has passed;
+//! - `user usage <uid> [--json | --out <path>] [--bins-only]` prints what
+//!   this Mac holds about the user's traffic, by id and alias, never by
+//!   label: each node's hourly and daily bins and its monthly, folded and
+//!   lifetime totals, as the daemon would keep them now. It reads
+//!   `state.json` and the daemon's collected usage and changes nothing;
+//!   `--out` writes the document to a new file with mode 0600.
 //!
 //! The user portal's two files (design §9.5, `docs/portal-contract.md`),
 //! both refused until a revision of the user agreement covers the portal:
@@ -89,6 +95,8 @@ mod backup;
 #[cfg(target_os = "macos")]
 mod cli;
 #[cfg(target_os = "macos")]
+mod collected_usage;
+#[cfg(target_os = "macos")]
 mod daemon;
 #[cfg(target_os = "macos")]
 mod error;
@@ -123,6 +131,8 @@ mod status;
 mod tests;
 #[cfg(target_os = "macos")]
 mod user;
+#[cfg(target_os = "macos")]
+mod user_history;
 
 use std::io;
 use std::process::ExitCode;
