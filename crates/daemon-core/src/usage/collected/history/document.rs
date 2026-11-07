@@ -4,10 +4,13 @@
 //! 1, exactly as `mooringctl user usage` prints and writes it (design
 //! §15.3): every key always present, `null` for what is absent or unknown
 //! (never 0), and no other key. These types are that shape and are only
-//! serialised. They are built from the model's values by the mappings
-//! below, whose matches name every variant, so a new status, reason or
-//! stage needs a decision here, and the model's own serde format never
-//! reaches the document.
+//! serialised. The status, the suspension's reason, the retention and the
+//! node's stage are mapped from the model's enums below, by matches that
+//! name every variant: a new variant needs a decision here, and the
+//! model's own serde form of those enums never reaches the document.
+//! Times, ids, the alias, months and byte counts serialise as
+//! `mooring-model` and `mooring-agent-proto` spell them, which
+//! `contract/usage-fixtures/` pins.
 //!
 //! The document names the user by id and alias. It has no field for a
 //! label, a credential, a short id or an address.
@@ -203,9 +206,13 @@ pub enum Retention {
     Tiered,
     /// The user is revoked: everything held goes by this instant at the
     /// latest, 13 months after the last time the daemon saw it not
-    /// revoked, which is no earlier than the revocation.
+    /// revoked. That sighting came before the revocation, so the instant
+    /// is never later than 13 months after it.
     Until(UnixTime),
-    /// The user is revoked and its history is deleted: nothing is held.
+    /// The user is revoked and its retention has ended: its deadline has
+    /// passed, or the daemon never saw it not revoked. Nothing of its
+    /// history is shown, and the daemon's next prune deletes what
+    /// `usage/users.json` may still hold.
     Erased,
 }
 
@@ -253,7 +260,8 @@ impl NodeStage {
     }
 }
 
-/// What one node's history holds for the user.
+/// What one node's history holds for the user: nothing, for a node the
+/// daemon has not collected from yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct NodeHistory {
@@ -311,8 +319,8 @@ pub struct Totals {
     /// `None` when none has.
     pub folded: Option<Folded>,
     /// Everything the node counted for the user since it was first served;
-    /// `None` when that cannot be told (no recorded origin, or a month
-    /// missing or not final).
+    /// `None` when that cannot be told (no recorded origin, a month missing
+    /// or not final, or a month held from before the origin).
     pub lifetime: Option<ProtocolTraffic>,
 }
 
@@ -324,8 +332,9 @@ pub struct MonthTotal {
     pub month: UsageMonth,
     /// The node's accounting poll the total is as of.
     pub counted_through: UnixTime,
-    /// Whether the total was received once the month had ended, so that it
-    /// can no longer grow.
+    /// Whether the total was received once the month had ended by the
+    /// Mac's clock. A node whose clock runs behind the Mac's can still add
+    /// to it, and the daemon pulls a month again for 7 days after it ends.
     #[serde(rename = "final")]
     pub is_final: bool,
     /// The user's bytes.

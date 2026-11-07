@@ -14,7 +14,7 @@ use mooring_model::{Deployment, UnixTime, UserId};
 use mooring_store::Store;
 
 use crate::app::{Env, support_dir};
-use crate::daemon::usage::{UsageFault, read_collected};
+use crate::collected_usage::{UsageFault, read_collected};
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
 use crate::state::{load, output};

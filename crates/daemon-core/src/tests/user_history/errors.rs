@@ -124,21 +124,105 @@ fn usage_dated_after_now_is_refused() {
 }
 
 /// The refusals come in their order: the user before anything of the
-/// document, and usage dated after now before a node missing its history.
+/// document, and usage dated after now before the users the document
+/// names.
 #[test]
 fn the_refusals_come_in_their_order() {
     let mut future = served();
     let mut ams = future.node(&node("ams1")).unwrap().clone();
     detail(&mut ams, "ams1", now(), later(300), &[]);
-    future.set_node(node("ams1"), ams.clone());
+    future.set_node(node("ams1"), ams);
     let stranger = UserId::from_low_bits(0x3_1415_9265);
     assert_eq!(
         future.user_history(&deployment(), &stranger, now(), UsageScope::All),
         Err(UsageError::Model(ModelError::UnknownUser { id: stranger }))
     );
-    let mut partial = CollectedUsage::default();
-    partial.set_node(node("ams1"), ams);
-    assert_eq!(refusal(&partial, now()), dated_after_now("ams1"));
+    // lon1 names a user this deployment does not hold, which is refused
+    // only once nothing is dated after now.
+    let removed = super::other();
+    let without = edited(|parts| parts.users.retain(|user| user.id != removed));
+    assert_eq!(
+        future.user_history(&without, &subject(), now(), UsageScope::All),
+        Err(dated_after_now("ams1"))
+    );
+    assert_eq!(
+        served().user_history(&without, &subject(), now(), UsageScope::All),
+        Err(UsageError::UnknownUser {
+            node: node("lon1"),
+            user: removed,
+        })
+    );
+}
+
+/// A month received after now is refused even when its sample was taken
+/// before now: the receipt dates it, not the sample.
+#[test]
+fn a_month_received_after_now_is_refused_whenever_it_was_sampled() {
+    let (subject, other) = (subject(), super::other());
+    let mut future = served();
+    let mut lon = future.node(&node("lon1")).unwrap().clone();
+    monthly(
+        &mut lon,
+        "lon1",
+        "2026-11",
+        later_than_midnight(11 * 3600 + 58 * 60),
+        later(60),
+        vec![
+            (email(&subject, Reality), traffic(1400, 35_200)),
+            (email(&subject, Hy2), traffic(25, 207)),
+            (email(&other, Reality), traffic(999, 9_999)),
+            (super::probe(Reality), traffic(0, 500)),
+            (super::probe(Hy2), traffic(0, 600)),
+        ],
+    );
+    future.set_node(node("lon1"), lon);
+    assert_eq!(refusal(&future, now()), dated_after_now("lon1"));
+}
+
+/// What ends or was recorded at the read's own second is not after it: a
+/// day that ends then is held, and an origin recorded then is no refusal.
+#[test]
+fn what_ends_or_was_recorded_at_the_read_is_not_after_it() {
+    let midnight = at("2026-11-05", 0);
+    let mut lon = NodeUsageHistory::default();
+    detail(&mut lon, "lon1", at("2026-11-04", 0), midnight, &[]);
+    let mut collected = CollectedUsage::default();
+    collected.set_node(node("lon1"), lon);
+    let read = collected
+        .user_history(&deployment(), &subject(), midnight, UsageScope::All)
+        .unwrap();
+    assert_eq!(
+        read.nodes()[1].daily.held,
+        [super::range(at("2026-11-04", 0), midnight)]
+    );
+    let mut planned = served();
+    planned.observe_unserved(node("par1"), now());
+    assert!(
+        planned
+            .user_history(&deployment(), &subject(), now(), UsageScope::All)
+            .is_ok()
+    );
+}
+
+/// A user last seen not revoked after now would push the user's deadline
+/// out once it is revoked. Only a clock that went back or a corrupt
+/// document records one, and it is refused to the second.
+#[test]
+fn a_user_seen_after_now_is_refused() {
+    let seen = edited_document(&served(), |value| {
+        value["last_nonrevoked"][subject().as_str()] = serde_json::json!(later(1).as_secs());
+    });
+    assert_eq!(
+        refusal(&seen, now()),
+        UsageError::LedgerCorrupt {
+            message: "a user was last seen not revoked after now (the Mac's clock went back, or the document is corrupt)"
+                .to_owned(),
+        }
+    );
+    assert!(
+        seen.user_history(&deployment(), &subject(), later(1), UsageScope::All)
+            .is_ok()
+    );
 }
 
 /// An accounting email whose principal is no user id was not rendered by
@@ -231,18 +315,6 @@ fn an_overflowing_total_is_refused() {
     let mut lifetime = served();
     lifetime.set_node(node("lon1"), lon);
     assert_eq!(refusal(&lifetime, now()), UsageError::CounterOverflow);
-}
-
-/// A node that may have counted traffic but has no history is
-/// `MissingLedger`, never a node with nothing held.
-#[test]
-fn a_served_node_without_a_history_is_refused() {
-    let mut collected = CollectedUsage::default();
-    collected.set_node(node("lon1"), served().node(&node("lon1")).unwrap().clone());
-    assert_eq!(
-        refusal(&collected, now()),
-        UsageError::MissingLedger { node: node("ams1") }
-    );
 }
 
 /// The document names a user the deployment does not hold: it is not the

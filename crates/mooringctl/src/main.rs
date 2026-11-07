@@ -95,6 +95,8 @@ mod backup;
 #[cfg(target_os = "macos")]
 mod cli;
 #[cfg(target_os = "macos")]
+mod collected_usage;
+#[cfg(target_os = "macos")]
 mod daemon;
 #[cfg(target_os = "macos")]
 mod error;

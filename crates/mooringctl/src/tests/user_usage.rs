@@ -522,7 +522,7 @@ fn a_revoked_user_is_shown_with_its_deadline_and_then_as_erased() {
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     assert_eq!(
         outcome.stdout,
-        "user fxuseraaab (alias tmmg-2dsv), revoked, at 2026-10-13 19:20:00 UTC\npast its deletion deadline: nothing of it is shown, and the daemon deletes what it may still hold at its next prune\n"
+        "user fxuseraaab (alias tmmg-2dsv), revoked, at 2026-10-13 19:20:00 UTC\nits retention has ended: nothing of it is shown, and the daemon deletes what it may still hold at its next prune\n"
     );
     let outcome = run(&mut harness, subject, &["--json"]);
     let document: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap();
@@ -713,6 +713,42 @@ fn with_no_node_past_planned_nothing_is_held() {
     assert_eq!(document["nodes"], serde_json::json!([]));
 }
 
+/// A node past `Planned` that the daemon has not collected from yet holds
+/// nothing on this Mac. It is listed with nothing held and its lifetime
+/// unknown, and the user's history on the other nodes is shown: the node
+/// is no reason to refuse it.
+#[test]
+fn a_node_not_collected_from_yet_is_shown_holding_nothing() {
+    let deployment = deployment(|_| {});
+    let lon1 = NodeId::parse("lon1").unwrap();
+    let mut partial = CollectedUsage::default();
+    partial.set_node(
+        lon1.clone(),
+        collected(&deployment).node(&lon1).unwrap().clone(),
+    );
+    let mut harness = holding(deployment.clone(), &partial);
+    let outcome = run(&mut harness, &ids(&deployment)[0], &[]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let expected = SUMMARY.replace(
+        "\
+ams1 (applied)
+  hourly bins 2026-10-13 00:00:00 UTC to 2026-10-13 19:00:00 UTC: no traffic
+  daily bins: none held
+  month 2026-10, counted through 2026-10-13 19:18:00 UTC, not final: reality 0 B up, 0 B down; hy2 0 B up, 0 B down
+  lifetime: unknown
+",
+        "\
+ams1 (applied)
+  hourly bins: none held
+  daily bins: none held
+  months: none held
+  lifetime: unknown
+",
+    );
+    assert_ne!(expected, SUMMARY);
+    assert_eq!(outcome.stdout, expected);
+}
+
 /// What a file in the support directory is: its mode, inode and
 /// modification time, and its bytes (none for a folder).
 type Entry = (u32, u64, std::time::SystemTime, Option<Vec<u8>>);
@@ -775,14 +811,23 @@ fn the_support_directory_is_left_as_it_was() {
     let stranger = UserId::from_low_bits(0x3_1415_9265);
     assert_eq!(run(&mut harness, &stranger, &[]).code, 1);
     assert_eq!(tree(&support), before);
-    // Nor does a refusal for an inconsistent document change it.
+    // Nor does a refusal for an inconsistent document change it: here
+    // lon1's October, received after now.
     let lon1 = NodeId::parse("lon1").unwrap();
-    let mut partial = CollectedUsage::default();
-    partial.set_node(
-        lon1.clone(),
-        collected(&deployment).node(&lon1).unwrap().clone(),
-    );
-    write_user_usage(&support, &partial.encode().unwrap()).unwrap();
+    let mut future = collected(&deployment);
+    let mut lon = future.node(&lon1).unwrap().clone();
+    lon.record_month(
+        &lon1,
+        UsageV1 {
+            month: "2026-10".parse().unwrap(),
+            updated_at: wire(NOW + 60),
+            traffic: lon1_october(&deployment).into_iter().collect(),
+        },
+        UnixTime::from_secs(NOW + 60),
+    )
+    .unwrap();
+    future.set_node(lon1, lon);
+    write_user_usage(&support, &future.encode().unwrap()).unwrap();
     let before = tree(&support);
     assert_eq!(run(&mut harness, &subject, &["--json"]).code, 1);
     assert_eq!(tree(&support), before);

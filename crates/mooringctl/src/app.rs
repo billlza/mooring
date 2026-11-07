@@ -35,6 +35,7 @@ use crate::paths;
 use crate::prompt::{self, Answer, Console};
 use crate::router::output::{json_line, summary};
 use crate::router::{self, PinDecision, RouterEnv, decide_pin};
+use crate::user_history::Output;
 
 /// What a command runs against.
 pub(crate) struct Env<'a> {
@@ -136,13 +137,17 @@ pub(crate) fn run(
             out,
             err,
             &user,
-            json,
             if bins_only {
                 UsageScope::BinsOnly
             } else {
                 UsageScope::All
             },
-            path.as_deref(),
+            // clap refuses `--json` with `--out`.
+            match path.as_deref() {
+                Some(path) => Output::File(path),
+                None if json => Output::Json,
+                None => Output::Summary,
+            },
         ),
         Command::Portal(PortalCommand::Export { users, out: path }) => {
             crate::portal::export(env, out, err, &users, &path)

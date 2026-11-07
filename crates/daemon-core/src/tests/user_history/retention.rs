@@ -319,3 +319,46 @@ fn a_suspended_users_history_is_kept_by_tier() {
         .unwrap();
     assert_eq!(history.nodes(), active.nodes());
 }
+
+/// A month folded before it was final leaves the folded total a lower
+/// bound, even on a node whose origin is recorded. Here it is August 2025,
+/// received a minute before it ended and folded once its retention ended
+/// on 2026-10-01.
+#[test]
+fn a_month_folded_before_it_was_final_leaves_a_lower_bound() {
+    let subject = subject();
+    let mut planned = CollectedUsage::default();
+    planned.observe_unserved(node("lon1"), at("2025-08-01", 0));
+    let mut lon = planned.node(&node("lon1")).unwrap().clone();
+    monthly(
+        &mut lon,
+        "lon1",
+        "2025-08",
+        at("2025-08-31", 86_280),
+        at("2025-08-31", 86_340),
+        vec![(email(&subject, Reality), traffic(10, 20))],
+    );
+    monthly(
+        &mut lon,
+        "lon1",
+        "2026-11",
+        at("2026-11-05", 11 * 3600 + 58 * 60),
+        at("2026-11-05", 11 * 3600 + 59 * 60),
+        vec![],
+    );
+    let mut collected = CollectedUsage::default();
+    collected.set_node(node("lon1"), lon);
+    let history = collected
+        .user_history(&deployment(), &subject, now(), UsageScope::All)
+        .unwrap();
+    let totals = history.nodes()[1].totals.as_ref().unwrap();
+    assert_eq!(
+        totals.folded,
+        Some(Folded {
+            before: month("2025-09"),
+            complete: false,
+            bytes: bytes((10, 20), (0, 0)),
+        })
+    );
+    assert_eq!(totals.lifetime, None);
+}

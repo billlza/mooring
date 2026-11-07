@@ -127,7 +127,7 @@ pub(crate) enum UserCommand {
     /// folded and lifetime totals, as the daemon would keep them now. It
     /// names the user by id and alias, never by label, and changes
     /// nothing; only --out writes, to a new file with mode 0600 (never
-    /// overwritten), as for a ban record.
+    /// overwritten).
     Usage {
         /// The user's id.
         #[arg(value_name = "USER_ID")]
@@ -141,7 +141,8 @@ pub(crate) enum UserCommand {
         bins_only: bool,
         /// Write the document, pretty-printed, to this new file instead of
         /// printing it, in a folder Time Machine excludes and outside
-        /// iCloud Drive, the Desktop and Documents.
+        /// iCloud Drive, the Desktop and Documents. Mooring never deletes
+        /// the file: the retention of usage/users.json does not reach it.
         #[arg(long, value_name = "PATH", conflicts_with = "json")]
         out: Option<PathBuf>,
     },

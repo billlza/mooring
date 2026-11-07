@@ -81,7 +81,7 @@ fn retention(retention: Retention) -> Result<String, ModelError> {
             "due for deletion by {} at the latest, each tier sooner as it expires; {FIVE_MINUTES}\n",
             utc_stamp(until)?
         ),
-        Retention::Erased => "past its deletion deadline: nothing of it is shown, and the daemon deletes what it may still hold at its next prune\n".to_owned(),
+        Retention::Erased => "its retention has ended: nothing of it is shown, and the daemon deletes what it may still hold at its next prune\n".to_owned(),
     })
 }
 
@@ -110,6 +110,9 @@ fn node_text(text: &mut String, node: &NodeHistory) -> Result<(), ModelError> {
     let Some(totals) = &node.totals else {
         return Ok(());
     };
+    if totals.months.is_empty() {
+        text.push_str("  months: none held\n");
+    }
     for month in &totals.months {
         text.push_str(&format!(
             "  month {}, counted through {}, {}: {}\n",
@@ -228,7 +231,7 @@ mod tests {
         );
         assert_eq!(
             retention(Retention::Erased).unwrap(),
-            "past its deletion deadline: nothing of it is shown, and the daemon deletes what it may still hold at its next prune\n"
+            "its retention has ended: nothing of it is shown, and the daemon deletes what it may still hold at its next prune\n"
         );
     }
 }

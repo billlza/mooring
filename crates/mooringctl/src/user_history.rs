@@ -21,32 +21,41 @@ use mooring_model::UserId;
 use mooring_store::{Store, USAGE_DIRECTORY, USER_USAGE_FILE};
 
 use crate::app::{Env, support_dir};
-use crate::daemon::usage::{UsageFault, read_collected_document};
+use crate::collected_usage::{UsageFault, read_collected_document};
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
 use crate::router::output::json_line;
-use crate::state::{load, output};
+use crate::state::{self, load};
 
-/// `user usage`: prints `user`'s history as a summary, or as one JSON line
-/// with `json`, or writes it pretty-printed to the new file `path` (mode
-/// 0600, never overwriting one, its folder warned about as for an
-/// export's). `json` and `path` never come together: clap refuses them.
+/// Where `user usage` puts the history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Output<'a> {
+    /// The summary, on stdout.
+    Summary,
+    /// The document as one JSON line, on stdout.
+    Json,
+    /// The document pretty-printed, in this new file (mode 0600, never
+    /// overwriting one, its folder warned about as for an export's).
+    File(&'a Path),
+}
+
+/// `user usage`: puts `user`'s history, its parts as `scope` says, where
+/// `output` says.
 ///
 /// Refused, with nothing printed, in this order: no state (`NoState`); an
 /// id the deployment does not hold (`UnknownUser`), before the collected
 /// usage is opened; no collected usage (`NoCollectedUsage`); collected
 /// usage that cannot be read or is inconsistent (`UserUsage`, with the
-/// core's reason); and, with `path`, a file that exists or cannot be
-/// written. A summary that cannot be made, which only a time in the state
-/// past the year 9999 could cause, is an output error.
+/// core's reason); and, for a file, one that exists or cannot be written.
+/// A summary that cannot be made, which only a time in the state past the
+/// year 9999 could cause, is an output error.
 pub(crate) fn usage(
     env: &Env<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
     user: &UserId,
-    json: bool,
     scope: UsageScope,
-    path: Option<&Path>,
+    output: Output<'_>,
 ) -> Result<(), CommandError> {
     let support = support_dir(env)?;
     let state = load(&Store::new(&support))?;
@@ -64,16 +73,16 @@ pub(crate) fn usage(
     let history = collected
         .user_history(&state.deployment, user, now, scope)
         .map_err(|error| LocalError::UserUsage(Box::new(UsageFault::Inconsistent(error))))?;
-    let text = match path {
-        Some(path) => return write(env, out, err, path, &history),
-        None if json => json_line(&history)
+    let text = match output {
+        Output::File(path) => return write(env, out, err, path, &history),
+        Output::Json => json_line(&history)
             .map_err(io::Error::other)
-            .map_err(output)?,
-        None => text::summary(&history)
+            .map_err(state::output)?,
+        Output::Summary => text::summary(&history)
             .map_err(io::Error::other)
-            .map_err(output)?,
+            .map_err(state::output)?,
     };
-    out.write_all(text.as_bytes()).map_err(output)
+    out.write_all(text.as_bytes()).map_err(state::output)
 }
 
 /// Writes `history` as the core encodes it for a file to the new file
@@ -85,7 +94,10 @@ fn write(
     path: &Path,
     history: &UserUsageHistory,
 ) -> Result<(), CommandError> {
-    let bytes = history.pretty().map_err(io::Error::other).map_err(output)?;
+    let bytes = history
+        .pretty()
+        .map_err(io::Error::other)
+        .map_err(state::output)?;
     export_file::prepare(env, err, path)?;
     export_file::write_new(path, &bytes)?;
     out.write_all(
@@ -96,5 +108,5 @@ fn write(
         )
         .as_bytes(),
     )
-    .map_err(output)
+    .map_err(state::output)
 }

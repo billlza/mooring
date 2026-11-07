@@ -30,7 +30,7 @@ use mooring_model::{CalendarDate, NodeId, PortalNotCovered, PublicAlias, UserId}
 use mooring_render::RenderError;
 use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadError, StoreError};
 
-use crate::daemon::usage::UsageFault;
+use crate::collected_usage::UsageFault;
 use crate::node::NodeError;
 use crate::node::adopt::Step;
 use crate::router::error::RouterError;

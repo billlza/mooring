@@ -552,6 +552,47 @@ fn a_month_from_before_the_origin_leaves_the_lifetime_unknown() {
     );
 }
 
+/// A node past `Planned` that the daemon has not collected from yet holds
+/// nothing on this Mac. It is listed with its tiers held nowhere, no month,
+/// nothing folded and its lifetime unknown, and the other nodes read as
+/// ever. The aggregate refuses it, since it needs every node's figures.
+#[test]
+fn a_node_not_collected_from_yet_is_listed_with_nothing_held() {
+    let mut collected = CollectedUsage::default();
+    collected.set_node(node("lon1"), served().node(&node("lon1")).unwrap().clone());
+    for scope in [UsageScope::All, UsageScope::BinsOnly] {
+        let history = collected
+            .user_history(&deployment(), &subject(), now(), scope)
+            .unwrap();
+        let [ams, lon] = history.nodes() else {
+            panic!("two nodes: {:?}", history.nodes());
+        };
+        assert_eq!(
+            *ams,
+            NodeHistory {
+                node: node("ams1"),
+                stage: NodeStage::Applied,
+                hourly: nothing(),
+                daily: nothing(),
+                totals: (scope == UsageScope::All).then(|| Totals {
+                    months: Vec::new(),
+                    folded: None,
+                    lifetime: None,
+                }),
+            },
+            "{scope:?}"
+        );
+        let full = served()
+            .user_history(&deployment(), &subject(), now(), scope)
+            .unwrap();
+        assert_eq!(lon, &full.nodes()[1], "{scope:?}");
+    }
+    assert_eq!(
+        collected.aggregate(&deployment(), now()).unwrap_err(),
+        crate::error::UsageError::MissingLedger { node: node("ams1") }
+    );
+}
+
 /// A node not yet past `Planned` never served and is not listed; every
 /// other stage is, under its own name, a retired one included.
 #[test]

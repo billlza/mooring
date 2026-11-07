@@ -9,7 +9,7 @@ use std::os::unix::fs::symlink;
 
 use clap::Parser as _;
 use mooring_agent_proto::UsageV1;
-use mooring_daemon_core::usage::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES};
+use mooring_daemon_core::usage::MAX_COLLECTED_USAGE_BYTES;
 use mooring_model::{NodeId, UnixTime, UserId};
 use mooring_store::{USAGE_DIRECTORY, USER_USAGE_FILE, write_sim_meter, write_user_usage};
 
@@ -165,9 +165,8 @@ fn an_unreadable_document_is_refused_with_its_cause() {
     assert_eq!(fs::read(&linked).unwrap(), good);
 }
 
-/// A document that holds usage dated after now, or no history of a node
-/// that may have counted traffic, is inconsistent: refused with the core's
-/// reason.
+/// A document that holds usage dated after now is inconsistent: refused
+/// with the core's reason.
 #[test]
 fn an_inconsistent_document_is_refused_with_its_reason() {
     let deployment = deployment(|_| {});
@@ -186,22 +185,12 @@ fn an_inconsistent_document_is_refused_with_its_reason() {
     )
     .unwrap();
     future.set_node(lon1.clone(), lon);
-    let mut harness = holding(deployment.clone(), &future);
+    let mut harness = holding(deployment, &future);
     assert_eq!(
         refused(&mut harness, &user),
         fault(
             "the collected usage ledger is invalid: lon1 holds usage dated after now (the Mac's clock went back, or the document is corrupt)"
         )
-    );
-    let mut partial = CollectedUsage::default();
-    partial.set_node(
-        lon1.clone(),
-        collected(&deployment).node(&lon1).unwrap().clone(),
-    );
-    let mut harness = holding(deployment, &partial);
-    assert_eq!(
-        refused(&mut harness, &user),
-        fault("ams1 may have counted traffic, but no usage ledger is given for it")
     );
 }
 

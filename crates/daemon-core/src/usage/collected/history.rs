@@ -3,7 +3,8 @@
 //! One user's retained usage (design §15.3, `mooringctl user usage`): for
 //! each node that may have counted the user's traffic, the hourly and
 //! daily bins its history holds and the monthly, folded and lifetime
-//! totals, as the daemon would keep them at `now`.
+//! totals, as the daemon would keep them at `now`. A node the daemon has
+//! not collected from yet holds none of them.
 //!
 //! # Retention
 //!
@@ -42,19 +43,26 @@ use crate::wire::{mac_time, wire_time};
 
 impl CollectedUsage {
     /// What this history holds about `user` at `now`, its parts as `scope`
-    /// says, once pruned at `now` as the daemon prunes it.
+    /// says, once pruned at `now` as the daemon prunes it. Every node past
+    /// `Planned` is listed. One the daemon has not collected from yet holds
+    /// nothing on this Mac, so its tiers are held nowhere and its totals
+    /// are unknown. It is not refused as the aggregate refuses it: the
+    /// aggregate needs every node's figures, and this only shows what is
+    /// held.
     ///
-    /// Refused, in this order: a user the deployment does not hold
-    /// ([`UsageError::Model`]); a `now` past the year 9999; any usage dated
-    /// after `now` (a month received, a bin that ends or an origin recorded
-    /// after it), which only a clock that went back or a corrupt document
-    /// leaves (`LedgerCorrupt`); then node by node, in id order, a node
-    /// past `Planned` without a history (`MissingLedger`) or whose history
-    /// names an accounting email no user of the deployment has or holds a
-    /// month total below the detail it covers, as the aggregate refuses
-    /// them (`UnknownUser`, `PrincipalNotAUser`, `MonthlyInconsistent`);
-    /// and a total that overflows while the copy is pruned or a lifetime
-    /// summed (`CounterOverflow`).
+    /// Refused, in this order:
+    /// - a user the deployment does not hold ([`UsageError::Model`]);
+    /// - a `now` past the year 9999;
+    /// - anything dated after `now`: a month received, a bin that ends, an
+    ///   origin recorded or a user last seen not revoked after it. Only a
+    ///   clock that went back or a corrupt document leaves one
+    ///   (`LedgerCorrupt`).
+    /// - node by node, in id order, a history that names an accounting
+    ///   email no user of the deployment has, or that holds a month total
+    ///   below the detail it covers. The aggregate refuses these too
+    ///   (`UnknownUser`, `PrincipalNotAUser`, `MonthlyInconsistent`).
+    /// - a total that overflows while the copy is pruned or a lifetime is
+    ///   summed (`CounterOverflow`).
     pub fn user_history(
         &self,
         deployment: &Deployment,
@@ -72,31 +80,37 @@ impl CollectedUsage {
                 )));
             }
         }
+        // A sighting after now would push a revoked user's deadline out.
+        if self.last_nonrevoked.values().any(|seen| *seen > now) {
+            return Err(corrupt(
+                "a user was last seen not revoked after now (the Mac's clock went back, or the document is corrupt)",
+            ));
+        }
         let served = served(deployment);
-        // The document as stored is checked, as the aggregate checks it:
-        // the prune drops the counters of ids the deployment does not hold,
-        // so after it a document of another deployment would read as no
+        // The stored document is checked as the aggregate checks it. The
+        // prune drops the counters of ids the deployment does not hold, so
+        // after the prune another deployment's document would read as no
         // traffic. The prune keeps what this checks.
-        for &node in served.keys() {
-            self.nodes
-                .get(node)
-                .ok_or_else(|| UsageError::MissingLedger { node: node.clone() })?
-                .validate_users(node, deployment)?;
+        for (node, history) in &self.nodes {
+            if served.contains_key(node) {
+                history.validate_users(node, deployment)?;
+            }
         }
         let kept = self.pruned(deployment, now)?;
         let deletion = kept.deletion(deployment, user, now)?;
         let emails = UserEmails::of(user)?;
-        // Every node served has a history in the pruned copy: each was
-        // checked above, and the prune keeps every node of the deployment.
+        // A node with no history, which the daemon has not collected from
+        // yet, holds what an empty history holds: no held range, no month
+        // and no lifetime, which are nothing known, never zeros.
+        let uncollected = NodeUsageHistory::default();
         let nodes = if deletion == Deletion::Done {
             Vec::new()
         } else {
-            kept.nodes
+            served
                 .iter()
-                .filter_map(|(node, history)| {
-                    served
-                        .get(node)
-                        .map(|&stage| emails.node(node, stage, history, current, scope))
+                .map(|(&node, &stage)| {
+                    let history = kept.nodes.get(node).unwrap_or(&uncollected);
+                    emails.node(node, stage, history, current, scope)
                 })
                 .collect::<Result<_, _>>()?
         };
