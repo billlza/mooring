@@ -45,7 +45,12 @@
       outage, and refunded by the outage's time only if the user insists.
       When the service ends, the unused days are refunded. Refunds go back
       to the card; once the card can take none, time or traffic replaces
-      them. Nothing else is refunded.
+      them, except for a payment by a banned user's card (clause 3), which
+      grants nothing and is only refunded (the operator's decision of
+      2026-11-07). A ban found to be a mistake is undone: its records are
+      deleted, and the days unused at the ban are made up, or refunded if
+      the user insists (the operator's decision, the same day). Nothing
+      else is refunded.
     - The text names no price and makes no legal claim. Whether UK consumer
       law, including the rules on subscription contracts, adds to it is the
       operator's to check.
@@ -56,15 +61,31 @@
     abuse review) and one who has not accepted the current revision keep
     their link, which returns nothing until they are served again; only
     revocation, a ban included, ends it for good (the operator's decision
-    of 2026-11-06; the portal pauses links since 120ca8a). A quota
+    of 2026-11-06; the portal pauses links since 120ca8a). A paused link
+    can be disabled at the portal but not regenerated, as the portal makes
+    links only for an account with a profile: of clause 2's
+    「重新生成……或停用它」, a paused user has the second (the portal's test
+    a_paused_link_fetches_nothing_and_works_again_once_delivered). A quota
     suspension ends at the next billing cycle only once Mooring lifts it
     there (planned with M5's apply), and the link works again after the
     next bundle. CFM's wording
-    (「导入链接」, 「更新」, 「编辑」, 「QRCode」, the link shown in the
+    (「导入链接」, 「更新」, 「编辑」, 「QRCode」, 「TUN 模式」, 「系统代理」,
+    「规则」, the default mode (ui/src/state.js:111), the link shown in the
     profile's details) is CFM 0.5.1's: its zh-Hans catalogue and app.js at
-    release/0.5.1 (8fd6a634). Its subscription fetch resolves the portal's
-    name with the system's DNS even while it goes through CFM's own proxy
-    (commands/subscriptions/fetch.rs:470), which clause 4 discloses.
+    release/0.5.1 (8fd6a634). Its subscription
+    fetch resolves the portal's name with the system's DNS even while it
+    goes through CFM's own proxy (commands/subscriptions/fetch.rs:470).
+    While the core runs with 「TUN 模式」 on, alone or with 「系统代理」, the
+    system's DNS is the tunnel's resolver for every domain
+    (native/macos/Sources/CFWPacketTunnel/PacketTunnelProvider.swift:589-596),
+    which sing-box answers with DoH through the selected node
+    (crates/cfw-singbox-config/src/projection.rs:655-667 and 840-841), as
+    Mooring's profile holds only outbounds (this repo's
+    crates/export/src/singbox.rs). With 「中国大陆直连」 on, in 「规则」
+    mode, sing-box sends the names on GeoSite cn to AliDNS and DNSPod by
+    DoH dialled directly (crates/cfw-singbox-config/src/mainland.rs:41-57
+    and 84-99). Clause 4 says all three; they are read from the source,
+    and M6 checks them on the real build.
   - Clause 4 adds the portal's host: a UK VPS of its own, neither a node nor
     the Mac (the operator's decision of 2026-11-06). What it keeps is the
     portal's schema at 520c358 (accounts, sessions, bindings, snapshot
@@ -88,7 +109,28 @@
       passes, one lane, a fixed public salt) since the portal's e0604f2. A
       sign-up computes the same digest to check the list, and keeps nothing
       of it. No key kept out of the database and its backups is built, so a
-      copy of them can still test addresses. Clause 4 says how far:
+      copy of them can still test addresses. With payment, the list is
+      also to keep the Stripe fingerprints of the cards the banned user
+      paid with (clause 3), to be built as follows:
+      - The portal holds no Stripe key (its docs/payments.md §2), so the
+        operator reads the fingerprints in the Stripe Dashboard at the ban
+        and gives them to the ban command.
+      - The fingerprint is on the payment's Charge
+        (`payment_method_details.card.fingerprint`), not on the Checkout
+        Session the portal now handles. So the portal is to read
+        `charge.succeeded` and join it to the order by its PaymentIntent.
+        Stripe does not order its events, so no order is to be pulled
+        before its charge is checked.
+      - A match keeps only a flag on the order, never the fingerprint,
+        and grants nothing. The operator refunds it in the Dashboard. If
+        it started an auto-renewing month, the operator also cancels that
+        subscription and deletes the saved card.
+      - A fingerprint names a card number, so a replacement card escapes
+        it. A wallet payment (Apple Pay, Google Pay) may carry the
+        token's fingerprint instead (Stripe's API reference for
+        card.fingerprint), so the payment links offer the card alone
+        (delivery.md, section 0).
+      Clause 4 says how far the email's digest goes:
       - Whoever holds the data can test any addresses they have quickly:
         about a million an hour on one eight-core computer (OpenSSL 4.1's
         Argon2id, which reproduces the portal's pinned digest, on an M1
@@ -107,13 +149,27 @@
       of cron, systemd and mail (delivery.md, section 0).
     - The portal keeps client addresses only in memory; its reverse proxy
       keeps no access log, and TLS ends on that host.
-    - The Mac's new record is the payments it pulls, under the 13-month
-      rule, built with the payment pull.
+    - The Mac's new records are the payments it pulls, under the 13-month
+      rule, built with the payment pull, and the operator's ban records
+      (clause 3). The ban records are kept until the service ends, outside
+      Mooring's state, so neither the 13-month rule nor `user forget`
+      reaches them.
+    - The operator's phone and Mac keep FaceTime's call history with each
+      user: the number or Apple ID, and the call times. The operator
+      deletes it at the user's revocation (the operator's decision of
+      2026-11-07). A banned user's contact stays in the ban record.
     - Stripe and the user's card issuer are its new third parties. What
       Stripe keeps is its Checkout and Radar data: the payment page's
       fields, the card's brand, last four digits, expiry and country, and
       the payer's IP address, location and device. The operator deletes a
       revoked user's saved card at Stripe; the payments themselves stay.
+      The operator compares a new user's payments with the banned users'
+      in the Stripe Dashboard. Only a ban copies anything out of Stripe
+      (the operator's decision of 2026-11-07):
+      - the IP address, location and device of the banned user's payments,
+        into the ban record;
+      - the fingerprints of the banned user's cards, into the portal's ban
+        list.
       The operator's Stripe business name and statement descriptor say
       nothing about the service.
   - Clause 4's other promises are revision 1's: decision F7 (retention,
@@ -127,16 +183,51 @@
     - The ban is the operator's decision of 2026-11-06, in their words:
       «额度用尽当然只暂停直到下一个计费周期，你用我的网从事非法活动被我抓了，我当然要封禁涉事账号。并且使其永远不得重复注册».
       A ban refunds nothing (the operator's decision, the same day).
+    - On 2026-11-07 the operator added that a banned person must be
+      recognised under another email or account too, in their words:
+      «还得想办法让他换个号也能被认出来，要不然一个发动网络攻击的换个号又回来了».
+      They chose four means, each stated in clause 4. The records of the
+      first three are kept until the service ends:
+      - The ban record on the Mac (delivery.md, section 10). It holds:
+        - the label;
+        - the phone number or Apple ID of the FaceTime calls;
+        - the ban's day;
+        - copies of the user's hourly and daily usage (bytes by node and
+          protocol) and of their payments;
+        - what the Stripe Dashboard shows of those payments: IP address,
+          location, device.
+      - The email's digest at the portal (below).
+      - The Stripe fingerprints of the cards the user paid with, at the
+        portal. Later payments by those cards grant nothing and are
+        refunded. This is to be built with payment (above).
+      - A comparison of every new user with the banned: when they join, at
+        each payment, and while they are served.
+        - It uses records already kept: those above, FaceTime's call
+          history, and what the Stripe Dashboard shows of payments.
+          Nothing is collected for it.
+        - A likeness is a reason to check. The operator bans only once
+          they have confirmed it is the same person.
+      They also decided that day:
+      - the Stripe copy;
+      - the deletion of the call history;
+      - keeping these records until the service ends, not for good;
+      - what a ban found to be a mistake undoes.
+      The client line is left out, since every user is on Cfm05
+      (delivery.md, section 1), so it tells no one apart. The record copies
+      hourly and daily figures, not five-minute ones.
     - Mooring's revocation records no reason, so a ban is the operator's
       own act at the portal, `mooring-portal ban` (portal 852eb24), beside
-      the revocation in Mooring.
-    - The portal deletes the account as for any revocation. It keeps for
-      good the Argon2id digest of the email (above), trimmed and in lower
-      case, with the ban's time, and answers a registration with that
-      email as it answers one with a taken email. `unban` drops it.
-    - The ban stops nothing but that email; the operator's binding by
-      account number is the real gate. A payment identity added later
-      must join clause 4 before users confirm this revision.
+      the revocation in Mooring, with the ban record kept outside
+      Mooring's state.
+    - The portal deletes the account as for any revocation. It keeps,
+      until the service ends, the Argon2id digest of the email (above),
+      trimmed and in lower case, with the ban's time, and answers a
+      registration with that email as it answers one with a taken email.
+      `unban` drops it, and the cards' fingerprints too once they exist.
+    - An email stops only that email, and a card only that card. What
+      keeps a banned person out is the operator's binding by account
+      number after a call, with the ban records checked before it
+      (delivery.md, section 1).
   - Clause 5's shared line: the operator undertakes to keep the line's
     monthly cap from being reached. Their example was more SIMs, which
     design §18 leaves to a later decision. A pause from the cap is an
@@ -162,7 +253,7 @@
 - 配置改为在门户上取得：用订阅链接导入 CFM，或者下载配置文件。订阅链接和配置文件一样，都是只属于你的凭据（第 2、5 条）。
 - 门户所在的服务器和 Stripe 是新的保存地点：第 4 条写明它们保存什么、保存多久、谁能看到。
 - 服务到期 3 个月后仍未续费，你的账户会被作废（第 6 条）。
-- 用本服务从事违法活动的，会被封禁，以后也不能再注册（第 3 条）。
+- 用本服务从事违法活动的，会被封禁，以后换用别的邮箱、门户账号或银行卡也不能再使用本服务。为此，运营者会保留认出被封禁的人所需的记录，直到本服务停止，并把每位新用户与他们比对（第 3、4 条）。
 
 ## 1. 收费，不转售
 
@@ -188,7 +279,9 @@
   - 发生这种情况时，请按第 5 条告诉运营者。
 - 你坚持要退款时，运营者按中断的时间退款。
 - 运营者停止提供本服务时，按你还没用到的天数退款。
-- 退款都退回你付款用的银行卡。这张卡已经不能退款时，改为补偿时间或流量；本服务停止时，就无法补偿了。
+- 封禁之后，如果有人用被封禁的人付过款的银行卡付款，运营者不开通服务，并退回这笔付款（第 3 条）。
+- 封禁后发现是误封的，运营者补回被封禁时还没用到的天数；你坚持要退款时，按这些天数退款（第 3 条）。
+- 退款都退回你付款用的银行卡。这张卡已经不能退款时，改为补偿时间或流量，上面所说封禁之后的付款除外；本服务停止时，就无法补偿了。
 - 其他情况既不补偿也不退款，例如：你自己不再使用；你的配额用完或服务到期；你因为违反本约定被暂停、作废或封禁；你自己的设备或网络出了问题。
 
 ## 2. 配置和链接只给你一人
@@ -211,7 +304,9 @@
 - 不得使用 BitTorrent 等 P2P 下载或分享，不得通过 25 端口直接投递邮件。服务器会拦截 25 端口，以及它能识别出的 P2P 流量。
 - 服务器拒绝中国大陆的网站和 IP。访问国内网站时，请按《使用指南》打开 CFM 的“中国大陆直连”开关，国内网站就会直接连接，不经过本服务。
 - 所有流量都从运营者在英国的个人手机线路出去，在运营商那里记在运营者名下。
-- 运营者确认你用本服务从事违法活动时，会封禁你：作废你的账户，删除你的门户账号，你的订阅链接永久失效，你以后也不能再注册门户账号。已付的费用不退。
+- 运营者确认你用本服务从事违法活动时，会封禁你：作废你的账户，删除你的门户账号，你的订阅链接永久失效。已付的费用不退。
+- 被封禁后，你不得再使用本服务，换用别的邮箱、门户账号或银行卡也不行。运营者会保留认出你所需的记录，直到本服务停止，并把每位新用户与被封禁的人比对（第 4 条）。封禁之后，如果有人用你付过款的银行卡付款，运营者不开通服务，并退回这笔付款。
+- 封禁后发现是误封的，运营者会删除第 4 条所说的封禁记录、邮箱摘要和银行卡识别码，你可以重新加入，并按第 1 条补回被封禁时还没用到的天数。
 
 ## 4. 运营者能看到什么、保存多久
 
@@ -221,9 +316,13 @@
 - 你最近一次使用的时间；
 - 你的账户状态变化（启用、暂停、作废），以及运营者为你做的操作（例如导出配置、更换凭据）及其时间；
 - 从门户取回的你的付款记录：订单编号、买了什么、金额和币种、付款时间、为你开通了什么，以及开通的时间；
-- 你接受本约定的版本号和日期。
+- 你接受本约定的版本号和日期；
+- 如果你被封禁：你的名字、你和运营者 FaceTime 通话用的电话号码或 Apple ID、封禁的日期，你按小时和按日汇总的流量记录和付款记录在封禁时的副本，以及 Stripe 后台显示的你付款时的 IP 地址、大致位置和设备信息，用来认出你是否换了账号回来（第 3 条）。
 
 你的名字和别名只保存在运营者的电脑上，不会发送到服务器或门户。
+
+**运营者的手机和电脑上，FaceTime 的通话记录会保存：**
+- 你和运营者通话用的电话号码或 Apple ID，以及每次通话的时间。
 
 **服务器（你在 CFM 里连接的节点）上会保存：**
 - 按用户编号统计的流量明细和每月合计，以及每个编号最近一次使用的时间；
@@ -240,25 +339,32 @@
 - 你的 CFM 配置，包括你的凭据和服务器地址。门户要把它原样交给 CFM，所以它不加密保存；
 - 你的订单记录：买了什么、金额、付款时间和付款状态（包括退款），以及 Stripe 的付款编号。
 
-门户不保存你的名字、别名和 IP 地址，也不保存你的银行卡信息：卡号只在 Stripe 的付款页上填写。
+门户不保存你的名字、别名和 IP 地址，也不保存你的银行卡信息：卡号只在 Stripe 的付款页上填写。你被封禁时，门户会保留你付款用过的银行卡的识别码（见「保存多久」）。
 
 **Stripe 上会保存：**
 - 你在付款页上填写的信息（例如邮箱和持卡人姓名）；卡的品牌、后四位、有效期和发卡国家；每笔付款的金额和时间；以及付款时 Stripe 为防欺诈自动收集的 IP 地址、大致位置和设备信息。运营者能在 Stripe 的后台看到这些，看不到完整的卡号。
 - 开通自动续费时，你的银行卡，用于以后的扣款。
 
+**与被封禁的人比对：**
+- 在你加入时、每次付款时，以及你使用本服务期间，运营者会把你与被封禁的人比对：名字和 FaceTime 联系方式；登录邮箱；付款用的银行卡；按小时和按日汇总的流量记录和付款记录；以及 Stripe 后台显示的付款 IP 地址、大致位置和设备信息。
+- 比对只用本条写明会保存的记录，不为此另外收集任何信息。
+- 比对出的相似之处只是核实的理由：运营者确认是同一个人后，才会封禁。
+
 **运营者的电脑、服务器和门户不会记录：**
 - 你访问的网站、域名、IP 地址、DNS 查询或网址；不保存任何连接日志；
-- 你的 IP 地址和设备信息；
+- 你的 IP 地址和设备信息，被封禁的人的封禁记录除外；
 - 你在门户上看了哪些页面，以及 CFM 什么时候更新了订阅；
 - 运营者不检查你的流量内容。
 
 **无法避免：**
 - 你在国内使用的网络（宽带或手机运营商）能看到你的设备在什么时间连接了哪个服务器、传了多少数据，但看不到经过本服务传输的内容。
-- 你在国内使用的网络还能看到你访问了门户的域名：CFM 导入或「更新」订阅时，会先用你所在网络的 DNS 查询门户的域名，打开了「系统代理」时也是这样；不经过 CFM 访问门户时也一样。
+- 你在国内使用的网络还能看到你访问了门户的域名：CFM 导入或「更新」订阅时，会先用你所在网络的 DNS 查询门户的域名，打开了「系统代理」时也是这样；只有在 CFM 的内核运行、并且打开了「TUN 模式」时，这个查询才经节点用加密 DNS 发出。不经过 CFM 访问门户时，你所在的网络也能看到。
+- 打开“中国大陆直连”后，在默认的「规则」模式下，CFM 直接用阿里云和腾讯的加密 DNS 查询国内网站的域名：它们能看到你的 IP 地址和这些域名。
 - 你连接时，服务器能看到你的 IP 地址，但不记录。门户也一样：你访问门户时，它能看到你的 IP 地址，只用来限制请求的次数，不记录。
 - 服务器提供商能看到你的 IP 地址、连接时间和流量大小；如果它控制了服务器，也能看到你访问的目标地址和域名，以及没有经过 HTTPS 加密的内容。
 - 门户所在服务器的提供商能看到连接门户的 IP 地址；如果它控制了这台服务器，也能看到门户上保存的全部内容，包括你的配置和凭据，以及磁盘上可能残留的、门户已经删除的记录。
 - 门户被攻破或数据外泄时，所有用户的登录邮箱、订单、配置和凭据会一起外泄。这时运营者会为所有用户更换凭据，你需要在门户上重新生成订阅链接并导入 CFM，或者重新下载配置文件。
+- 运营者的电脑被攻破时，上面关于你的记录和所有用户的凭据会一起外泄，被封禁的人的封禁记录也在其中。
 - 知道门户网址的人，可以在注册页输入一个邮箱，从门户的回答看出这个邮箱是否已有门户账号或被封禁过（这两种情况门户的回答相同）。门户限制了每个网络尝试的次数，但挡不住只核对几个邮箱的人。
 - 服务器通过 Cloudflare 的加密 DNS 服务（1.1.1.1 和 1.0.0.1）查询你访问的域名。Cloudflare 能看到这些域名和查询时间，但看到的是英国移动网络的地址，不是你的地址。
 - 英国移动运营商能看到目标 IP 地址，以及大多数加密连接开头的域名（SNI），看不到你的地址，也看不到 HTTPS 加密的内容。
@@ -267,9 +373,11 @@
 
 **保存多久：**
 - 运营者的电脑上：五分钟粒度的流量记录保存 7 天，按小时汇总的保存 35 天，按日和按月的合计保存 13 个月。
-- 你的累计总量、最近一次使用的时间、账户状态变化和这些操作记录、付款记录、你接受本约定的记录，以及你的名字和别名，在你的账户作废 13 个月后全部删除。
+- 你的累计总量、最近一次使用的时间、账户状态变化和这些操作记录、付款记录、你接受本约定的记录，以及你的名字和别名，在你的账户作废 13 个月后全部删除；你被封禁时，其中一部分另有副本保存在封禁记录里（见下一条）。
+- 你被封禁时，运营者电脑上的封禁记录（第 3 条）保留到本服务停止：你的名字、FaceTime 联系方式、封禁的日期，流量记录和付款记录的副本，以及你付款时的 IP 地址、大致位置和设备信息。封禁后发现是误封的，这些记录随即删除。
+- FaceTime 通话记录：你的账户作废时，运营者在手机和电脑上删除和你的通话记录；这些设备此前的备份里如果还有，要到备份被删除或覆盖时才会消失。
 - 服务器上：流量明细保存 48 小时，每月合计在当月结束 7 天后删除，运营者的电脑会在此之前取回它们；你最近一次使用的时间在你的账户作废、服务器不再为你服务时删除。
-- 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会一直保留你登录邮箱的摘要和封禁的时间，用来拒绝这个邮箱再注册。门户不保存邮箱本身，但拿到门户数据的人，可以很快核对一个或一批邮箱是否被封禁过：一台普通电脑一两个小时就能核对一百万个。像 QQ 号邮箱这样由数字组成的邮箱，要把所有号码逐个试一遍，需要大量计算，随手做不到；但如果有人租用足够多的电脑，几天内就能试完，而且试完这一遍，就能同时认出所有被封禁过的这类邮箱。
+- 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会保留你登录邮箱的摘要、你付款用过的银行卡在 Stripe 的识别码（Stripe 给同一个卡号的编号，不是卡号本身），以及封禁的时间，直到本服务停止：用来拒绝这个邮箱再注册，并认出用这些卡付的款（不开通服务，退回付款，见第 3 条）。封禁后发现是误封的，这些也随即删除。门户不保存邮箱本身，但拿到门户数据的人，可以很快核对一个或一批邮箱是否被封禁过：一台普通电脑一两个小时就能核对一百万个。像 QQ 号邮箱这样由数字组成的邮箱，要把所有号码逐个试一遍，需要大量计算，随手做不到；但如果有人租用足够多的电脑，几天内就能试完，而且试完这一遍，就能同时认出所有被封禁过的这类邮箱。
 - Stripe 上：你的账户作废时，运营者会取消你的自动续费，并删除 Stripe 上保存的你的银行卡。付款记录本身由 Stripe 按它自己的规定保存，运营者不能删除。
 - 你可以随时请运营者告诉你，运营者保存了哪些关于你的记录。退出时，你可以请运营者立即删除运营者电脑上的这些记录，不必等 13 个月；门户上的记录在运营者删除你的门户账号时删除；服务器上的记录按上面的期限自动删除。
 

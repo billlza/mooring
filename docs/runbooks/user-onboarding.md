@@ -15,10 +15,14 @@
     (「导入链接」, the box 「HTTPS 订阅或节点链接」, 「更新」, 「删除」, 「QRCode」)
     were checked against the same catalogue and app.js at v0.5.0 and at
     release/0.5.1 (8fd6a634), and the route an update takes against
-    release/0.5.1's commands/subscriptions/fetch.rs: through CFM's own proxy
-    while 「系统代理」 is on, through the tunnel in TUN mode (which captures
-    the direct socket), and direct only with both off. M6 still checks every
-    CFM step against the real build (design §22).
+    release/0.5.1's commands/subscriptions/fetch.rs:329-351: through CFM's
+    own proxy whenever its core runs, except in pure TUN mode, where the
+    tunnel captures the direct socket; direct only once the core is
+    stopped (「停止内核」 on the 「常规」 page, ui/src/general.js:149).
+    Turning both switches off keeps a ready core running as a local proxy
+    (src/engine.rs:66-76), and the profile menu's 「凭据」 needs the core
+    stopped (ui/src/app.js:1095 and 1134-1136). M6 still checks every CFM
+    step against the real build (design §22).
   - The portal's wording (「我的账户」, 「账户」, 「订阅」, 「账号编号」,
     「生成订阅链接」, 「重新生成」, 「停用链接」, 「下载配置文件（JSON）」) is the
     portal's zh catalogue (crates/web/src/i18n/zh.rs) at its commit
@@ -63,7 +67,7 @@
 ## 3. 取得配置并导入
 
 运营者为你开通后，「我的账户」的「订阅」页会出现「在 CFM 中使用」。下面两种方式任选一种，导入的配置完全相同：
-- **订阅链接：** 以后在 CFM 里点「更新」就能取得新配置。但链接本身就是凭据，会保存在 CFM 里；CFM 每次导入或「更新」时，还会用你所在网络的 DNS 查询门户的域名，你在国内使用的网络能看到。
+- **订阅链接：** 以后在 CFM 里点「更新」就能取得新配置。但链接本身就是凭据，会保存在 CFM 里；CFM 每次导入或「更新」还会用你所在网络的 DNS 查询门户的域名，你在国内使用的网络能看到；只有在 CFM 的内核运行、并且打开了「TUN 模式」时，这个查询才经节点用加密 DNS 发出。
 - **配置文件：** CFM 里不保存链接；但每次更新都要重新下载、重新导入。
 
 **用订阅链接：**
@@ -78,7 +82,7 @@
 2. 打开 CFM，进入「配置文件」，点「导入文件」，选择这个文件。
 3. 导入后，删除这个文件，并清空废纸篓。
 
-**导入之后：** 在「配置文件」页右键点按（或双指点按）新导入的配置文件，选「凭据」，应能看到全部凭据都已存入「钥匙串凭据库」。这一项需要先关闭「系统代理」和「TUN 模式」。
+**导入之后：** 在「配置文件」页右键点按（或双指点按）新导入的配置文件，选「凭据」，应能看到全部凭据都已存入「钥匙串凭据库」。这一项需要内核已经停止：「常规」页上的按钮是「停止内核」时，先点它。
 
 不要把配置文件的内容粘贴进输入框。
 
@@ -112,7 +116,7 @@
 CFM 不会自动更新配置。运营者告诉你配置已经更新，或者所有节点都连不上时：
 
 - **用订阅链接导入的：** 在「配置文件」页右键点按这份配置，选「更新」。
-  - 打开了「系统代理」或「TUN 模式」时，CFM 经过节点去取新配置；节点连不上时，这样会失败。这时先关闭「系统代理」和「TUN 模式」，再「更新」一次：CFM 会直接连接门户，你所在的网络能看到你访问了门户的网址。
+  - CFM 的内核在运行时，CFM 经过节点去取新配置，关掉「系统代理」和「TUN 模式」也一样；节点连不上时，这样会失败。这时到「常规」页，按钮显示「停止内核」就点它，再「更新」一次：CFM 会直接连接门户，你所在的网络能看到你访问了门户的域名。取到新配置后，按第 5 步重新连接。
   - 修改过门户密码，或者重新生成过链接时，旧链接已经失效：按第 3 步用新链接导入，再在「配置文件」页右键点按旧的配置，选「删除」。
 - **用配置文件导入的：** 到「订阅」页重新下载，按第 3 步导入，再在「配置文件」页右键点按旧的配置，选「删除」。
 - 换用新的配置时，在「配置文件」页右键点按它并选「选择」。
@@ -135,6 +139,7 @@ CFM 不会自动更新配置。运营者告诉你配置已经更新，或者所�
 2. 删除 .dmg 和 .json（或 .yaml）文件，并清空废纸篓。
 3. 删除聊天记录里发送映像的那条消息。
 4. 在「配置文件」页右键点按新配置并选「选择」，再删除旧的配置。
+5. 按第 5 步重新连接。
 
 凭据已保存在 CFM 的钥匙串凭据库里，不会因此丢失。
 
