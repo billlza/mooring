@@ -14,7 +14,7 @@ use mooring_model::{Deployment, UnixTime, UserId};
 use mooring_store::Store;
 
 use crate::app::{Env, support_dir};
-use crate::daemon::usage::{CollectedReadError, read_collected};
+use crate::daemon::usage::{UsageFault, read_collected};
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
 use crate::state::{load, output};
@@ -95,21 +95,9 @@ enum Usage {
     Behind(UsageError),
 }
 
-/// Why the collected usage cannot be used at all. A fault is never read as
-/// usage that is behind: that would replace every user's figures at the
-/// portal with "unknown" and hide it.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum UsageFault {
-    /// `usage/users.json` cannot be read, or holds no collected usage
-    /// document.
-    #[error(transparent)]
-    Read(CollectedReadError),
-    /// The collected usage contradicts itself or the deployment.
-    #[error(transparent)]
-    Inconsistent(UsageError),
-}
-
-/// The collected usage aggregated at `now`.
+/// The collected usage aggregated at `now`. A fault is never read as usage
+/// that is behind: that would replace every user's figures at the portal
+/// with "unknown" and hide it.
 fn usage(support: &Path, deployment: &Deployment, now: UnixTime) -> Result<Usage, UsageFault> {
     match read_collected(support)
         .map_err(UsageFault::Read)?

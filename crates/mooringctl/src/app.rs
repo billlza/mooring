@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooring_daemon_core::router::RouterReading;
 use mooring_daemon_core::router::netgear::RedactedModelJson;
+use mooring_daemon_core::usage::history::UsageScope;
 use mooring_model::iface::BsdName;
 use mooring_model::secret::{SecretEntry, SecretRef};
 use mooring_model::time::UnixTime;
@@ -125,6 +126,24 @@ pub(crate) fn run(
         Command::User(UserCommand::ExportProfiles { users, out: path }) => {
             crate::user::export_profiles(env, out, err, &users, &path)
         }
+        Command::User(UserCommand::Usage {
+            user,
+            json,
+            bins_only,
+            out: path,
+        }) => crate::user_history::usage(
+            env,
+            out,
+            err,
+            &user,
+            json,
+            if bins_only {
+                UsageScope::BinsOnly
+            } else {
+                UsageScope::All
+            },
+            path.as_deref(),
+        ),
         Command::Portal(PortalCommand::Export { users, out: path }) => {
             crate::portal::export(env, out, err, &users, &path)
         }

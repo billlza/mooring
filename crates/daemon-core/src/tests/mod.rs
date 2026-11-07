@@ -21,4 +21,5 @@ mod router;
 mod snapshot;
 mod support;
 mod usage;
+mod user_history;
 mod variants;
