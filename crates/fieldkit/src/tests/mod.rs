@@ -10,7 +10,9 @@ mod env;
 #[cfg(target_os = "macos")]
 mod limits;
 mod loopback;
+mod net;
 mod output;
 mod search;
+mod sockopt;
 mod stats;
 mod wire;

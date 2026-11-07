@@ -29,7 +29,7 @@ use serde::Serialize;
 
 use crate::error::FieldkitError;
 use crate::limits::ensure_open_files;
-use crate::net::{read_line, timed_out};
+use crate::net::{option_outcome, read_line, timed_out};
 use crate::output::Output;
 use crate::wire::{
     CEILING_ACK, EchoAnswer, EchoKind, EchoRequest, MAX_LINE, SinkReport, parse_sink_line,
@@ -463,9 +463,11 @@ fn sink_accept(
 /// the seconds asked, then the report at once (the probe may still be
 /// sending: what its buffers still hold is not the line's rate), then the
 /// rest drained and discarded until the probe closes or [`SINK_GRACE`]
-/// passes.
-fn sink_session(mut stream: TcpStream, stop: &AtomicBool) -> io::Result<()> {
-    stream.set_read_timeout(Some(SINK_OPENING))?;
+/// passes. A reset before the report ends the session with the read or
+/// write that meets it ([`option_outcome`]); after the report it is the
+/// probe's abort, which ends the draining.
+pub(crate) fn sink_session(mut stream: TcpStream, stop: &AtomicBool) -> io::Result<()> {
+    option_outcome(&stream, stream.set_read_timeout(Some(SINK_OPENING)))?;
     let line = read_line(&mut stream, MAX_LINE)?
         .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "no opening line"))?;
     let seconds = parse_sink_line(&line)
@@ -474,7 +476,7 @@ fn sink_session(mut stream: TcpStream, stop: &AtomicBool) -> io::Result<()> {
     let window = Duration::from_secs(u64::from(seconds));
     let mut buckets = vec![0_u64; usize::from(seconds)];
     let mut buffer = vec![0_u8; 64 * 1024];
-    stream.set_read_timeout(Some(POLL))?;
+    option_outcome(&stream, stream.set_read_timeout(Some(POLL)))?;
     let mut open = true;
     while open && started.elapsed() < window {
         stopping(stop)?;
@@ -494,9 +496,7 @@ fn sink_session(mut stream: TcpStream, stop: &AtomicBool) -> io::Result<()> {
     })
     .map_err(io::Error::other)?;
     report.push(b'\n');
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    stream.write_all(&report)?;
-    stream.shutdown(std::net::Shutdown::Write)?;
+    send_report(&mut stream, &report)?;
     while open && started.elapsed() < window + SINK_GRACE {
         stopping(stop)?;
         match stream.read(&mut buffer) {
@@ -510,6 +510,16 @@ fn sink_session(mut stream: TcpStream, stop: &AtomicBool) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Writes the sink's `report` on `stream`, then ends its sending side.
+pub(crate) fn send_report(stream: &mut TcpStream, report: &[u8]) -> io::Result<()> {
+    option_outcome(
+        stream,
+        stream.set_write_timeout(Some(Duration::from_secs(5))),
+    )?;
+    stream.write_all(report)?;
+    stream.shutdown(std::net::Shutdown::Write)
 }
 
 /// `Interrupted` once the server is stopping.

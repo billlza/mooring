@@ -114,6 +114,8 @@ mod runtime;
 #[cfg(target_os = "macos")]
 mod sim;
 #[cfg(target_os = "macos")]
+mod sockopt;
+#[cfg(target_os = "macos")]
 mod state;
 #[cfg(target_os = "macos")]
 mod status;

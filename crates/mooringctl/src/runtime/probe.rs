@@ -10,7 +10,8 @@
 //! 10 s.
 //!
 //! Both connect through [`connect_within`]: a reflector answers and closes
-//! at once, and its close can come before the connect's own poll looks.
+//! at once, and its close can come before the connect's own poll looks,
+//! which [`connect_outcome`] reads as the connection it is.
 
 use std::io::{self, ErrorKind, Read};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
@@ -20,6 +21,8 @@ use std::time::{Duration, Instant};
 use mooring_daemon_core::status::ProbeStage;
 use mooring_model::iface::InterfaceIndex;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+use crate::sockopt::option_outcome;
 
 /// The longest the whole direct probe may take.
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -77,27 +80,35 @@ pub(crate) fn in_chain(port: u16) -> Result<(Ipv4Addr, Duration), ProbeFailure> 
     Ok((address, started.elapsed()))
 }
 
-/// Connects `socket` to `target` within `timeout`. A peer that answers and
-/// closes at once can hang up before `connect_timeout`'s poll looks, and
-/// socket2 then reports the hang-up with no error set (`ErrorKind::Other`,
-/// "no error set after POLLHUP", socket2 0.6.5 `sys/unix.rs`) although the
-/// connection was made and the answer waits to be read: measured on this
-/// Mac, 18 of 3000 loopback connects. A socket that has a peer is
-/// connected, so that report, and only it, is the connection it is.
+/// Connects `socket` to `target` within `timeout`, socket2's report read
+/// by [`connect_outcome`].
 fn connect_within(socket: &Socket, target: &SockAddr, timeout: Duration) -> io::Result<()> {
-    match socket.connect_timeout(target, timeout) {
-        Err(error)
-            if error.kind() == ErrorKind::Other
-                && error.raw_os_error().is_none()
-                && socket.peer_addr().is_ok() =>
-        {
-            Ok(())
-        }
-        connected => connected,
+    connect_outcome(socket, socket.connect_timeout(target, timeout))
+}
+
+/// What `report`, socket2's `connect_timeout` on `socket`, says of the
+/// connection. A peer that answers and closes at once can hang up before
+/// `connect_timeout`'s poll looks, and socket2 then reports the hang-up
+/// with no error set (`ErrorKind::Other`, "no error set after POLLHUP",
+/// socket2 0.6.5 `sys/unix.rs`) although the connection was made and the
+/// answer waits to be read: measured on this Mac, 18 of 3000 loopback
+/// connects. A socket whose peer answered and hung up still has that peer,
+/// so that report, on a socket that has a peer, is the connection it is.
+/// No other report of `connect_timeout` has its kind: the others are its
+/// time-out and the operating system's errors, and the standard library
+/// uses the kind `Other` for none of its errors (its documentation of
+/// `ErrorKind::Other` says so). Every other report is returned as it is.
+/// fieldkit's `Bind::connect` (`net.rs`) reads the report the same way.
+pub(crate) fn connect_outcome(socket: &Socket, report: io::Result<()>) -> io::Result<()> {
+    match report {
+        Err(error) if error.kind() == ErrorKind::Other && socket.peer_addr().is_ok() => Ok(()),
+        report => report,
     }
 }
 
 /// The reflector's line on `stream`, read before `timeout` from `started`.
+/// Each byte waits only for what is left; a reset ends the read where it
+/// comes, after the bytes that came before it ([`option_outcome`]).
 pub(crate) fn read_address(
     mut stream: TcpStream,
     started: Instant,
@@ -119,8 +130,7 @@ pub(crate) fn read_address(
                 kind: Some(ErrorKind::TimedOut),
             });
         }
-        stream
-            .set_read_timeout(Some(left))
+        option_outcome(&stream, stream.set_read_timeout(Some(left)))
             .map_err(failed(ProbeStage::Read))?;
         match stream.read(&mut byte) {
             Ok(0) => {

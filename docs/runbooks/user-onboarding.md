@@ -20,9 +20,15 @@
     tunnel captures the direct socket; direct only once the core is
     stopped (「停止内核」 on the 「常规」 page, ui/src/general.js:149).
     Turning both switches off keeps a ready core running as a local proxy
-    (src/engine.rs:66-76), and the profile menu's 「凭据」 needs the core
-    stopped (ui/src/app.js:1095 and 1134-1136). M6 still checks every CFM
-    step against the real build (design §22).
+    (src/engine.rs:66-76). M6 still checks every CFM step against the real
+    build (design §22).
+  - The 「凭据」 step in section 3 needs the core stopped, not just both
+    switches off. The profile menu's 「凭据」 waits until the core is off
+    (apps/cfw-tauri-shell/ui/src/app.js:1059 and 1098-1100 at v0.5.0, 1095
+    and 1134-1136 at release/0.5.1). Turning both switches off keeps a
+    ready core running as a local proxy (src/engine.rs:64-74 at v0.5.0,
+    66-76 at release/0.5.1). The core stops with 「停止内核」 on the 「常规」
+    page (ui/src/general.js:141 at v0.5.0, 149 at release/0.5.1).
   - The portal's wording (「我的账户」, 「账户」, 「订阅」, 「账号编号」,
     「生成订阅链接」, 「重新生成」, 「停用链接」, 「下载配置文件（JSON）」) is the
     portal's zh catalogue (crates/web/src/i18n/zh.rs) at its commit
