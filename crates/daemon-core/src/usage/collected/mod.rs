@@ -150,9 +150,10 @@ impl CollectedUsage {
     /// before the Mac records it applied: an export needs the node's
     /// confirmed generation, and the Mac's exit and prober cover applied
     /// nodes only. So such a node counted no client's bytes before `at`.
-    /// That needs the lifecycle to move only forward: no command moves a
-    /// node back to planned or adopted, but the store does not refuse such
-    /// an edit, which would give the node a late origin. A host that ran
+    /// That needs the lifecycle to move only forward, which the store
+    /// enforces: a configuration change that moves a node back, or removes
+    /// it, is `NodeLifecycleEdited`. Only a state file restored or edited by
+    /// hand could still move a node back. A host that ran
     /// Mooring before breaks it too: adoption keeps its usage files, which
     /// may hold bytes from before `at`, and its old generation, which Xray
     /// keeps running, or runs again from the host's next boot. The guard in

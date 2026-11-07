@@ -1986,6 +1986,60 @@ mod tests {
         );
     }
 
+    /// Every lifecycle step a record takes is one
+    /// `LifecycleStage::may_change_to` allows: a record only moves a node
+    /// on.
+    #[test]
+    fn a_record_moves_a_node_only_forward() {
+        let stage =
+            |deployment: &Deployment| deployment.node(&node_id("lon1")).unwrap().lifecycle.stage();
+        let mut parts = two_node_parts();
+        parts.config_generation = ConfigGeneration::new(2).unwrap();
+        parts.nodes[0].lifecycle = NodeLifecycle::Adopted {
+            site: site([45, 67, 89, 10]),
+        };
+        let adopted = build(parts).unwrap();
+        let apply = |deployment: &Deployment, generation| {
+            deployment
+                .clone()
+                .record(Bookkeeping::Applied {
+                    node: node_id("lon1"),
+                    applied: applied_config(generation),
+                })
+                .unwrap()
+        };
+        let applied = apply(&adopted, 1);
+        let reapplied = apply(&applied, 2);
+        let mut parts = two_node_parts();
+        parts.nodes[0].lifecycle = NodeLifecycle::Retiring {
+            site: site([45, 67, 89, 10]),
+        };
+        let retiring = build(parts).unwrap();
+        let shut_down = retiring
+            .clone()
+            .record(Bookkeeping::RetirementShutDown {
+                node: node_id("lon1"),
+            })
+            .unwrap();
+        for (before, after, to) in [
+            (&adopted, &applied, LifecycleStage::Applied),
+            (&applied, &reapplied, LifecycleStage::Applied),
+            (
+                &retiring,
+                &shut_down,
+                LifecycleStage::RetiredPendingProviderDeletion,
+            ),
+        ] {
+            assert_eq!(stage(after), to);
+            assert!(
+                stage(before).may_change_to(stage(after)),
+                "{:?} -> {:?}",
+                stage(before),
+                stage(after)
+            );
+        }
+    }
+
     #[test]
     fn retired_nodes_require_no_secrets() {
         let mut parts = two_node_parts();
