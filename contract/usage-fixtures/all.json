@@ -1,0 +1,183 @@
+{
+  "format": "mooring-user-usage",
+  "version": 1,
+  "scope": "all",
+  "generated_at": 1793880000,
+  "user": "fxuseraaab",
+  "alias": "tmmg-2dsv",
+  "status": "active",
+  "retention": "tiered",
+  "nodes": [
+    {
+      "node": "ams1",
+      "stage": "applied",
+      "hourly": {
+        "held": [],
+        "bins": []
+      },
+      "daily": {
+        "held": [],
+        "bins": []
+      },
+      "totals": {
+        "months": [
+          {
+            "month": "2026-11",
+            "counted_through": 1793879880,
+            "final": false,
+            "bytes": {
+              "reality": {
+                "uplink": 0,
+                "downlink": 0
+              },
+              "hy2": {
+                "uplink": 0,
+                "downlink": 0
+              }
+            }
+          }
+        ],
+        "folded": {
+          "before": "2025-10",
+          "complete": false,
+          "bytes": {
+            "reality": {
+              "uplink": 0,
+              "downlink": 0
+            },
+            "hy2": {
+              "uplink": 640,
+              "downlink": 18000
+            }
+          }
+        },
+        "lifetime": null
+      }
+    },
+    {
+      "node": "lon1",
+      "stage": "applied",
+      "hourly": {
+        "held": [
+          {
+            "from": 1793664000,
+            "to": 1793750400
+          },
+          {
+            "from": 1793793600,
+            "to": 1793880000
+          }
+        ],
+        "bins": [
+          {
+            "start": 1793736000,
+            "bytes": {
+              "reality": {
+                "uplink": 1200,
+                "downlink": 34000
+              },
+              "hy2": {
+                "uplink": 0,
+                "downlink": 0
+              }
+            }
+          },
+          {
+            "start": 1793739600,
+            "bytes": {
+              "reality": {
+                "uplink": 0,
+                "downlink": 0
+              },
+              "hy2": {
+                "uplink": 300,
+                "downlink": 4100
+              }
+            }
+          },
+          {
+            "start": 1793869200,
+            "bytes": {
+              "reality": {
+                "uplink": 80,
+                "downlink": 2400
+              },
+              "hy2": {
+                "uplink": 7,
+                "downlink": 90
+              }
+            }
+          }
+        ]
+      },
+      "daily": {
+        "held": [
+          {
+            "from": 1793664000,
+            "to": 1793750400
+          }
+        ],
+        "bins": [
+          {
+            "start": 1793664000,
+            "bytes": {
+              "reality": {
+                "uplink": 1200,
+                "downlink": 34000
+              },
+              "hy2": {
+                "uplink": 300,
+                "downlink": 4100
+              }
+            }
+          }
+        ]
+      },
+      "totals": {
+        "months": [
+          {
+            "month": "2026-10",
+            "counted_through": 1793491140,
+            "final": true,
+            "bytes": {
+              "reality": {
+                "uplink": 9000,
+                "downlink": 120000
+              },
+              "hy2": {
+                "uplink": 0,
+                "downlink": 0
+              }
+            }
+          },
+          {
+            "month": "2026-11",
+            "counted_through": 1793879880,
+            "final": false,
+            "bytes": {
+              "reality": {
+                "uplink": 1300,
+                "downlink": 36500
+              },
+              "hy2": {
+                "uplink": 307,
+                "downlink": 4190
+              }
+            }
+          }
+        ],
+        "folded": null,
+        "lifetime": {
+          "reality": {
+            "uplink": 10300,
+            "downlink": 156500
+          },
+          "hy2": {
+            "uplink": 307,
+            "downlink": 4190
+          }
+        }
+      }
+    }
+  ]
+}

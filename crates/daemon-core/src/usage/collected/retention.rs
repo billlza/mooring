@@ -30,7 +30,45 @@ fn revoked(status: UserStatus) -> bool {
     matches!(status, UserStatus::Revoked | UserStatus::RevokePending)
 }
 
+/// When a user's retained usage goes, as the prune decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Deletion {
+    /// The user is not revoked: each bin and month expires on its own.
+    Tiered,
+    /// The user is revoked: all of it goes at this instant, 13 months after
+    /// the last time it was seen not revoked, if the tiers have not taken
+    /// it first.
+    At(UnixTime),
+    /// It is gone: the user's deadline has passed, it was never seen not
+    /// revoked, or the deployment does not hold it.
+    Done,
+}
+
 impl CollectedUsage {
+    /// When `user`'s retained usage goes, judged at `now`.
+    pub(super) fn deletion(
+        &self,
+        deployment: &Deployment,
+        user: &UserId,
+        now: UnixTime,
+    ) -> Result<Deletion, UsageError> {
+        let Some(row) = deployment.users().get(user) else {
+            return Ok(Deletion::Done);
+        };
+        if !revoked(row.status) {
+            return Ok(Deletion::Tiered);
+        }
+        let Some(at) = self.last_nonrevoked.get(user) else {
+            return Ok(Deletion::Done);
+        };
+        let end = after_thirteen_months(*at)?;
+        Ok(if now >= end {
+            Deletion::Done
+        } else {
+            Deletion::At(end)
+        })
+    }
+
     /// Removes counters whose retention has ended before comparing an
     /// incoming snapshot with the pruned one. Unknown principals still fail.
     pub fn retain_counter_users(
@@ -62,25 +100,25 @@ impl CollectedUsage {
         user: &UserId,
         now: UnixTime,
     ) -> Result<bool, UsageError> {
-        let Some(row) = deployment.users().get(user) else {
-            return Ok(true);
-        };
-        if !revoked(row.status) {
-            return Ok(false);
-        }
-        match self.last_nonrevoked.get(user) {
-            None => Ok(true),
-            Some(at) => Ok(now >= after_thirteen_months(*at)?),
-        }
+        Ok(self.deletion(deployment, user, now)? == Deletion::Done)
     }
 
     /// Applies deletion to every retained representation before publication
     /// and writing. Forgotten or expired users cannot reappear from a replay.
     pub fn prune(&mut self, deployment: &Deployment, now: UnixTime) -> Result<(), UsageError> {
+        *self = self.pruned(deployment, now)?;
+        Ok(())
+    }
+
+    /// A copy of this history pruned at `now`; this one is left as it is.
+    pub(super) fn pruned(
+        &self,
+        deployment: &Deployment,
+        now: UnixTime,
+    ) -> Result<Self, UsageError> {
         let mut candidate = self.clone();
         candidate.prune_inner(deployment, now)?;
-        *self = candidate;
-        Ok(())
+        Ok(candidate)
     }
 
     fn prune_inner(&mut self, deployment: &Deployment, now: UnixTime) -> Result<(), UsageError> {
@@ -153,10 +191,7 @@ impl CollectedUsage {
                 let Some(sample) = history.months.remove(&month) else {
                     return Err(corrupt("retention month disappeared"));
                 };
-                if month
-                    .next()
-                    .is_none_or(|next| sample.received_at.as_secs() < next.start().as_secs())
-                {
+                if !sample.is_final() {
                     history.lifetime_complete = false;
                 }
                 add_counters(&mut history.folded, &sample.sample.traffic)?;

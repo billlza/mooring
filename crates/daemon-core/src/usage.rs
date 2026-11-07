@@ -48,7 +48,7 @@ use crate::share::{BasisPoints, basis_points, require_whole};
 use crate::wire::{accounting_user, mac_time};
 
 mod collected;
-pub use collected::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES, NodeUsageHistory};
+pub use collected::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES, NodeUsageHistory, history};
 
 /// The totals of one node's accounting emails before `as_of`.
 #[derive(Debug, Clone, PartialEq, Eq)]

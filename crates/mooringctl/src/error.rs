@@ -30,9 +30,9 @@ use mooring_model::{CalendarDate, NodeId, PortalNotCovered, PublicAlias, UserId}
 use mooring_render::RenderError;
 use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadError, StoreError};
 
+use crate::collected_usage::UsageFault;
 use crate::node::NodeError;
 use crate::node::adopt::Step;
-use crate::portal::UsageFault;
 use crate::router::error::RouterError;
 
 /// A failure on the Mac rather than at the M7.
@@ -176,6 +176,23 @@ pub(crate) enum LocalError {
     /// `mooring-daemon-core` refused the portal snapshot.
     #[error("no file was written: the portal snapshot was refused")]
     PortalSnapshotRefused(#[source] Box<PortalError>),
+    /// There is no collected usage to read a user's history from:
+    /// `usage/users.json` does not exist. It is never read as a history
+    /// with nothing in it.
+    #[error(
+        "no usage is collected at {}: the daemon writes it while it serves a deployment, and no history is shown without it",
+        path.display()
+    )]
+    NoCollectedUsage {
+        /// Where the file would be.
+        path: PathBuf,
+    },
+    /// The usage the daemon collected cannot be read or is inconsistent,
+    /// so no user's history is shown or written from it.
+    #[error(
+        "the usage the daemon collected (usage/users.json) cannot be read or is inconsistent: no history is shown or written"
+    )]
+    UserUsage(#[source] Box<UsageFault>),
     /// `mooring-export` refused the portal's profile bundle.
     #[error("no file was written: the profile bundle was refused")]
     ProfilesRefused(#[source] Box<ProfilesError>),
