@@ -283,6 +283,22 @@ impl Host {
         }))
     }
 
+    /// A copy of the host as it is now, in a scratch root of its own, with
+    /// no fault set: directories and files with their modes, and links as
+    /// they are, so an absolute target still names the original. Many
+    /// cases can then start from one `Bootstrap`, whose links are all
+    /// relative.
+    pub(super) fn copy(&self) -> Self {
+        let (dir, paths) = scratch();
+        copy_tree(&self.paths.at("/"), &paths.at("/"));
+        Self {
+            _dir: dir,
+            paths,
+            sha: self.sha,
+            faults: Rc::new(RefCell::new(Faults::default())),
+        }
+    }
+
     pub(super) fn bootstrap(&self, node: &FakeNode) -> Result<SshEd25519Key, AgentError> {
         let (bootstrap_key, ops_key) = keys();
         bootstrap(
@@ -294,6 +310,25 @@ impl Host {
                 ops: &ops_key,
             },
         )
+    }
+}
+
+/// Copies what is in `from` into `to` ([`Host::copy`]); a directory gets
+/// its mode once it is filled.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        let meta = fs::symlink_metadata(&source).unwrap();
+        if meta.file_type().is_symlink() {
+            std::os::unix::fs::symlink(fs::read_link(&source).unwrap(), &target).unwrap();
+        } else if meta.is_dir() {
+            fs::create_dir(&target).unwrap();
+            copy_tree(&source, &target);
+            fs::set_permissions(&target, meta.permissions()).unwrap();
+        } else {
+            fs::copy(&source, &target).unwrap();
+        }
     }
 }
 

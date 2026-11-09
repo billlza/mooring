@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A node's lifetime origin. On a host new to Mooring, a node's agent
-//! records its first month only once Xray runs, normally at the node's
-//! first apply, and no client reaches the node before the Mac records it
-//! applied. So the origin is the latest sighting of the node planned or
-//! adopted while the Mac held nothing from it, and a node planned in one
-//! month and first applied in a later one still has a lifetime.
+//! A node's lifetime origin. On a host new to Mooring, which adoption
+//! requires (design §13.2), a node's agent records its first month only
+//! once Xray runs, normally at the node's first apply, and no client
+//! reaches the node before the Mac records it applied. So the origin is
+//! the latest sighting of the node planned or adopted while the Mac held
+//! nothing from it, and a node planned in one month and first applied in a
+//! later one still has a lifetime.
 
 use std::collections::BTreeMap;
 
@@ -179,7 +180,7 @@ fn a_month_held_from_before_the_origin_leaves_the_lifetime_unknown() {
     // The agent polled in October, but the Mac reached the node only after
     // its last sighting, on 2 November at 09:00, and then pulled October at
     // 10:00: October may hold bytes the origin does not cover, as a VPS
-    // adopted again with its old files does.
+    // adopted again with its old files did before adoption refused one.
     let now = at("2026-11-05", 12 * 3600);
     let mut collected = CollectedUsage::default();
     for name in ["lon1", "ams1"] {

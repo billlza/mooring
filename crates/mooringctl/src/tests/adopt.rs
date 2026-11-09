@@ -2,14 +2,17 @@
 
 //! `node adopt`'s refusals and failures (design §13.2 step 3) beyond the
 //! upload: an unknown node, an agent binary that cannot be read or is
-//! empty, and a failure or a reply to another request at each step after
-//! the upload. Each is reported with its step and leaves the node planned.
+//! empty, a failure or a reply to another request at each step after the
+//! upload, and a host that ran Mooring before. Each is reported with its
+//! step and leaves the node planned.
 
 use std::fs;
 
-use mooring_agent_proto::{AgentError, RequestKind, Response};
+use mooring_agent_proto::{AgentError, PriorState, RequestKind, Response};
 use mooring_model::NodeId;
 use mooring_model::node::NodeLifecycle;
+use mooring_model::secret::SecretRef;
+use mooring_store::SecretStore;
 
 use super::node::{ADDRESS, adopt_args, agent_file, hello, planned, root_key};
 use super::support::{Answered, Expected, ExpectedRemote, Harness};
@@ -138,6 +141,61 @@ fn a_failed_bootstrap_stops_the_adoption_at_its_step() {
     );
     assert!(harness.nodes.script.borrow().is_empty());
     assert_eq!(lon1_lifecycle(&harness), NodeLifecycle::Planned);
+}
+
+/// A `Bootstrap` that finds the host ran Mooring before stops the adoption
+/// at that step, naming what it found and what to do. The agent changed
+/// nothing on the VPS, so the node stays planned with its pin, and its
+/// bootstrap key stays for the next attempt.
+#[test]
+fn a_host_that_ran_mooring_before_stops_the_adoption_at_bootstrap() {
+    let (mut harness, pinned) = planned();
+    let generation = store(&harness)
+        .load()
+        .unwrap()
+        .deployment
+        .config_generation();
+    let agent = agent_file(&harness);
+    let root = root_key(&harness);
+    harness.nodes.expect(
+        Expected::Run {
+            identity: "root_ed25519",
+            command_prefix: "umask 077",
+        },
+        Answered::Ran(Ok(())),
+    );
+    harness.nodes.expect(
+        Expected::Request {
+            identity: "root_ed25519",
+            remote: ExpectedRemote::Command("/root/.mooring-agent-"),
+            kind: RequestKind::Bootstrap,
+        },
+        Answered::Replied(Err(NodeError::Agent(AgentError::HostRanMooring {
+            found: PriorState::Usage,
+        }))),
+    );
+    let outcome = harness.run(&adopt_args(
+        agent.to_str().unwrap(),
+        Some(root.to_str().unwrap()),
+    ));
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: adoption stopped at Bootstrap\n  caused by: the agent refused the request\n  caused by: the host ran Mooring before (Usage at /var/lib/mooring/usage); Bootstrap changed nothing: copy the host key the node pins (/etc/ssh/ssh_host_ed25519_key and its .pub) off the VPS, reinstall it, put the key back, and adopt it again\n"
+    );
+    assert!(harness.nodes.script.borrow().is_empty());
+    let lon1 = NodeId::parse("lon1").unwrap();
+    let state = store(&harness).load().unwrap();
+    let node = &state.deployment.nodes()[&lon1];
+    assert_eq!(node.lifecycle, NodeLifecycle::Planned);
+    assert_eq!(node.ssh.host_ed25519, pinned);
+    assert_eq!(state.deployment.config_generation(), generation);
+    assert!(
+        harness
+            .secrets
+            .get(&SecretRef::NodeSshBootstrapPrivate(lon1))
+            .is_ok()
+    );
 }
 
 /// An unknown node, and an agent binary that cannot be read or is empty,

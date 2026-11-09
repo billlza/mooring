@@ -4,6 +4,14 @@
 //! set-up of a fresh Debian host, as root over the bootstrap key, and the
 //! end of that key's window.
 //!
+//! A host that ran Mooring before is not fresh. `Bootstrap` refuses it
+//! before it changes anything when it holds state that only a node's use
+//! leaves ([`prior_state`], `HostRanMooring`), so that no old generation,
+//! transaction record or usage passes to the new node. A fresh host holds
+//! none of it, even after an earlier run: only a transaction, the
+//! accounting of a generation's Xray, a `Shutdown`, or a request to an
+//! adopted node writes it.
+//!
 //! `Bootstrap` may run again: every step converges, and the host key is
 //! replaced only until a replacement has been recorded, so a retry after
 //! a lost reply returns the same key. That record is the last step, so
@@ -22,8 +30,8 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
 use mooring_agent_proto::{
-    AgentError, BootstrapStep, ENABLED_UNITS, HostProfile, IoOp, PACKAGES, Role, Sha256Hex,
-    SshEd25519Key, StderrTail,
+    AgentError, BootstrapStep, ENABLED_UNITS, HostProfile, IoOp, PACKAGES, PriorState, Role,
+    Sha256Hex, SshEd25519Key, StderrTail,
 };
 
 use crate::host::{Node, Tool, run_ok};
@@ -54,6 +62,9 @@ pub(crate) fn bootstrap(
             expected: expected_agent_sha,
             actual,
         });
+    }
+    if let Some(found) = prior_state(paths)? {
+        return Err(AgentError::HostRanMooring { found });
     }
     packages(node)?;
     accounts::converge(paths, node)?;
@@ -86,6 +97,42 @@ pub(crate) fn bootstrap(
         write_json(&paths.host_key_record(), &key, 0o640)?;
     }
     Ok(key)
+}
+
+/// The first state, in [`PriorState::ALL`] order, that only a node's use
+/// leaves and that the host holds. A location holds its state when
+/// anything is there but an empty directory where a directory belongs: a
+/// file, a link, which is never followed, or any entry, whatever its name.
+/// The state root must be absent or a directory, so that nothing is read
+/// through a link; what cannot be read is an error, never nothing.
+pub(crate) fn prior_state(paths: &Paths) -> Result<Option<PriorState>, AgentError> {
+    match fs::symlink_metadata(paths.var_lib()) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(malformed(IoOp::ReadState)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error(IoOp::ReadState, &error)),
+    }
+    for &state in PriorState::ALL {
+        if holds(&paths.at(state.path()), state.is_directory())? {
+            return Ok(Some(state));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether `path` holds anything: anything there but an empty directory,
+/// where `directory` says one belongs ([`prior_state`]).
+fn holds(path: &Path, directory: bool) -> Result<bool, AgentError> {
+    let fail = |error: io::Error| io_error(IoOp::ReadState, &error);
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(fail(error)),
+        Ok(meta) if directory && meta.is_dir() => match fs::read_dir(path).map_err(fail)?.next() {
+            None => Ok(false),
+            Some(entry) => entry.map(|_| true).map_err(fail),
+        },
+        Ok(_) => Ok(true),
+    }
 }
 
 /// `RevokeBootstrap`: removes the bootstrap role's `authorized_keys`

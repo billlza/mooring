@@ -9,12 +9,13 @@
 //! made, stopping it before the keys, so that a retry goes through; and
 //! both requests served to their roles. The packages, the accounts, the
 //! layout, the host profile and the SSH steps have files of their own, as
-//! does revoke.
+//! do revoke and a host that ran Mooring before.
 
 mod accounts;
 mod host_profile;
 mod layout;
 mod packages;
+mod prior;
 mod revoke;
 mod ssh;
 mod world;
