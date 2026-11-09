@@ -153,11 +153,13 @@ impl CollectedUsage {
     /// That needs the lifecycle to move only forward, which the store
     /// enforces: a configuration change that moves a node back, or removes
     /// it, is `NodeLifecycleEdited`. Only a state file restored or edited by
-    /// hand could still move a node back. A host that ran
-    /// Mooring before breaks it too: adoption keeps its usage files, which
-    /// may hold bytes from before `at`, and its old generation, which Xray
-    /// keeps running, or runs again from the host's next boot. The guard in
-    /// `aggregate.rs` catches only bytes of a month before the origin's.
+    /// hand could still move a node back. It needs a host new to Mooring
+    /// too: adoption refuses a host that holds an earlier node's
+    /// generation, records or usage (`HostRanMooring`, design §13.2), whose
+    /// usage files could hold bytes from before `at`. A node adopted before
+    /// that check or by an agent built before it, or state restored onto a
+    /// node since, can still break it, and the guard in `aggregate.rs`
+    /// catches only bytes of a month before the origin's.
     ///
     /// A node's agent records its first month once Xray runs, normally at
     /// its first apply, which can come months after the node was planned.

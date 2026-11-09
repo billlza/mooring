@@ -16,14 +16,15 @@ use mooring_agent_proto::{
     EventsV1, GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostAccount,
     HostFact, HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion,
     IfName, Inbound, InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MAX_BLOB_BYTES,
-    MacDrainHold, OpaqueUserId, OperatorHold, PortRange, Principal, ReadError, RedirectUrl, Reply,
-    Request, RequestKind, Resolution, Response, ResponseKind, Role, RollbackCause, SeriesRange,
-    SeriesSpan, Sha256Hex, ShutdownReason, SshEd25519Key, SshdDirective, StatsEmail, StatusV1,
-    StderrTail, StoredMacReport, SystemdOp, TargetFacts, TargetHost, TargetTool, TlsGroup,
-    TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage, TxnState, UnitName, UnixTime,
-    UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1, ValidationTool, WatchConditions,
-    WatchConfig, WatchError, WatchErrorKind, WatchTarget, expect_end_of_input, read_blob,
-    read_reply, read_request, write_put_blob, write_reply, write_request,
+    MacDrainHold, OpaqueUserId, OperatorHold, PortRange, Principal, PriorState, ReadError,
+    RedirectUrl, Reply, Request, RequestKind, Resolution, Response, ResponseKind, Role,
+    RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason, SshEd25519Key,
+    SshdDirective, StatsEmail, StatusV1, StderrTail, StoredMacReport, SystemdOp, TargetFacts,
+    TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage,
+    TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1,
+    ValidationTool, WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
+    expect_end_of_input, read_blob, read_reply, read_request, write_put_blob, write_reply,
+    write_request,
 };
 use proptest::collection::{btree_map, btree_set, vec};
 use proptest::option;
@@ -626,6 +627,7 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
         stderr_tail().prop_map(|stderr_tail| AgentError::AgentSelfTestFailed { stderr_tail }),
         (digest(), digest())
             .prop_map(|(expected, actual)| AgentError::AgentShaMismatch { expected, actual }),
+        select(PriorState::ALL).prop_map(|found| AgentError::HostRanMooring { found }),
         generation().prop_map(|generation| AgentError::Busy { generation }),
         generation().prop_map(|current| AgentError::GenerationNotNewer { current }),
         generation().prop_map(|current| AgentError::GenerationMismatch { current }),

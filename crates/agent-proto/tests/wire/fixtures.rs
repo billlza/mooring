@@ -16,11 +16,11 @@ use mooring_agent_proto::{
     HostAccount, HostFact, HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus,
     HttpVersion, IfName, Inbound, InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest,
     MacAlertKind, MacDrainHold, MacReportParts, MacReportV1, NodeName, OperatorHold, PROTOCOL,
-    PortRange, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber, ReportCapacity,
-    ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine,
-    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim,
-    ReportUsage, ReportUser, ReportUserId, ReportUserStatus, Request, RequestKind, Resolution,
-    Response, ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex,
+    PortRange, PriorState, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber,
+    ReportCapacity, ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal,
+    ReportPlanLine, ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity,
+    ReportSim, ReportUsage, ReportUser, ReportUserId, ReportUserStatus, Request, RequestKind,
+    Resolution, Response, ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex,
     ShutdownReason, SshEd25519Key, SshdDirective, StatusV1, StderrTail, StoredMacReport, SystemdOp,
     TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic,
     TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1,
@@ -676,6 +676,9 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         AgentErrorKind::AgentShaMismatch => AgentError::AgentShaMismatch {
             expected: digest(4),
             actual: digest(5),
+        },
+        AgentErrorKind::HostRanMooring => AgentError::HostRanMooring {
+            found: PriorState::Usage,
         },
         AgentErrorKind::Busy => AgentError::Busy {
             generation: Generation::new(8),

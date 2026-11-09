@@ -375,6 +375,16 @@ pub enum AgentError {
         /// The running agent's digest.
         actual: Sha256Hex,
     },
+    /// `Bootstrap` found state that only a node's use leaves: the host ran
+    /// Mooring before (design §13.2). Nothing was changed.
+    #[error(
+        "the host ran Mooring before ({found:?} at {}); Bootstrap changed nothing: copy the host key the node pins (/etc/ssh/ssh_host_ed25519_key and its .pub) off the VPS, reinstall it, put the key back (owned by root, mode 0600), restart ssh, and adopt it again",
+        .found.path()
+    )]
+    HostRanMooring {
+        /// The first, in [`PriorState::ALL`] order, that the host holds.
+        found: PriorState,
+    },
     /// The watch did not run the expected executable within the restart budget.
     #[error("watch did not run the expected agent {expected}")]
     WatchNotUpdated {
@@ -580,6 +590,8 @@ closed_enum! {
         WatchNotUpdated,
         /// [`AgentError::AgentShaMismatch`].
         AgentShaMismatch,
+        /// [`AgentError::HostRanMooring`].
+        HostRanMooring,
         /// [`AgentError::Busy`].
         Busy,
         /// [`AgentError::GenerationNotNewer`].
@@ -648,6 +660,7 @@ impl AgentError {
             Self::RevertedUnconfirmed { .. } => AgentErrorKind::RevertedUnconfirmed,
             Self::AgentSelfTestFailed { .. } => AgentErrorKind::AgentSelfTestFailed,
             Self::AgentShaMismatch { .. } => AgentErrorKind::AgentShaMismatch,
+            Self::HostRanMooring { .. } => AgentErrorKind::HostRanMooring,
             Self::WatchNotUpdated { .. } => AgentErrorKind::WatchNotUpdated,
             Self::Busy { .. } => AgentErrorKind::Busy,
             Self::GenerationNotNewer { .. } => AgentErrorKind::GenerationNotNewer,
@@ -743,6 +756,60 @@ closed_enum! {
         SshdReload,
         /// `ssh-keygen` for the new ed25519 host key.
         HostKey,
+    }
+}
+
+closed_enum! {
+    /// State that only a node's use leaves on its host, which `Bootstrap`
+    /// looks for, in this order, before it changes anything (design
+    /// §13.2). A fresh host holds none of it, even after an earlier
+    /// `Bootstrap`: only a transaction, the accounting of a generation's
+    /// Xray, a `Shutdown`, or a request to an adopted node writes it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub enum PriorState {
+        /// Anything in `/etc/mooring`: a generation, or the `current` link.
+        Generations,
+        /// Anything in `/var/lib/mooring/txn`: a transaction's record.
+        Transactions,
+        /// Anything in `/var/lib/mooring/usage`: the usage Xray counted.
+        Usage,
+        /// `/var/lib/mooring/halted.json`: the node was halted.
+        Halted,
+        /// Anything in `/var/lib/mooring/gate`: a hold.
+        Holds,
+        /// Anything in `/var/lib/mooring/stop`: a viewer's stop.
+        StopRequest,
+        /// `/var/lib/mooring/mac-report.json`: a Mac's report for the
+        /// viewers.
+        MacReport,
+    }
+}
+
+impl PriorState {
+    /// Where the state is kept.
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Generations => crate::ETC_DIR,
+            Self::Transactions => "/var/lib/mooring/txn",
+            Self::Usage => "/var/lib/mooring/usage",
+            Self::Halted => "/var/lib/mooring/halted.json",
+            Self::Holds => "/var/lib/mooring/gate",
+            Self::StopRequest => "/var/lib/mooring/stop",
+            Self::MacReport => "/var/lib/mooring/mac-report.json",
+        }
+    }
+
+    /// Whether [`Self::path`] is a directory, whose entries are the state,
+    /// rather than the state's one file.
+    pub const fn is_directory(self) -> bool {
+        match self {
+            Self::Generations
+            | Self::Transactions
+            | Self::Usage
+            | Self::Holds
+            | Self::StopRequest => true,
+            Self::Halted | Self::MacReport => false,
+        }
     }
 }
 

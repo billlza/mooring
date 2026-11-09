@@ -126,8 +126,9 @@ impl CollectedUsage {
 
 /// The deployment's nodes whose agents may hold records, every one past
 /// `Planned`, with their stages. An adopted one holds none of a client's
-/// bytes unless its host ran Mooring before
-/// ([`CollectedUsage::observe_unserved_nodes`]).
+/// bytes, since adoption refuses a host that ran Mooring before, unless it
+/// was adopted before that check or by an agent built before it, or had
+/// state restored onto it since ([`CollectedUsage::observe_unserved_nodes`]).
 fn served(deployment: &Deployment) -> BTreeMap<&NodeId, NodeStage> {
     deployment
         .nodes()
