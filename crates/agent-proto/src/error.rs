@@ -378,7 +378,7 @@ pub enum AgentError {
     /// `Bootstrap` found state that only a node's use leaves: the host ran
     /// Mooring before (design §13.2). Nothing was changed.
     #[error(
-        "the host ran Mooring before ({found:?} at {}); Bootstrap changed nothing: copy the host key the node pins (/etc/ssh/ssh_host_ed25519_key and its .pub) off the VPS, reinstall it, put the key back, and adopt it again",
+        "the host ran Mooring before ({found:?} at {}); Bootstrap changed nothing: copy the host key the node pins (/etc/ssh/ssh_host_ed25519_key and its .pub) off the VPS, reinstall it, put the key back (owned by root, mode 0600), restart ssh, and adopt it again",
         .found.path()
     )]
     HostRanMooring {

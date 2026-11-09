@@ -181,7 +181,7 @@ fn a_host_that_ran_mooring_before_stops_the_adoption_at_bootstrap() {
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert_eq!(
         outcome.stderr,
-        "mooringctl: adoption stopped at Bootstrap\n  caused by: the agent refused the request\n  caused by: the host ran Mooring before (Usage at /var/lib/mooring/usage); Bootstrap changed nothing: copy the host key the node pins (/etc/ssh/ssh_host_ed25519_key and its .pub) off the VPS, reinstall it, put the key back, and adopt it again\n"
+        "mooringctl: adoption stopped at Bootstrap\n  caused by: the agent refused the request\n  caused by: the host ran Mooring before (Usage at /var/lib/mooring/usage); Bootstrap changed nothing: copy the host key the node pins (/etc/ssh/ssh_host_ed25519_key and its .pub) off the VPS, reinstall it, put the key back (owned by root, mode 0600), restart ssh, and adopt it again\n"
     );
     assert!(harness.nodes.script.borrow().is_empty());
     let lon1 = NodeId::parse("lon1").unwrap();
