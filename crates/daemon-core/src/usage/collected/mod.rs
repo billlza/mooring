@@ -153,7 +153,11 @@ impl CollectedUsage {
     /// That needs the lifecycle to move only forward, which the store
     /// enforces: a configuration change that moves a node back, or removes
     /// it, is `NodeLifecycleEdited`. Only a state file restored or edited by
-    /// hand could still move a node back. It needs a host new to Mooring
+    /// hand could still move a node back. The one removal, the record
+    /// `Bookkeeping::PlanCancelled`, takes a planned node, which counted
+    /// nothing; its id may be planned again, and the history it left holds
+    /// at most an origin, which the next sighting replaces or the prune
+    /// drops. It needs a host new to Mooring
     /// too: adoption refuses a host that holds an earlier node's
     /// generation, records or usage (`HostRanMooring`, design §13.2), whose
     /// usage files could hold bytes from before `at`. A node adopted before

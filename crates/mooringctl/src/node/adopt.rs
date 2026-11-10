@@ -11,7 +11,10 @@
 //! 2. `Bootstrap` runs with that key. It replaces root's `authorized_keys`
 //!    with the bootstrap and operations lines, so the operator's own key
 //!    stops working, and it generates a new host key, which the Mac pins at
-//!    once, in `known_hosts` and in the state.
+//!    once, in `known_hosts` and in the state. A pin that cannot be
+//!    recorded stops the adoption with the key in its error
+//!    (`BootstrapKeyUnpinned`): `node repin` pins it, and `--resume` goes
+//!    on.
 //! 3. The operations key must reach the forced command: an empty request
 //!    is answered `UnknownRequest` (otherwise `ForcedCommandNotActive`).
 //! 4. `Hello` gives the node's site (`render::adoption_site`), and asserts
@@ -25,6 +28,17 @@
 //! the reboot is the operator's, and `Hello` checks the running system.
 //! A run that stopped after step 2 is resumed with `--resume`, which starts
 //! at step 3: the operator's root key no longer works then.
+//!
+//! Both state writes find the node again under the lock and refuse when it
+//! is gone or past `Planned` (`node::planned`): a `node cancel` in between
+//! keeps the generation, so their compare-and-swap would not notice it.
+//! `Bootstrap` cannot be undone, and the answer to the question before it
+//! may have waited. So when it comes, the state is read again and must be
+//! the one read (`state::unchanged`), and the interface is checked again
+//! and must still face the M7: the sessions bind to it as that check finds
+//! it. Once the final write is committed the node is adopted, and a
+//! bootstrap key that cannot be removed then, its keychain item or its
+//! file, is what the command reports.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -32,22 +46,24 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 
 use mooring_agent_proto::{AgentError, LineRequest, RequestKind, Response, Sha256Hex};
+use mooring_keys::SshPublicKey;
 use mooring_model::iface::BsdName;
 use mooring_model::ipv4::PublicIpv4;
-use mooring_model::node::{NodeAddress, NodeLifecycle, SshPin};
+use mooring_model::node::{NodeAddress, NodeLifecycle};
 use mooring_model::secret::{SecretKind, SecretMaterial, SecretRef};
-use mooring_model::{Ed25519Pub, NodeId, Sha256Digest};
+use mooring_model::{NodeId, Sha256Digest};
 use mooring_render::{adoption_site, ssh_ed25519_key, ssh_ed25519_pub};
 use mooring_store::{Store, update_config_with_secrets};
 
 use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::exit::confirm;
-use crate::node::dial::facing_the_m7;
+use crate::node::dial::{M7Egress, facing_the_m7};
 use crate::node::files::NodeFiles;
+use crate::node::planned::{PlannedAction, pin_in_state, planned, planned_mut};
 use crate::node::ssh::{Remote, SshTarget};
 use crate::node::{NodeError, NodeSession};
-use crate::state::{load, output, state_change};
+use crate::state::{load, output, refused_change, unchanged};
 
 /// The largest agent binary read, in bytes.
 const MAX_AGENT_BYTES: u64 = 64 * 1024 * 1024;
@@ -75,22 +91,9 @@ pub(crate) fn adopt(
     let support = support_dir(env)?;
     let store = Store::new(support.clone());
     let state = load(&store)?;
-    let node = state
-        .deployment
-        .nodes()
-        .get(args.node)
-        .ok_or_else(|| LocalError::UnknownNode {
-            node: args.node.clone(),
-        })?;
-    if node.lifecycle != NodeLifecycle::Planned {
-        return Err(LocalError::NodeNotPlanned {
-            node: args.node.clone(),
-            stage: node.lifecycle.stage(),
-        }
-        .into());
-    }
+    let node = planned(&state.deployment, args.node, PlannedAction::Adopted)?;
     let address = PublicIpv4::new(args.address).map_err(LocalError::NodeAddress)?;
-    let egress = facing_the_m7(env, args.interface)?;
+    let mut egress = facing_the_m7(env, args.interface)?;
     let agent = read_agent(args.agent)?;
     let agent_sha = Sha256Hex::from_bytes(*Sha256Digest::of(&agent).as_bytes());
     let files = NodeFiles::of(&support, args.node);
@@ -113,7 +116,7 @@ pub(crate) fn adopt(
     let bootstrap = files.write_bootstrap_key(args.node, seed)?;
     let mooringctl = std::env::current_exe().map_err(LocalError::CurrentExe)?;
     let links = env.nodes;
-    let target = |identity: &Path, remote: Remote| {
+    let target = |egress: M7Egress, identity: &Path, remote: Remote| {
         links.open(SshTarget {
             address,
             identity: identity.to_path_buf(),
@@ -140,11 +143,22 @@ pub(crate) fn adopt(
         )
         .map_err(output)?;
         confirm(env, args.yes, "Hand this VPS to Mooring?")?;
+        // `Bootstrap` cannot be undone, and the answer may have waited:
+        // the node must still be the planned one this command read, and
+        // the interface must still face the M7. The sessions bind to the
+        // interface as this check finds it.
+        unchanged(&store, &state.deployment)?;
+        egress = facing_the_m7(env, args.interface)?;
         let staged = format!("/root/.mooring-agent-{agent_sha}");
-        target(root_identity, Remote::Command(upload_command(&staged)))
-            .run(&agent)
-            .map_err(|error| step(Step::Upload, error))?;
+        target(
+            egress,
+            root_identity,
+            Remote::Command(upload_command(&staged)),
+        )
+        .run(&agent)
+        .map_err(|error| step(Step::Upload, error))?;
         let reply = target(
+            egress,
             root_identity,
             Remote::Command(format!(
                 "{staged} serve-ssh --role bootstrap; status=$?; rm -f {staged}; exit $status"
@@ -160,19 +174,30 @@ pub(crate) fn adopt(
             return Err(unexpected(Step::Bootstrap, RequestKind::Bootstrap, &reply));
         };
         let host = ssh_ed25519_pub(&host_pubkey).map_err(LocalError::Render)?;
-        files.pin_host_key(address.get(), host)?;
-        generation = pin_in_state(&store, args.node, generation, host)?;
+        // The VPS holds `host` from here and lets in only Mooring's keys.
+        // A pin that cannot be recorded leaves `--resume` checking the old
+        // key, so the failure carries the new one for `node repin`.
+        generation = files
+            .pin_host_key(address.get(), host)
+            .and_then(|()| {
+                pin_in_state(&store, args.node, generation, host, PlannedAction::Adopted)
+            })
+            .map_err(|source| LocalError::BootstrapKeyUnpinned {
+                node: args.node.clone(),
+                key: SshPublicKey::from(host),
+                source: Box::new(source),
+            })?;
         writeln!(
             out,
             "bootstrapped {}: new host key {} pinned",
             args.node,
-            mooring_keys::SshPublicKey::from(host).fingerprint()
+            SshPublicKey::from(host).fingerprint()
         )
         .map_err(output)?;
     }
     let ops_key = files.ops_key();
-    forced_command_active(target(&ops_key, Remote::Command("true".to_owned())).as_mut())?;
-    let mut agent_link = target(&ops_key, Remote::ForcedCommand);
+    forced_command_active(target(egress, &ops_key, Remote::Command("true".to_owned())).as_mut())?;
+    let mut agent_link = target(egress, &ops_key, Remote::ForcedCommand);
     let reply = agent_link
         .request(&LineRequest::Hello)
         .map_err(|error| step(Step::Hello, error))?;
@@ -192,17 +217,22 @@ pub(crate) fn adopt(
             &reply,
         ));
     }
-    update_config_with_secrets(&store, env.secrets, generation, Vec::new(), |mut parts| {
-        for candidate in &mut parts.nodes {
-            if candidate.id == *args.node {
-                candidate.lifecycle = NodeLifecycle::Adopted { site: site.clone() };
-            }
-        }
-        Ok(parts)
-    })
-    .map_err(state_change)?;
-    files.remove_bootstrap_key()?;
-    writeln!(
+    let recorded =
+        update_config_with_secrets(&store, env.secrets, generation, Vec::new(), |mut parts| {
+            planned_mut(&mut parts, args.node, PlannedAction::Adopted)?.lifecycle =
+                NodeLifecycle::Adopted { site: site.clone() };
+            Ok(parts)
+        })
+        .map_err(refused_change);
+    // A failed deletion of the bootstrap key's keychain item leaves the node
+    // adopted: its file goes all the same, and the failure is reported.
+    let cleanup = match recorded {
+        Ok(_) => None,
+        Err(LocalError::StateCommitted(failure)) => Some(failure),
+        Err(error) => return Err(error.into()),
+    };
+    let removed = files.remove_bootstrap_key();
+    let written = writeln!(
         out,
         "adopted {}: Debian {}, kernel {}, {} on {}; the Mac's address as the node saw it: {}\nnext: `mooringctl node target check {}`, then `node apply {}`",
         args.node,
@@ -214,8 +244,23 @@ pub(crate) fn adopt(
         args.node,
         args.node
     )
-    .map_err(output)?;
-    Ok(())
+    .map_err(output);
+    // The node is adopted. What the adoption left behind is the failure to
+    // report, whatever became of the line that says so.
+    let node = args.node.clone();
+    let path = files.bootstrap_key();
+    match (cleanup, removed) {
+        (None, Ok(())) => written,
+        (None, Err(source)) => Err(LocalError::BootstrapKeyLeft { node, path, source }.into()),
+        (Some(failure), Ok(())) => Err(LocalError::StateCommitted(failure).into()),
+        (Some(source), Err(removal)) => Err(LocalError::BootstrapKeyAndSecretsLeft {
+            node,
+            path,
+            removal,
+            source,
+        }
+        .into()),
+    }
 }
 
 /// The adoption step a failure happened at.
@@ -285,27 +330,6 @@ pub(crate) fn read_agent(path: &Path) -> Result<Vec<u8>, LocalError> {
         });
     }
     Ok(bytes)
-}
-
-/// Records `host` as the planned node's pinned host key: the key the VPS
-/// has from now on. A configuration change; returns the new generation.
-fn pin_in_state(
-    store: &Store,
-    node: &NodeId,
-    generation: mooring_model::counters::ConfigGeneration,
-    host: Ed25519Pub,
-) -> Result<mooring_model::counters::ConfigGeneration, LocalError> {
-    let state = store
-        .update_config(generation, |mut parts| {
-            for candidate in &mut parts.nodes {
-                if candidate.id == *node {
-                    candidate.ssh = SshPin { host_ed25519: host };
-                }
-            }
-            Ok::<_, std::convert::Infallible>(parts)
-        })
-        .map_err(state_change)?;
-    Ok(state.deployment.config_generation())
 }
 
 /// Step 3: an empty request over the operations key must reach the agent,

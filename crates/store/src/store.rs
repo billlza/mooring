@@ -124,7 +124,9 @@ impl Store {
     /// (`AppliedEdited`), because only a node's own confirmation, recorded
     /// as `Bookkeeping::Applied`, sets it. It may move a node only on to a
     /// later lifecycle stage, out of `Applied` too, never back, and it may
-    /// remove no node (`NodeLifecycleEdited`). It may change a user's
+    /// remove no node (`NodeLifecycleEdited`): a planned node is removed
+    /// only by the record `Bookkeeping::PlanCancelled`, through
+    /// [`crate::record_with_secrets`]. It may change a user's
     /// status only along the user transitions, and remove only a revoked
     /// user (`UserStatusEdited`): a revocation settles only through
     /// `Bookkeeping`. It may edit the exit's SIM policy only to one whose
@@ -153,7 +155,8 @@ impl Store {
     /// generation is still `expected`; the generation is checked and kept.
     ///
     /// A record that drops secret references (a committed revocation, a
-    /// shut-down retirement) is refused with `SecretRefsChanged`: it goes
+    /// shut-down retirement, a cancelled plan) is refused with
+    /// `SecretRefsChanged`: it goes
     /// through [`crate::record_with_secrets`], which deletes the dropped
     /// secrets after the state stops referencing them.
     pub fn record(
@@ -334,10 +337,14 @@ fn node_stages(deployment: &Deployment) -> BTreeMap<NodeId, LifecycleStage> {
 }
 
 /// Refuses a change that moves a node back to an earlier lifecycle stage,
-/// or removes one (`LifecycleStage::may_change_to`, design §7). Nothing
-/// sanctions either. Retirement only moves on, retired nodes stay, and a
-/// node id is never reused, so the usage collector can take a node it sees
-/// planned or adopted to have counted no client's bytes. A move into
+/// moves a planned node anywhere but to `Adopted`, or removes a node
+/// (`LifecycleStage::may_change_to`, design §7). No closure may do any of
+/// them. Retirement only moves on and retired nodes stay, so the
+/// id of a node that may have served is never reused, and the usage
+/// collector can take a node it sees planned or adopted to have counted no
+/// client's bytes. Only the record `Bookkeeping::PlanCancelled`, which
+/// skips this check, removes a node: a planned one, which served no
+/// client, so its id may be planned again. A move into
 /// `Applied` was refused already, as `AppliedEdited`. A new node may start
 /// in any stage the model accepts but `Applied`, which only a record sets.
 fn require_lifecycles_forward(

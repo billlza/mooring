@@ -251,14 +251,18 @@ pub enum StoreError {
         /// The node whose confirmed generation the change edited.
         node: NodeId,
     },
-    /// The change moved a node back to an earlier lifecycle stage, or
-    /// removed it (`LifecycleStage::may_change_to`; design §7). A node only
-    /// moves on, and retired nodes stay, so no id is ever reused: the usage
-    /// collector takes a node it sees planned or adopted to have counted no
-    /// client's bytes. A move back into `Applied` is `AppliedEdited`. `to`
-    /// is `None` when the change removed the node.
+    /// The change moved a node back to an earlier lifecycle stage, moved a
+    /// planned node anywhere but to `Adopted`, or removed a node
+    /// (`LifecycleStage::may_change_to`; design §7). A node only moves on,
+    /// and retired nodes stay, so the id of a node that may have served is
+    /// never reused: the usage collector takes a node it sees planned or
+    /// adopted to have counted no client's bytes. A planned node is never
+    /// retired, since the usage figures need records from every node past
+    /// `Planned`: only the record `Bookkeeping::PlanCancelled` removes a
+    /// node, and only a planned one. A move back into `Applied` is
+    /// `AppliedEdited`. `to` is `None` when the change removed the node.
     #[error(
-        "the change moved node {node} from {from:?} to {to:?}; a node's lifecycle only moves forward, and a node is never removed"
+        "the change moved node {node} from {from:?} to {to:?}; a node's lifecycle only moves forward, a planned node only to adopted, and a configuration change removes no node"
     )]
     NodeLifecycleEdited {
         /// The node.

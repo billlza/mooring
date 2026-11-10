@@ -9,12 +9,20 @@
 use std::fs;
 use std::io;
 use std::net::Ipv4Addr;
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::net::UnixListener;
+use std::path::Path;
+use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use mooring_keys::SshKeyPair;
 use mooring_model::{Ed25519Pub, NodeId};
 
 use crate::error::LocalError;
-use crate::node::files::{NodeFiles, read_public_key};
+use crate::node::dial::RelaySocket;
+use crate::node::files::{NodeFiles, read_public_key, relay_socket_name};
 
 fn files() -> (tempfile::TempDir, NodeFiles) {
     let support = tempfile::tempdir().unwrap();
@@ -121,8 +129,428 @@ fn a_bootstrap_key_gone_already_is_fine_and_one_that_stays_is_an_error() {
     files.remove_bootstrap_key().unwrap();
     fs::create_dir(files.bootstrap_key()).unwrap();
     let error = files.remove_bootstrap_key().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error:?}");
+    assert!(files.bootstrap_key().is_dir());
+}
+
+/// A key line with a comment, and its key.
+fn key_line(comment: &str) -> (String, Ed25519Pub) {
+    let key = host_key();
+    (format!("{} {comment}", key.ssh_authorized_key()), key)
+}
+
+/// Two keys on what an editor shows as two lines never pin the first:
+/// the Unicode line and paragraph separators and the next-line character
+/// end a line on screen, though not for `str::lines`.
+#[test]
+fn two_keys_apart_by_a_unicode_line_end_do_not_pin_the_first() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, separator) in [
+        ("line.pub", '\u{2028}'),
+        ("paragraph.pub", '\u{2029}'),
+        ("next-line.pub", '\u{85}'),
+    ] {
+        let (first, _) = key_line("root@old");
+        let (second, _) = key_line("root@new");
+        let path = dir.path().join(name);
+        fs::write(&path, format!("{first}{separator}{second}\n")).unwrap();
+        let read = read_public_key(&path);
+        assert!(
+            matches!(&read, Err(LocalError::HostKey { path: named }) if *named == path),
+            "{name}: {read:?}"
+        );
+    }
+}
+
+/// Two keys apart by a space are one line everywhere, and one key with a
+/// comment, as OpenSSH reads them too.
+#[test]
+fn two_keys_on_one_line_are_one_key_with_a_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    let (first, key) = key_line("root@old");
+    let (second, _) = key_line("root@new");
+    let path = dir.path().join("one-line.pub");
+    fs::write(&path, format!("{first} {second}\n")).unwrap();
+    assert_eq!(read_public_key(&path).unwrap(), key);
+}
+
+/// What the key file's reader takes and what it refuses: one plain
+/// `ssh-ed25519` line, however it is spaced and ended, and nothing that
+/// only resembles one.
+#[test]
+fn the_key_file_reader_takes_one_plain_line_and_refuses_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let (line, key) = key_line("root@lon1");
+    let bare = key.ssh_authorized_key();
+    let blob = bare.strip_prefix("ssh-ed25519 ").unwrap();
+    let taken = [
+        ("bare.pub", format!("{bare}\n")),
+        ("no-newline.pub", line.clone()),
+        ("indented.pub", format!("  \t{line}\n")),
+        (
+            "two-spaces.pub",
+            format!("ssh-ed25519  {blob}  root@lon1\n"),
+        ),
+        ("crlf.pub", format!("{line}\r\n")),
+        ("blank-lines.pub", format!("\n\r\n{line}\n \t \n")),
+        (
+            "unicode-comment.pub",
+            format!("{bare} r\u{f6}\u{f6}t@l\u{f6}n1\n"),
+        ),
+    ];
+    for (name, text) in taken {
+        let path = dir.path().join(name);
+        fs::write(&path, text).unwrap();
+        assert_eq!(read_public_key(&path).unwrap(), key, "{name}");
+    }
+    let refused = [
+        ("bom.pub", format!("\u{feff}{line}\n")),
+        ("bare-cr.pub", format!("{line}\r")),
+        ("comment-line.pub", format!("# lon1\n{line}\n")),
+        ("known-hosts.pub", format!("45.67.89.10 {bare}\n")),
+        ("options.pub", format!("restrict {line}\n")),
+        (
+            "certificate.pub",
+            format!("ssh-ed25519-cert-v01@openssh.com {blob} root@lon1\n"),
+        ),
+        (
+            "security-key.pub",
+            format!("sk-ssh-ed25519@openssh.com {blob} root@lon1\n"),
+        ),
+        ("no-space.pub", format!("ssh-ed25519\u{a0}{blob}\n")),
+        ("escape.pub", format!("{bare} root\u{1b}[2K@lon1\n")),
+        ("backspace.pub", format!("{bare} root\u{8}@lon1\n")),
+        ("delete.pub", format!("{bare} root\u{7f}@lon1\n")),
+    ];
+    for (name, text) in refused {
+        let path = dir.path().join(name);
+        fs::write(&path, text).unwrap();
+        let read = read_public_key(&path);
+        assert!(
+            matches!(&read, Err(LocalError::HostKey { path: named }) if *named == path),
+            "{name}: {read:?}"
+        );
+    }
+}
+
+/// The operations key's public half is read as any public key file is. One
+/// that is missing or damaged is reported as a public key, not as the host
+/// key `node new` and `node repin` read through the same reader.
+#[test]
+fn a_damaged_operations_public_key_is_not_called_a_host_key() {
+    let (_support, files) = files();
+    let lon1 = NodeId::parse("lon1").unwrap();
+    files.create_dir().unwrap();
+    fs::write(files.ops_key(), b"a key\n").unwrap();
+    let public = files.dir().join("ops_ed25519.pub");
+    assert_eq!(
+        files.ops_public(&lon1).unwrap_err().to_string(),
+        format!("cannot read the public key in {}", public.display())
+    );
+    fs::write(&public, b"not a key\n").unwrap();
+    assert_eq!(
+        files.ops_public(&lon1).unwrap_err().to_string(),
+        format!(
+            "{} does not hold exactly one Ed25519 public key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)",
+            public.display()
+        )
+    );
+}
+
+/// A regular file whose name only resembles one of Mooring's is not
+/// Mooring's: what `ssh-keygen -R` leaves beside `known_hosts`, a copy of
+/// a key, or a `.partial` of a file Mooring never rewrites.
+#[test]
+fn a_file_named_almost_as_one_of_moorings_is_not_kept() {
+    for name in [
+        "known_hosts.old",
+        "known_hosts.partial.partial",
+        "ops_ed25519.partial",
+        "ops_ed25519.pub.partial",
+        "ops_ed25519.bak",
+        "bootstrap_ed25519.pub",
+        "ops_ed25519_",
+    ] {
+        let (_support, files) = files();
+        files.create_dir().unwrap();
+        let path = files.dir().join(name);
+        fs::write(&path, b"").unwrap();
+        let listed = files.inspect();
+        assert!(
+            matches!(&listed, Err(LocalError::NodeFileUnexpected { path: named }) if *named == path),
+            "{name}: {listed:?}"
+        );
+    }
+}
+
+/// A public key file holds one line of at most 4096 bytes, blank lines
+/// aside, in a regular file; bytes that are not UTF-8 hold no key.
+#[test]
+fn a_public_key_file_is_one_line_of_at_most_4096_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = host_key().ssh_authorized_key();
+    let padded = |total: usize| {
+        let line = format!("{key} ");
+        format!("{line}{}\n", "c".repeat(total - line.len() - 1))
+    };
+    for (name, text, holds) in [
+        (
+            "blank-lines.pub",
+            format!("\n  \n{key} root@lon1\n\n"),
+            true,
+        ),
+        ("at-the-limit.pub", padded(4096), true),
+        ("past-the-limit.pub", padded(4097), false),
+    ] {
+        let path = dir.path().join(name);
+        fs::write(&path, &text).unwrap();
+        let read = read_public_key(&path);
+        if holds {
+            assert_eq!(read.unwrap().ssh_authorized_key(), key, "{name}");
+        } else {
+            assert!(
+                matches!(&read, Err(LocalError::HostKey { path: named }) if *named == path),
+                "{name}: {read:?}"
+            );
+        }
+    }
+    let path = dir.path().join("not-utf8.pub");
+    let mut bytes = format!("{key} ").into_bytes();
+    bytes.extend_from_slice(&[0xff, 0xfe, b'\n']);
+    fs::write(&path, bytes).unwrap();
+    let read = read_public_key(&path);
     assert!(
-        matches!(&error, LocalError::NodeFile { path, .. } if *path == files.bootstrap_key()),
+        matches!(&read, Err(LocalError::HostKey { path: named }) if *named == path),
+        "{read:?}"
+    );
+}
+
+/// A node's directory is listed with Mooring's own files, every one, and
+/// removed with them, leaving `ssh/`; with no directory there is nothing.
+#[test]
+fn a_node_directory_is_listed_with_moorings_own_files_and_removed_with_them() {
+    let (support, files) = files();
+    assert!(files.inspect().unwrap().is_none());
+    files.create_dir().unwrap();
+    for name in [
+        "ops_ed25519",
+        "ops_ed25519.pub",
+        "known_hosts",
+        "known_hosts.partial",
+        "bootstrap_ed25519",
+        "bootstrap_ed25519.partial",
+    ] {
+        fs::write(files.dir().join(name), b"").unwrap();
+    }
+    let listing = files.inspect().unwrap().unwrap();
+    assert_eq!(listing.dir(), files.dir());
+    listing.remove().unwrap();
+    assert!(!files.dir().exists());
+    assert!(support.path().join("ssh").is_dir());
+}
+
+/// The removal follows no link put where the directory was, keeps an
+/// entry added since and with it the directory, and takes an entry or a
+/// directory removed already as gone.
+#[test]
+fn a_removal_follows_no_link_and_keeps_what_was_added_since() {
+    let (support, files) = files();
+    files.create_dir().unwrap();
+    fs::write(files.known_hosts(), b"pinned\n").unwrap();
+    let listing = files.inspect().unwrap().unwrap();
+    let moved = support.path().join("moved");
+    fs::rename(files.dir(), &moved).unwrap();
+    symlink(&moved, files.dir()).unwrap();
+    let error = listing.remove().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    assert_eq!(fs::read(moved.join("known_hosts")).unwrap(), b"pinned\n");
+    fs::remove_file(files.dir()).unwrap();
+    fs::rename(&moved, files.dir()).unwrap();
+
+    let listing = files.inspect().unwrap().unwrap();
+    let added = files.dir().join("ops_ed25519");
+    fs::write(&added, b"").unwrap();
+    let error = listing.remove().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::DirectoryNotEmpty);
+    assert!(!files.known_hosts().exists());
+    assert!(added.exists());
+
+    let listing = files.inspect().unwrap().unwrap();
+    fs::remove_file(&added).unwrap();
+    listing.remove().unwrap();
+    assert!(!files.dir().exists());
+
+    files.create_dir().unwrap();
+    let listing = files.inspect().unwrap().unwrap();
+    fs::remove_dir(files.dir()).unwrap();
+    listing.remove().unwrap();
+}
+
+/// A directory the removal cannot examine any more is its failure, never
+/// taken as gone, and nothing in it is touched.
+#[test]
+fn a_removal_that_cannot_examine_the_directory_fails_and_removes_nothing() {
+    let (support, files) = files();
+    files.create_dir().unwrap();
+    fs::write(files.known_hosts(), b"pinned\n").unwrap();
+    let listing = files.inspect().unwrap().unwrap();
+    let ssh = support.path().join("ssh");
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o000)).unwrap();
+    let outcome = listing.remove();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(outcome.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(fs::read(files.known_hosts()).unwrap(), b"pinned\n");
+}
+
+/// The entries of `dir`, sorted.
+fn names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A fresh socket at `path`, bound at a shorter path and moved there.
+fn socket_at(short: &Path, path: &Path) {
+    drop(UnixListener::bind(short).unwrap());
+    fs::rename(short, path).unwrap();
+}
+
+/// The socket a session binds for its relay is one the listing keeps, by
+/// the name `RelaySocket` gives it; a socket of another name is not
+/// Mooring's.
+#[test]
+fn only_a_socket_named_as_a_session_names_its_relay_is_kept() {
+    assert_eq!(relay_socket_name(7, 3), "relay-7-3.sock");
+    let (support, files) = files();
+    files.create_dir().unwrap();
+    let relay = RelaySocket::bind(files.dir()).unwrap();
+    assert_eq!(names(files.dir()).len(), 1);
+    assert!(files.inspect().unwrap().is_some());
+    drop(relay);
+    assert!(names(files.dir()).is_empty());
+    for name in [
+        "agent.sock",
+        "relay-1-0",
+        "relay-1-0.sock.old",
+        "xrelay-1-0.sock",
+    ] {
+        let path = files.dir().join(name);
+        socket_at(&support.path().join("s"), &path);
+        let error = files.inspect().unwrap_err();
+        assert!(
+            matches!(&error, LocalError::NodeFileUnexpected { path: named } if *named == path),
+            "{name}: {error:?}"
+        );
+        fs::remove_file(&path).unwrap();
+    }
+    socket_at(
+        &support.path().join("s"),
+        &files.dir().join(relay_socket_name(1, 0)),
+    );
+    files.inspect().unwrap().unwrap().remove().unwrap();
+    assert!(!files.dir().exists());
+}
+
+/// A link among the entries is not Mooring's, whatever it is named and
+/// wherever it leads: an entry is judged by its own type.
+#[test]
+fn a_link_named_as_one_of_moorings_files_is_not_kept() {
+    let (support, files) = files();
+    files.create_dir().unwrap();
+    let elsewhere = support.path().join("elsewhere");
+    fs::write(&elsewhere, b"kept\n").unwrap();
+    symlink(&elsewhere, files.known_hosts()).unwrap();
+    let error = files.inspect().unwrap_err();
+    assert!(
+        matches!(&error, LocalError::NodeFileUnexpected { path } if *path == files.known_hosts()),
+        "{error:?}"
+    );
+    assert_eq!(fs::read(&elsewhere).unwrap(), b"kept\n");
+}
+
+/// A removal tries every entry it listed: one that cannot be removed (a
+/// directory put in its place since) keeps the directory and is the
+/// failure reported, and every other entry still goes, whichever of them
+/// the directory lists first.
+#[test]
+fn a_removal_tries_every_entry_and_reports_the_one_that_stays() {
+    let all = [
+        "bootstrap_ed25519",
+        "known_hosts",
+        "ops_ed25519",
+        "ops_ed25519.pub",
+    ];
+    for stays in all {
+        let (_support, files) = files();
+        files.create_dir().unwrap();
+        for name in all {
+            fs::write(files.dir().join(name), b"").unwrap();
+        }
+        let listing = files.inspect().unwrap().unwrap();
+        let kept = files.dir().join(stays);
+        fs::remove_file(&kept).unwrap();
+        fs::create_dir(&kept).unwrap();
+        let error = listing.remove().unwrap_err();
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::PermissionDenied,
+            "{stays}: {error}"
+        );
+        assert_eq!(names(files.dir()), [stays], "{stays}");
+    }
+}
+
+/// A FIFO does not hold the reader: with nothing writing to it the read is
+/// over at once, where a blocking open would never return. The wait bounds
+/// the test, so a regression fails it instead of hanging the run.
+#[test]
+fn a_fifo_is_refused_without_waiting_for_a_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("fifo.pub");
+    assert!(
+        Command::new("/usr/bin/mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (done, refused) = mpsc::channel();
+    let path = fifo.clone();
+    thread::spawn(move || {
+        let read = read_public_key(&path);
+        let refused =
+            matches!(&read, Err(LocalError::HostKeyNotAFile { path: named }) if *named == path);
+        // The receiver is gone if the wait below ran out.
+        let _ = done.send(refused);
+    });
+    assert_eq!(refused.recv_timeout(Duration::from_secs(10)), Ok(true));
+}
+
+/// Whether anything is at a node's ssh path: nothing, a directory, a file
+/// or a link that leads nowhere; a path that cannot be examined is a
+/// failure.
+#[test]
+fn a_node_directory_is_present_whatever_is_at_its_path() {
+    let (support, files) = files();
+    assert!(!files.present().unwrap());
+    files.create_dir().unwrap();
+    assert!(files.present().unwrap());
+    fs::remove_dir(files.dir()).unwrap();
+    fs::write(files.dir(), b"").unwrap();
+    assert!(files.present().unwrap());
+    fs::remove_file(files.dir()).unwrap();
+    symlink(support.path().join("gone"), files.dir()).unwrap();
+    assert!(files.present().unwrap());
+    fs::remove_file(files.dir()).unwrap();
+    let ssh = support.path().join("ssh");
+    fs::remove_dir(&ssh).unwrap();
+    fs::write(&ssh, b"").unwrap();
+    let error = files.present().unwrap_err();
+    assert!(
+        matches!(&error, LocalError::NodeFile { path, .. } if path == files.dir()),
         "{error:?}"
     );
 }

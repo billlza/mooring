@@ -277,6 +277,10 @@ impl RefusingPort {
 /// neighbour answers are scripted (the last one repeats), as are its IPv4
 /// addresses.
 pub(crate) struct FakeLink {
+    /// The indexes the name `lo0` resolves to, one for each lookup and the
+    /// last one for every lookup after it; with none, the loopback's own.
+    /// An index other than the loopback's needs its entry in `routes`.
+    pub(crate) indexes: RefCell<VecDeque<InterfaceIndex>>,
     pub(crate) gateway: Result<Ipv4Addr, MacsysError>,
     pub(crate) neighbours: RefCell<VecDeque<Result<[u8; 6], MacsysError>>>,
     pub(crate) neighbour_calls: Cell<usize>,
@@ -299,6 +303,7 @@ pub(crate) type Route = (Result<Ipv4Addr, MacsysError>, Result<[u8; 6], MacsysEr
 impl FakeLink {
     pub(crate) fn answering(neighbours: &[Result<[u8; 6], MacsysError>]) -> Self {
         Self {
+            indexes: RefCell::new(VecDeque::new()),
             gateway: Ok(Ipv4Addr::LOCALHOST),
             neighbours: RefCell::new(neighbours.iter().copied().collect()),
             neighbour_calls: Cell::new(0),
@@ -320,11 +325,15 @@ impl FakeLink {
 
 impl LinkLayer for FakeLink {
     fn interface_index(&self, name: &BsdName) -> Result<InterfaceIndex, MacsysError> {
-        if name.as_str() == "lo0" {
-            Ok(lo0())
-        } else {
-            Err(MacsysError::InterfaceAbsent)
+        if name.as_str() != "lo0" {
+            return Err(MacsysError::InterfaceAbsent);
         }
+        let mut scripted = self.indexes.borrow_mut();
+        Ok(match scripted.len() {
+            0 => lo0(),
+            1 => scripted[0],
+            _ => scripted.pop_front().unwrap(),
+        })
     }
 
     fn default_gateway(&self, index: InterfaceIndex) -> Result<Ipv4Addr, MacsysError> {
@@ -411,12 +420,28 @@ pub(crate) enum Answered {
     Replied(Result<Response, NodeError>),
 }
 
+/// What another command does while a scripted session runs
+/// ([`FakeNodes::meanwhile`]) or a question waits
+/// ([`FakeConsole::meanwhile`]).
+pub(crate) type Meanwhile = Box<dyn FnOnce() + Send>;
+
+/// What a command reports when the state it read is no longer the state
+/// once its question is answered (`LocalError::StateChangedSinceRead`).
+pub(crate) const MOVED: &str = "mooringctl: the state changed since this command read it, so it stopped before acting: run the command again\n";
+
+/// What a command reports when its change is committed and keychain
+/// deletions failed after it (`LocalError::StateCommitted`).
+pub(crate) const COMMITTED: &str = "mooringctl: the change is committed, but deleting the keychain items it no longer references failed for those named below; nothing uses them, and any that is still there can be deleted by hand";
+
 /// Nodes whose sessions follow a script, in order, recording each session's
 /// target and what was sent.
 #[derive(Default)]
 pub(crate) struct FakeNodes {
     pub(crate) script: RefCell<VecDeque<(Expected, Answered)>>,
     pub(crate) seen: RefCell<Vec<(SshTarget, Sent)>>,
+    /// Once this many more steps are answered, this runs once, before the
+    /// next step is answered.
+    pub(crate) meanwhile: RefCell<Option<(usize, Meanwhile)>>,
 }
 
 /// What a session sent.
@@ -434,6 +459,20 @@ impl FakeNodes {
     }
 
     fn next(&self, target: &SshTarget, sent: Sent) -> Answered {
+        let due = {
+            let mut meanwhile = self.meanwhile.borrow_mut();
+            match meanwhile.as_mut() {
+                Some((0, _)) => meanwhile.take(),
+                Some((steps, _)) => {
+                    *steps -= 1;
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some((_, run)) = due {
+            run();
+        }
         let (expected, answered) = self
             .script
             .borrow_mut()
@@ -548,11 +587,17 @@ pub(crate) struct FakeConsole {
     /// Lines to type, each `None` for no terminal.
     pub(crate) lines: VecDeque<Option<Vec<u8>>>,
     pub(crate) asked: Vec<String>,
+    /// What another command does while the next question waits for its
+    /// answer; it runs once.
+    pub(crate) meanwhile: Option<Meanwhile>,
 }
 
 impl Console for FakeConsole {
     fn confirm(&mut self, question: &str) -> Result<Answer, LocalError> {
         self.asked.push(question.to_owned());
+        if let Some(run) = self.meanwhile.take() {
+            run();
+        }
         Ok(self.answers.pop_front().unwrap())
     }
 
@@ -590,11 +635,15 @@ impl Write for Refusing {
 }
 
 /// A log that keeps every write until one holds `fails_at`, and refuses
-/// that write and every one after it, as a disk that has filled up does.
+/// that write and every one after it, as a disk that has filled up does;
+/// or, made with [`FailingLog::only_at`], refuses that one write and takes
+/// the rest, as an interrupted write does.
 #[derive(Debug)]
 pub(crate) struct FailingLog {
     fails_at: &'static str,
     failed: bool,
+    /// Whether the writes after the refused one are refused too.
+    stays_failed: bool,
     /// What was written before the failure.
     pub(crate) kept: Vec<u8>,
 }
@@ -604,7 +653,16 @@ impl FailingLog {
         Self {
             fails_at,
             failed: false,
+            stays_failed: true,
             kept: Vec::new(),
+        }
+    }
+
+    /// A log that refuses only the write that holds `fails_at`.
+    pub(crate) fn only_at(fails_at: &'static str) -> Self {
+        Self {
+            stays_failed: false,
+            ..Self::at(fails_at)
         }
     }
 
@@ -617,7 +675,8 @@ impl FailingLog {
 impl Write for FailingLog {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let needle = self.fails_at.as_bytes();
-        if self.failed || buf.windows(needle.len()).any(|window| window == needle) {
+        let holds = buf.windows(needle.len()).any(|window| window == needle);
+        if holds || (self.failed && self.stays_failed) {
             self.failed = true;
             return Err(io::Error::other("no space left for the log"));
         }
@@ -631,11 +690,13 @@ impl Write for FailingLog {
 }
 
 /// What the fake keychain refuses, with the `OSStatus` the Security
-/// framework gives: every read (`get`) or every write (`put`).
+/// framework gives: every read (`get`), every write (`put`) or every
+/// deletion (`delete`).
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Refusals {
     pub(crate) get: Option<i32>,
     pub(crate) put: Option<i32>,
+    pub(crate) delete: Option<i32>,
 }
 
 /// The harness's secrets as a command sees them: its in-memory store, with
@@ -673,7 +734,13 @@ impl SecretStore for RefusingStore<'_> {
     }
 
     fn delete(&mut self, secret_ref: &SecretRef) -> Result<(), SecretStoreError> {
-        self.store.delete(secret_ref)
+        match self.refusals().delete {
+            Some(status) => Err(SecretStoreError::Keychain {
+                op: SecretOp::Delete,
+                status,
+            }),
+            None => self.store.delete(secret_ref),
+        }
     }
 }
 

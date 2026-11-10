@@ -268,6 +268,7 @@ fn a_keychain_that_cannot_be_read_stops_the_apply_before_any_session() {
     *harness.keychain.lock().unwrap() = Refusals {
         get: Some(-25_293),
         put: None,
+        delete: None,
     };
     let before = state_bytes(&harness);
     let outcome = run(&mut harness, &apply_args(&engines));

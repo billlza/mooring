@@ -80,7 +80,8 @@ pub enum SuspendReason {
 /// Transitions ([`User::suspend`], [`User::resume`], [`User::revoke`]):
 /// an active user may be suspended and a suspended one resumed; an active
 /// or suspended user may be revoked; revocation then proceeds node by node
-/// through `Bookkeeping::RevocationCommitted` and never goes back.
+/// through `Bookkeeping::RevocationCommitted`, or a record that drops a
+/// node (`RetirementShutDown`, `PlanCancelled`), and never goes back.
 /// Suspending and resuming change which users the nodes serve, so they are
 /// configuration changes that bump `config_generation`, never bookkeeping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -114,9 +115,10 @@ impl UserStatus {
     /// [`User::resume`]); either starts a revocation ([`User::revoke`]),
     /// becoming `RevokePending` or, holding no credentials, `Revoked`.
     /// Nothing else: a suspension is not re-labelled in place, and a
-    /// revocation settles only through `Bookkeeping::RevocationCommitted`
-    /// and never goes back. The store refuses any other change
-    /// (`UserStatusEdited`).
+    /// revocation settles only through bookkeeping
+    /// (`Bookkeeping::RevocationCommitted`, or a record that drops the
+    /// last node it waits on) and never goes back. The store refuses any
+    /// other change (`UserStatusEdited`).
     #[must_use]
     pub fn may_change_to(self, next: Self) -> bool {
         match (self, next) {

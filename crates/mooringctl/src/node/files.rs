@@ -7,11 +7,15 @@
 //! `/usr/bin/ssh` reads keys from files only, so these keys are files, not
 //! keychain items. Each ssh session's one-time relay socket is bound there
 //! too, so only the operator reaches it (`crate::node::dial::RelaySocket`).
+//! `node cancel` removes the directory once the state no longer names the
+//! node, so a node planned again under the id gets fresh keys
+//! ([`NodeFiles::inspect`]).
 
+use std::ffi::OsStr;
 use std::fs::{self, DirBuilder, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::net::Ipv4Addr;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use mooring_keys::{SshComment, SshKeyPair, SshPublicKey};
@@ -22,6 +26,28 @@ use crate::error::LocalError;
 
 /// The most bytes read from a public key file: one line.
 const MAX_PUBLIC_KEY_BYTES: u64 = 4096;
+
+/// The operations key's file.
+const OPS_KEY: &str = "ops_ed25519";
+/// The file of the operations key's public half.
+const OPS_PUBLIC_KEY: &str = "ops_ed25519.pub";
+/// The pinned host key's file, which ssh reads.
+const KNOWN_HOSTS: &str = "known_hosts";
+/// The one-time bootstrap key's file.
+const BOOTSTRAP_KEY: &str = "bootstrap_ed25519";
+/// The extension of the copy [`replace`] writes before it renames it.
+const PARTIAL: &str = "partial";
+/// What a relay socket's name starts with ([`relay_socket_name`]).
+const RELAY_PREFIX: &str = "relay-";
+/// What a relay socket's name ends with.
+const RELAY_SUFFIX: &str = ".sock";
+
+/// The name of the `number`th relay socket that process `process` binds
+/// in a node's directory (`crate::node::dial::RelaySocket`). A cancel
+/// takes a socket of such a name for Mooring's own ([`NodeFiles::inspect`]).
+pub(crate) fn relay_socket_name(process: u32, number: u64) -> String {
+    format!("{RELAY_PREFIX}{process}-{number}{RELAY_SUFFIX}")
+}
 
 /// One node's directory of SSH files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,21 +70,38 @@ impl NodeFiles {
 
     /// The operations key.
     pub(crate) fn ops_key(&self) -> PathBuf {
-        self.dir.join("ops_ed25519")
+        self.dir.join(OPS_KEY)
     }
 
     fn ops_public_path(&self) -> PathBuf {
-        self.dir.join("ops_ed25519.pub")
+        self.dir.join(OPS_PUBLIC_KEY)
     }
 
     /// The pinned host key.
     pub(crate) fn known_hosts(&self) -> PathBuf {
-        self.dir.join("known_hosts")
+        self.dir.join(KNOWN_HOSTS)
     }
 
-    /// The one-time bootstrap key, present only while the node is adopted.
+    /// The one-time bootstrap key: an adoption writes it when it starts and
+    /// removes it when the node is adopted, and one it could not remove
+    /// then stays (`BootstrapKeyLeft`).
     pub(crate) fn bootstrap_key(&self) -> PathBuf {
-        self.dir.join("bootstrap_ed25519")
+        self.dir.join(BOOTSTRAP_KEY)
+    }
+
+    /// Whether anything is at the directory's path, whatever it is: an
+    /// adoption on this Mac made it, or an earlier node of the id left
+    /// it. A link is not followed, and a path that cannot be examined is
+    /// a failure, not an absent one.
+    pub(crate) fn present(&self) -> Result<bool, LocalError> {
+        match fs::symlink_metadata(&self.dir) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(LocalError::NodeFile {
+                path: self.dir.clone(),
+                source,
+            }),
+        }
     }
 
     /// Creates `ssh/` and `ssh/<node>/` with mode 0700, and sets 0700 on
@@ -118,12 +161,11 @@ impl NodeFiles {
     }
 
     /// Removes the bootstrap key; one that is gone already is fine.
-    pub(crate) fn remove_bootstrap_key(&self) -> Result<(), LocalError> {
-        let path = self.bootstrap_key();
-        match fs::remove_file(&path) {
+    pub(crate) fn remove_bootstrap_key(&self) -> io::Result<()> {
+        match fs::remove_file(self.bootstrap_key()) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(LocalError::NodeFile { path, source }),
+            Err(error) => Err(error),
         }
     }
 
@@ -138,28 +180,186 @@ impl NodeFiles {
     }
 }
 
-/// The Ed25519 key of an OpenSSH public key line in `path`.
+/// What [`NodeFiles::inspect`] found in a node's directory before anything
+/// changed: the directory and each entry in it, every one Mooring's own.
+#[derive(Debug)]
+pub(crate) struct NodeDirListing {
+    dir: PathBuf,
+    entries: Vec<PathBuf>,
+}
+
+impl NodeFiles {
+    /// The directory's entries, for [`NodeDirListing::remove`] once the
+    /// state no longer names the node; `None` when there is no directory.
+    /// Nothing Mooring does not keep there is accepted, so the removal
+    /// takes only Mooring's own files: a link or a file where the directory
+    /// belongs, or any entry other than the operations key and its `.pub`,
+    /// `known_hosts`, the bootstrap key, the `.partial` copies a
+    /// replacement writes and the relay sockets, each of its own type, is
+    /// `NodeFileUnexpected`. Links are never followed. `node new` reads the
+    /// same answer for what is in an id's way.
+    pub(crate) fn inspect(&self) -> Result<Option<NodeDirListing>, LocalError> {
+        let failed = |path: &Path| {
+            let path = path.to_path_buf();
+            move |source| LocalError::NodeFile { path, source }
+        };
+        match fs::symlink_metadata(&self.dir) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(failed(&self.dir)(source)),
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(LocalError::NodeFileUnexpected {
+                    path: self.dir.clone(),
+                });
+            }
+            Ok(_) => {}
+        }
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(&self.dir).map_err(failed(&self.dir))? {
+            let entry = entry.map_err(failed(&self.dir))?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(failed(&path))?;
+            if !kept(&entry.file_name(), kind) {
+                return Err(LocalError::NodeFileUnexpected { path });
+            }
+            entries.push(path);
+        }
+        Ok(Some(NodeDirListing {
+            dir: self.dir.clone(),
+            entries,
+        }))
+    }
+
+    /// The listing of a directory that was not there. Its
+    /// [`NodeDirListing::remove`] finds nothing to remove, unless a
+    /// directory was made since: an empty one goes, and one that holds
+    /// anything stays and is the failure, since nothing in it was examined.
+    pub(crate) fn absent(&self) -> NodeDirListing {
+        NodeDirListing {
+            dir: self.dir.clone(),
+            entries: Vec::new(),
+        }
+    }
+}
+
+/// Whether an entry `name` of type `kind` is one Mooring writes in a
+/// node's directory: one of its four files, the copy [`replace`] leaves
+/// of either file it rewrites when it is interrupted, or a session's
+/// relay socket ([`relay_socket_name`]).
+fn kept(name: &OsStr, kind: fs::FileType) -> bool {
+    let written = [OPS_KEY, OPS_PUBLIC_KEY, KNOWN_HOSTS, BOOTSTRAP_KEY]
+        .iter()
+        .any(|file| name == *file);
+    let partial = [KNOWN_HOSTS, BOOTSTRAP_KEY]
+        .iter()
+        .any(|file| name == Path::new(file).with_extension(PARTIAL).as_os_str());
+    if written || partial {
+        return kind.is_file();
+    }
+    let name = name.as_encoded_bytes();
+    name.starts_with(RELAY_PREFIX.as_bytes())
+        && name.ends_with(RELAY_SUFFIX.as_bytes())
+        && kind.is_socket()
+}
+
+impl NodeDirListing {
+    /// The directory.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Removes the entries found, then the directory, which must still be
+    /// one: a link put there since is not followed. An entry or a directory
+    /// gone already is fine. Every entry is tried; the first failure is
+    /// returned, and one added since keeps the directory, which is then
+    /// the failure.
+    pub(crate) fn remove(self) -> Result<(), io::Error> {
+        match fs::symlink_metadata(&self.dir) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(io::Error::from(io::ErrorKind::NotADirectory));
+            }
+            Ok(_) => {}
+        }
+        let mut first = None;
+        for entry in &self.entries {
+            match fs::remove_file(entry) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    first.get_or_insert(error);
+                }
+            }
+        }
+        match fs::remove_dir(&self.dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                first.get_or_insert(error);
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+}
+
+/// The Ed25519 key of the one OpenSSH public key line in `path`
+/// (`ssh-ed25519 <base64> [comment]`). The file is opened once, with
+/// `O_NONBLOCK` so a FIFO cannot hold the open, must be a regular file by
+/// its own descriptor (`HostKeyNotAFile`), and is read to at most
+/// [`MAX_PUBLIC_KEY_BYTES`]. Blank lines aside it must hold that one line,
+/// and the line nothing that ends a line on a screen
+/// ([`ends_a_line_on_screen`]), so a file that shows two keys on two lines
+/// never pins the first (`HostKey`). Two keys on one line, apart by spaces,
+/// are one key and its comment, as OpenSSH reads them.
 pub(crate) fn read_public_key(path: &Path) -> Result<Ed25519Pub, LocalError> {
     let read = |source| LocalError::HostKeyFile {
         path: path.to_path_buf(),
         source,
     };
-    if fs::metadata(path).map_err(read)?.len() > MAX_PUBLIC_KEY_BYTES {
-        return Err(LocalError::HostKey {
+    let malformed = || LocalError::HostKey {
+        path: path.to_path_buf(),
+    };
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(read)?;
+    if !file.metadata().map_err(read)?.file_type().is_file() {
+        return Err(LocalError::HostKeyNotAFile {
             path: path.to_path_buf(),
         });
     }
-    let text = fs::read_to_string(path).map_err(read)?;
-    let mut tokens = text.split_ascii_whitespace();
-    match (tokens.next(), tokens.next()) {
-        (Some(kind), Some(blob)) => Ed25519Pub::parse_ssh_authorized_key(&format!("{kind} {blob}"))
-            .map_err(|_| LocalError::HostKey {
-                path: path.to_path_buf(),
-            }),
-        _ => Err(LocalError::HostKey {
-            path: path.to_path_buf(),
-        }),
+    let mut bytes = Vec::new();
+    file.take(MAX_PUBLIC_KEY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(read)?;
+    if bytes.len() as u64 > MAX_PUBLIC_KEY_BYTES {
+        return Err(malformed());
     }
+    let text = std::str::from_utf8(&bytes).map_err(|_| malformed())?;
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let (Some(line), None) = (lines.next(), lines.next()) else {
+        return Err(malformed());
+    };
+    if line.chars().any(ends_a_line_on_screen) {
+        return Err(malformed());
+    }
+    let mut tokens = line.split_ascii_whitespace();
+    match (tokens.next(), tokens.next()) {
+        (Some(kind), Some(blob)) => {
+            Ed25519Pub::parse_ssh_authorized_key(&format!("{kind} {blob}")).map_err(|_| malformed())
+        }
+        _ => Err(malformed()),
+    }
+}
+
+/// Whether `character` may end a line where a key file is looked at,
+/// though `str::lines` splits only at a line feed: any control character
+/// but a tab (a carriage return, a form feed, a next-line character), and
+/// the Unicode line and paragraph separators, which are no control
+/// characters. A second key could hide after one.
+fn ends_a_line_on_screen(character: char) -> bool {
+    (character.is_control() && character != '\t') || matches!(character, '\u{2028}' | '\u{2029}')
 }
 
 /// Writes a new file with mode 0600; an existing one is an error.
@@ -182,7 +382,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), LocalError> {
 /// Replaces `path` with `bytes` through a temporary file (mode 0600) and a
 /// rename, so the file is always whole.
 fn replace(path: &Path, bytes: &[u8]) -> Result<(), LocalError> {
-    let temporary = path.with_extension("partial");
+    let temporary = path.with_extension(PARTIAL);
     let failed = |path: &Path| {
         let path = path.to_path_buf();
         move |source| LocalError::NodeFile { path, source }
