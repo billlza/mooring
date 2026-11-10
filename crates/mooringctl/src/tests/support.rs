@@ -611,11 +611,15 @@ impl Write for Refusing {
 }
 
 /// A log that keeps every write until one holds `fails_at`, and refuses
-/// that write and every one after it, as a disk that has filled up does.
+/// that write and every one after it, as a disk that has filled up does;
+/// or, made with [`FailingLog::only_at`], refuses that one write and takes
+/// the rest, as an interrupted write does.
 #[derive(Debug)]
 pub(crate) struct FailingLog {
     fails_at: &'static str,
     failed: bool,
+    /// Whether the writes after the refused one are refused too.
+    stays_failed: bool,
     /// What was written before the failure.
     pub(crate) kept: Vec<u8>,
 }
@@ -625,7 +629,16 @@ impl FailingLog {
         Self {
             fails_at,
             failed: false,
+            stays_failed: true,
             kept: Vec::new(),
+        }
+    }
+
+    /// A log that refuses only the write that holds `fails_at`.
+    pub(crate) fn only_at(fails_at: &'static str) -> Self {
+        Self {
+            stays_failed: false,
+            ..Self::at(fails_at)
         }
     }
 
@@ -638,7 +651,8 @@ impl FailingLog {
 impl Write for FailingLog {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let needle = self.fails_at.as_bytes();
-        if self.failed || buf.windows(needle.len()).any(|window| window == needle) {
+        let holds = buf.windows(needle.len()).any(|window| window == needle);
+        if holds || (self.failed && self.stays_failed) {
             self.failed = true;
             return Err(io::Error::other("no space left for the log"));
         }

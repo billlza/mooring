@@ -9,6 +9,7 @@
 use std::fs;
 use std::io;
 use std::net::Ipv4Addr;
+use std::os::unix::fs::PermissionsExt;
 
 use mooring_keys::SshKeyPair;
 use mooring_model::{Ed25519Pub, NodeId};
@@ -228,4 +229,20 @@ fn a_removal_follows_no_link_and_keeps_what_was_added_since() {
     let listing = files.inspect().unwrap().unwrap();
     fs::remove_dir(files.dir()).unwrap();
     listing.remove().unwrap();
+}
+
+/// A directory the removal cannot examine any more is its failure, never
+/// taken as gone, and nothing in it is touched.
+#[test]
+fn a_removal_that_cannot_examine_the_directory_fails_and_removes_nothing() {
+    let (support, files) = files();
+    files.create_dir().unwrap();
+    fs::write(files.known_hosts(), b"pinned\n").unwrap();
+    let listing = files.inspect().unwrap().unwrap();
+    let ssh = support.path().join("ssh");
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o000)).unwrap();
+    let outcome = listing.remove();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(outcome.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(fs::read(files.known_hosts()).unwrap(), b"pinned\n");
 }

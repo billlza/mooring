@@ -191,21 +191,26 @@ impl NodeFiles {
     }
 }
 
+/// The files Mooring writes in a node's directory: the keys, `known_hosts`,
+/// and the `.partial` copies a replacement writes.
+const KEPT_FILES: [&str; 6] = [
+    "ops_ed25519",
+    "ops_ed25519.pub",
+    "known_hosts",
+    "known_hosts.partial",
+    "bootstrap_ed25519",
+    "bootstrap_ed25519.partial",
+];
+
 /// Whether an entry `name` of type `kind` is one Mooring writes in a
-/// node's directory.
+/// node's directory: one of its files, or a session's relay socket
+/// (`relay-….sock`).
 fn kept(name: &OsStr, kind: fs::FileType) -> bool {
-    let Some(name) = name.to_str() else {
-        return false;
-    };
-    match name {
-        "ops_ed25519"
-        | "ops_ed25519.pub"
-        | "known_hosts"
-        | "known_hosts.partial"
-        | "bootstrap_ed25519"
-        | "bootstrap_ed25519.partial" => kind.is_file(),
-        _ => name.starts_with("relay-") && name.ends_with(".sock") && kind.is_socket(),
+    if KEPT_FILES.iter().any(|file| name == *file) {
+        return kind.is_file();
     }
+    let name = name.as_encoded_bytes();
+    name.starts_with(b"relay-") && name.ends_with(b".sock") && kind.is_socket()
 }
 
 impl NodeDirListing {

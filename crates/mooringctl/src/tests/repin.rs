@@ -18,7 +18,7 @@ use mooring_store::{SecretStore, record_with_secrets};
 
 use super::cancel::{lon1_dir, partially_adopted};
 use super::node::{ADDRESS, adopt_args, agent_file, host_key_file, planned};
-use super::support::{Answered, Expected, Harness, Refusals};
+use super::support::{Answered, Expected, FailingLog, Harness, Refusals};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::{EXIT_LOCAL, LocalError};
 use crate::node::NodeError;
@@ -416,4 +416,92 @@ fn repin_reads_and_writes_no_secret() {
             .host_ed25519,
         key
     );
+}
+
+/// A pin that cannot be committed leaves the state as it was, and says so.
+#[test]
+fn a_repin_that_cannot_be_committed_leaves_the_pin() {
+    let (mut harness, _) = planned();
+    let before = state_bytes(&harness);
+    let stale = harness.support_dir().join("state.json.tmp");
+    fs::create_dir(&stale).unwrap();
+    fs::write(stale.join("keep"), b"").unwrap();
+    let (path, _) = host_key_file(&harness, "new.pub");
+    let outcome = harness.run(&[
+        "node",
+        "repin",
+        "lon1",
+        "--host-key",
+        path.to_str().unwrap(),
+        "--yes",
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: the state was not changed\n"),
+        "{}",
+        outcome.stderr
+    );
+    assert!(
+        !outcome.stdout.contains("re-pinned node"),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(state_bytes(&harness), before);
+}
+
+/// What the re-pin says before it commits is written first, so output that
+/// fails there pins nothing, whether or not the lines after it could be
+/// written; output that fails after the commit leaves the new pin. The
+/// key already pinned has one line to write, and no commit.
+#[test]
+fn output_that_fails_before_the_commit_pins_nothing_and_after_it_keeps_the_pin() {
+    let failed = |harness: &mut Harness, file: &str, mut out: FailingLog| {
+        let mut err = Vec::new();
+        let code = harness.run_to(
+            &["node", "repin", "lon1", "--host-key", file, "--yes"],
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, EXIT_LOCAL, "{out:?}");
+        assert!(out.failed(), "{out:?}");
+        let report = String::from_utf8(err).unwrap();
+        assert!(
+            report.starts_with("mooringctl: writing the output failed\n"),
+            "{out:?}: {report}"
+        );
+    };
+    // The first line is the last before the commit on a node no adoption
+    // touched, and the adoption's note is the last after one.
+    let fresh: fn() -> (Harness, Ed25519Pub) = planned;
+    for (needle, harness, committed) in [
+        ("is no check", fresh, false),
+        ("is no check", partially_adopted, false),
+        ("ran on this Mac", partially_adopted, false),
+        ("re-pinned node", fresh, true),
+    ] {
+        for out in [FailingLog::at(needle), FailingLog::only_at(needle)] {
+            let (mut harness, _) = harness();
+            let before = state_bytes(&harness);
+            let (path, key) = host_key_file(&harness, "new.pub");
+            failed(&mut harness, path.to_str().unwrap(), out);
+            let deployment = store(&harness).load().unwrap().deployment;
+            assert_eq!(
+                deployment.nodes()[&node_id("lon1")].ssh.host_ed25519 == key,
+                committed,
+                "{needle}"
+            );
+            assert_eq!(state_bytes(&harness) == before, !committed, "{needle}");
+        }
+    }
+    let (mut harness, _) = planned();
+    let before = state_bytes(&harness);
+    let pinned = harness.home.path().join("lon1_host.pub");
+    failed(
+        &mut harness,
+        pinned.to_str().unwrap(),
+        FailingLog::at("nothing was written"),
+    );
+    assert_eq!(state_bytes(&harness), before);
 }
