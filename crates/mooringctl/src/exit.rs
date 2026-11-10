@@ -29,7 +29,7 @@ use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::node::dial::facing_the_m7;
 use crate::prompt::Answer;
 use crate::router;
-use crate::state::{load, output, state_change};
+use crate::state::{load, output, state_change, store_failure};
 use crate::status::{ANSWER_TIMEOUT, Next, connect, read_reply_line};
 
 /// `exit init --interface <bsd> --cycle-anchor <date> --flow-cap <n>
@@ -95,7 +95,7 @@ pub(crate) fn init(
     confirm(env, yes, "Create the deployment with these values?")?;
     let state = store.init(init).map_err(|error| match error {
         StoreError::AlreadyInitialized { path } => LocalError::DeploymentExists { path },
-        other => LocalError::StateChange(Box::new(other)),
+        other => store_failure(other),
     })?;
     writeln!(
         out,
@@ -230,7 +230,7 @@ pub(crate) fn record_carrier(
                 state.deployment.config_generation(),
                 Bookkeeping::CarrierRecorded { check },
             )
-            .map_err(|error| LocalError::StateChange(Box::new(error)))?;
+            .map_err(store_failure)?;
         writeln!(out, "recorded the carrier check; no node apply is needed").map_err(output)?;
         return Ok(());
     };
@@ -290,7 +290,7 @@ pub(crate) fn set_enabled(
     }
     store
         .set_exit_enabled(state.runtime.revision, enabled)
-        .map_err(|error| LocalError::StateChange(Box::new(error)))?;
+        .map_err(store_failure)?;
     writeln!(
         out,
         "the exit is {word}; the daemon {} the engine at its next tick",

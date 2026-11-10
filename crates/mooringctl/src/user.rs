@@ -28,7 +28,7 @@ use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
 use crate::prompt::{Console, Line};
-use crate::state::{load, output, state_change};
+use crate::state::{load, output, state_change, store_failure};
 
 /// The most bytes read for a label: [`MAX_LABEL_CHARS`] characters of at
 /// most four UTF-8 bytes each.
@@ -225,7 +225,7 @@ pub(crate) fn agree(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result
                 record: offered,
             },
         )
-        .map_err(|error| LocalError::StateChange(Box::new(error)))?;
+        .map_err(store_failure)?;
     // The model keeps a record of the same revision with its first day
     // (`Bookkeeping::AgreementRecorded`); the tests hold the two together.
     let line = match before {

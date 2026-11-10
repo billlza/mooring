@@ -207,14 +207,14 @@ pub(crate) fn adopt(
         })
         .map_err(refused_change);
     // A failed deletion of the bootstrap key's keychain item leaves the node
-    // adopted: its file goes all the same, and the failure is reported last.
+    // adopted: its file goes all the same, and the failure is reported.
     let cleanup = match recorded {
         Ok(_) => None,
         Err(committed @ LocalError::StateCommitted(_)) => Some(committed),
         Err(error) => return Err(error.into()),
     };
     files.remove_bootstrap_key()?;
-    writeln!(
+    let written = writeln!(
         out,
         "adopted {}: Debian {}, kernel {}, {} on {}; the Mac's address as the node saw it: {}\nnext: `mooringctl node target check {}`, then `node apply {}`",
         args.node,
@@ -226,8 +226,10 @@ pub(crate) fn adopt(
         args.node,
         args.node
     )
-    .map_err(output)?;
-    cleanup.map_or(Ok(()), |committed| Err(committed.into()))
+    .map_err(output);
+    // The node is adopted: a deletion that failed is the failure to
+    // report, whatever became of the line that says so.
+    cleanup.map_or(written, |committed| Err(committed.into()))
 }
 
 /// The adoption step a failure happened at.

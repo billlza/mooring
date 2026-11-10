@@ -961,3 +961,79 @@ fn a_node_is_followed_by_its_id() {
     assert_eq!(state_bytes(&store), on_disk);
     assert_eq!(secrets.refs(), held);
 }
+
+/// A planned node moves only to adopted. It has no usage records, which
+/// the figures need from every node past `Planned`, so it is never
+/// retired: its record cancels it. A closure that moves planned ams1 to a
+/// retiring or retired stage is refused through either write, and nothing
+/// is written; adopting it is the one move on.
+#[test]
+fn a_closure_moves_a_planned_node_only_to_adopted() {
+    let (_dir, store, adopted, mut secrets) = adopted_store();
+    let add = |parts| with_node(parts, planned_node("ams1", 2, 20));
+    let refs = added_refs(&adopted.deployment, add);
+    let state = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        adopted.deployment.config_generation(),
+        entries_for(&refs, 4),
+        |parts| Ok::<_, Infallible>(add(parts)),
+    )
+    .unwrap();
+    let current = state.deployment.config_generation();
+    let on_disk = state_bytes(&store);
+    let held = secrets.refs();
+    let at = site([45, 67, 89, 11]);
+    for lifecycle in [
+        NodeLifecycle::Retiring { site: at.clone() },
+        NodeLifecycle::RetiredPendingProviderDeletion {
+            address: at.address,
+        },
+        NodeLifecycle::Retired,
+    ] {
+        let to = lifecycle.stage();
+        let change = |parts| with_lifecycle(parts, "ams1", lifecycle.clone());
+        let refused = |error: StoreError| {
+            assert!(
+                matches!(
+                    &error,
+                    StoreError::NodeLifecycleEdited {
+                        node,
+                        from: LifecycleStage::Planned,
+                        to: found,
+                    } if *node == node_id("ams1") && *found == Some(to)
+                ),
+                "{to:?}: {error:?}"
+            );
+        };
+        refused(store_error(
+            store
+                .update_config(current, |parts| Ok::<_, Infallible>(change(parts)))
+                .unwrap_err(),
+        ));
+        refused(store_error(
+            update_config_with_secrets(&store, &mut secrets, current, Vec::new(), |parts| {
+                Ok::<_, Infallible>(change(parts))
+            })
+            .unwrap_err(),
+        ));
+        assert_eq!(state_bytes(&store), on_disk, "{to:?}");
+        assert_eq!(secrets.refs(), held, "{to:?}");
+    }
+    let next = update_config_with_secrets(&store, &mut secrets, current, Vec::new(), |parts| {
+        Ok::<_, Infallible>(with_lifecycle(
+            parts,
+            "ams1",
+            NodeLifecycle::Adopted { site: at },
+        ))
+    })
+    .unwrap();
+    assert_eq!(
+        next.deployment
+            .node(&node_id("ams1"))
+            .unwrap()
+            .lifecycle
+            .stage(),
+        LifecycleStage::Adopted
+    );
+}

@@ -337,8 +337,9 @@ fn node_stages(deployment: &Deployment) -> BTreeMap<NodeId, LifecycleStage> {
 }
 
 /// Refuses a change that moves a node back to an earlier lifecycle stage,
-/// or removes one (`LifecycleStage::may_change_to`, design §7). No closure
-/// may do either. Retirement only moves on and retired nodes stay, so the
+/// moves a planned node anywhere but to `Adopted`, or removes a node
+/// (`LifecycleStage::may_change_to`, design §7). No closure may do any of
+/// them. Retirement only moves on and retired nodes stay, so the
 /// id of a node that may have served is never reused, and the usage
 /// collector can take a node it sees planned or adopted to have counted no
 /// client's bytes. Only the record `Bookkeeping::PlanCancelled`, which

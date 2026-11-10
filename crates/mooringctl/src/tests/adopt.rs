@@ -23,7 +23,9 @@ use super::cancel::{
 use super::node::{
     ADDRESS, adopt_args, agent_file, hello, planned, root_key, script_after_bootstrap,
 };
-use super::support::{Answered, Expected, ExpectedRemote, Harness, Refusals};
+use super::support::{
+    Answered, COMMITTED, Expected, ExpectedRemote, FailingLog, Harness, Refusals,
+};
 use super::user::store;
 use crate::error::EXIT_LOCAL;
 use crate::node::NodeError;
@@ -275,10 +277,7 @@ fn an_adoption_whose_bootstrap_key_cannot_be_deleted_is_adopted_and_says_so() {
         "{}",
         outcome.stdout
     );
-    assert_eq!(
-        outcome.stderr.lines().next().unwrap(),
-        "mooringctl: the change is committed, but some keychain items it no longer references could not be deleted; nothing uses them, and they can be deleted by hand"
-    );
+    assert_eq!(outcome.stderr.lines().next().unwrap(), COMMITTED);
     assert!(matches!(
         lon1_lifecycle(&harness),
         NodeLifecycle::Adopted { .. }
@@ -426,4 +425,33 @@ fn an_adoption_that_cannot_record_bootstraps_key_names_it_and_resumes_after_a_re
             "{case:?}"
         );
     }
+}
+
+/// The failed deletion is the failure reported even when the line that
+/// says the node is adopted cannot be written.
+#[test]
+fn an_adoption_whose_closing_line_cannot_be_written_still_reports_the_item_left() {
+    let (mut harness, _) = partially_adopted();
+    script_after_bootstrap(&harness, 13);
+    *harness.keychain.lock().unwrap() = Refusals {
+        delete: Some(-25_308),
+        ..Refusals::default()
+    };
+    let agent = agent_file(&harness);
+    let mut out = FailingLog::at("adopted ");
+    let mut err = Vec::new();
+    let code = harness.run_to(
+        &adopt_args(agent.to_str().unwrap(), None),
+        &mut out,
+        &mut err,
+    );
+    assert_eq!(code, EXIT_LOCAL);
+    assert!(out.failed());
+    let report = String::from_utf8(err).unwrap();
+    assert_eq!(report.lines().next().unwrap(), COMMITTED, "{report}");
+    assert!(matches!(
+        lon1_lifecycle(&harness),
+        NodeLifecycle::Adopted { .. }
+    ));
+    assert!(harness.nodes.script.borrow().is_empty());
 }

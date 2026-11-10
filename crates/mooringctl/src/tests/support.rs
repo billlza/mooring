@@ -412,8 +412,13 @@ pub(crate) enum Answered {
 }
 
 /// What another command does while a scripted session runs
-/// ([`FakeNodes::meanwhile`]).
+/// ([`FakeNodes::meanwhile`]) or a question waits
+/// ([`FakeConsole::meanwhile`]).
 pub(crate) type Meanwhile = Box<dyn FnOnce() + Send>;
+
+/// What a command reports when its change is committed and keychain
+/// deletions failed after it (`LocalError::StateCommitted`).
+pub(crate) const COMMITTED: &str = "mooringctl: the change is committed, but deleting the keychain items it no longer references failed for those named below; nothing uses them, and any that is still there can be deleted by hand";
 
 /// Nodes whose sessions follow a script, in order, recording each session's
 /// target and what was sent.
@@ -569,11 +574,17 @@ pub(crate) struct FakeConsole {
     /// Lines to type, each `None` for no terminal.
     pub(crate) lines: VecDeque<Option<Vec<u8>>>,
     pub(crate) asked: Vec<String>,
+    /// What another command does while the next question waits for its
+    /// answer; it runs once.
+    pub(crate) meanwhile: Option<Meanwhile>,
 }
 
 impl Console for FakeConsole {
     fn confirm(&mut self, question: &str) -> Result<Answer, LocalError> {
         self.asked.push(question.to_owned());
+        if let Some(run) = self.meanwhile.take() {
+            run();
+        }
         Ok(self.answers.pop_front().unwrap())
     }
 

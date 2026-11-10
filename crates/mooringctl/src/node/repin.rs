@@ -10,10 +10,10 @@
 //! provider's console, not read over the network. It reads the key as
 //! `node new --host-key` does, contacts nothing, and records the pin as a
 //! configuration change, as `node adopt` records the key `Bootstrap`
-//! makes. `known_hosts` is left alone: every adoption writes it from the
-//! state's pin before it connects.
+//! makes: the generation moves on, so the command names the applied nodes
+//! that then need `node apply`. `known_hosts` is left alone: every
+//! adoption writes it from the state's pin before it connects.
 
-use std::fs;
 use std::io::Write;
 use std::path::Path;
 
@@ -58,10 +58,26 @@ pub(crate) fn repin(
         host_key.display()
     )
     .map_err(output)?;
-    if fs::symlink_metadata(NodeFiles::of(&support, id).dir()).is_ok() {
+    let adoption_ran = NodeFiles::of(&support, id).present()?;
+    if adoption_ran {
         writeln!(
             out,
             "`node adopt {id}` ran on this Mac: if its Bootstrap ran and the VPS was not reinstalled since, the only key to pin is the one Bootstrap made (adoption pins it itself, or says that it could not), and `node adopt {id} --resume` goes on from there; after a reinstall, pin the reinstalled VPS's key and adopt it with --root-identity"
+        )
+        .map_err(output)?;
+    }
+    let applied: Vec<&str> = state
+        .deployment
+        .nodes()
+        .values()
+        .filter(|other| other.lifecycle.applied().is_some())
+        .map(|other| other.id.as_str())
+        .collect();
+    if !applied.is_empty() {
+        writeln!(
+            out,
+            "the pin is a configuration change: every applied node ({}) then needs `node apply` before a user's file can be exported again",
+            applied.join(", ")
         )
         .map_err(output)?;
     }
@@ -75,8 +91,13 @@ pub(crate) fn repin(
     )?;
     writeln!(
         out,
-        "re-pinned node {id} to host key {fingerprint} (configuration generation {}); next: `mooringctl node adopt {id}`",
-        generation.get()
+        "re-pinned node {id} to host key {fingerprint} (configuration generation {}); next: `mooringctl node adopt {id}`{}",
+        generation.get(),
+        if adoption_ran {
+            ", with --resume if Bootstrap ran on the VPS as it is now"
+        } else {
+            ""
+        }
     )
     .map_err(output)?;
     Ok(())

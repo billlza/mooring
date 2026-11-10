@@ -7,7 +7,8 @@
 use std::convert::Infallible;
 use std::io;
 
-use mooring_model::StateV2;
+use mooring_model::deployment::Bookkeeping;
+use mooring_model::{Deployment, StateV2};
 use mooring_store::{ChangeError, Store, StoreError};
 
 use crate::error::{CommandError, LocalError};
@@ -37,12 +38,29 @@ pub(crate) fn output(error: io::Error) -> CommandError {
 
 /// A store failure of a change: `StateCommitted` when the change is
 /// committed and only deleting the secrets it stopped referencing failed
-/// (`SecretCleanup`), `StateChange` when the state is as it was.
+/// (`SecretCleanup`), `StateChange` for a refusal or a failed write. (A
+/// write that fails after its rename, when the directory cannot be
+/// synced, has replaced the state all the same; the store does not tell
+/// that failure apart.)
 pub(crate) fn store_failure(error: StoreError) -> LocalError {
     match error {
         StoreError::SecretCleanup { .. } => LocalError::StateCommitted(Box::new(error)),
         other => LocalError::StateChange(Box::new(other)),
     }
+}
+
+/// What the bookkeeping record `entry` makes of `deployment`, with
+/// nothing written: what a command shows before it asks. A record the
+/// model refuses is the refusal the store would give for it
+/// (`InvalidChange`).
+pub(crate) fn recorded(
+    deployment: &Deployment,
+    entry: Bookkeeping,
+) -> Result<Deployment, LocalError> {
+    deployment
+        .clone()
+        .record(entry)
+        .map_err(|source| store_failure(StoreError::InvalidChange { source }))
 }
 
 /// A change whose closure cannot refuse: only the store can fail it.

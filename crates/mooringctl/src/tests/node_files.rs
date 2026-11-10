@@ -9,13 +9,20 @@
 use std::fs;
 use std::io;
 use std::net::Ipv4Addr;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::net::UnixListener;
+use std::path::Path;
+use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use mooring_keys::SshKeyPair;
 use mooring_model::{Ed25519Pub, NodeId};
 
 use crate::error::LocalError;
-use crate::node::files::{NodeFiles, read_public_key};
+use crate::node::dial::RelaySocket;
+use crate::node::files::{NodeFiles, read_public_key, relay_socket_name};
 
 fn files() -> (tempfile::TempDir, NodeFiles) {
     let support = tempfile::tempdir().unwrap();
@@ -205,7 +212,7 @@ fn a_removal_follows_no_link_and_keeps_what_was_added_since() {
     let listing = files.inspect().unwrap().unwrap();
     let moved = support.path().join("moved");
     fs::rename(files.dir(), &moved).unwrap();
-    std::os::unix::fs::symlink(&moved, files.dir()).unwrap();
+    symlink(&moved, files.dir()).unwrap();
     let error = listing.remove().unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
     assert_eq!(fs::read(moved.join("known_hosts")).unwrap(), b"pinned\n");
@@ -245,4 +252,157 @@ fn a_removal_that_cannot_examine_the_directory_fails_and_removes_nothing() {
     fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(outcome.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     assert_eq!(fs::read(files.known_hosts()).unwrap(), b"pinned\n");
+}
+
+/// The entries of `dir`, sorted.
+fn names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A fresh socket at `path`, bound at a shorter path and moved there.
+fn socket_at(short: &Path, path: &Path) {
+    drop(UnixListener::bind(short).unwrap());
+    fs::rename(short, path).unwrap();
+}
+
+/// The socket a session binds for its relay is one the listing keeps, by
+/// the name `RelaySocket` gives it; a socket of another name is not
+/// Mooring's.
+#[test]
+fn only_a_socket_named_as_a_session_names_its_relay_is_kept() {
+    assert_eq!(relay_socket_name(7, 3), "relay-7-3.sock");
+    let (support, files) = files();
+    files.create_dir().unwrap();
+    let relay = RelaySocket::bind(files.dir()).unwrap();
+    assert_eq!(names(files.dir()).len(), 1);
+    assert!(files.inspect().unwrap().is_some());
+    drop(relay);
+    assert!(names(files.dir()).is_empty());
+    for name in [
+        "agent.sock",
+        "relay-1-0",
+        "relay-1-0.sock.old",
+        "xrelay-1-0.sock",
+    ] {
+        let path = files.dir().join(name);
+        socket_at(&support.path().join("s"), &path);
+        let error = files.inspect().unwrap_err();
+        assert!(
+            matches!(&error, LocalError::NodeFileUnexpected { path: named } if *named == path),
+            "{name}: {error:?}"
+        );
+        fs::remove_file(&path).unwrap();
+    }
+    socket_at(
+        &support.path().join("s"),
+        &files.dir().join(relay_socket_name(1, 0)),
+    );
+    files.inspect().unwrap().unwrap().remove().unwrap();
+    assert!(!files.dir().exists());
+}
+
+/// A link among the entries is not Mooring's, whatever it is named and
+/// wherever it leads: an entry is judged by its own type.
+#[test]
+fn a_link_named_as_one_of_moorings_files_is_not_kept() {
+    let (support, files) = files();
+    files.create_dir().unwrap();
+    let elsewhere = support.path().join("elsewhere");
+    fs::write(&elsewhere, b"kept\n").unwrap();
+    symlink(&elsewhere, files.known_hosts()).unwrap();
+    let error = files.inspect().unwrap_err();
+    assert!(
+        matches!(&error, LocalError::NodeFileUnexpected { path } if *path == files.known_hosts()),
+        "{error:?}"
+    );
+    assert_eq!(fs::read(&elsewhere).unwrap(), b"kept\n");
+}
+
+/// A removal tries every entry it listed: one that cannot be removed (a
+/// directory put in its place since) keeps the directory and is the
+/// failure reported, and every other entry still goes, whichever of them
+/// the directory lists first.
+#[test]
+fn a_removal_tries_every_entry_and_reports_the_one_that_stays() {
+    let all = [
+        "bootstrap_ed25519",
+        "known_hosts",
+        "ops_ed25519",
+        "ops_ed25519.pub",
+    ];
+    for stays in all {
+        let (_support, files) = files();
+        files.create_dir().unwrap();
+        for name in all {
+            fs::write(files.dir().join(name), b"").unwrap();
+        }
+        let listing = files.inspect().unwrap().unwrap();
+        let kept = files.dir().join(stays);
+        fs::remove_file(&kept).unwrap();
+        fs::create_dir(&kept).unwrap();
+        let error = listing.remove().unwrap_err();
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::PermissionDenied,
+            "{stays}: {error}"
+        );
+        assert_eq!(names(files.dir()), [stays], "{stays}");
+    }
+}
+
+/// A FIFO does not hold the reader: with nothing writing to it the read is
+/// over at once, where a blocking open would never return. The wait bounds
+/// the test, so a regression fails it instead of hanging the run.
+#[test]
+fn a_fifo_is_refused_without_waiting_for_a_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("fifo.pub");
+    assert!(
+        Command::new("/usr/bin/mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (done, refused) = mpsc::channel();
+    let path = fifo.clone();
+    thread::spawn(move || {
+        let read = read_public_key(&path);
+        let refused =
+            matches!(&read, Err(LocalError::HostKeyNotAFile { path: named }) if *named == path);
+        // The receiver is gone if the wait below ran out.
+        let _ = done.send(refused);
+    });
+    assert_eq!(refused.recv_timeout(Duration::from_secs(10)), Ok(true));
+}
+
+/// Whether anything is at a node's ssh path: nothing, a directory, a file
+/// or a link that leads nowhere; a path that cannot be examined is a
+/// failure.
+#[test]
+fn a_node_directory_is_present_whatever_is_at_its_path() {
+    let (support, files) = files();
+    assert!(!files.present().unwrap());
+    files.create_dir().unwrap();
+    assert!(files.present().unwrap());
+    fs::remove_dir(files.dir()).unwrap();
+    fs::write(files.dir(), b"").unwrap();
+    assert!(files.present().unwrap());
+    fs::remove_file(files.dir()).unwrap();
+    symlink(support.path().join("gone"), files.dir()).unwrap();
+    assert!(files.present().unwrap());
+    fs::remove_file(files.dir()).unwrap();
+    let ssh = support.path().join("ssh");
+    fs::remove_dir(&ssh).unwrap();
+    fs::write(&ssh, b"").unwrap();
+    let error = files.present().unwrap_err();
+    assert!(
+        matches!(&error, LocalError::NodeFile { path, .. } if path == files.dir()),
+        "{error:?}"
+    );
 }

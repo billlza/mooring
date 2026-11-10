@@ -34,6 +34,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
+use crate::node::files::relay_socket_name;
 use crate::router;
 
 /// How long the connection may take to open: ssh's own `ConnectTimeout`.
@@ -250,7 +251,7 @@ impl RelaySocket {
     /// `dir`, which must be private to the operator.
     pub(crate) fn bind(dir: &Path) -> Result<Self, NodeError> {
         let number = RELAY_SOCKETS.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!("relay-{}-{number}.sock", std::process::id()));
+        let path = dir.join(relay_socket_name(std::process::id(), number));
         let listener = UnixListener::bind(&path).map_err(NodeError::Relay)?;
         let socket = Self {
             path,

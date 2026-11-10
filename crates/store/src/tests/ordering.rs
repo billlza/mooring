@@ -431,10 +431,23 @@ fn a_failed_secret_write_leaves_the_state_unchanged() {
     assert_references_resolve(&next, &secrets);
 }
 
+/// Retiring adopted lon1 stops referencing its secrets. (A planned node
+/// is never retired, so lon1 is adopted first, which drops its bootstrap
+/// key.)
 #[test]
 fn failed_deletions_are_reported_after_the_commit() {
     let (_dir, store, mut secrets, state) = with_planned_lon1();
-    let refs = planned_node_refs("lon1");
+    let state = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        state.deployment.config_generation(),
+        Vec::new(),
+        |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", adopted([45, 67, 89, 10]))),
+    )
+    .unwrap();
+    secrets.log.clear();
+    let refs = state.deployment.required_secrets();
+    assert_eq!(refs.len(), planned_node_refs("lon1").len() - 1);
     let stuck: BTreeSet<SecretRef> = refs.iter().take(2).cloned().collect();
     secrets.fail_delete = stuck.clone();
 
@@ -456,7 +469,7 @@ fn failed_deletions_are_reported_after_the_commit() {
     else {
         panic!("expected SecretCleanup, got {error:?}");
     };
-    assert_eq!(committed.get(), 3);
+    assert_eq!(committed.get(), 4);
     let failed: BTreeSet<SecretRef> = failures
         .iter()
         .map(|failure| failure.secret_ref.clone())
@@ -647,15 +660,24 @@ fn alert_channel_secrets_follow_their_node() {
         "{puts:?}"
     );
     assert_references_resolve(&set_up, &secrets);
-    secrets.log.clear();
 
-    // Cancelling the planned node without dropping its channels is refused.
+    // Retiring the node, once adopted, without dropping its channels is
+    // refused.
+    let adopted_state = update_config_with_secrets(
+        &store,
+        &mut secrets,
+        set_up.deployment.config_generation(),
+        Vec::new(),
+        |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", adopted([45, 67, 89, 10]))),
+    )
+    .unwrap();
+    secrets.log.clear();
     let on_disk = state_bytes(&store);
     let error = store_error(
         update_config_with_secrets(
             &store,
             &mut secrets,
-            set_up.deployment.config_generation(),
+            adopted_state.deployment.config_generation(),
             Vec::new(),
             |parts| Ok::<_, Infallible>(with_lifecycle(parts, "lon1", NodeLifecycle::Retired)),
         )
@@ -673,9 +695,9 @@ fn alert_channel_secrets_follow_their_node() {
     assert_eq!(state_bytes(&store), on_disk);
     assert!(secrets.log.is_empty());
 
-    // Adopt lon1, start retiring it, then shut it down: the record drops
-    // its channels, and their secrets are deleted after the commit.
-    let retiring = retiring_lon1(&store, &mut secrets, &set_up);
+    // Start retiring lon1, then shut it down: the record drops its
+    // channels, and their secrets are deleted after the commit.
+    let retiring = retiring_lon1(&store, &mut secrets, &adopted_state);
     assert!(
         retiring
             .deployment

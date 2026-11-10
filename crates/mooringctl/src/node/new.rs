@@ -14,8 +14,7 @@
 //! node with it, but not while that node's ssh directory is still there:
 //! the new node would inherit its operations key.
 
-use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::Path;
 
 use mooring_keys::credentials;
@@ -55,7 +54,15 @@ pub(crate) fn new(
     if state.deployment.nodes().contains_key(&id) {
         return Err(LocalError::NodeExists { node: id }.into());
     }
-    require_no_node_files(&NodeFiles::of(&support, &id))?;
+    let files = NodeFiles::of(&support, &id);
+    // An earlier node of the id left its ssh directory: the new node
+    // would reuse its operations key.
+    if files.present()? {
+        return Err(LocalError::NodeFilesExist {
+            path: files.dir().to_path_buf(),
+        }
+        .into());
+    }
     let host = read_public_key(host_key)?;
     let now = (env.clock)()?;
     let (reality_private, reality_public) = RealityKeyPair::generate()
@@ -205,20 +212,4 @@ pub(crate) fn new(
     .map_err(state_change)?;
     writeln!(out, "planned node {id}; next: `mooringctl node adopt {id}`").map_err(output)?;
     Ok(())
-}
-
-/// Refuses an id whose ssh directory is still there, whatever it is
-/// (`NodeFilesExist`): an earlier node with the id left it, and the new
-/// node would otherwise reuse its operations key.
-fn require_no_node_files(files: &NodeFiles) -> Result<(), LocalError> {
-    match fs::symlink_metadata(files.dir()) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(LocalError::NodeFile {
-            path: files.dir().to_path_buf(),
-            source,
-        }),
-        Ok(_) => Err(LocalError::NodeFilesExist {
-            path: files.dir().to_path_buf(),
-        }),
-    }
 }

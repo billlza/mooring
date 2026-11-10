@@ -258,3 +258,36 @@ fn suspending_a_user_changes_the_bundles_and_resuming_restores_them() {
     let resumed = edit(&suspended, |parts| parts.users[0].resume().unwrap());
     assert_eq!(rendered(&fixture, &resumed), before);
 }
+
+/// Cancelling a planned node changes neither Mac config: the exit's and
+/// the prober's cover applied nodes only, so the daemon, which renders
+/// them once per generation, has nothing to render again after a record
+/// that keeps the generation.
+#[test]
+fn cancelling_a_planned_node_changes_neither_mac_config() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let planned = edit(&fixture.deployment, |parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|candidate| candidate.id == node("ams1"))
+            .unwrap();
+        ams1.lifecycle = NodeLifecycle::Planned;
+    });
+    let cancelled = planned
+        .clone()
+        .record(Bookkeeping::PlanCancelled { node: node("ams1") })
+        .unwrap();
+    let exit = |deployment: &Deployment| {
+        crate::mac::exit(deployment, &fixture.interfaces, &fixture.secrets).unwrap()
+    };
+    let prober = |deployment: &Deployment| {
+        crate::mac::prober(deployment, &fixture.interfaces, &fixture.secrets).unwrap()
+    };
+    assert_eq!(exit(&planned).nodes(), [node("lon1")]);
+    assert_eq!(exit(&cancelled), exit(&planned));
+    assert_eq!(prober(&cancelled).digest(), prober(&planned).digest());
+    // The fixture, with ams1 applied, renders another exit config: the
+    // comparison above is not one of two configs that hold no node.
+    assert_ne!(exit(&fixture.deployment).digest(), exit(&planned).digest());
+}

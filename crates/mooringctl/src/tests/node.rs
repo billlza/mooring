@@ -1465,3 +1465,102 @@ fn new_refuses_a_host_key_file_larger_than_one_line() {
         outcome.stderr
     );
 }
+
+/// Runs `node new <id> --role standby --host-key <file> --yes`.
+fn plan(harness: &mut Harness, id: &str, host_key: &Path) -> super::support::Outcome {
+    harness.run(&[
+        "node",
+        "new",
+        id,
+        "--role",
+        "standby",
+        "--host-key",
+        host_key.to_str().unwrap(),
+        "--yes",
+    ])
+}
+
+/// `node new` refuses an id whose ssh path is taken by anything, a link
+/// that leads nowhere included: the next adoption could not make its
+/// directory there.
+#[test]
+fn new_refuses_an_id_whose_ssh_path_is_a_link_that_leads_nowhere() {
+    let (mut harness, _) = planned();
+    let before = state_bytes(&harness);
+    let refs = harness.secrets.refs();
+    let ssh = harness.support_dir().join("ssh");
+    fs::create_dir_all(&ssh).unwrap();
+    let dir = ssh.join("ams1");
+    std::os::unix::fs::symlink(harness.home.path().join("gone"), &dir).unwrap();
+    let (path, _) = host_key_file(&harness, "ams1.pub");
+    let outcome = plan(&mut harness, "ams1", &path);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: {} exists already: it holds the ssh files of an earlier node with this id; remove it, then plan the node again\n",
+            dir.display()
+        )
+    );
+    assert_eq!(state_bytes(&harness), before);
+    assert_eq!(harness.secrets.refs(), refs);
+}
+
+/// `node new` reads its host key as `node repin` does: a file with two
+/// keys pins neither, and a directory or a FIFO is refused without waiting
+/// on it.
+#[test]
+fn new_refuses_a_file_with_two_keys_and_what_is_no_regular_file() {
+    let mut harness = deployed();
+    let before = state_bytes(&harness);
+    let (first, _) = host_key_file(&harness, "first.pub");
+    let (second, _) = host_key_file(&harness, "second.pub");
+    let two = harness.home.path().join("two.pub");
+    fs::write(
+        &two,
+        format!(
+            "{}{}",
+            fs::read_to_string(&first).unwrap(),
+            fs::read_to_string(&second).unwrap()
+        ),
+    )
+    .unwrap();
+    let outcome = plan(&mut harness, "lon1", &two);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: {} does not hold exactly one Ed25519 host key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)\n",
+            two.display()
+        )
+    );
+    let fifo = harness.home.path().join("fifo.pub");
+    assert!(
+        std::process::Command::new("/usr/bin/mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    // A writer is held open, so that a reader that waited for one would
+    // not hang the run; `a_fifo_is_refused_without_waiting_for_a_writer`
+    // is the test of the wait.
+    let _writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+    for path in [harness.home.path().to_path_buf(), fifo] {
+        let outcome = plan(&mut harness, "lon1", &path);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        assert_eq!(
+            outcome.stderr,
+            format!(
+                "mooringctl: {} is not a regular file, so no public key was read from it\n",
+                path.display()
+            )
+        );
+    }
+    assert_eq!(state_bytes(&harness), before);
+    assert!(harness.secrets.is_empty());
+}

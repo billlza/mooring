@@ -27,6 +27,28 @@ use crate::error::LocalError;
 /// The most bytes read from a public key file: one line.
 const MAX_PUBLIC_KEY_BYTES: u64 = 4096;
 
+/// The operations key's file.
+const OPS_KEY: &str = "ops_ed25519";
+/// The file of the operations key's public half.
+const OPS_PUBLIC_KEY: &str = "ops_ed25519.pub";
+/// The pinned host key's file, which ssh reads.
+const KNOWN_HOSTS: &str = "known_hosts";
+/// The one-time bootstrap key's file.
+const BOOTSTRAP_KEY: &str = "bootstrap_ed25519";
+/// The extension of the copy [`replace`] writes before it renames it.
+const PARTIAL: &str = "partial";
+/// What a relay socket's name starts with ([`relay_socket_name`]).
+const RELAY_PREFIX: &str = "relay-";
+/// What a relay socket's name ends with.
+const RELAY_SUFFIX: &str = ".sock";
+
+/// The name of the `number`th relay socket that process `process` binds
+/// in a node's directory (`crate::node::dial::RelaySocket`). A cancel
+/// takes a socket of such a name for Mooring's own ([`NodeFiles::inspect`]).
+pub(crate) fn relay_socket_name(process: u32, number: u64) -> String {
+    format!("{RELAY_PREFIX}{process}-{number}{RELAY_SUFFIX}")
+}
+
 /// One node's directory of SSH files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NodeFiles {
@@ -48,21 +70,36 @@ impl NodeFiles {
 
     /// The operations key.
     pub(crate) fn ops_key(&self) -> PathBuf {
-        self.dir.join("ops_ed25519")
+        self.dir.join(OPS_KEY)
     }
 
     fn ops_public_path(&self) -> PathBuf {
-        self.dir.join("ops_ed25519.pub")
+        self.dir.join(OPS_PUBLIC_KEY)
     }
 
     /// The pinned host key.
     pub(crate) fn known_hosts(&self) -> PathBuf {
-        self.dir.join("known_hosts")
+        self.dir.join(KNOWN_HOSTS)
     }
 
     /// The one-time bootstrap key, present only while the node is adopted.
     pub(crate) fn bootstrap_key(&self) -> PathBuf {
-        self.dir.join("bootstrap_ed25519")
+        self.dir.join(BOOTSTRAP_KEY)
+    }
+
+    /// Whether anything is at the directory's path, whatever it is: an
+    /// adoption on this Mac made it, or an earlier node of the id left
+    /// it. A link is not followed, and a path that cannot be examined is
+    /// a failure, not an absent one.
+    pub(crate) fn present(&self) -> Result<bool, LocalError> {
+        match fs::symlink_metadata(&self.dir) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(LocalError::NodeFile {
+                path: self.dir.clone(),
+                source,
+            }),
+        }
     }
 
     /// Creates `ssh/` and `ssh/<node>/` with mode 0700, and sets 0700 on
@@ -191,26 +228,24 @@ impl NodeFiles {
     }
 }
 
-/// The files Mooring writes in a node's directory: the keys, `known_hosts`,
-/// and the `.partial` copies a replacement writes.
-const KEPT_FILES: [&str; 6] = [
-    "ops_ed25519",
-    "ops_ed25519.pub",
-    "known_hosts",
-    "known_hosts.partial",
-    "bootstrap_ed25519",
-    "bootstrap_ed25519.partial",
-];
-
 /// Whether an entry `name` of type `kind` is one Mooring writes in a
-/// node's directory: one of its files, or a session's relay socket
-/// (`relay-….sock`).
+/// node's directory: one of its four files, the copy [`replace`] leaves
+/// of either file it rewrites when it is interrupted, or a session's
+/// relay socket ([`relay_socket_name`]).
 fn kept(name: &OsStr, kind: fs::FileType) -> bool {
-    if KEPT_FILES.iter().any(|file| name == *file) {
+    let written = [OPS_KEY, OPS_PUBLIC_KEY, KNOWN_HOSTS, BOOTSTRAP_KEY]
+        .iter()
+        .any(|file| name == *file);
+    let partial = [KNOWN_HOSTS, BOOTSTRAP_KEY]
+        .iter()
+        .any(|file| name == Path::new(file).with_extension(PARTIAL).as_os_str());
+    if written || partial {
         return kind.is_file();
     }
     let name = name.as_encoded_bytes();
-    name.starts_with(b"relay-") && name.ends_with(b".sock") && kind.is_socket()
+    name.starts_with(RELAY_PREFIX.as_bytes())
+        && name.ends_with(RELAY_SUFFIX.as_bytes())
+        && kind.is_socket()
 }
 
 impl NodeDirListing {
@@ -259,7 +294,8 @@ impl NodeDirListing {
 /// `O_NONBLOCK` so a FIFO cannot hold the open, must be a regular file by
 /// its own descriptor (`HostKeyNotAFile`), and is read to at most
 /// [`MAX_PUBLIC_KEY_BYTES`]. Blank lines aside it must hold that one line,
-/// so a file with two keys never pins the first (`HostKey`).
+/// and the line no control character but a tab, so a file with two keys
+/// never pins the first, however they are separated (`HostKey`).
 pub(crate) fn read_public_key(path: &Path) -> Result<Ed25519Pub, LocalError> {
     let read = |source| LocalError::HostKeyFile {
         path: path.to_path_buf(),
@@ -290,6 +326,14 @@ pub(crate) fn read_public_key(path: &Path) -> Result<Ed25519Pub, LocalError> {
     let (Some(line), None) = (lines.next(), lines.next()) else {
         return Err(malformed());
     };
+    // A carriage return or a form feed ends a line on a terminal, and a
+    // token below, but not a line here: a second key could hide after one.
+    if line
+        .chars()
+        .any(|character| character.is_control() && character != '\t')
+    {
+        return Err(malformed());
+    }
     let mut tokens = line.split_ascii_whitespace();
     match (tokens.next(), tokens.next()) {
         (Some(kind), Some(blob)) => {
@@ -319,7 +363,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), LocalError> {
 /// Replaces `path` with `bytes` through a temporary file (mode 0600) and a
 /// rename, so the file is always whole.
 fn replace(path: &Path, bytes: &[u8]) -> Result<(), LocalError> {
-    let temporary = path.with_extension("partial");
+    let temporary = path.with_extension(PARTIAL);
     let failed = |path: &Path| {
         let path = path.to_path_buf();
         move |source| LocalError::NodeFile { path, source }

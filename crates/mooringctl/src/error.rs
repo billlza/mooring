@@ -78,10 +78,11 @@ pub(crate) enum LocalError {
     #[error("the state was not changed")]
     StateChange(#[source] Box<StoreError>),
     /// The change is committed, but deleting the keychain items it no
-    /// longer references failed (`StoreError::SecretCleanup`): nothing
-    /// references them any more.
+    /// longer references failed for some (`StoreError::SecretCleanup`,
+    /// which names each: one that could not be deleted, or one that was
+    /// gone already). Nothing references them any more.
     #[error(
-        "the change is committed, but some keychain items it no longer references could not be deleted; nothing uses them, and they can be deleted by hand"
+        "the change is committed, but deleting the keychain items it no longer references failed for those named below; nothing uses them, and any that is still there can be deleted by hand"
     )]
     StateCommitted(#[source] Box<StoreError>),
     /// The label typed is not a valid local label.
@@ -784,9 +785,9 @@ pub(crate) enum LocalError {
         /// The file.
         path: PathBuf,
     },
-    /// The host-key path is not a regular file: a directory, a FIFO or a
-    /// device.
-    #[error("{} is not a regular file; give the host key's .pub file", path.display())]
+    /// A public key's path (the host key's file, or a node's own `.pub`)
+    /// is not a regular file: a directory, a FIFO or a device.
+    #[error("{} is not a regular file, so no public key was read from it", path.display())]
     HostKeyNotAFile {
         /// The path.
         path: PathBuf,
@@ -825,6 +826,24 @@ pub(crate) enum LocalError {
         /// The first removal that failed.
         #[source]
         source: io::Error,
+    },
+    /// The cancel is committed, but neither the node's ssh directory nor
+    /// all of the keychain items the state stopped referencing could be
+    /// removed.
+    #[error(
+        "node {node} is cancelled, but {} could not be removed ({removal}): remove it by hand, or `node new {node}` refuses; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
+        dir.display()
+    )]
+    NodeFilesAndSecretsLeft {
+        /// The cancelled node.
+        node: NodeId,
+        /// Its ssh directory.
+        dir: PathBuf,
+        /// The first removal that failed.
+        removal: io::Error,
+        /// The keychain deletions that failed.
+        #[source]
+        source: Box<StoreError>,
     },
     /// The node's plan was refused by the model.
     #[error("the node's plan was not accepted")]

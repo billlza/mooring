@@ -7,6 +7,8 @@
 //! adoption whose node is cancelled meanwhile stops instead of writing an
 //! empty change.
 
+use std::collections::BTreeSet;
+use std::convert::Infallible;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::net::UnixListener;
@@ -18,14 +20,16 @@ use mooring_keys::{SshKeyPair, SshPublicKey};
 use mooring_model::deployment::Bookkeeping;
 use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::{SecretEntry, SecretRef};
-use mooring_model::{AlertSettings, Ed25519Pub, NodeId, UnixTime, UserStatus};
+use mooring_model::{AlertSettings, Ed25519Pub, NodeId, SuspendReason, UnixTime, UserStatus};
 use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_with_secrets};
 
 use super::export::exporting;
 use super::node::{
     adopt_args, agent_file, host_key_file, planned, root_key, script_after_bootstrap,
 };
-use super::support::{Answered, Expected, ExpectedRemote, FailingLog, Harness, NOW, Refusals};
+use super::support::{
+    Answered, COMMITTED, Expected, ExpectedRemote, FailingLog, Harness, NOW, Refusals,
+};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
 use crate::node::NodeError;
@@ -231,6 +235,10 @@ fn cancel_refuses_an_unknown_node_and_one_past_planned_before_asking() {
     });
     for (deployment, stage) in [(adopted, "Adopted"), (fixture(|_| {}), "Applied")] {
         let mut harness = harness_with(deployment);
+        // Whatever its directory holds, the node is refused for its stage.
+        let dir = lon1_dir(&harness);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("notes.txt"), b"mine\n").unwrap();
         let before = state_bytes(&harness);
         let outcome = harness.run(&["node", "cancel", "lon1"]);
         assert_eq!(outcome.code, EXIT_LOCAL);
@@ -238,8 +246,10 @@ fn cancel_refuses_an_unknown_node_and_one_past_planned_before_asking() {
             outcome.stderr,
             format!("mooringctl: node lon1 is {stage}; only a planned node is cancelled\n")
         );
+        assert_eq!(outcome.stdout, "");
         assert_eq!(state_bytes(&harness), before);
         assert!(harness.console.asked.is_empty());
+        assert_eq!(fs::read(dir.join("notes.txt")).unwrap(), b"mine\n");
     }
 }
 
@@ -375,6 +385,7 @@ fn cancel_deletes_the_users_credentials_on_the_node_and_keeps_the_rest() {
         assert!(outcome.stdout.contains(&line), "{}", outcome.stdout);
     }
     let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.users().len(), 3);
     for user in after.users().values() {
         let held: Vec<&str> = user.per_node.keys().map(NodeId::as_str).collect();
         assert_eq!(held, ["lon1"], "{}", user.id);
@@ -386,6 +397,7 @@ fn cancel_deletes_the_users_credentials_on_the_node_and_keeps_the_rest() {
             .iter()
             .all(|secret_ref| secret_ref.node() != Some(&node_id("par1")))
     );
+    assert!(!lon1_refs.is_empty());
     for secret_ref in lon1_refs {
         assert!(harness.secrets.get(&secret_ref).is_ok(), "{secret_ref}");
     }
@@ -396,23 +408,34 @@ fn cancel_deletes_the_users_credentials_on_the_node_and_keeps_the_rest() {
 /// changes nothing.
 #[test]
 fn cancel_names_the_revocations_it_settles_and_the_alert_channels_it_drops() {
-    let (mut harness, third) = planned_ams1_with_a_revocation_and_channels();
-    let before = state_bytes(&harness);
-    harness.console.answers.push_back(Answer::No);
-    let outcome = harness.run(&["node", "cancel", "ams1"]);
-    assert_eq!(outcome.code, EXIT_LOCAL);
-    for line in [
-        format!("revoked once it is gone, since their revocation waits only on it: {third}\n"),
-        "its alert channels go with it\n".to_owned(),
+    // The alert topic goes with the last node that has channels, and
+    // stays while another has them.
+    for (channels, alert_line) in [
+        (
+            &["ams1"][..],
+            "its alert channels go with it, and the alert topic with them, as no other node has channels",
+        ),
+        (&["lon1", "ams1"][..], "its alert channels go with it"),
     ] {
-        assert!(outcome.stdout.contains(&line), "{}", outcome.stdout);
+        let (mut harness, third) = planned_ams1_with_a_revocation_and_channels(channels);
+        let before = state_bytes(&harness);
+        harness.console.answers.push_back(Answer::No);
+        let outcome = harness.run(&["node", "cancel", "ams1"]);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        let lines: Vec<&str> = outcome.stdout.lines().collect();
+        assert_eq!(lines.len(), 4, "{}", outcome.stdout);
+        assert_eq!(
+            lines[1],
+            format!("revoked once it is gone, since their revocation waits only on it: {third}")
+        );
+        assert_eq!(lines[2], alert_line);
+        assert_eq!(state_bytes(&harness), before);
     }
-    assert_eq!(state_bytes(&harness), before);
 }
 
 /// The fixture with ams1 planned, a revocation that waits only on it (the
-/// third user's, whose id is returned) and its alert channels.
-fn planned_ams1_with_a_revocation_and_channels() -> (Harness, String) {
+/// third user's, whose id is returned), and alert channels on `channels`.
+fn planned_ams1_with_a_revocation_and_channels(channels: &[&str]) -> (Harness, String) {
     let deployment = fixture(|parts| {
         let ams1 = parts
             .nodes
@@ -420,8 +443,10 @@ fn planned_ams1_with_a_revocation_and_channels() -> (Harness, String) {
             .find(|node| node.id == node_id("ams1"))
             .unwrap();
         ams1.lifecycle = NodeLifecycle::Planned;
-        // The third user's revocation waits only on ams1, the second's on
-        // lon1 too.
+        // The first user was revoked before; the third user's revocation
+        // waits only on ams1, the second's on lon1 too.
+        parts.users[0].per_node.clear();
+        parts.users[0].status = UserStatus::Revoked;
         for (index, nodes) in [(1, &["lon1", "ams1"][..]), (2, &["ams1"][..])] {
             let user = &mut parts.users[index];
             user.per_node
@@ -429,7 +454,7 @@ fn planned_ams1_with_a_revocation_and_channels() -> (Harness, String) {
             user.status = UserStatus::RevokePending;
         }
         parts.alerting = Some(AlertSettings {
-            channels: [node_id("ams1")].into_iter().collect(),
+            channels: channels.iter().copied().map(node_id).collect(),
             ..AlertSettings::pilot()
         });
     });
@@ -451,7 +476,7 @@ fn output_that_fails_before_the_commit_cancels_nothing() {
         "ran on this Mac",
     ] {
         for mut out in [FailingLog::at(needle), FailingLog::only_at(needle)] {
-            let (mut harness, _) = planned_ams1_with_a_revocation_and_channels();
+            let (mut harness, _) = planned_ams1_with_a_revocation_and_channels(&["ams1"]);
             let dir = harness.support_dir().join("ssh").join("ams1");
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("known_hosts"), b"pinned\n").unwrap();
@@ -524,10 +549,7 @@ fn a_failed_keychain_deletion_is_reported_and_the_files_still_go() {
         "{}",
         outcome.stdout
     );
-    assert_eq!(
-        outcome.stderr.lines().next().unwrap(),
-        "mooringctl: the change is committed, but some keychain items it no longer references could not be deleted; nothing uses them, and they can be deleted by hand"
-    );
+    assert_eq!(outcome.stderr.lines().next().unwrap(), COMMITTED);
     assert!(
         outcome
             .stderr
@@ -562,37 +584,44 @@ fn a_failed_keychain_deletion_is_reported_and_the_files_still_go() {
 }
 
 /// When the keychain deletions and the directory's removal both fail after
-/// the commit, the node is cancelled all the same: the directory is named
-/// on the output, and the failure reported is the keychain's, as
-/// committed.
+/// the commit, the node is cancelled all the same, and one failure names
+/// both: the directory that stays, with why, and the keychain items. The
+/// directory stays because of a file that appeared in it while the
+/// question waited, which the removal does not take, so no file mode is
+/// involved.
 #[test]
-fn a_cancel_whose_keychain_deletions_and_file_removal_both_fail_names_both() {
+fn a_cancel_whose_keychain_items_and_files_both_stay_names_both() {
     let (mut harness, _) = partially_adopted();
     let dir = lon1_dir(&harness);
+    let refs = harness.secrets.refs();
     *harness.keychain.lock().unwrap() = Refusals {
         delete: Some(-25_308),
         ..Refusals::default()
     };
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();
-    let outcome = harness.run(&["node", "cancel", "lon1", "--yes"]);
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let added = dir.join("added-since");
+    harness.console.meanwhile = Some(Box::new(move || fs::write(added, b"").unwrap()));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["node", "cancel", "lon1"]);
     assert_eq!(outcome.code, EXIT_LOCAL);
-    assert!(
-        outcome.stdout.contains("cancelled node lon1: "),
-        "{}",
-        outcome.stdout
-    );
-    assert!(
-        outcome.stdout.ends_with(&format!(
-            "{} could not be removed (Permission denied (os error 13)); remove it by hand, or `node new lon1` refuses\n",
-            dir.display()
-        )),
-        "{}",
-        outcome.stdout
-    );
+    // The id is not said to be free while its directory stays.
     assert_eq!(
-        outcome.stderr.lines().next().unwrap(),
-        "mooringctl: the change is committed, but some keychain items it no longer references could not be deleted; nothing uses them, and they can be deleted by hand"
+        outcome.stdout.lines().last().unwrap(),
+        "cancelled node lon1: the configuration generation stays 3, so the cancel needs no `node apply`"
+    );
+    let mut report = outcome.stderr.lines();
+    assert_eq!(
+        report.next().unwrap(),
+        format!(
+            "mooringctl: node lon1 is cancelled, but {} could not be removed (Directory not empty (os error 66)): remove it by hand, or `node new lon1` refuses; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
+            dir.display()
+        )
+    );
+    assert!(
+        report.next().unwrap().starts_with(
+            "  caused by: state committed at config generation 3, but deleting secrets failed: "
+        ),
+        "{}",
+        outcome.stderr
     );
     assert!(
         store(&harness)
@@ -602,7 +631,88 @@ fn a_cancel_whose_keychain_deletions_and_file_removal_both_fail_names_both() {
             .nodes()
             .is_empty()
     );
-    assert_eq!(names(&dir).len(), 4, "nothing could be removed");
+    assert_eq!(harness.secrets.refs(), refs, "every deletion was refused");
+    // Every entry the cancel listed went; what was added since stays.
+    assert_eq!(names(&dir), ["added-since"]);
+}
+
+/// With the keychain's deletions done, a directory that stays is the
+/// failure: here too because of a file added while the question waited.
+#[test]
+fn a_file_added_while_the_question_waited_keeps_the_directory_and_is_named() {
+    let (mut harness, _) = partially_adopted();
+    let dir = lon1_dir(&harness);
+    let added = dir.join("added-since");
+    harness.console.meanwhile = Some(Box::new(move || fs::write(added, b"").unwrap()));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["node", "cancel", "lon1"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stdout.lines().last().unwrap(),
+        "cancelled node lon1: the configuration generation stays 3, so the cancel needs no `node apply`"
+    );
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: node lon1 is cancelled, but {} could not be removed; remove it by hand, or `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
+            dir.display()
+        )
+    );
+    assert!(
+        store(&harness)
+            .load()
+            .unwrap()
+            .deployment
+            .nodes()
+            .is_empty()
+    );
+    assert!(harness.secrets.is_empty());
+    assert_eq!(names(&dir), ["added-since"]);
+}
+
+/// What a cancel left behind after its commit is the failure reported even
+/// when its closing lines cannot be written: the keychain items, or the
+/// directory, not only that a write to standard output failed.
+#[test]
+fn a_cancel_whose_closing_line_cannot_be_written_still_reports_what_it_left() {
+    let (mut harness, _) = partially_adopted();
+    *harness.keychain.lock().unwrap() = Refusals {
+        delete: Some(-25_308),
+        ..Refusals::default()
+    };
+    let mut out = FailingLog::at("cancelled node");
+    let mut err = Vec::new();
+    let code = harness.run_to(&["node", "cancel", "lon1", "--yes"], &mut out, &mut err);
+    assert_eq!(code, EXIT_LOCAL);
+    assert!(out.failed());
+    let report = String::from_utf8(err).unwrap();
+    assert_eq!(report.lines().next().unwrap(), COMMITTED, "{report}");
+    assert!(
+        store(&harness)
+            .load()
+            .unwrap()
+            .deployment
+            .nodes()
+            .is_empty()
+    );
+
+    let (mut harness, _) = partially_adopted();
+    let dir = lon1_dir(&harness);
+    let added = dir.join("added-since");
+    harness.console.meanwhile = Some(Box::new(move || fs::write(added, b"").unwrap()));
+    harness.console.answers.push_back(Answer::Yes);
+    let mut out = FailingLog::at("cancelled node");
+    let mut err = Vec::new();
+    let code = harness.run_to(&["node", "cancel", "lon1"], &mut out, &mut err);
+    assert_eq!(code, EXIT_LOCAL);
+    assert!(out.failed());
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        format!(
+            "mooringctl: node lon1 is cancelled, but {} could not be removed; remove it by hand, or `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
+            dir.display()
+        )
+    );
 }
 
 /// Output that fails after the commit leaves the node cancelled and its
@@ -699,6 +809,10 @@ fn node_files_that_cannot_be_removed_after_the_commit_are_named() {
     let outcome = harness.run(&["node", "cancel", "lon1", "--yes"]);
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stdout.lines().last().unwrap(),
+        "cancelled node lon1: the configuration generation stays 3, so the cancel needs no `node apply`"
+    );
     assert_eq!(
         outcome.stderr,
         format!(
@@ -910,7 +1024,10 @@ fn cancelling_a_planned_node_lets_its_users_be_exported_without_an_apply() {
     ];
     let refused = harness.run(&args);
     assert_eq!(refused.code, EXIT_LOCAL);
-    assert!(refused.stderr.contains("ams1"), "{}", refused.stderr);
+    assert_eq!(
+        refused.stderr,
+        "mooringctl: no file was written: the export was refused\n  caused by: node ams1 cannot be exported: its stage is Planned\n"
+    );
     let generation = store(&harness)
         .load()
         .unwrap()
@@ -1002,5 +1119,364 @@ fn an_adoption_whose_node_is_cancelled_meanwhile_stops_and_writes_nothing() {
         let generation = if after_bootstrap { 3 } else { 2 };
         assert_eq!(after.config_generation().get(), generation);
         assert!(harness.nodes.script.borrow().is_empty());
+    }
+}
+
+/// Runs `node new <id> --role standby --host-key <file> --yes`.
+fn plan(harness: &mut Harness, id: &str, host_key: &Path) -> super::support::Outcome {
+    harness.run(&[
+        "node",
+        "new",
+        id,
+        "--role",
+        "standby",
+        "--host-key",
+        host_key.to_str().unwrap(),
+        "--yes",
+    ])
+}
+
+/// The question names exactly the users who hold credentials on the node,
+/// and as revoked once it is gone only a user whose revocation waits on it
+/// alone: not an active user who holds credentials nowhere else, and no
+/// user who holds none on it.
+#[test]
+fn cancel_names_only_the_users_who_hold_credentials_on_the_node() {
+    let mut ids = Vec::new();
+    let deployment = fixture(|parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == node_id("ams1"))
+            .unwrap();
+        ams1.lifecycle = NodeLifecycle::Planned;
+        // The first user holds credentials on lon1 alone; the second on
+        // both, suspended; the third on ams1 alone, active.
+        parts.users[0].per_node.remove(&node_id("ams1"));
+        parts.users[1].status = UserStatus::Suspended {
+            reason: SuspendReason::Operator,
+            since: UnixTime::from_secs(1),
+        };
+        parts.users[2].per_node.remove(&node_id("lon1"));
+        ids = parts.users.iter().map(|user| user.id.clone()).collect();
+    });
+    let mut holders = [ids[1].as_str(), ids[2].as_str()];
+    holders.sort_unstable();
+    let pinned = deployment.nodes()[&node_id("ams1")].ssh.host_ed25519;
+    let mut harness = harness_with(deployment);
+    let before = state_bytes(&harness);
+    harness.console.answers.push_back(Answer::No);
+    let outcome = harness.run(&["node", "cancel", "ams1"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "node ams1: planned, tunnel 10.77.2.0/30, host key {} pinned; users with credentials on it: {}\n\
+             cancelling removes it from the state and deletes its keys, and those users' credentials on it, from the keychain; no VPS is contacted\n",
+            SshPublicKey::from(pinned).fingerprint(),
+            holders.join(", ")
+        )
+    );
+    assert_eq!(state_bytes(&harness), before);
+}
+
+/// Through the command, the cancel settles the revocation that waited only
+/// on the node, in the state and in the keychain, and leaves the one that
+/// waits on another node pending with its credentials there.
+#[test]
+fn cancel_settles_the_revocation_that_waited_only_on_the_node() {
+    let mut ids = Vec::new();
+    let deployment = fixture(|parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == node_id("ams1"))
+            .unwrap();
+        ams1.lifecycle = NodeLifecycle::Planned;
+        for (index, nodes) in [(1, &["lon1", "ams1"][..]), (2, &["ams1"][..])] {
+            let user = &mut parts.users[index];
+            user.per_node
+                .retain(|node, _| nodes.contains(&node.as_str()));
+            user.status = UserStatus::RevokePending;
+        }
+        ids = parts.users.iter().map(|user| user.id.clone()).collect();
+    });
+    let (mut harness, _) = exporting(deployment);
+    let (seed, _) = SshKeyPair::generate().unwrap().into_parts();
+    harness
+        .secrets
+        .put(SecretEntry::NodeSshBootstrapPrivate(node_id("ams1"), seed))
+        .unwrap();
+    // The keychain holds every item of the fixture: the ones this
+    // deployment never referenced stay whatever the cancel does.
+    let before = store(&harness).load().unwrap().deployment;
+    let unreferenced: BTreeSet<SecretRef> = harness
+        .secrets
+        .refs()
+        .difference(&before.required_secrets())
+        .cloned()
+        .collect();
+    let outcome = harness.run(&["node", "cancel", "ams1", "--yes"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let after = store(&harness).load().unwrap().deployment;
+    let held = |index: usize| -> Vec<&str> {
+        after.users()[&ids[index]]
+            .per_node
+            .keys()
+            .map(NodeId::as_str)
+            .collect()
+    };
+    assert_eq!(after.users()[&ids[1]].status, UserStatus::RevokePending);
+    assert_eq!(held(1), ["lon1"]);
+    assert_eq!(after.users()[&ids[2]].status, UserStatus::Revoked);
+    assert!(held(2).is_empty());
+    assert_eq!(after.users()[&ids[0]].status, UserStatus::Active);
+    assert_eq!(held(0), ["lon1"]);
+    // Of the items the state referenced, exactly those it still does stay.
+    let kept: BTreeSet<SecretRef> = harness
+        .secrets
+        .refs()
+        .difference(&unreferenced)
+        .cloned()
+        .collect();
+    assert_eq!(kept, after.required_secrets());
+    assert!(after.required_secrets().len() < before.required_secrets().len());
+    assert!(
+        harness
+            .secrets
+            .get(&SecretRef::UserVlessUuid(ids[1].clone(), node_id("lon1")))
+            .is_ok()
+    );
+}
+
+/// Users who held credentials on a cancelled node get new ones when its id
+/// is planned again: a new short id in the state and new items in the
+/// keychain, on a new tunnel; their credentials on the other node stay.
+#[test]
+fn users_get_new_credentials_when_a_cancelled_id_is_planned_again() {
+    let mut harness = planned_par1_beside_applied_lon1();
+    let par1 = node_id("par1");
+    let first = store(&harness).load().unwrap().deployment;
+    let user = first.users().keys().next().unwrap().clone();
+    let vless = SecretRef::UserVlessUuid(user.clone(), par1.clone());
+    let on_lon1 = SecretRef::UserVlessUuid(user.clone(), node_id("lon1"));
+    let old_secret = harness.secrets.get(&vless).unwrap();
+    let kept_secret = harness.secrets.get(&on_lon1).unwrap();
+    let old_short = first.users()[&user].per_node[&par1].short_id;
+    let outcome = harness.run(&["node", "cancel", "par1", "--yes"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(harness.secrets.get(&vless).is_err());
+    let (path, _) = host_key_file(&harness, "par1-again.pub");
+    let outcome = plan(&mut harness, "par1", &path);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        outcome
+            .stdout
+            .starts_with("node par1: standby, tunnel 10.77.4.0/30, "),
+        "{}",
+        outcome.stdout
+    );
+    let again = store(&harness).load().unwrap().deployment;
+    assert_ne!(again.users()[&user].per_node[&par1].short_id, old_short);
+    assert_ne!(harness.secrets.get(&vless).unwrap(), old_secret);
+    assert_eq!(harness.secrets.get(&on_lon1).unwrap(), kept_secret);
+    assert_eq!(
+        again.users()[&user].per_node[&node_id("lon1")],
+        first.users()[&user].per_node[&node_id("lon1")]
+    );
+    assert!(!again.required_secrets().is_empty());
+    for secret_ref in again.required_secrets() {
+        assert!(harness.secrets.get(&secret_ref).is_ok(), "{secret_ref}");
+    }
+}
+
+/// What the operator answered is what is done: a configuration change made
+/// while the cancel's question waited is a generation conflict, and the
+/// cancel deletes no key and no file.
+#[test]
+fn a_cancel_answered_after_another_change_is_refused() {
+    let (mut harness, _) = partially_adopted();
+    let dir = lon1_dir(&harness);
+    let files = contents(&dir);
+    let refs = harness.secrets.refs();
+    let support = harness.support_dir();
+    harness.console.meanwhile = Some(Box::new(move || {
+        let store = Store::new(support);
+        let generation = store.load().unwrap().deployment.config_generation();
+        store
+            .update_config(generation, Ok::<_, Infallible>)
+            .unwrap();
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["node", "cancel", "lon1"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: the state was not changed\n  caused by: config generation is 4, expected 3; re-read the state and retry\n"
+    );
+    assert!(harness.console.meanwhile.is_none());
+    assert!(!outcome.stdout.contains("cancelled node"));
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.config_generation().get(), 4);
+    assert_eq!(
+        after.nodes()[&node_id("lon1")].lifecycle,
+        NodeLifecycle::Planned
+    );
+    assert_eq!(harness.secrets.refs(), refs);
+    assert_eq!(contents(&dir), files);
+}
+
+/// `partially_adopted()` after a cancel that committed and stopped there,
+/// as when its process ended before it deleted anything: the state holds
+/// no lon1, and the keychain items and `ssh/lon1/` are as they were.
+fn cancelled_and_stopped() -> Harness {
+    let (harness, _) = partially_adopted();
+    let store = store(&harness);
+    let generation = store.load().unwrap().deployment.config_generation();
+    let cancelled = record_with_secrets(
+        &store,
+        &mut InMemorySecretStore::new(),
+        generation,
+        Bookkeeping::PlanCancelled {
+            node: node_id("lon1"),
+        },
+    );
+    // Its keychain is not the harness's: the commit stands, the items stay.
+    assert!(
+        matches!(cancelled, Err(StoreError::SecretCleanup { .. })),
+        "{cancelled:?}"
+    );
+    harness
+}
+
+/// A cancel that committed and stopped before it removed the node's files
+/// is finished by running it again: the state no longer holds the node,
+/// `node new` refuses the id over the files, and the cancel removes them,
+/// after a question, changing nothing else. The id is then planned again,
+/// and the keychain items the first cancel left are replaced.
+#[test]
+fn a_cancel_that_stopped_after_its_commit_is_finished_by_running_it_again() {
+    let mut harness = cancelled_and_stopped();
+    let dir = lon1_dir(&harness);
+    let files = contents(&dir);
+    let before = state_bytes(&harness);
+    let refs = harness.secrets.refs();
+    let reality = SecretRef::NodeRealityPrivate(node_id("lon1"));
+    let old = harness.secrets.get(&reality).unwrap();
+    let (path, _) = host_key_file(&harness, "again.pub");
+    let refused = plan(&mut harness, "lon1", &path);
+    assert_eq!(refused.code, EXIT_LOCAL);
+    assert!(
+        refused.stderr.contains(" exists already: "),
+        "{}",
+        refused.stderr
+    );
+    let described = format!(
+        "node lon1 is not in the state, but {dir} still holds the ssh files Mooring kept for a node of that id: a cancel committed and did not get to remove them\n\
+         removing them lets the id be planned again; the state is not changed, no VPS is contacted, and keychain items that cancel did not get to delete stay, which nothing uses\n\
+         `node adopt lon1` ran on this Mac: if its Bootstrap ran, the VPS lets in only the Mooring keys this deletes, not your own root key, so reinstall it or delete it from the provider's console\n",
+        dir = dir.display()
+    );
+    for (answer, why) in [
+        (Answer::No, "the answer was not yes"),
+        (
+            Answer::NoTerminal,
+            "no terminal to ask and --yes was not given",
+        ),
+    ] {
+        harness.console.answers.push_back(answer);
+        let outcome = harness.run(&["node", "cancel", "lon1"]);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        assert_eq!(outcome.stderr, format!("mooringctl: not recorded: {why}\n"));
+        assert_eq!(outcome.stdout, described);
+        assert_eq!(contents(&dir), files);
+    }
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["node", "cancel", "lon1"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "{described}removed {}: the id may be planned again\n",
+            dir.display()
+        )
+    );
+    assert_eq!(harness.console.asked, ["Remove these files?"; 3]);
+    assert!(!dir.exists());
+    assert!(harness.support_dir().join("ssh").is_dir());
+    assert_eq!(state_bytes(&harness), before, "the state is not changed");
+    assert_eq!(harness.secrets.refs(), refs, "no keychain item is touched");
+
+    let outcome = plan(&mut harness, "lon1", &path);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_ne!(harness.secrets.get(&reality).unwrap(), old);
+    // With nothing left of it, a cancelled node is unknown.
+    let outcome = harness.run(&["node", "cancel", "zzz1", "--yes"]);
+    assert_eq!(outcome.stderr, "mooringctl: unknown node zzz1\n");
+}
+
+/// What a cancel left is removed by the same rules as before a cancel:
+/// anything Mooring does not keep there is refused before the question,
+/// and an entry added while the question waits keeps the directory, which
+/// is then the failure.
+#[test]
+fn files_left_by_a_cancel_are_removed_only_if_they_are_moorings_own() {
+    let mut harness = cancelled_and_stopped();
+    let dir = lon1_dir(&harness);
+    let notes = dir.join("notes.txt");
+    fs::write(&notes, b"mine\n").unwrap();
+    let outcome = harness.run(&["node", "cancel", "lon1", "--yes"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: {} is not what Mooring keeps for the node; move it away, then cancel the node again\n",
+            notes.display()
+        )
+    );
+    assert_eq!(outcome.stdout, "");
+    assert_eq!(names(&dir).len(), 5);
+    fs::remove_file(&notes).unwrap();
+
+    let added = dir.join("added-since");
+    harness.console.meanwhile = Some(Box::new(move || fs::write(added, b"").unwrap()));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["node", "cancel", "lon1"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: node lon1 is cancelled, but {} could not be removed; remove it by hand, or `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
+            dir.display()
+        )
+    );
+    assert!(!outcome.stdout.contains("removed "), "{}", outcome.stdout);
+    assert_eq!(names(&dir), ["added-since"]);
+}
+
+/// Output that fails while the leftover files are described removes
+/// nothing; output that fails once they are gone is the failure, and they
+/// stay gone.
+#[test]
+fn output_that_fails_before_the_leftover_files_go_removes_nothing() {
+    for (needle, removed) in [
+        ("is not in the state", false),
+        ("ran on this Mac", false),
+        ("removed ", true),
+    ] {
+        for mut out in [FailingLog::at(needle), FailingLog::only_at(needle)] {
+            let mut harness = cancelled_and_stopped();
+            let dir = lon1_dir(&harness);
+            let mut err = Vec::new();
+            let code = harness.run_to(&["node", "cancel", "lon1", "--yes"], &mut out, &mut err);
+            assert_eq!(code, EXIT_LOCAL, "{out:?}");
+            assert!(out.failed(), "{out:?}");
+            let report = String::from_utf8(err).unwrap();
+            assert!(
+                report.starts_with("mooringctl: writing the output failed\n"),
+                "{out:?}: {report}"
+            );
+            assert_eq!(dir.exists(), !removed, "{out:?}");
+        }
     }
 }

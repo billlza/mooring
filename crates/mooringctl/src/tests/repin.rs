@@ -6,6 +6,7 @@
 //! `Planned`, an unknown one, a file that holds no single key, and the key
 //! already pinned change nothing. The next adoption checks the new key.
 
+use std::convert::Infallible;
 use std::fs;
 use std::process::Command;
 
@@ -14,7 +15,7 @@ use mooring_model::deployment::Bookkeeping;
 use mooring_model::node::{LifecycleStage, SshPin};
 use mooring_model::secret::SecretRef;
 use mooring_model::{Ed25519Pub, NodeId};
-use mooring_store::{SecretStore, record_with_secrets};
+use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_with_secrets};
 
 use super::cancel::{lon1_dir, partially_adopted};
 use super::node::{ADDRESS, adopt_args, agent_file, host_key_file, planned};
@@ -22,6 +23,7 @@ use super::support::{Answered, Expected, FailingLog, Harness, Refusals};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::{EXIT_LOCAL, LocalError};
 use crate::node::NodeError;
+use crate::node::files::read_public_key;
 use crate::node::planned::{PlannedAction, pin_in_state};
 use crate::prompt::Answer;
 
@@ -79,6 +81,7 @@ fn repin_replaces_only_the_planned_nodes_host_key() {
         format!(
             "node par1: planned, host key {} pinned; {} holds {}\n\
              `node adopt par1` logs in as root with your own key to whichever host holds the new key: compare it with the fingerprint the provider's console shows (on the VPS, `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), since a key read over the network, by ssh-keyscan or a first ssh, is no check\n\
+             the pin is a configuration change: every applied node (lon1) then needs `node apply` before a user's file can be exported again\n\
              re-pinned node par1 to host key {} (configuration generation {next}); next: `mooringctl node adopt par1`\n",
             fingerprint(pinned),
             path.display(),
@@ -197,8 +200,8 @@ fn repin_to_the_key_already_pinned_writes_nothing_and_asks_nothing() {
 }
 
 /// A file that holds no single Ed25519 key line, or is no regular file, is
-/// refused naming it, and the state stays as it was. A FIFO does not hold
-/// the command, and a private key's lines are never echoed.
+/// refused naming it, and the state stays as it was. A private key's lines
+/// are never echoed.
 #[test]
 fn repin_refuses_a_file_that_holds_no_single_host_key() {
     let (mut harness, _) = planned();
@@ -210,7 +213,13 @@ fn repin_refuses_a_file_that_holds_no_single_host_key() {
     let known_hosts = format!("{ADDRESS} {}\n", key.ssh_authorized_key());
     let private = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n";
     let long = format!("{} {}\n", key.ssh_authorized_key(), "c".repeat(4096));
-    let malformed: [(&str, &[u8]); 7] = [
+    // Two keys that a carriage return, a form feed or a vertical tab keeps
+    // apart are one line to the file and two on a terminal.
+    let second = fs::read_to_string(&other).unwrap();
+    let joined = |by: &str| format!("{}{by}{second}", line.trim_end());
+    let (carriage_return, form_feed, vertical_tab) = (joined("\r"), joined("\x0c"), joined("\x0b"));
+    let nul = format!("{} root\0@lon1\n", key.ssh_authorized_key());
+    let malformed: [(&str, &[u8]); 11] = [
         ("rsa.pub", b"ssh-rsa AAAAB3NzaC1yc2E root@lon1\n"),
         ("empty.pub", b""),
         ("one-word.pub", b"ssh-ed25519\n"),
@@ -218,6 +227,10 @@ fn repin_refuses_a_file_that_holds_no_single_host_key() {
         ("two.pub", two.as_bytes()),
         ("id_ed25519", private.as_bytes()),
         ("long.pub", long.as_bytes()),
+        ("carriage-return.pub", carriage_return.as_bytes()),
+        ("form-feed.pub", form_feed.as_bytes()),
+        ("vertical-tab.pub", vertical_tab.as_bytes()),
+        ("nul.pub", nul.as_bytes()),
     ];
     for (name, bytes) in malformed {
         let path = harness.home.path().join(name);
@@ -239,8 +252,18 @@ fn repin_refuses_a_file_that_holds_no_single_host_key() {
             "{name}"
         );
         assert!(!outcome.stderr.contains("b3BlbnNzaC1rZXktdjEAAAAA"));
+        assert_eq!(outcome.stdout, "", "{name}");
         assert_eq!(state_bytes(&harness), before, "{name}");
     }
+    // A tab between the key and its comment, and Windows line ends, are
+    // one key still.
+    let tabbed = harness.home.path().join("tabbed.pub");
+    fs::write(
+        &tabbed,
+        format!("\r\n{}\troot@lon1\r\n", key.ssh_authorized_key()),
+    )
+    .unwrap();
+    assert_eq!(read_public_key(&tabbed).unwrap(), key);
     let fifo = harness.home.path().join("fifo.pub");
     assert!(
         Command::new("/usr/bin/mkfifo")
@@ -249,6 +272,14 @@ fn repin_refuses_a_file_that_holds_no_single_host_key() {
             .unwrap()
             .success()
     );
+    // A writer is held open, so that a reader that waited for one would
+    // not hang the run; `a_fifo_is_refused_without_waiting_for_a_writer`
+    // is the test of the wait.
+    let _writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
     for path in [harness.home.path().to_path_buf(), fifo] {
         let outcome = harness.run(&[
             "node",
@@ -261,7 +292,7 @@ fn repin_refuses_a_file_that_holds_no_single_host_key() {
         assert_eq!(
             outcome.stderr,
             format!(
-                "mooringctl: {} is not a regular file; give the host key's .pub file\n",
+                "mooringctl: {} is not a regular file, so no public key was read from it\n",
                 path.display()
             )
         );
@@ -295,6 +326,13 @@ fn repin_after_a_partial_adoption_is_the_key_the_next_adoption_checks() {
         ),
         "{}",
         outcome.stdout
+    );
+    assert_eq!(
+        outcome.stdout.lines().last().unwrap(),
+        format!(
+            "re-pinned node lon1 to host key {} (configuration generation 4); next: `mooringctl node adopt lon1`, with --resume if Bootstrap ran on the VPS as it is now",
+            fingerprint(key)
+        )
     );
     let deployment = store(&harness).load().unwrap().deployment;
     assert_eq!(deployment.config_generation().get(), 4);
@@ -457,10 +495,10 @@ fn a_repin_that_cannot_be_committed_leaves_the_pin() {
 /// key already pinned has one line to write, and no commit.
 #[test]
 fn output_that_fails_before_the_commit_pins_nothing_and_after_it_keeps_the_pin() {
-    let failed = |harness: &mut Harness, file: &str, mut out: FailingLog| {
+    let failed = |harness: &mut Harness, node: &str, file: &str, mut out: FailingLog| {
         let mut err = Vec::new();
         let code = harness.run_to(
-            &["node", "repin", "lon1", "--host-key", file, "--yes"],
+            &["node", "repin", node, "--host-key", file, "--yes"],
             &mut out,
             &mut err,
         );
@@ -473,22 +511,29 @@ fn output_that_fails_before_the_commit_pins_nothing_and_after_it_keeps_the_pin()
         );
     };
     // The first line is the last before the commit on a node no adoption
-    // touched, and the adoption's note is the last after one.
+    // touched, the adoption's note is the last after one, and the note on
+    // the applied nodes is the last beside one.
     let fresh: fn() -> (Harness, Ed25519Pub) = planned;
-    for (needle, harness, committed) in [
-        ("is no check", fresh, false),
-        ("is no check", partially_adopted, false),
-        ("ran on this Mac", partially_adopted, false),
-        ("re-pinned node", fresh, true),
+    for (needle, harness, node, committed) in [
+        ("is no check", fresh, "lon1", false),
+        ("is no check", partially_adopted, "lon1", false),
+        ("ran on this Mac", partially_adopted, "lon1", false),
+        (
+            "the pin is a configuration change",
+            applied_lon1_and_planned_par1,
+            "par1",
+            false,
+        ),
+        ("re-pinned node", fresh, "lon1", true),
     ] {
         for out in [FailingLog::at(needle), FailingLog::only_at(needle)] {
             let (mut harness, _) = harness();
             let before = state_bytes(&harness);
             let (path, key) = host_key_file(&harness, "new.pub");
-            failed(&mut harness, path.to_str().unwrap(), out);
+            failed(&mut harness, node, path.to_str().unwrap(), out);
             let deployment = store(&harness).load().unwrap().deployment;
             assert_eq!(
-                deployment.nodes()[&node_id("lon1")].ssh.host_ed25519 == key,
+                deployment.nodes()[&node_id(node)].ssh.host_ed25519 == key,
                 committed,
                 "{needle}"
             );
@@ -500,8 +545,115 @@ fn output_that_fails_before_the_commit_pins_nothing_and_after_it_keeps_the_pin()
     let pinned = harness.home.path().join("lon1_host.pub");
     failed(
         &mut harness,
+        "lon1",
         pinned.to_str().unwrap(),
         FailingLog::at("nothing was written"),
     );
     assert_eq!(state_bytes(&harness), before);
+}
+
+/// What the operator answered is what is done: a configuration change made
+/// while the re-pin's question waited is a generation conflict, and the
+/// key asked about is not pinned.
+#[test]
+fn a_repin_answered_after_another_change_is_refused() {
+    let (mut harness, pinned) = planned();
+    let (path, _) = host_key_file(&harness, "reinstalled.pub");
+    let support = harness.support_dir();
+    harness.console.meanwhile = Some(Box::new(move || {
+        let store = Store::new(support);
+        let generation = store.load().unwrap().deployment.config_generation();
+        store
+            .update_config(generation, Ok::<_, Infallible>)
+            .unwrap();
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&[
+        "node",
+        "repin",
+        "lon1",
+        "--host-key",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: the state was not changed\n  caused by: config generation is 3, expected 2; re-read the state and retry\n"
+    );
+    assert!(harness.console.meanwhile.is_none());
+    assert!(!outcome.stdout.contains("re-pinned node"));
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.config_generation().get(), 3);
+    assert_eq!(after.nodes()[&node_id("lon1")].ssh.host_ed25519, pinned);
+}
+
+/// A node cancelled while the re-pin's question waits: the cancel keeps
+/// the generation, so the compare-and-swap passes, and the pin, which
+/// finds the node again under the lock, refuses it as gone.
+#[test]
+fn a_repin_whose_node_is_cancelled_while_the_question_waits_is_refused() {
+    let (mut harness, _) = planned();
+    let (path, _) = host_key_file(&harness, "reinstalled.pub");
+    let support = harness.support_dir();
+    harness.console.meanwhile = Some(Box::new(move || {
+        let store = Store::new(support);
+        let generation = store.load().unwrap().deployment.config_generation();
+        let cancelled = record_with_secrets(
+            &store,
+            &mut InMemorySecretStore::new(),
+            generation,
+            Bookkeeping::PlanCancelled {
+                node: node_id("lon1"),
+            },
+        );
+        // Its keychain is not this one: the commit stands.
+        assert!(
+            matches!(cancelled, Err(StoreError::SecretCleanup { .. })),
+            "{cancelled:?}"
+        );
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&[
+        "node",
+        "repin",
+        "lon1",
+        "--host-key",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stderr, "mooringctl: unknown node lon1\n");
+    assert!(harness.console.meanwhile.is_none());
+    assert!(!outcome.stdout.contains("re-pinned node"));
+    let after = store(&harness).load().unwrap().deployment;
+    assert!(after.nodes().is_empty());
+    assert_eq!(after.config_generation().get(), 2);
+}
+
+/// Whether an adoption ran on this Mac decides what the re-pin says, so a
+/// node directory that cannot be examined stops it before the question
+/// instead of counting as absent.
+#[test]
+fn a_node_directory_that_cannot_be_examined_stops_the_repin() {
+    let (mut harness, _) = planned();
+    let before = state_bytes(&harness);
+    let ssh = harness.support_dir().join("ssh");
+    fs::write(&ssh, b"").unwrap();
+    let (path, _) = host_key_file(&harness, "reinstalled.pub");
+    let outcome = harness.run(&[
+        "node",
+        "repin",
+        "lon1",
+        "--host-key",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: cannot use {}\n  caused by: Not a directory (os error 20)\n",
+            ssh.join("lon1").display()
+        )
+    );
+    assert_eq!(state_bytes(&harness), before);
+    assert!(harness.console.asked.is_empty());
 }

@@ -318,3 +318,98 @@ fn only_an_explicit_yes_confirms() {
     // An overlong answer is no answer.
     assert_eq!(answer_of(None), Answer::No);
 }
+
+/// A store failure that left the change committed is never reported as
+/// nothing changed, through each of the three mappings; any other store
+/// failure is, and a closure's refusal is passed on as it is.
+#[test]
+fn a_cleanup_failure_is_committed_through_every_mapping() {
+    use mooring_model::counters::ConfigGeneration;
+    use mooring_model::{NodeId, NonEmpty};
+    use mooring_store::{ChangeError, CleanupFailure, StoreError};
+
+    use crate::state::{refused_change, state_change, store_failure};
+
+    let lon1 = || NodeId::parse("lon1").unwrap();
+    let cleanup = || StoreError::SecretCleanup {
+        committed: ConfigGeneration::INITIAL,
+        failures: NonEmpty::new(CleanupFailure {
+            secret_ref: SecretRef::NodeSshBootstrapPrivate(lon1()),
+            error: SecretStoreError::SecretMissing {
+                secret_ref: SecretRef::NodeSshBootstrapPrivate(lon1()),
+            },
+        }),
+    };
+    let conflict = || StoreError::GenerationConflict {
+        expected: ConfigGeneration::INITIAL,
+        found: ConfigGeneration::INITIAL.next().unwrap(),
+    };
+    for committed in [
+        store_failure(cleanup()),
+        state_change(ChangeError::Store(cleanup())),
+        refused_change(ChangeError::Store(cleanup())),
+    ] {
+        assert!(
+            matches!(committed, LocalError::StateCommitted(_)),
+            "{committed:?}"
+        );
+    }
+    for unchanged in [
+        store_failure(conflict()),
+        state_change(ChangeError::Store(conflict())),
+        refused_change(ChangeError::Store(conflict())),
+    ] {
+        assert!(
+            matches!(unchanged, LocalError::StateChange(_)),
+            "{unchanged:?}"
+        );
+    }
+    let refusal = refused_change(ChangeError::Refused(LocalError::UnknownNode {
+        node: lon1(),
+    }));
+    assert!(
+        matches!(&refusal, LocalError::UnknownNode { node } if *node == lon1()),
+        "{refusal:?}"
+    );
+}
+
+/// A record tried on a deployment before anything is written gives what
+/// the model makes of it, leaving the deployment given as it was; a record
+/// the model refuses is reported as the store would report it.
+#[test]
+fn a_record_is_tried_on_a_deployment_before_anything_is_written() {
+    use mooring_model::NodeId;
+    use mooring_model::deployment::Bookkeeping;
+    use mooring_model::error::ModelError;
+    use mooring_model::node::NodeLifecycle;
+    use mooring_store::StoreError;
+
+    use super::user::fixture;
+    use crate::state::recorded;
+
+    let ams1 = NodeId::parse("ams1").unwrap();
+    let cancel = || Bookkeeping::PlanCancelled { node: ams1.clone() };
+    let planned = fixture(|parts| {
+        let node = parts.nodes.iter_mut().find(|node| node.id == ams1).unwrap();
+        node.lifecycle = NodeLifecycle::Planned;
+    });
+    let after = recorded(&planned, cancel()).unwrap();
+    assert_eq!(after, planned.clone().record(cancel()).unwrap());
+    assert!(!after.nodes().contains_key(&ams1));
+    assert!(planned.nodes().contains_key(&ams1));
+
+    let error = recorded(&fixture(|_| {}), cancel()).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            LocalError::StateChange(source)
+                if matches!(
+                    &**source,
+                    StoreError::InvalidChange {
+                        source: ModelError::NodeNotPlanned { node, .. }
+                    } if *node == ams1
+                )
+        ),
+        "{error:?}"
+    );
+}
