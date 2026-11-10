@@ -1005,6 +1005,12 @@ fn a_closure_moves_a_planned_node_only_to_adopted() {
                 ),
                 "{to:?}: {error:?}"
             );
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "the change moved node ams1 from Planned to Some({to:?}); a node's lifecycle only moves forward, a planned node only to adopted, and a configuration change removes no node"
+                )
+            );
         };
         refused(store_error(
             store

@@ -409,7 +409,9 @@ pub(crate) enum NodeCommand {
     },
     /// Give a planned node up: remove it from the state with every user's
     /// credentials on it, and delete its keys from the keychain and its ssh
-    /// files. No VPS is contacted; the id may be planned again.
+    /// files. No VPS is contacted; the id may be planned again. Run again
+    /// for the id of a cancel that stopped midway, it removes the ssh files
+    /// that cancel left.
     Cancel {
         /// The node's id.
         node: NodeId,

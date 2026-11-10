@@ -14,15 +14,18 @@
 //!
 //! What the command says before it asks is read from the record applied to
 //! the deployment it loaded (`state::recorded`): it names what the model
-//! does, not a second reading of the model's rules.
+//! does, not a second reading of the model's rules. The answer may wait,
+//! and a record another command writes meanwhile keeps the generation, so
+//! the state is read again when the answer comes and must be the one
+//! described (`state::unchanged`).
 //!
 //! A cancel that stopped after its commit (the process ended there, or the
 //! write failed late) leaves the ssh directory, and `node new` refuses to
 //! plan over it. Run for an id the state does not hold, the command
-//! removes that directory, after the same inspection and a question. No
-//! compare-and-swap guards that removal, so it reads the state again once
-//! the question is answered, and removes nothing if the id is planned
-//! again by then.
+//! removes that directory, after the same inspection, a question and the
+//! same second reading of the state: no write guards that removal, and a
+//! node planned under the id meanwhile would own whatever its adoption has
+//! put at the path since.
 
 use std::io::{self, Write};
 
@@ -38,7 +41,7 @@ use crate::error::{CommandError, LocalError};
 use crate::exit::confirm;
 use crate::node::files::{NodeDirListing, NodeFiles};
 use crate::node::planned::{PlannedAction, planned};
-use crate::state::{load, output, recorded, store_failure};
+use crate::state::{load, output, recorded, store_failure, unchanged};
 
 /// `node cancel`. It reads and checks everything before the question and
 /// writes nothing before it: the node must be planned, and its ssh
@@ -52,24 +55,21 @@ pub(crate) fn cancel(
     let support = support_dir(env)?;
     let store = Store::new(support.clone());
     let files = NodeFiles::of(&support, id);
-    // The directory is looked at before the state is read. `node new`
-    // refuses an id whose directory is there, so when the state then holds
-    // no node of the id, none appears for as long as the directory stays.
-    let listing = files.inspect();
     let state = load(&store)?;
     let deployment = &state.deployment;
     let node = match planned(deployment, id, PlannedAction::Cancelled) {
         Ok(node) => node,
-        Err(LocalError::UnknownNode { node }) => {
-            return remove_leftover(env, out, &store, listing?, &node, yes);
+        Err(LocalError::UnknownNode { .. }) => {
+            return remove_leftover(env, out, &store, deployment, &files, id, yes);
         }
         Err(refusal) => return Err(refusal.into()),
     };
-    let found = listing?;
+    let found = files.inspect()?;
     let entry = Bookkeeping::PlanCancelled { node: id.clone() };
     let after = recorded(deployment, entry.clone())?;
     describe(out, deployment, &after, node, found.as_ref()).map_err(output)?;
     confirm(env, yes, "Cancel this planned node?")?;
+    unchanged(&store, deployment)?;
     let generation = deployment.config_generation();
     let cleanup =
         match record_with_secrets(&store, env.secrets, generation, entry).map_err(store_failure) {
@@ -112,17 +112,18 @@ pub(crate) fn cancel(
 /// The question may wait, and nothing holds the directory meanwhile: once
 /// it is gone, by another run of this command or by hand, the id can be
 /// planned and adopted again, and the files at the path are then that
-/// node's. So the state is read again when the answer comes, and a node of
-/// the id in it keeps the files (`NodePlannedMeanwhile`).
+/// node's. So the state is read again when the answer comes, and must be
+/// `read`, the state that held no node of the id.
 fn remove_leftover(
     env: &mut Env<'_>,
     out: &mut dyn Write,
     store: &Store,
-    found: Option<NodeDirListing>,
+    read: &Deployment,
+    files: &NodeFiles,
     id: &NodeId,
     yes: bool,
 ) -> Result<(), CommandError> {
-    let Some(found) = found else {
+    let Some(found) = files.inspect()? else {
         return Err(LocalError::UnknownNode { node: id.clone() }.into());
     };
     writeln!(
@@ -133,9 +134,7 @@ fn remove_leftover(
     .map_err(output)?;
     stranded_note(out, id).map_err(output)?;
     confirm(env, yes, "Remove these files?")?;
-    if load(store)?.deployment.nodes().contains_key(id) {
-        return Err(LocalError::NodePlannedMeanwhile { node: id.clone() }.into());
-    }
+    unchanged(store, read)?;
     let dir = found.dir().to_path_buf();
     found.remove().map_err(|source| LocalError::NodeFilesLeft {
         node: id.clone(),

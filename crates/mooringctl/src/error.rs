@@ -77,6 +77,14 @@ pub(crate) enum LocalError {
     /// state as it was.
     #[error("the state was not changed")]
     StateChange(#[source] Box<StoreError>),
+    /// The state is no longer the one the command read and described
+    /// before it asked: another command changed it while the question
+    /// waited (`state::unchanged`). The answer was about the state read,
+    /// so nothing was done on it.
+    #[error(
+        "the state changed since this command read it, so the answer was not acted on: run the command again"
+    )]
+    StateChangedSinceRead,
     /// The change is committed, but deleting the keychain items it no
     /// longer references failed for some (`StoreError::SecretCleanup`,
     /// which names each: one that could not be deleted, or one that was
@@ -765,8 +773,9 @@ pub(crate) enum LocalError {
         /// The id given.
         node: NodeId,
     },
-    /// The host-key file could not be read.
-    #[error("cannot read the host key in {}", path.display())]
+    /// A public key's file (the host key's, or a node's own `.pub`) could
+    /// not be read.
+    #[error("cannot read the public key in {}", path.display())]
     HostKeyFile {
         /// The file.
         path: PathBuf,
@@ -774,11 +783,11 @@ pub(crate) enum LocalError {
         #[source]
         source: io::Error,
     },
-    /// The host-key file does not hold exactly one Ed25519 OpenSSH public
-    /// key line: none, a malformed one, a second line, or more than one
-    /// line's worth of bytes.
+    /// A public key's file does not hold exactly one Ed25519 OpenSSH public
+    /// key line: none, a malformed one, a second line, a character that
+    /// ends a line on a screen, or more than one line's worth of bytes.
     #[error(
-        "{} does not hold exactly one Ed25519 host key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)",
+        "{} does not hold exactly one Ed25519 public key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)",
         path.display()
     )]
     HostKey {
@@ -804,14 +813,6 @@ pub(crate) enum LocalError {
         node: NodeId,
         /// The directory.
         path: PathBuf,
-    },
-    /// `node cancel` asked whether to remove the files a cancelled node
-    /// left, and the id was in the state again when the answer came: what
-    /// is at the path then may be the new node's, so nothing was removed.
-    #[error("node {node} was planned again while the question waited: nothing was removed")]
-    NodePlannedMeanwhile {
-        /// The id given.
-        node: NodeId,
     },
     /// The node's ssh directory is not a directory, or holds something
     /// Mooring does not keep there, which `node cancel` will not remove.
@@ -905,6 +906,39 @@ pub(crate) enum LocalError {
         /// Why the pin was not recorded.
         #[source]
         source: Box<LocalError>,
+    },
+    /// The node is adopted, but the file of its one-time bootstrap key
+    /// could not be removed. `RevokeBootstrap` ran before the commit, so
+    /// the VPS no longer accepts that key.
+    #[error(
+        "node {node} is adopted, but its one-time bootstrap key could not be removed from {}: the VPS no longer accepts that key, so remove the file by hand",
+        path.display()
+    )]
+    BootstrapKeyLeft {
+        /// The adopted node.
+        node: NodeId,
+        /// The key's file.
+        path: PathBuf,
+        /// Why it stays.
+        #[source]
+        source: io::Error,
+    },
+    /// The node is adopted, but neither the file of its one-time bootstrap
+    /// key nor the key's keychain item could be removed.
+    #[error(
+        "node {node} is adopted, but its one-time bootstrap key could not be removed from {} ({removal}): the VPS no longer accepts that key, so remove the file by hand; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
+        path.display()
+    )]
+    BootstrapKeyAndSecretsLeft {
+        /// The adopted node.
+        node: NodeId,
+        /// The key's file.
+        path: PathBuf,
+        /// Why the file stays.
+        removal: io::Error,
+        /// The keychain deletions that failed.
+        #[source]
+        source: Box<StoreError>,
     },
     /// `node adopt` without `--resume` needs the operator's root key.
     #[error("give --root-identity, the key that logs in as root on the VPS now, or --resume")]

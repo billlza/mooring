@@ -129,10 +129,158 @@ fn a_bootstrap_key_gone_already_is_fine_and_one_that_stays_is_an_error() {
     files.remove_bootstrap_key().unwrap();
     fs::create_dir(files.bootstrap_key()).unwrap();
     let error = files.remove_bootstrap_key().unwrap_err();
-    assert!(
-        matches!(&error, LocalError::NodeFile { path, .. } if *path == files.bootstrap_key()),
-        "{error:?}"
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error:?}");
+    assert!(files.bootstrap_key().is_dir());
+}
+
+/// A key line with a comment, and its key.
+fn key_line(comment: &str) -> (String, Ed25519Pub) {
+    let key = host_key();
+    (format!("{} {comment}", key.ssh_authorized_key()), key)
+}
+
+/// Two keys on what an editor shows as two lines never pin the first:
+/// the Unicode line and paragraph separators and the next-line character
+/// end a line on screen, though not for `str::lines`.
+#[test]
+fn two_keys_apart_by_a_unicode_line_end_do_not_pin_the_first() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, separator) in [
+        ("line.pub", '\u{2028}'),
+        ("paragraph.pub", '\u{2029}'),
+        ("next-line.pub", '\u{85}'),
+    ] {
+        let (first, _) = key_line("root@old");
+        let (second, _) = key_line("root@new");
+        let path = dir.path().join(name);
+        fs::write(&path, format!("{first}{separator}{second}\n")).unwrap();
+        let read = read_public_key(&path);
+        assert!(
+            matches!(&read, Err(LocalError::HostKey { path: named }) if *named == path),
+            "{name}: {read:?}"
+        );
+    }
+}
+
+/// Two keys apart by a space are one line everywhere, and one key with a
+/// comment, as OpenSSH reads them too.
+#[test]
+fn two_keys_on_one_line_are_one_key_with_a_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    let (first, key) = key_line("root@old");
+    let (second, _) = key_line("root@new");
+    let path = dir.path().join("one-line.pub");
+    fs::write(&path, format!("{first} {second}\n")).unwrap();
+    assert_eq!(read_public_key(&path).unwrap(), key);
+}
+
+/// What the key file's reader takes and what it refuses: one plain
+/// `ssh-ed25519` line, however it is spaced and ended, and nothing that
+/// only resembles one.
+#[test]
+fn the_key_file_reader_takes_one_plain_line_and_refuses_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let (line, key) = key_line("root@lon1");
+    let bare = key.ssh_authorized_key();
+    let blob = bare.strip_prefix("ssh-ed25519 ").unwrap();
+    let taken = [
+        ("bare.pub", format!("{bare}\n")),
+        ("no-newline.pub", line.clone()),
+        ("indented.pub", format!("  \t{line}\n")),
+        (
+            "two-spaces.pub",
+            format!("ssh-ed25519  {blob}  root@lon1\n"),
+        ),
+        ("crlf.pub", format!("{line}\r\n")),
+        ("blank-lines.pub", format!("\n\r\n{line}\n \t \n")),
+        (
+            "unicode-comment.pub",
+            format!("{bare} r\u{f6}\u{f6}t@l\u{f6}n1\n"),
+        ),
+    ];
+    for (name, text) in taken {
+        let path = dir.path().join(name);
+        fs::write(&path, text).unwrap();
+        assert_eq!(read_public_key(&path).unwrap(), key, "{name}");
+    }
+    let refused = [
+        ("bom.pub", format!("\u{feff}{line}\n")),
+        ("bare-cr.pub", format!("{line}\r")),
+        ("comment-line.pub", format!("# lon1\n{line}\n")),
+        ("known-hosts.pub", format!("45.67.89.10 {bare}\n")),
+        ("options.pub", format!("restrict {line}\n")),
+        (
+            "certificate.pub",
+            format!("ssh-ed25519-cert-v01@openssh.com {blob} root@lon1\n"),
+        ),
+        (
+            "security-key.pub",
+            format!("sk-ssh-ed25519@openssh.com {blob} root@lon1\n"),
+        ),
+        ("no-space.pub", format!("ssh-ed25519\u{a0}{blob}\n")),
+        ("escape.pub", format!("{bare} root\u{1b}[2K@lon1\n")),
+        ("backspace.pub", format!("{bare} root\u{8}@lon1\n")),
+        ("delete.pub", format!("{bare} root\u{7f}@lon1\n")),
+    ];
+    for (name, text) in refused {
+        let path = dir.path().join(name);
+        fs::write(&path, text).unwrap();
+        let read = read_public_key(&path);
+        assert!(
+            matches!(&read, Err(LocalError::HostKey { path: named }) if *named == path),
+            "{name}: {read:?}"
+        );
+    }
+}
+
+/// The operations key's public half is read as any public key file is. One
+/// that is missing or damaged is reported as a public key, not as the host
+/// key `node new` and `node repin` read through the same reader.
+#[test]
+fn a_damaged_operations_public_key_is_not_called_a_host_key() {
+    let (_support, files) = files();
+    let lon1 = NodeId::parse("lon1").unwrap();
+    files.create_dir().unwrap();
+    fs::write(files.ops_key(), b"a key\n").unwrap();
+    let public = files.dir().join("ops_ed25519.pub");
+    assert_eq!(
+        files.ops_public(&lon1).unwrap_err().to_string(),
+        format!("cannot read the public key in {}", public.display())
     );
+    fs::write(&public, b"not a key\n").unwrap();
+    assert_eq!(
+        files.ops_public(&lon1).unwrap_err().to_string(),
+        format!(
+            "{} does not hold exactly one Ed25519 public key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)",
+            public.display()
+        )
+    );
+}
+
+/// A regular file whose name only resembles one of Mooring's is not
+/// Mooring's: what `ssh-keygen -R` leaves beside `known_hosts`, a copy of
+/// a key, or a `.partial` of a file Mooring never rewrites.
+#[test]
+fn a_file_named_almost_as_one_of_moorings_is_not_kept() {
+    for name in [
+        "known_hosts.old",
+        "known_hosts.partial.partial",
+        "ops_ed25519.partial",
+        "ops_ed25519.pub.partial",
+        "ops_ed25519.bak",
+        "bootstrap_ed25519.pub",
+        "ops_ed25519_",
+    ] {
+        let (_support, files) = files();
+        files.create_dir().unwrap();
+        let path = files.dir().join(name);
+        fs::write(&path, b"").unwrap();
+        let listed = files.inspect();
+        assert!(
+            matches!(&listed, Err(LocalError::NodeFileUnexpected { path: named }) if *named == path),
+            "{name}: {listed:?}"
+        );
+    }
 }
 
 /// A public key file holds one line of at most 4096 bytes, blank lines

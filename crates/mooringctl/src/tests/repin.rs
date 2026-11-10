@@ -12,14 +12,15 @@ use std::process::Command;
 
 use mooring_keys::SshPublicKey;
 use mooring_model::deployment::Bookkeeping;
-use mooring_model::node::{LifecycleStage, SshPin};
+use mooring_model::node::{LifecycleStage, NodeLifecycle, SshPin};
 use mooring_model::secret::SecretRef;
 use mooring_model::{Ed25519Pub, NodeId};
 use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_with_secrets};
 
 use super::cancel::{lon1_dir, partially_adopted};
+use super::export::exporting;
 use super::node::{ADDRESS, adopt_args, agent_file, host_key_file, planned};
-use super::support::{Answered, Expected, FailingLog, Harness, Refusals};
+use super::support::{Answered, Expected, FailingLog, Harness, MOVED, Refusals};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::{EXIT_LOCAL, LocalError};
 use crate::node::NodeError;
@@ -246,7 +247,7 @@ fn repin_refuses_a_file_that_holds_no_single_host_key() {
         assert_eq!(
             outcome.stderr,
             format!(
-                "mooringctl: {} does not hold exactly one Ed25519 host key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)\n",
+                "mooringctl: {} does not hold exactly one Ed25519 public key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)\n",
                 path.display()
             ),
             "{name}"
@@ -552,9 +553,9 @@ fn output_that_fails_before_the_commit_pins_nothing_and_after_it_keeps_the_pin()
     assert_eq!(state_bytes(&harness), before);
 }
 
-/// What the operator answered is what is done: a configuration change made
-/// while the re-pin's question waited is a generation conflict, and the
-/// key asked about is not pinned.
+/// What the operator answered is what is done: the state is read again
+/// when the answer comes, and a configuration change made while the
+/// question waited stops the re-pin, so the key asked about is not pinned.
 #[test]
 fn a_repin_answered_after_another_change_is_refused() {
     let (mut harness, pinned) = planned();
@@ -576,10 +577,7 @@ fn a_repin_answered_after_another_change_is_refused() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(outcome.code, EXIT_LOCAL);
-    assert_eq!(
-        outcome.stderr,
-        "mooringctl: the state was not changed\n  caused by: config generation is 3, expected 2; re-read the state and retry\n"
-    );
+    assert_eq!(outcome.stderr, MOVED);
     assert!(harness.console.meanwhile.is_none());
     assert!(!outcome.stdout.contains("re-pinned node"));
     let after = store(&harness).load().unwrap().deployment;
@@ -588,8 +586,10 @@ fn a_repin_answered_after_another_change_is_refused() {
 }
 
 /// A node cancelled while the re-pin's question waits: the cancel keeps
-/// the generation, so the compare-and-swap passes, and the pin, which
-/// finds the node again under the lock, refuses it as gone.
+/// the generation, so no compare-and-swap would notice it. The state read
+/// again when the answer comes is not the one asked about, and nothing is
+/// pinned. (The pin's own write finds the node again under the lock too:
+/// `the_pin_refuses_a_node_cancelled_or_past_planned_since_it_was_read`.)
 #[test]
 fn a_repin_whose_node_is_cancelled_while_the_question_waits_is_refused() {
     let (mut harness, _) = planned();
@@ -621,7 +621,7 @@ fn a_repin_whose_node_is_cancelled_while_the_question_waits_is_refused() {
         path.to_str().unwrap(),
     ]);
     assert_eq!(outcome.code, EXIT_LOCAL);
-    assert_eq!(outcome.stderr, "mooringctl: unknown node lon1\n");
+    assert_eq!(outcome.stderr, MOVED);
     assert!(harness.console.meanwhile.is_none());
     assert!(!outcome.stdout.contains("re-pinned node"));
     let after = store(&harness).load().unwrap().deployment;
@@ -656,4 +656,48 @@ fn a_node_directory_that_cannot_be_examined_stops_the_repin() {
     );
     assert_eq!(state_bytes(&harness), before);
     assert!(harness.console.asked.is_empty());
+}
+
+/// `node repin` names as needing `node apply` the applied nodes only: an
+/// adopted node beside the planned one has confirmed no generation that
+/// the pin could leave behind.
+#[test]
+fn repin_names_no_adopted_node_as_applied() {
+    let adopted = fixture(|parts| {
+        parts.nodes.retain(|node| node.id == node_id("lon1"));
+        for user in &mut parts.users {
+            user.per_node.retain(|node, _| *node == node_id("lon1"));
+        }
+        let site = parts.nodes[0].lifecycle.site().unwrap().clone();
+        parts.nodes[0].lifecycle = NodeLifecycle::Adopted { site };
+    });
+    let (mut harness, _) = exporting(adopted);
+    let (path, _) = host_key_file(&harness, "par1.pub");
+    let outcome = harness.run(&[
+        "node",
+        "new",
+        "par1",
+        "--role",
+        "standby",
+        "--host-key",
+        path.to_str().unwrap(),
+        "--yes",
+    ]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let (path, _) = host_key_file(&harness, "reinstalled.pub");
+    let outcome = harness.run(&[
+        "node",
+        "repin",
+        "par1",
+        "--host-key",
+        path.to_str().unwrap(),
+        "--yes",
+    ]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        !outcome.stdout.contains("the pin is a configuration change"),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(outcome.stdout.lines().count(), 3, "{}", outcome.stdout);
 }

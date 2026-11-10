@@ -63,6 +63,25 @@ pub(crate) fn recorded(
         .map_err(|source| store_failure(StoreError::InvalidChange { source }))
 }
 
+/// Reads the state again and requires its deployment to be `read`, the one
+/// a command described before it asked. The answer may have waited. A
+/// record another command wrote meanwhile keeps the generation, so the
+/// compare-and-swap of the write that follows would not notice it, and no
+/// write at all guards what a command does outside the state: a node's
+/// files, or a VPS. Only mooringctl writes the state, so a difference is
+/// another command's doing (`StateChangedSinceRead`).
+///
+/// This shortens the time in which another command can slip in unnoticed
+/// from the wait for an answer to the instant between this read and the
+/// write or the action that follows; it does not close it.
+pub(crate) fn unchanged(store: &Store, read: &Deployment) -> Result<(), LocalError> {
+    if load(store)?.deployment == *read {
+        Ok(())
+    } else {
+        Err(LocalError::StateChangedSinceRead)
+    }
+}
+
 /// A change whose closure cannot refuse: only the store can fail it.
 pub(crate) fn state_change(error: ChangeError<Infallible>) -> LocalError {
     match error {

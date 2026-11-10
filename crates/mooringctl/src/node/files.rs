@@ -159,12 +159,11 @@ impl NodeFiles {
     }
 
     /// Removes the bootstrap key; one that is gone already is fine.
-    pub(crate) fn remove_bootstrap_key(&self) -> Result<(), LocalError> {
-        let path = self.bootstrap_key();
-        match fs::remove_file(&path) {
+    pub(crate) fn remove_bootstrap_key(&self) -> io::Result<()> {
+        match fs::remove_file(self.bootstrap_key()) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(LocalError::NodeFile { path, source }),
+            Err(error) => Err(error),
         }
     }
 
@@ -305,8 +304,10 @@ impl NodeDirListing {
 /// `O_NONBLOCK` so a FIFO cannot hold the open, must be a regular file by
 /// its own descriptor (`HostKeyNotAFile`), and is read to at most
 /// [`MAX_PUBLIC_KEY_BYTES`]. Blank lines aside it must hold that one line,
-/// and the line no control character but a tab, so a file with two keys
-/// never pins the first, however they are separated (`HostKey`).
+/// and the line nothing that ends a line on a screen
+/// ([`ends_a_line_on_screen`]), so a file that shows two keys on two lines
+/// never pins the first (`HostKey`). Two keys on one line, apart by spaces,
+/// are one key and its comment, as OpenSSH reads them.
 pub(crate) fn read_public_key(path: &Path) -> Result<Ed25519Pub, LocalError> {
     let read = |source| LocalError::HostKeyFile {
         path: path.to_path_buf(),
@@ -337,12 +338,7 @@ pub(crate) fn read_public_key(path: &Path) -> Result<Ed25519Pub, LocalError> {
     let (Some(line), None) = (lines.next(), lines.next()) else {
         return Err(malformed());
     };
-    // A carriage return or a form feed ends a line on a terminal, and a
-    // token below, but not a line here: a second key could hide after one.
-    if line
-        .chars()
-        .any(|character| character.is_control() && character != '\t')
-    {
+    if line.chars().any(ends_a_line_on_screen) {
         return Err(malformed());
     }
     let mut tokens = line.split_ascii_whitespace();
@@ -352,6 +348,15 @@ pub(crate) fn read_public_key(path: &Path) -> Result<Ed25519Pub, LocalError> {
         }
         _ => Err(malformed()),
     }
+}
+
+/// Whether `character` may end a line where a key file is looked at,
+/// though `str::lines` splits only at a line feed: any control character
+/// but a tab (a carriage return, a form feed, a next-line character), and
+/// the Unicode line and paragraph separators, which are no control
+/// characters. A second key could hide after one.
+fn ends_a_line_on_screen(character: char) -> bool {
+    (character.is_control() && character != '\t') || matches!(character, '\u{2028}' | '\u{2029}')
 }
 
 /// Writes a new file with mode 0600; an existing one is an error.

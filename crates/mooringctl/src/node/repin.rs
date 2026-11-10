@@ -12,7 +12,9 @@
 //! configuration change, as `node adopt` records the key `Bootstrap`
 //! makes: the generation moves on, so the command names the applied nodes
 //! that then need `node apply`. `known_hosts` is left alone: every
-//! adoption writes it from the state's pin before it connects.
+//! adoption writes it from the state's pin before it connects. The state
+//! is read again when the answer comes and must be the one described
+//! (`state::unchanged`).
 
 use std::io::Write;
 use std::path::Path;
@@ -26,7 +28,7 @@ use crate::error::CommandError;
 use crate::exit::confirm;
 use crate::node::files::{NodeFiles, read_public_key};
 use crate::node::planned::{PlannedAction, pin_in_state, planned};
-use crate::state::{load, output};
+use crate::state::{load, output, unchanged};
 
 /// `node repin`. The key already pinned writes nothing and asks nothing.
 pub(crate) fn repin(
@@ -82,6 +84,7 @@ pub(crate) fn repin(
         .map_err(output)?;
     }
     confirm(env, yes, "Pin the new host key?")?;
+    unchanged(&store, &state.deployment)?;
     let generation = pin_in_state(
         &store,
         id,

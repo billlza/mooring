@@ -32,6 +32,11 @@
 //! Both state writes find the node again under the lock and refuse when it
 //! is gone or past `Planned` (`node::planned`): a `node cancel` in between
 //! keeps the generation, so their compare-and-swap would not notice it.
+//! `Bootstrap` cannot be undone, so the state is read again when the
+//! question before it is answered and must be the one read
+//! (`state::unchanged`). Once the final write is committed the node is
+//! adopted, and a bootstrap key that cannot be removed then, its keychain
+//! item or its file, is what the command reports.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -56,7 +61,7 @@ use crate::node::files::NodeFiles;
 use crate::node::planned::{PlannedAction, pin_in_state, planned, planned_mut};
 use crate::node::ssh::{Remote, SshTarget};
 use crate::node::{NodeError, NodeSession};
-use crate::state::{load, output, refused_change};
+use crate::state::{load, output, refused_change, unchanged};
 
 /// The largest agent binary read, in bytes.
 const MAX_AGENT_BYTES: u64 = 64 * 1024 * 1024;
@@ -136,6 +141,9 @@ pub(crate) fn adopt(
         )
         .map_err(output)?;
         confirm(env, args.yes, "Hand this VPS to Mooring?")?;
+        // `Bootstrap` cannot be undone, and the answer may have waited:
+        // the node must still be the planned one this command read.
+        unchanged(&store, &state.deployment)?;
         let staged = format!("/root/.mooring-agent-{agent_sha}");
         target(root_identity, Remote::Command(upload_command(&staged)))
             .run(&agent)
@@ -210,10 +218,10 @@ pub(crate) fn adopt(
     // adopted: its file goes all the same, and the failure is reported.
     let cleanup = match recorded {
         Ok(_) => None,
-        Err(committed @ LocalError::StateCommitted(_)) => Some(committed),
+        Err(LocalError::StateCommitted(failure)) => Some(failure),
         Err(error) => return Err(error.into()),
     };
-    files.remove_bootstrap_key()?;
+    let removed = files.remove_bootstrap_key();
     let written = writeln!(
         out,
         "adopted {}: Debian {}, kernel {}, {} on {}; the Mac's address as the node saw it: {}\nnext: `mooringctl node target check {}`, then `node apply {}`",
@@ -227,9 +235,22 @@ pub(crate) fn adopt(
         args.node
     )
     .map_err(output);
-    // The node is adopted: a deletion that failed is the failure to
+    // The node is adopted. What the adoption left behind is the failure to
     // report, whatever became of the line that says so.
-    cleanup.map_or(written, |committed| Err(committed.into()))
+    let node = args.node.clone();
+    let path = files.bootstrap_key();
+    match (cleanup, removed) {
+        (None, Ok(())) => written,
+        (None, Err(source)) => Err(LocalError::BootstrapKeyLeft { node, path, source }.into()),
+        (Some(failure), Ok(())) => Err(LocalError::StateCommitted(failure).into()),
+        (Some(source), Err(removal)) => Err(LocalError::BootstrapKeyAndSecretsLeft {
+            node,
+            path,
+            removal,
+            source,
+        }
+        .into()),
+    }
 }
 
 /// The adoption step a failure happened at.

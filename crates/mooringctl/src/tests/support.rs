@@ -416,6 +416,10 @@ pub(crate) enum Answered {
 /// ([`FakeConsole::meanwhile`]).
 pub(crate) type Meanwhile = Box<dyn FnOnce() + Send>;
 
+/// What a command reports when the state it read is no longer the state
+/// once its question is answered (`LocalError::StateChangedSinceRead`).
+pub(crate) const MOVED: &str = "mooringctl: the state changed since this command read it, so the answer was not acted on: run the command again\n";
+
 /// What a command reports when its change is committed and keychain
 /// deletions failed after it (`LocalError::StateCommitted`).
 pub(crate) const COMMITTED: &str = "mooringctl: the change is committed, but deleting the keychain items it no longer references failed for those named below; nothing uses them, and any that is still there can be deleted by hand";

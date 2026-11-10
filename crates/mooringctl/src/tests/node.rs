@@ -209,9 +209,9 @@ fn new_refuses_an_existing_id_a_bad_host_key_and_a_declined_answer() {
     for (content, why) in [
         (
             "ssh-rsa AAAAB3NzaC1yc2E root@lon1\n",
-            "does not hold exactly one Ed25519 host key",
+            "does not hold exactly one Ed25519 public key",
         ),
-        ("", "does not hold exactly one Ed25519 host key"),
+        ("", "does not hold exactly one Ed25519 public key"),
     ] {
         let bad = harness.home.path().join("bad.pub");
         fs::write(&bad, content).unwrap();
@@ -242,7 +242,7 @@ fn new_refuses_an_existing_id_a_bad_host_key_and_a_declined_answer() {
     ]);
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert!(
-        outcome.stderr.contains("cannot read the host key"),
+        outcome.stderr.contains("cannot read the public key"),
         "{}",
         outcome.stderr
     );
@@ -1460,7 +1460,7 @@ fn new_refuses_a_host_key_file_larger_than_one_line() {
     assert!(
         outcome
             .stderr
-            .contains("does not hold exactly one Ed25519 host key"),
+            .contains("does not hold exactly one Ed25519 public key"),
         "{}",
         outcome.stderr
     );
@@ -1530,7 +1530,7 @@ fn new_refuses_a_file_with_two_keys_and_what_is_no_regular_file() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: {} does not hold exactly one Ed25519 host key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)\n",
+            "mooringctl: {} does not hold exactly one Ed25519 public key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)\n",
             two.display()
         )
     );
