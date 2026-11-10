@@ -244,7 +244,7 @@ mod tests {
     use std::ffi::OsString;
     use std::fs::{self, File, TryLockError};
     use std::io;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
 
     use super::{Installed, home_from, install_with, place};
@@ -261,12 +261,17 @@ mod tests {
     /// A built app in a scratch target directory, with one file in it, and
     /// where it is to be installed.
     fn built(scratch: &Scratch) -> (PathBuf, Bundle, Installed) {
-        let root = scratch.0.join("repo");
+        built_in(&scratch.0)
+    }
+
+    /// [`built`], with the scratch directory named `dir`.
+    fn built_in(dir: &Path) -> (PathBuf, Bundle, Installed) {
+        let root = dir.join("repo");
         fs::create_dir_all(&root).unwrap();
-        let bundle = AppPaths::new(&root, &scratch.0.join("target")).bundle();
+        let bundle = AppPaths::new(&root, &dir.join("target")).bundle();
         fs::create_dir_all(bundle.embedded.parent().unwrap()).unwrap();
         fs::write(&bundle.embedded, b"the build's mooringctl").unwrap();
-        (root, bundle, Installed::under(&scratch.0.join("home")))
+        (root, bundle, Installed::under(&dir.join("home")))
     }
 
     /// Scripts one bundle's seal and three identifiers twice over, the
@@ -440,17 +445,23 @@ mod tests {
     /// which launchd and the console start by name alone, or the power
     /// helper. Each process is placed by the executable the kernel names
     /// for it, and the ones before it that run from elsewhere are passed
-    /// over.
+    /// over. The apps are given through a link here, which the kernel's
+    /// names do not go through. The link is the test's own: a temporary
+    /// directory is behind one on macOS (`/var`) and behind none on Linux.
     #[test]
     fn an_app_in_use_is_not_replaced() {
         let scratch = Scratch::new("install-in-use");
-        let (root, bundle, installed) = built(&scratch);
+        let named = fs::canonicalize(&scratch.0).unwrap().join("named");
+        fs::create_dir(&named).unwrap();
+        let link = scratch.0.join("link");
+        symlink(&named, &link).unwrap();
+        let (root, bundle, installed) = built_in(&link);
         fs::create_dir_all(installed.app.join("Contents/Old")).unwrap();
-        // As the kernel names them: the scratch directory's own path goes
-        // through a link (`/var`).
+        // As the kernel names them.
         let build = Bundle::at(fs::canonicalize(&bundle.app).unwrap());
-        assert_ne!(build.app, bundle.app);
+        assert_eq!(build.app, named.join("target/app/Mooring.app"));
         let placed = Bundle::at(fs::canonicalize(&installed.app).unwrap());
+        assert_eq!(placed.app, named.join("home/Applications/Mooring.app"));
         let elsewhere =
             Path::new("/Users/op/mooring/target/app/Mooring.app/Contents/MacOS/Mooring");
         for (executable, identifier, app) in [
