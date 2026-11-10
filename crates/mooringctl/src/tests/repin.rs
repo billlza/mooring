@@ -291,7 +291,7 @@ fn repin_after_a_partial_adoption_is_the_key_the_next_adoption_checks() {
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     assert!(
         outcome.stdout.contains(
-            "`node adopt lon1` ran on this Mac: if its Bootstrap ran and the VPS was not reinstalled since, keep the key Bootstrap made and run `node adopt lon1 --resume`; after a reinstall, pin the reinstalled VPS's key and adopt it with --root-identity\n"
+            "`node adopt lon1` ran on this Mac: if its Bootstrap ran and the VPS was not reinstalled since, the only key to pin is the one Bootstrap made (adoption pins it itself, or says that it could not), and `node adopt lon1 --resume` goes on from there; after a reinstall, pin the reinstalled VPS's key and adopt it with --root-identity\n"
         ),
         "{}",
         outcome.stdout

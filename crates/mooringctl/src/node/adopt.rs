@@ -11,7 +11,10 @@
 //! 2. `Bootstrap` runs with that key. It replaces root's `authorized_keys`
 //!    with the bootstrap and operations lines, so the operator's own key
 //!    stops working, and it generates a new host key, which the Mac pins at
-//!    once, in `known_hosts` and in the state.
+//!    once, in `known_hosts` and in the state. A pin that cannot be
+//!    recorded stops the adoption with the key in its error
+//!    (`BootstrapKeyUnpinned`): `node repin` pins it, and `--resume` goes
+//!    on.
 //! 3. The operations key must reach the forced command: an empty request
 //!    is answered `UnknownRequest` (otherwise `ForcedCommandNotActive`).
 //! 4. `Hello` gives the node's site (`render::adoption_site`), and asserts
@@ -36,6 +39,7 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 
 use mooring_agent_proto::{AgentError, LineRequest, RequestKind, Response, Sha256Hex};
+use mooring_keys::SshPublicKey;
 use mooring_model::iface::BsdName;
 use mooring_model::ipv4::PublicIpv4;
 use mooring_model::node::{NodeAddress, NodeLifecycle};
@@ -152,13 +156,24 @@ pub(crate) fn adopt(
             return Err(unexpected(Step::Bootstrap, RequestKind::Bootstrap, &reply));
         };
         let host = ssh_ed25519_pub(&host_pubkey).map_err(LocalError::Render)?;
-        files.pin_host_key(address.get(), host)?;
-        generation = pin_in_state(&store, args.node, generation, host, PlannedAction::Adopted)?;
+        // The VPS holds `host` from here and lets in only Mooring's keys.
+        // A pin that cannot be recorded leaves `--resume` checking the old
+        // key, so the failure carries the new one for `node repin`.
+        generation = files
+            .pin_host_key(address.get(), host)
+            .and_then(|()| {
+                pin_in_state(&store, args.node, generation, host, PlannedAction::Adopted)
+            })
+            .map_err(|source| LocalError::BootstrapKeyUnpinned {
+                node: args.node.clone(),
+                key: SshPublicKey::from(host),
+                source: Box::new(source),
+            })?;
         writeln!(
             out,
             "bootstrapped {}: new host key {} pinned",
             args.node,
-            mooring_keys::SshPublicKey::from(host).fingerprint()
+            SshPublicKey::from(host).fingerprint()
         )
         .map_err(output)?;
     }

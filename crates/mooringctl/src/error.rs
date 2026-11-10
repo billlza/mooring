@@ -18,7 +18,7 @@ use mooring_daemon_core::meter::MeterError;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_daemon_core::snapshot::SnapshotError;
 use mooring_export::{ExportError, ProfilesError};
-use mooring_keys::KeysError;
+use mooring_keys::{KeysError, SshPublicKey};
 use mooring_macsys::MacsysError;
 use mooring_model::dns::DnsName;
 use mooring_model::error::ModelError;
@@ -858,6 +858,24 @@ pub(crate) enum LocalError {
     /// ProxyCommand.
     #[error("cannot find this mooringctl's path")]
     CurrentExe(#[source] io::Error),
+    /// `Bootstrap` ran, so the VPS holds a new host key and lets in only
+    /// Mooring's keys, but that key could not be recorded as the node's
+    /// pin (the source says why): `--resume` would check the host against
+    /// the old one.
+    #[error(
+        "Bootstrap ran, so node {node}'s VPS now holds host key {} and lets in only Mooring's keys, but that key was not recorded as the node's pin: if the node is still planned, save `{}` to a file, pin it with `node repin {node} --host-key <file>`, then run `node adopt {node} --resume`; if it was cancelled, reinstall the VPS or delete it from the provider's console",
+        key.fingerprint(),
+        key.authorized_key()
+    )]
+    BootstrapKeyUnpinned {
+        /// The node.
+        node: NodeId,
+        /// The host key `Bootstrap` made.
+        key: SshPublicKey,
+        /// Why the pin was not recorded.
+        #[source]
+        source: Box<LocalError>,
+    },
     /// `node adopt` without `--resume` needs the operator's root key.
     #[error("give --root-identity, the key that logs in as root on the VPS now, or --resume")]
     RootIdentityMissing,

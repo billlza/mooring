@@ -1021,3 +1021,45 @@ fn parts_read_before_a_cancel_cannot_bring_the_node_back() {
     assert!(secrets.log.is_empty(), "{:?}", secrets.log);
     assert_eq!(state_bytes(&store), on_disk);
 }
+
+/// `user add` gives a new user credentials on every node it read, a
+/// planned one included, and a cancel since then keeps the generation. The
+/// model refuses the credentials on a node that is gone, before any of
+/// them is written, so the user is not added half-served.
+#[test]
+fn a_user_given_credentials_on_a_node_cancelled_since_is_refused_and_writes_nothing() {
+    let (_dir, store, mut secrets, state) = with_planned_lon1();
+    let generation = state.deployment.config_generation();
+    let newcomer = user(1, &[("lon1", 1)]);
+    let entries = entries_for(
+        &added_refs(&state.deployment, |parts| {
+            with_user(parts, newcomer.clone())
+        }),
+        2,
+    );
+    assert_eq!(entries.len(), 3, "the user's three credentials on lon1");
+    record_with_secrets(
+        &store,
+        &mut secrets,
+        generation,
+        Bookkeeping::PlanCancelled {
+            node: node_id("lon1"),
+        },
+    )
+    .unwrap();
+    secrets.log.clear();
+    let on_disk = state_bytes(&store);
+    let error = store_error(
+        update_config_with_secrets(&store, &mut secrets, generation, entries, |parts| {
+            Ok::<_, Infallible>(with_user(parts, newcomer.clone()))
+        })
+        .unwrap_err(),
+    );
+    assert!(
+        matches!(&error, StoreError::InvalidChange { source }
+            if *source == ModelError::UnknownNode { id: node_id("lon1") }),
+        "{error:?}"
+    );
+    assert!(secrets.log.is_empty(), "{:?}", secrets.log);
+    assert_eq!(state_bytes(&store), on_disk);
+}

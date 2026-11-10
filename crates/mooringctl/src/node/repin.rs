@@ -61,7 +61,7 @@ pub(crate) fn repin(
     if fs::symlink_metadata(NodeFiles::of(&support, id).dir()).is_ok() {
         writeln!(
             out,
-            "`node adopt {id}` ran on this Mac: if its Bootstrap ran and the VPS was not reinstalled since, keep the key Bootstrap made and run `node adopt {id} --resume`; after a reinstall, pin the reinstalled VPS's key and adopt it with --root-identity"
+            "`node adopt {id}` ran on this Mac: if its Bootstrap ran and the VPS was not reinstalled since, the only key to pin is the one Bootstrap made (adoption pins it itself, or says that it could not), and `node adopt {id} --resume` goes on from there; after a reinstall, pin the reinstalled VPS's key and adopt it with --root-identity"
         )
         .map_err(output)?;
     }

@@ -41,13 +41,13 @@ pub(crate) fn lon1_dir(harness: &Harness) -> PathBuf {
 }
 
 /// A fresh Ed25519 host key.
-fn new_host_key() -> Ed25519Pub {
+pub(crate) fn new_host_key() -> Ed25519Pub {
     let (_, public) = SshKeyPair::generate().unwrap().into_parts();
     Ed25519Pub::parse_ssh_authorized_key(&public.authorized_key()).unwrap()
 }
 
 /// Scripts an upload and a `Bootstrap` that makes `host`.
-fn script_bootstrap(harness: &Harness, host: &Ed25519Pub) {
+pub(crate) fn script_bootstrap(harness: &Harness, host: &Ed25519Pub) {
     harness.nodes.expect(
         Expected::Run {
             identity: "root_ed25519",
@@ -68,7 +68,7 @@ fn script_bootstrap(harness: &Harness, host: &Ed25519Pub) {
 }
 
 /// Runs `node adopt lon1` with the operator's root key.
-fn adopt(harness: &mut Harness) -> super::support::Outcome {
+pub(crate) fn adopt(harness: &mut Harness) -> super::support::Outcome {
     let agent = agent_file(harness);
     let root = root_key(harness);
     harness.run(&adopt_args(
@@ -752,7 +752,9 @@ fn cancelling_a_planned_node_lets_its_users_be_exported_without_an_apply() {
 
 /// Another command cancels the node while `node adopt` runs. A cancel
 /// keeps the generation, so adoption's compare-and-swap still passes: each
-/// of its writes finds the node gone instead, and changes nothing.
+/// of its writes finds the node gone instead, and changes nothing. The
+/// first of them, which records the key `Bootstrap` made, says that the
+/// VPS holds that key by then.
 #[test]
 fn an_adoption_whose_node_is_cancelled_meanwhile_stops_and_writes_nothing() {
     for (steps_before, after_bootstrap) in [(0, false), (4, true)] {
@@ -778,13 +780,23 @@ fn an_adoption_whose_node_is_cancelled_meanwhile_stops_and_writes_nothing() {
                 );
             }),
         ));
-        script_bootstrap(&harness, &new_host_key());
+        let bootstrapped = SshPublicKey::from(new_host_key());
+        script_bootstrap(&harness, &bootstrapped.key());
         if after_bootstrap {
             script_after_bootstrap(&harness, 13);
         }
         let outcome = adopt(&mut harness);
         assert_eq!(outcome.code, EXIT_LOCAL);
-        assert_eq!(outcome.stderr, "mooringctl: unknown node lon1\n");
+        let expected = if after_bootstrap {
+            "mooringctl: unknown node lon1\n".to_owned()
+        } else {
+            format!(
+                "mooringctl: Bootstrap ran, so node lon1's VPS now holds host key {} and lets in only Mooring's keys, but that key was not recorded as the node's pin: if the node is still planned, save `{}` to a file, pin it with `node repin lon1 --host-key <file>`, then run `node adopt lon1 --resume`; if it was cancelled, reinstall the VPS or delete it from the provider's console\n  caused by: unknown node lon1\n",
+                bootstrapped.fingerprint(),
+                bootstrapped.authorized_key()
+            )
+        };
+        assert_eq!(outcome.stderr, expected);
         assert!(
             !outcome.stdout.contains("adopted lon1"),
             "{}",
