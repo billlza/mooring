@@ -387,18 +387,22 @@ fn pin(
         candidate.lladdr
     )
     .map_err(output)?;
-    let existing =
-        read_router_pin(&dir).map_err(|error| CommandError::Local(LocalError::Store(error)))?;
-    let decision = decide_pin(existing.as_ref(), candidate.lladdr, interface, replace)?;
-    match decision {
-        PinDecision::AlreadyPinned => {
-            writeln!(out, "already pinned; nothing was written").map_err(output)?;
-            return Ok(());
-        }
-        // The identity does not change, so there is nothing to confirm.
-        PinDecision::RecordInterface => {}
-        PinDecision::Write if yes => {}
-        PinDecision::Write => match env
+    // What the pin on disk makes of the candidate, as it is when asked.
+    let decide = || -> Result<PinDecision, CommandError> {
+        let existing =
+            read_router_pin(&dir).map_err(|error| CommandError::Local(LocalError::Store(error)))?;
+        Ok(decide_pin(
+            existing.as_ref(),
+            candidate.lladdr,
+            interface,
+            replace,
+        )?)
+    };
+    let mut decision = decide()?;
+    // Only a new identity is confirmed: the address pinned already, with
+    // this interface or about to get it, changes none.
+    if decision == PinDecision::Write && !yes {
+        match env
             .console
             .confirm("Record this link-layer address as the M7's identity?")?
         {
@@ -407,7 +411,25 @@ fn pin(
             Answer::NoTerminal => {
                 return Err(LocalError::NotConfirmed(Unconfirmed::NoTerminal).into());
             }
-        },
+        }
+        // The answer may have waited, and the pin's write compares
+        // nothing: the pin is decided on again, as it is now. Another
+        // address that another `router pin` recorded meanwhile is replaced
+        // only with `--replace`, and the refusal says that it appeared
+        // while the question waited (`PinnedMeanwhile`); this address,
+        // recorded meanwhile, is pinned already, or gets this interface.
+        // The window that leaves is the instant between this read and the
+        // write.
+        decision = match decide() {
+            Err(CommandError::Local(LocalError::PinExists { pinned })) => {
+                return Err(LocalError::PinnedMeanwhile { pinned }.into());
+            }
+            decided => decided?,
+        };
+    }
+    if decision == PinDecision::AlreadyPinned {
+        writeln!(out, "already pinned; nothing was written").map_err(output)?;
+        return Ok(());
     }
     paths::create_support_dir(&dir)?;
     let pin = RouterPin {

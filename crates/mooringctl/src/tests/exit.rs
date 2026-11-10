@@ -13,9 +13,10 @@ use mooring_model::collections::NonEmpty;
 use mooring_model::exit::{EgressCheck, FlowCap, Pairing};
 use mooring_model::iface::{InterfaceSelector, MacAddr};
 use mooring_model::ipv4::CarrierPrefix;
-use mooring_model::{CalendarDate, CycleRule, DeploymentInit, PeriodDays};
+use mooring_model::{Bookkeeping, CalendarDate, CycleRule, DeploymentInit, PeriodDays};
+use mooring_store::Store;
 
-use super::support::{Harness, PINNED};
+use super::support::{Harness, PINNED, change_the_configuration_meanwhile, changed_since};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
 use crate::prompt::Answer;
@@ -198,6 +199,50 @@ fn init_refuses_an_existing_deployment_before_asking() {
     assert_eq!(state_bytes(&harness), before);
 }
 
+/// The answer may have waited. A deployment that another `exit init`
+/// created meanwhile is not replaced: the store refuses a second one under
+/// its lock, and the command says what it says before it asks.
+#[test]
+fn init_answered_after_another_created_the_deployment_creates_none() {
+    let mut harness = facing_the_m7();
+    let support = harness.support_dir();
+    harness.console.meanwhile = Some(Box::new(move || {
+        let theirs = DeploymentInit::pilot(
+            InterfaceSelector::GatewayLinkAddr {
+                gw_lladdr: MacAddr::from_bytes(PINNED).unwrap(),
+                subnet: "192.168.1.0/24".parse().unwrap(),
+            },
+            date("2026-11-01"),
+            FlowCap::new(512).unwrap(),
+        )
+        .unwrap();
+        Store::new(support).init(theirs).unwrap();
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&INIT);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: a deployment exists already ({}); `exit init` creates one only once\n",
+            store(&harness).state_path().display()
+        )
+    );
+    assert_eq!(
+        harness.console.asked,
+        ["Create the deployment with these values?"]
+    );
+    assert!(harness.console.meanwhile.is_none());
+    assert!(
+        !outcome.stdout.contains("created the deployment"),
+        "{}",
+        outcome.stdout
+    );
+    // The other command's deployment stands, with its flow cap.
+    let kept = store(&harness).load().unwrap().deployment;
+    assert_eq!(kept.exit().flow_cap, FlowCap::new(512).unwrap());
+}
+
 fn prefix(text: &str) -> CarrierPrefix {
     text.parse().unwrap()
 }
@@ -253,6 +298,96 @@ fn record_carrier_records_the_check_once_as_bookkeeping() {
     );
     assert_eq!(state_bytes(&harness), before);
     assert_eq!(harness.console.asked.len(), 1);
+}
+
+/// A carrier check that another `exit record-carrier` recorded while the
+/// question waited is not recorded over: the model refuses a second
+/// record, and replacing a check is a configuration change. The other
+/// command's check stands.
+#[test]
+fn a_carrier_check_recorded_while_the_question_waits_refuses_the_record() {
+    let deployment = fixture(|parts| parts.exit.egress_check = None);
+    let mut harness = harness_with(deployment.clone());
+    let support = harness.support_dir();
+    let theirs = EgressCheck {
+        carrier_prefixes: NonEmpty::new(prefix("92.40.0.0/16")),
+        pairing: Pairing::Paired,
+    };
+    let recorded = theirs.clone();
+    harness.console.meanwhile = Some(Box::new(move || {
+        let store = Store::new(support);
+        let generation = store.load().unwrap().deployment.config_generation();
+        store
+            .record(generation, Bookkeeping::CarrierRecorded { check: recorded })
+            .unwrap();
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&[
+        "exit",
+        "record-carrier",
+        "--prefix",
+        "31.120.0.0/14",
+        "--pairing",
+        "unpaired",
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: the state was not changed\n  caused by: the new or changed deployment is invalid\n  caused by: the exit's carrier check is recorded already; replacing it is a configuration change\n"
+    );
+    assert_eq!(harness.console.asked, ["Record this carrier check?"]);
+    assert!(harness.console.meanwhile.is_none());
+    assert!(
+        !outcome.stdout.contains("recorded the carrier check"),
+        "{}",
+        outcome.stdout
+    );
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.exit().egress_check, Some(theirs));
+    assert_eq!(after.config_generation(), deployment.config_generation());
+}
+
+/// A configuration change that another command made while the question
+/// waited refuses a replacement of the carrier check and a move of the
+/// billing cycles: each is one write for the generation its command read,
+/// and the store finds another.
+#[test]
+fn a_configuration_change_while_the_question_waits_refuses_a_replacement_and_a_new_anchor() {
+    let deployment = fixture(|_| {});
+    let read = deployment.config_generation().get();
+    let mut harness = harness_with(deployment.clone());
+    change_the_configuration_meanwhile(&mut harness);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&[
+        "exit",
+        "record-carrier",
+        "--prefix",
+        "31.94.0.0/16",
+        "--pairing",
+        "unpaired",
+        "--replace",
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stderr, changed_since(read));
+    assert_eq!(harness.console.asked, ["Replace the carrier check?"]);
+    assert!(harness.console.meanwhile.is_none());
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.exit().egress_check, deployment.exit().egress_check);
+    assert_eq!(after.config_generation().get(), read + 1);
+
+    let deployment = fixed_cycles("2026-10-28");
+    let read = deployment.config_generation().get();
+    let mut harness = harness_with(deployment.clone());
+    change_the_configuration_meanwhile(&mut harness);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["sim", "set-anchor", "2026-10-30"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stderr, changed_since(read));
+    assert_eq!(harness.console.asked, ["Move the billing cycles?"]);
+    assert!(harness.console.meanwhile.is_none());
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.exit().sim.cycle(), deployment.exit().sim.cycle());
+    assert_eq!(after.config_generation().get(), read + 1);
 }
 
 /// A new SIM's carrier check replaces the old one with `--replace`, as a

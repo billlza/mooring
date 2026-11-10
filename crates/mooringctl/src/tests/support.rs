@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::io::{self, Cursor, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
+use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -26,7 +27,8 @@ use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry, SecretMaterial, SecretRef};
 use mooring_model::time::UnixTime;
 use mooring_store::{
-    InMemorySecretStore, RouterPin, SecretOp, SecretStore, SecretStoreError, write_router_pin,
+    InMemorySecretStore, RouterPin, SecretOp, SecretStore, SecretStoreError, Store,
+    write_router_pin,
 };
 use socket2::{Domain, Protocol, Socket, Type};
 use tempfile::TempDir;
@@ -421,13 +423,44 @@ pub(crate) enum Answered {
 }
 
 /// What another command does while a scripted session runs
-/// ([`FakeNodes::meanwhile`]) or a question waits
+/// ([`FakeNodes::meanwhile`]), or a question or a line to type waits
 /// ([`FakeConsole::meanwhile`]).
 pub(crate) type Meanwhile = Box<dyn FnOnce() + Send>;
 
 /// What a command reports when the state it read is no longer the state
 /// once its question is answered (`LocalError::StateChangedSinceRead`).
 pub(crate) const MOVED: &str = "mooringctl: the state changed since this command read it, so it stopped before acting: run the command again\n";
+
+/// Has another command change the configuration while the next question
+/// waits, or the next line is typed: it raises the cap on active users to
+/// [`CAP_RAISED_MEANWHILE`], which bumps the generation and touches nothing
+/// a test's own command shows or writes.
+pub(crate) fn change_the_configuration_meanwhile(harness: &mut Harness) {
+    let support = harness.support_dir();
+    harness.console.meanwhile = Some(Box::new(move || {
+        let store = Store::new(support);
+        let generation = store.load().unwrap().deployment.config_generation();
+        store
+            .update_config(generation, |mut parts| {
+                parts.capacity.max_active_users = NonZeroU16::new(CAP_RAISED_MEANWHILE);
+                Ok::<_, std::convert::Infallible>(parts)
+            })
+            .unwrap();
+    }));
+}
+
+/// The cap [`change_the_configuration_meanwhile`] leaves.
+pub(crate) const CAP_RAISED_MEANWHILE: u16 = 40;
+
+/// What a command reports when the configuration it read at generation
+/// `read` has been changed once since, so that its own change is refused
+/// (`StoreError::GenerationConflict`).
+pub(crate) fn changed_since(read: u64) -> String {
+    format!(
+        "mooringctl: the state was not changed\n  caused by: config generation is {}, expected {read}; re-read the state and retry\n",
+        read + 1
+    )
+}
 
 /// What a command reports when its change is committed and keychain
 /// deletions failed after it (`LocalError::StateCommitted`).
@@ -588,7 +621,7 @@ pub(crate) struct FakeConsole {
     pub(crate) lines: VecDeque<Option<Vec<u8>>>,
     pub(crate) asked: Vec<String>,
     /// What another command does while the next question waits for its
-    /// answer; it runs once.
+    /// answer, or the next line to be typed; it runs once.
     pub(crate) meanwhile: Option<Meanwhile>,
 }
 
@@ -611,6 +644,9 @@ impl Console for FakeConsole {
 
     fn line(&mut self, prompt: &str, limit: usize) -> Result<Line, LocalError> {
         self.asked.push(prompt.to_owned());
+        if let Some(run) = self.meanwhile.take() {
+            run();
+        }
         Ok(match self.lines.pop_front().unwrap() {
             None => Line::NoTerminal,
             Some(line) if line.len() > limit => Line::Overlong,

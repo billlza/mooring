@@ -12,7 +12,11 @@
 //!
 //! An id may be planned again once `node cancel` has removed the earlier
 //! node with it, but not while that node's ssh directory is still there:
-//! the new node would inherit its operations key.
+//! the new node would inherit its operations key. The directory is looked
+//! for before the question and again once it is answered, since no write
+//! guards it: an adoption of the earlier node that had read the state
+//! before that node was cancelled makes the directory, and its key, after
+//! the cancel found none.
 
 use std::io::Write;
 use std::path::Path;
@@ -31,6 +35,21 @@ use crate::error::{CommandError, LocalError};
 use crate::exit::confirm;
 use crate::node::files::{NodeFiles, read_public_key};
 use crate::state::{load, output, state_change};
+
+/// `NodeFilesExist` while an earlier node of the id has left its ssh
+/// directory: the new node would reuse its operations key. `node cancel`
+/// removes it. Anything else at its path, or in it, is not that command's
+/// to remove, and is named as such (`NodeFileUnexpected`).
+fn refuse_an_earlier_nodes_files(files: &NodeFiles, id: &NodeId) -> Result<(), CommandError> {
+    if files.inspect()?.is_some() {
+        return Err(LocalError::NodeFilesExist {
+            path: files.dir().to_path_buf(),
+            node: id.clone(),
+        }
+        .into());
+    }
+    Ok(())
+}
 
 /// `node new`: a `Planned` node with its REALITY, tunnel and Hysteria2
 /// keys, its probe credentials and its one-time bootstrap key, the next
@@ -55,17 +74,7 @@ pub(crate) fn new(
         return Err(LocalError::NodeExists { node: id }.into());
     }
     let files = NodeFiles::of(&support, &id);
-    // An earlier node of the id left its ssh directory: the new node
-    // would reuse its operations key. `node cancel` removes it. Anything
-    // else at its path, or in it, is not that command's to remove, and is
-    // named here (`NodeFileUnexpected`).
-    if files.inspect()?.is_some() {
-        return Err(LocalError::NodeFilesExist {
-            path: files.dir().to_path_buf(),
-            node: id,
-        }
-        .into());
-    }
+    refuse_an_earlier_nodes_files(&files, &id)?;
     let host = read_public_key(host_key)?;
     let now = (env.clock)()?;
     let (reality_private, reality_public) = RealityKeyPair::generate()
@@ -184,6 +193,7 @@ pub(crate) fn new(
     )
     .map_err(output)?;
     confirm(env, yes, "Plan this node?")?;
+    refuse_an_earlier_nodes_files(&files, &id)?;
     let next = state
         .deployment
         .next_wg_index()
