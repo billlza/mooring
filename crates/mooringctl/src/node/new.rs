@@ -56,8 +56,10 @@ pub(crate) fn new(
     }
     let files = NodeFiles::of(&support, &id);
     // An earlier node of the id left its ssh directory: the new node
-    // would reuse its operations key.
-    if files.present()? {
+    // would reuse its operations key. `node cancel` removes it. Anything
+    // else at its path, or in it, is not that command's to remove, and is
+    // named here (`NodeFileUnexpected`).
+    if files.inspect()?.is_some() {
         return Err(LocalError::NodeFilesExist {
             path: files.dir().to_path_buf(),
             node: id,

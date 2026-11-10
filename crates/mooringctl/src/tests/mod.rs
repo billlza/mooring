@@ -8,6 +8,7 @@
 
 mod add;
 mod adopt;
+mod answered;
 mod app;
 mod apply;
 mod canary;

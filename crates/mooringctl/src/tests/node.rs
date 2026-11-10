@@ -1480,30 +1480,68 @@ fn plan(harness: &mut Harness, id: &str, host_key: &Path) -> super::support::Out
     ])
 }
 
-/// `node new` refuses an id whose ssh path is taken by anything, a link
-/// that leads nowhere included: the next adoption could not make its
-/// directory there.
+/// `node new` refuses an id whose ssh path is taken by anything, and says
+/// what frees it. A link there, one that leads nowhere included, or a
+/// directory that holds something Mooring does not keep, is named for the
+/// operator to move away, since `node cancel` would refuse it too. A
+/// directory of Mooring's own files is what an earlier node of the id
+/// left, which `node cancel` removes. Each step the refusals name leads to
+/// the next, and the node is planned at the end.
 #[test]
-fn new_refuses_an_id_whose_ssh_path_is_a_link_that_leads_nowhere() {
+fn new_names_what_is_in_the_way_of_an_ids_ssh_directory() {
     let (mut harness, _) = planned();
     let before = state_bytes(&harness);
     let refs = harness.secrets.refs();
     let ssh = harness.support_dir().join("ssh");
     fs::create_dir_all(&ssh).unwrap();
     let dir = ssh.join("ams1");
-    std::os::unix::fs::symlink(harness.home.path().join("gone"), &dir).unwrap();
     let (path, _) = host_key_file(&harness, "ams1.pub");
-    let outcome = plan(&mut harness, "ams1", &path);
-    assert_eq!(outcome.code, EXIT_LOCAL);
-    assert_eq!(
-        outcome.stderr,
+    let refused = |harness: &mut Harness, report: String| {
+        let outcome = plan(harness, "ams1", &path);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        assert_eq!(outcome.stderr, report);
+        assert_eq!(state_bytes(harness), before);
+        assert_eq!(harness.secrets.refs(), refs);
+    };
+    let not_moorings = |path: &Path| {
+        format!(
+            "mooringctl: {} is not what Mooring keeps for a node; move it away, then run the command again\n",
+            path.display()
+        )
+    };
+
+    std::os::unix::fs::symlink(harness.home.path().join("gone"), &dir).unwrap();
+    refused(&mut harness, not_moorings(&dir));
+    fs::remove_file(&dir).unwrap();
+
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("ops_ed25519"), b"an earlier node's key\n").unwrap();
+    let notes = dir.join("notes.txt");
+    fs::write(&notes, b"mine\n").unwrap();
+    refused(&mut harness, not_moorings(&notes));
+    fs::remove_file(&notes).unwrap();
+
+    refused(
+        &mut harness,
         format!(
             "mooringctl: {} exists already: an earlier node with this id left it; `node cancel ams1` removes the ssh files Mooring kept there, then plan the node again\n",
             dir.display()
-        )
+        ),
     );
-    assert_eq!(state_bytes(&harness), before);
-    assert_eq!(harness.secrets.refs(), refs);
+    let outcome = harness.run(&["node", "cancel", "ams1", "--yes"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(!dir.exists());
+
+    let outcome = plan(&mut harness, "ams1", &path);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        store(&harness)
+            .load()
+            .unwrap()
+            .deployment
+            .nodes()
+            .contains_key(&NodeId::parse("ams1").unwrap())
+    );
 }
 
 /// `node new` reads its host key as `node repin` does: a file with two

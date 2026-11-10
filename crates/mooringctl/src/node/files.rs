@@ -82,7 +82,9 @@ impl NodeFiles {
         self.dir.join(KNOWN_HOSTS)
     }
 
-    /// The one-time bootstrap key, present only while the node is adopted.
+    /// The one-time bootstrap key: an adoption writes it when it starts and
+    /// removes it when the node is adopted, and one it could not remove
+    /// then stays (`BootstrapKeyLeft`).
     pub(crate) fn bootstrap_key(&self) -> PathBuf {
         self.dir.join(BOOTSTRAP_KEY)
     }
@@ -194,7 +196,8 @@ impl NodeFiles {
     /// belongs, or any entry other than the operations key and its `.pub`,
     /// `known_hosts`, the bootstrap key, the `.partial` copies a
     /// replacement writes and the relay sockets, each of its own type, is
-    /// `NodeFileUnexpected`. Links are never followed.
+    /// `NodeFileUnexpected`. Links are never followed. `node new` reads the
+    /// same answer for what is in an id's way.
     pub(crate) fn inspect(&self) -> Result<Option<NodeDirListing>, LocalError> {
         let failed = |path: &Path| {
             let path = path.to_path_buf();

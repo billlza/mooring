@@ -472,33 +472,46 @@ fn bootstrap_key_file_cannot_be_removed(harness: &Harness) {
 }
 
 /// The node is adopted once the final record is committed. A bootstrap
-/// key file that cannot be removed then is reported as what was left, and
-/// the line that says the node is adopted is written all the same.
+/// key file that cannot be removed then is reported as what was left: the
+/// line that says the node is adopted is written all the same, and the
+/// file is still the failure when that line cannot be written.
 #[test]
 fn an_adoption_whose_key_file_stays_is_adopted_and_says_so() {
-    let (mut harness, _) = partially_adopted();
-    script_after_bootstrap(&harness, 13);
-    bootstrap_key_file_cannot_be_removed(&harness);
-    let agent = agent_file(&harness);
-    let outcome = harness.run(&adopt_args(agent.to_str().unwrap(), None));
-    assert_eq!(outcome.code, EXIT_LOCAL);
-    assert!(
-        outcome.stdout.contains("adopted lon1: Debian 13"),
-        "{}",
-        outcome.stdout
-    );
-    assert_eq!(
-        outcome.stderr,
-        format!(
-            "mooringctl: node lon1 is adopted, but its one-time bootstrap key could not be removed from {}: the VPS no longer accepts that key, so remove the file by hand\n  caused by: Operation not permitted (os error 1)\n",
-            lon1_dir(&harness).join("bootstrap_ed25519").display()
-        )
-    );
-    assert!(matches!(
-        lon1_lifecycle(&harness),
-        NodeLifecycle::Adopted { .. }
-    ));
-    assert!(harness.nodes.script.borrow().is_empty());
+    for output_fails in [false, true] {
+        let (mut harness, _) = partially_adopted();
+        script_after_bootstrap(&harness, 13);
+        bootstrap_key_file_cannot_be_removed(&harness);
+        let agent = agent_file(&harness);
+        let mut out = if output_fails {
+            FailingLog::at("adopted ")
+        } else {
+            FailingLog::at("no line holds this")
+        };
+        let mut err = Vec::new();
+        let code = harness.run_to(
+            &adopt_args(agent.to_str().unwrap(), None),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, EXIT_LOCAL);
+        assert_eq!(out.failed(), output_fails);
+        assert_eq!(
+            String::from_utf8_lossy(&out.kept).contains("adopted lon1: Debian 13"),
+            !output_fails
+        );
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            format!(
+                "mooringctl: node lon1 is adopted, but its one-time bootstrap key could not be removed from {}: the VPS no longer accepts that key, so remove the file by hand\n  caused by: Operation not permitted (os error 1)\n",
+                lon1_dir(&harness).join("bootstrap_ed25519").display()
+            )
+        );
+        assert!(matches!(
+            lon1_lifecycle(&harness),
+            NodeLifecycle::Adopted { .. }
+        ));
+        assert!(harness.nodes.script.borrow().is_empty());
+    }
 }
 
 /// When the keychain item and the file of the bootstrap key both stay,

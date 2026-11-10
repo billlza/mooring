@@ -32,11 +32,13 @@
 //! Both state writes find the node again under the lock and refuse when it
 //! is gone or past `Planned` (`node::planned`): a `node cancel` in between
 //! keeps the generation, so their compare-and-swap would not notice it.
-//! `Bootstrap` cannot be undone, so the state is read again when the
-//! question before it is answered and must be the one read
-//! (`state::unchanged`). Once the final write is committed the node is
-//! adopted, and a bootstrap key that cannot be removed then, its keychain
-//! item or its file, is what the command reports.
+//! `Bootstrap` cannot be undone, and the answer to the question before it
+//! may have waited. So when it comes, the state is read again and must be
+//! the one read (`state::unchanged`), and the interface is checked again
+//! and must still face the M7: the sessions bind to it as that check finds
+//! it. Once the final write is committed the node is adopted, and a
+//! bootstrap key that cannot be removed then, its keychain item or its
+//! file, is what the command reports.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -56,7 +58,7 @@ use mooring_store::{Store, update_config_with_secrets};
 use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::exit::confirm;
-use crate::node::dial::facing_the_m7;
+use crate::node::dial::{M7Egress, facing_the_m7};
 use crate::node::files::NodeFiles;
 use crate::node::planned::{PlannedAction, pin_in_state, planned, planned_mut};
 use crate::node::ssh::{Remote, SshTarget};
@@ -91,7 +93,7 @@ pub(crate) fn adopt(
     let state = load(&store)?;
     let node = planned(&state.deployment, args.node, PlannedAction::Adopted)?;
     let address = PublicIpv4::new(args.address).map_err(LocalError::NodeAddress)?;
-    let egress = facing_the_m7(env, args.interface)?;
+    let mut egress = facing_the_m7(env, args.interface)?;
     let agent = read_agent(args.agent)?;
     let agent_sha = Sha256Hex::from_bytes(*Sha256Digest::of(&agent).as_bytes());
     let files = NodeFiles::of(&support, args.node);
@@ -114,7 +116,7 @@ pub(crate) fn adopt(
     let bootstrap = files.write_bootstrap_key(args.node, seed)?;
     let mooringctl = std::env::current_exe().map_err(LocalError::CurrentExe)?;
     let links = env.nodes;
-    let target = |identity: &Path, remote: Remote| {
+    let target = |egress: M7Egress, identity: &Path, remote: Remote| {
         links.open(SshTarget {
             address,
             identity: identity.to_path_buf(),
@@ -142,13 +144,21 @@ pub(crate) fn adopt(
         .map_err(output)?;
         confirm(env, args.yes, "Hand this VPS to Mooring?")?;
         // `Bootstrap` cannot be undone, and the answer may have waited:
-        // the node must still be the planned one this command read.
+        // the node must still be the planned one this command read, and
+        // the interface must still face the M7. The sessions bind to the
+        // interface as this check finds it.
         unchanged(&store, &state.deployment)?;
+        egress = facing_the_m7(env, args.interface)?;
         let staged = format!("/root/.mooring-agent-{agent_sha}");
-        target(root_identity, Remote::Command(upload_command(&staged)))
-            .run(&agent)
-            .map_err(|error| step(Step::Upload, error))?;
+        target(
+            egress,
+            root_identity,
+            Remote::Command(upload_command(&staged)),
+        )
+        .run(&agent)
+        .map_err(|error| step(Step::Upload, error))?;
         let reply = target(
+            egress,
             root_identity,
             Remote::Command(format!(
                 "{staged} serve-ssh --role bootstrap; status=$?; rm -f {staged}; exit $status"
@@ -186,8 +196,8 @@ pub(crate) fn adopt(
         .map_err(output)?;
     }
     let ops_key = files.ops_key();
-    forced_command_active(target(&ops_key, Remote::Command("true".to_owned())).as_mut())?;
-    let mut agent_link = target(&ops_key, Remote::ForcedCommand);
+    forced_command_active(target(egress, &ops_key, Remote::Command("true".to_owned())).as_mut())?;
+    let mut agent_link = target(egress, &ops_key, Remote::ForcedCommand);
     let reply = agent_link
         .request(&LineRequest::Hello)
         .map_err(|error| step(Step::Hello, error))?;

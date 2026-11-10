@@ -277,6 +277,10 @@ impl RefusingPort {
 /// neighbour answers are scripted (the last one repeats), as are its IPv4
 /// addresses.
 pub(crate) struct FakeLink {
+    /// The indexes the name `lo0` resolves to, one for each lookup and the
+    /// last one for every lookup after it; with none, the loopback's own.
+    /// An index other than the loopback's needs its entry in `routes`.
+    pub(crate) indexes: RefCell<VecDeque<InterfaceIndex>>,
     pub(crate) gateway: Result<Ipv4Addr, MacsysError>,
     pub(crate) neighbours: RefCell<VecDeque<Result<[u8; 6], MacsysError>>>,
     pub(crate) neighbour_calls: Cell<usize>,
@@ -299,6 +303,7 @@ pub(crate) type Route = (Result<Ipv4Addr, MacsysError>, Result<[u8; 6], MacsysEr
 impl FakeLink {
     pub(crate) fn answering(neighbours: &[Result<[u8; 6], MacsysError>]) -> Self {
         Self {
+            indexes: RefCell::new(VecDeque::new()),
             gateway: Ok(Ipv4Addr::LOCALHOST),
             neighbours: RefCell::new(neighbours.iter().copied().collect()),
             neighbour_calls: Cell::new(0),
@@ -320,11 +325,15 @@ impl FakeLink {
 
 impl LinkLayer for FakeLink {
     fn interface_index(&self, name: &BsdName) -> Result<InterfaceIndex, MacsysError> {
-        if name.as_str() == "lo0" {
-            Ok(lo0())
-        } else {
-            Err(MacsysError::InterfaceAbsent)
+        if name.as_str() != "lo0" {
+            return Err(MacsysError::InterfaceAbsent);
         }
+        let mut scripted = self.indexes.borrow_mut();
+        Ok(match scripted.len() {
+            0 => lo0(),
+            1 => scripted[0],
+            _ => scripted.pop_front().unwrap(),
+        })
     }
 
     fn default_gateway(&self, index: InterfaceIndex) -> Result<Ipv4Addr, MacsysError> {
@@ -418,7 +427,7 @@ pub(crate) type Meanwhile = Box<dyn FnOnce() + Send>;
 
 /// What a command reports when the state it read is no longer the state
 /// once its question is answered (`LocalError::StateChangedSinceRead`).
-pub(crate) const MOVED: &str = "mooringctl: the state changed since this command read it, so the answer was not acted on: run the command again\n";
+pub(crate) const MOVED: &str = "mooringctl: the state changed since this command read it, so it stopped before acting: run the command again\n";
 
 /// What a command reports when its change is committed and keychain
 /// deletions failed after it (`LocalError::StateCommitted`).

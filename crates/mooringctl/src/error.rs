@@ -77,12 +77,13 @@ pub(crate) enum LocalError {
     /// state as it was.
     #[error("the state was not changed")]
     StateChange(#[source] Box<StoreError>),
-    /// The state is no longer the one the command read and described
-    /// before it asked: another command changed it while the question
-    /// waited (`state::unchanged`). The answer was about the state read,
-    /// so nothing was done on it.
+    /// The state is no longer the one the command read and described:
+    /// another command changed it meanwhile, as while a question waited
+    /// (`state::unchanged`). What was described, and answered if the
+    /// command asked, was about the state read, so the command stopped
+    /// before acting on it.
     #[error(
-        "the state changed since this command read it, so the answer was not acted on: run the command again"
+        "the state changed since this command read it, so it stopped before acting: run the command again"
     )]
     StateChangedSinceRead,
     /// The change is committed, but deleting the keychain items it no
@@ -803,7 +804,8 @@ pub(crate) enum LocalError {
     },
     /// `node new` found the ssh directory an earlier node with this id
     /// left, whose operations key the new node would otherwise inherit.
-    /// `node cancel` removes what a cancelled node left there.
+    /// It holds only what Mooring keeps there, which `node cancel` removes
+    /// (anything else is `NodeFileUnexpected`).
     #[error(
         "{} exists already: an earlier node with this id left it; `node cancel {node}` removes the ssh files Mooring kept there, then plan the node again",
         path.display()
@@ -814,10 +816,11 @@ pub(crate) enum LocalError {
         /// The directory.
         path: PathBuf,
     },
-    /// The node's ssh directory is not a directory, or holds something
-    /// Mooring does not keep there, which `node cancel` will not remove.
+    /// A node's ssh directory is not a directory, or holds something
+    /// Mooring does not keep there. `node cancel` will not remove it, and
+    /// `node new` will not plan a node beside it.
     #[error(
-        "{} is not what Mooring keeps for the node; move it away, then cancel the node again",
+        "{} is not what Mooring keeps for a node; move it away, then run the command again",
         path.display()
     )]
     NodeFileUnexpected {

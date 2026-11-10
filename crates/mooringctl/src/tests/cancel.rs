@@ -720,6 +720,28 @@ fn a_directory_made_while_the_question_waited_is_kept_and_named() {
     assert!(!dir.exists());
 }
 
+/// An empty directory made while the question waited holds nothing to
+/// examine, so it goes with the cancel: the id is free, and the closing
+/// line says so.
+#[test]
+fn an_empty_directory_made_while_the_question_waited_goes_with_the_cancel() {
+    let (mut harness, _) = planned();
+    let dir = lon1_dir(&harness);
+    assert!(!dir.exists());
+    let made = dir.clone();
+    harness.console.meanwhile = Some(Box::new(move || fs::create_dir_all(&made).unwrap()));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["node", "cancel", "lon1"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout.lines().last().unwrap(),
+        "cancelled node lon1: the configuration generation stays 2, so the cancel needs no `node apply`, and the id may be planned again"
+    );
+    assert!(harness.console.meanwhile.is_none());
+    assert!(!dir.exists());
+    assert!(harness.support_dir().join("ssh").is_dir());
+}
+
 /// What a cancel left behind after its commit is the failure reported even
 /// when its closing lines cannot be written: the keychain items, or the
 /// directory, not only that a write to standard output failed.
@@ -940,7 +962,7 @@ fn cancel_refuses_what_mooring_does_not_keep_for_the_node_before_asking() {
         assert_eq!(
             outcome.stderr,
             format!(
-                "mooringctl: {} is not what Mooring keeps for the node; move it away, then cancel the node again\n",
+                "mooringctl: {} is not what Mooring keeps for a node; move it away, then run the command again\n",
                 path.display()
             )
         );
@@ -1510,7 +1532,7 @@ fn a_cancel_answered_after_another_record_is_refused() {
 /// `partially_adopted()` after a cancel that committed and stopped there,
 /// as when its process ended before it deleted anything: the state holds
 /// no lon1, and the keychain items and `ssh/lon1/` are as they were.
-fn cancelled_and_stopped() -> Harness {
+pub(crate) fn cancelled_and_stopped() -> Harness {
     let (harness, _) = partially_adopted();
     cancel_and_stop(&harness);
     harness
@@ -1617,7 +1639,7 @@ fn files_left_by_a_cancel_are_removed_only_if_they_are_moorings_own() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: {} is not what Mooring keeps for the node; move it away, then cancel the node again\n",
+            "mooringctl: {} is not what Mooring keeps for a node; move it away, then run the command again\n",
             notes.display()
         )
     );
