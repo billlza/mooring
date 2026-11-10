@@ -1498,7 +1498,7 @@ fn new_refuses_an_id_whose_ssh_path_is_a_link_that_leads_nowhere() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: {} exists already: it holds the ssh files of an earlier node with this id; remove it, then plan the node again\n",
+            "mooringctl: {} exists already: an earlier node with this id left it; `node cancel ams1` removes the ssh files Mooring kept there, then plan the node again\n",
             dir.display()
         )
     );

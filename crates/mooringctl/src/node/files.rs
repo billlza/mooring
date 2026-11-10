@@ -226,6 +226,17 @@ impl NodeFiles {
             entries,
         }))
     }
+
+    /// The listing of a directory that was not there. Its
+    /// [`NodeDirListing::remove`] finds nothing to remove, unless a
+    /// directory was made since: an empty one goes, and one that holds
+    /// anything stays and is the failure, since nothing in it was examined.
+    pub(crate) fn absent(&self) -> NodeDirListing {
+        NodeDirListing {
+            dir: self.dir.clone(),
+            entries: Vec::new(),
+        }
+    }
 }
 
 /// Whether an entry `name` of type `kind` is one Mooring writes in a

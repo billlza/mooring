@@ -60,6 +60,7 @@ pub(crate) fn new(
     if files.present()? {
         return Err(LocalError::NodeFilesExist {
             path: files.dir().to_path_buf(),
+            node: id,
         }
         .into());
     }

@@ -612,7 +612,7 @@ fn a_cancel_whose_keychain_items_and_files_both_stay_names_both() {
     assert_eq!(
         report.next().unwrap(),
         format!(
-            "mooringctl: node lon1 is cancelled, but {} could not be removed (Directory not empty (os error 66)): remove it by hand, or `node new lon1` refuses; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
+            "mooringctl: node lon1 is cancelled, but {} could not be removed (Directory not empty (os error 66)); until it is removed, by `node cancel lon1` again or by hand, `node new lon1` refuses; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
             dir.display()
         )
     );
@@ -654,7 +654,7 @@ fn a_file_added_while_the_question_waited_keeps_the_directory_and_is_named() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: node lon1 is cancelled, but {} could not be removed; remove it by hand, or `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
+            "mooringctl: node lon1 is cancelled, but {} could not be removed; until it is removed, by `node cancel lon1` again or by hand, `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
             dir.display()
         )
     );
@@ -668,6 +668,50 @@ fn a_file_added_while_the_question_waited_keeps_the_directory_and_is_named() {
     );
     assert!(harness.secrets.is_empty());
     assert_eq!(names(&dir), ["added-since"]);
+}
+
+/// A directory that was not there when the cancel looked and is there when
+/// the answer comes, as when an adoption started in another terminal
+/// meanwhile, is not taken for gone. Nothing in it was examined, so it
+/// stays and is the failure, the closing line does not call the id free,
+/// and running the cancel again removes it after its own examination.
+#[test]
+fn a_directory_made_while_the_question_waited_is_kept_and_named() {
+    let (mut harness, _) = planned();
+    let dir = lon1_dir(&harness);
+    assert!(!dir.exists());
+    let made = dir.clone();
+    harness.console.meanwhile = Some(Box::new(move || {
+        fs::create_dir_all(&made).unwrap();
+        fs::write(made.join("ops_ed25519"), b"an adoption's key").unwrap();
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["node", "cancel", "lon1"]);
+    assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+    assert_eq!(
+        outcome.stdout.lines().last().unwrap(),
+        "cancelled node lon1: the configuration generation stays 2, so the cancel needs no `node apply`"
+    );
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: node lon1 is cancelled, but {} could not be removed; until it is removed, by `node cancel lon1` again or by hand, `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
+            dir.display()
+        )
+    );
+    assert!(
+        store(&harness)
+            .load()
+            .unwrap()
+            .deployment
+            .nodes()
+            .is_empty()
+    );
+    assert_eq!(names(&dir), ["ops_ed25519"]);
+
+    let outcome = harness.run(&["node", "cancel", "lon1", "--yes"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(!dir.exists());
 }
 
 /// What a cancel left behind after its commit is the failure reported even
@@ -709,7 +753,7 @@ fn a_cancel_whose_closing_line_cannot_be_written_still_reports_what_it_left() {
     assert_eq!(
         String::from_utf8(err).unwrap(),
         format!(
-            "mooringctl: node lon1 is cancelled, but {} could not be removed; remove it by hand, or `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
+            "mooringctl: node lon1 is cancelled, but {} could not be removed; until it is removed, by `node cancel lon1` again or by hand, `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
             dir.display()
         )
     );
@@ -816,7 +860,7 @@ fn node_files_that_cannot_be_removed_after_the_commit_are_named() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: node lon1 is cancelled, but {} could not be removed; remove it by hand, or `node new lon1` refuses\n  caused by: Permission denied (os error 13)\n",
+            "mooringctl: node lon1 is cancelled, but {} could not be removed; until it is removed, by `node cancel lon1` again or by hand, `node new lon1` refuses\n  caused by: Permission denied (os error 13)\n",
             dir.display()
         )
     );
@@ -845,7 +889,7 @@ fn node_files_that_cannot_be_removed_after_the_commit_are_named() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: {} exists already: it holds the ssh files of an earlier node with this id; remove it, then plan the node again\n",
+            "mooringctl: {} exists already: an earlier node with this id left it; `node cancel lon1` removes the ssh files Mooring kept there, then plan the node again\n",
             dir.display()
         )
     );
@@ -1331,7 +1375,14 @@ fn a_cancel_answered_after_another_change_is_refused() {
 /// no lon1, and the keychain items and `ssh/lon1/` are as they were.
 fn cancelled_and_stopped() -> Harness {
     let (harness, _) = partially_adopted();
-    let store = store(&harness);
+    cancel_and_stop(&harness);
+    harness
+}
+
+/// Commits lon1's cancel and stops there: the keychain items and the
+/// node's files stay.
+fn cancel_and_stop(harness: &Harness) {
+    let store = store(harness);
     let generation = store.load().unwrap().deployment.config_generation();
     let cancelled = record_with_secrets(
         &store,
@@ -1346,7 +1397,6 @@ fn cancelled_and_stopped() -> Harness {
         matches!(cancelled, Err(StoreError::SecretCleanup { .. })),
         "{cancelled:?}"
     );
-    harness
 }
 
 /// A cancel that committed and stopped before it removed the node's files
@@ -1446,12 +1496,61 @@ fn files_left_by_a_cancel_are_removed_only_if_they_are_moorings_own() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: node lon1 is cancelled, but {} could not be removed; remove it by hand, or `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
+            "mooringctl: node lon1 is cancelled, but {} could not be removed; until it is removed, by `node cancel lon1` again or by hand, `node new lon1` refuses\n  caused by: Directory not empty (os error 66)\n",
             dir.display()
         )
     );
     assert!(!outcome.stdout.contains("removed "), "{}", outcome.stdout);
     assert_eq!(names(&dir), ["added-since"]);
+}
+
+/// What the operator answered is what is done here too, where no
+/// compare-and-swap guards the files: the answer removes them only if the
+/// state still holds no node of the id when it comes. While the question
+/// waited, another terminal removed the files a cancel left and planned
+/// the id again (the state holds lon1 as it did before the cancel), and in
+/// the second round adopted it as far as its new operations key. The
+/// answer then removes nothing, and says why.
+#[test]
+fn an_id_planned_again_while_the_leftover_question_waited_keeps_its_files() {
+    for adopted_again in [false, true] {
+        let (mut harness, _) = partially_adopted();
+        let planned_again = state_bytes(&harness);
+        cancel_and_stop(&harness);
+        let dir = lon1_dir(&harness);
+        let (state, files, bytes) = (
+            store(&harness).state_path(),
+            dir.clone(),
+            planned_again.clone(),
+        );
+        harness.console.meanwhile = Some(Box::new(move || {
+            fs::remove_dir_all(&files).unwrap();
+            fs::write(state, bytes).unwrap();
+            if adopted_again {
+                fs::create_dir(&files).unwrap();
+                fs::write(files.join("ops_ed25519"), b"the new node's key").unwrap();
+            }
+        }));
+        harness.console.answers.push_back(Answer::Yes);
+        let outcome = harness.run(&["node", "cancel", "lon1"]);
+        assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+        assert_eq!(
+            outcome.stderr,
+            "mooringctl: node lon1 was planned again while the question waited: nothing was removed\n"
+        );
+        assert!(harness.console.meanwhile.is_none());
+        assert_eq!(harness.console.asked, ["Remove these files?"]);
+        assert!(!outcome.stdout.contains("removed "), "{}", outcome.stdout);
+        assert_eq!(state_bytes(&harness), planned_again);
+        if adopted_again {
+            assert_eq!(
+                contents(&dir),
+                [("ops_ed25519".to_owned(), b"the new node's key".to_vec())]
+            );
+        } else {
+            assert!(!dir.exists());
+        }
+    }
 }
 
 /// Output that fails while the leftover files are described removes

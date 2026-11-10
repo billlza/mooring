@@ -794,13 +794,24 @@ pub(crate) enum LocalError {
     },
     /// `node new` found the ssh directory an earlier node with this id
     /// left, whose operations key the new node would otherwise inherit.
+    /// `node cancel` removes what a cancelled node left there.
     #[error(
-        "{} exists already: it holds the ssh files of an earlier node with this id; remove it, then plan the node again",
+        "{} exists already: an earlier node with this id left it; `node cancel {node}` removes the ssh files Mooring kept there, then plan the node again",
         path.display()
     )]
     NodeFilesExist {
+        /// The id given.
+        node: NodeId,
         /// The directory.
         path: PathBuf,
+    },
+    /// `node cancel` asked whether to remove the files a cancelled node
+    /// left, and the id was in the state again when the answer came: what
+    /// is at the path then may be the new node's, so nothing was removed.
+    #[error("node {node} was planned again while the question waited: nothing was removed")]
+    NodePlannedMeanwhile {
+        /// The id given.
+        node: NodeId,
     },
     /// The node's ssh directory is not a directory, or holds something
     /// Mooring does not keep there, which `node cancel` will not remove.
@@ -815,7 +826,7 @@ pub(crate) enum LocalError {
     /// The cancel is committed, but the node's ssh directory could not be
     /// removed.
     #[error(
-        "node {node} is cancelled, but {} could not be removed; remove it by hand, or `node new {node}` refuses",
+        "node {node} is cancelled, but {} could not be removed; until it is removed, by `node cancel {node}` again or by hand, `node new {node}` refuses",
         dir.display()
     )]
     NodeFilesLeft {
@@ -831,7 +842,7 @@ pub(crate) enum LocalError {
     /// all of the keychain items the state stopped referencing could be
     /// removed.
     #[error(
-        "node {node} is cancelled, but {} could not be removed ({removal}): remove it by hand, or `node new {node}` refuses; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
+        "node {node} is cancelled, but {} could not be removed ({removal}); until it is removed, by `node cancel {node}` again or by hand, `node new {node}` refuses; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
         dir.display()
     )]
     NodeFilesAndSecretsLeft {

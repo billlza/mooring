@@ -19,7 +19,10 @@
 //! A cancel that stopped after its commit (the process ended there, or the
 //! write failed late) leaves the ssh directory, and `node new` refuses to
 //! plan over it. Run for an id the state does not hold, the command
-//! removes that directory, after the same inspection and a question.
+//! removes that directory, after the same inspection and a question. No
+//! compare-and-swap guards that removal, so it reads the state again once
+//! the question is answered, and removes nothing if the id is planned
+//! again by then.
 
 use std::io::{self, Write};
 
@@ -58,7 +61,7 @@ pub(crate) fn cancel(
     let node = match planned(deployment, id, PlannedAction::Cancelled) {
         Ok(node) => node,
         Err(LocalError::UnknownNode { node }) => {
-            return remove_leftover(env, out, &files, listing?, &node, yes);
+            return remove_leftover(env, out, &store, listing?, &node, yes);
         }
         Err(refusal) => return Err(refusal.into()),
     };
@@ -74,7 +77,10 @@ pub(crate) fn cancel(
             Err(LocalError::StateCommitted(failure)) => Some(failure),
             Err(error) => return Err(error.into()),
         };
-    let removed = found.map_or(Ok(()), NodeDirListing::remove);
+    // A directory that was not there before the question may be there now,
+    // made by an adoption started meanwhile: the removal fails on it, so
+    // `removed` says that nothing is at the path, not that nothing was.
+    let removed = found.unwrap_or_else(|| files.absent()).remove();
     // The cancel is committed. What it left behind is the failure to
     // report, whatever becomes of the lines that say it is done.
     let written = summarize(out, deployment, id, removed.is_ok()).map_err(output);
@@ -102,10 +108,16 @@ pub(crate) fn cancel(
 /// for the id are still there, a cancel committed and did not get to
 /// remove them: they are removed now, after a question, so that the id can
 /// be planned again. With no directory the node is unknown.
+///
+/// The question may wait, and nothing holds the directory meanwhile: once
+/// it is gone, by another run of this command or by hand, the id can be
+/// planned and adopted again, and the files at the path are then that
+/// node's. So the state is read again when the answer comes, and a node of
+/// the id in it keeps the files (`NodePlannedMeanwhile`).
 fn remove_leftover(
     env: &mut Env<'_>,
     out: &mut dyn Write,
-    files: &NodeFiles,
+    store: &Store,
     found: Option<NodeDirListing>,
     id: &NodeId,
     yes: bool,
@@ -121,15 +133,19 @@ fn remove_leftover(
     .map_err(output)?;
     stranded_note(out, id).map_err(output)?;
     confirm(env, yes, "Remove these files?")?;
+    if load(store)?.deployment.nodes().contains_key(id) {
+        return Err(LocalError::NodePlannedMeanwhile { node: id.clone() }.into());
+    }
+    let dir = found.dir().to_path_buf();
     found.remove().map_err(|source| LocalError::NodeFilesLeft {
         node: id.clone(),
-        dir: files.dir().to_path_buf(),
+        dir: dir.clone(),
         source,
     })?;
     writeln!(
         out,
         "removed {}: the id may be planned again",
-        files.dir().display()
+        dir.display()
     )
     .map_err(output)
 }
