@@ -6,6 +6,7 @@
 //! any failure; the error and its causes go to standard error.
 
 mod acceptance;
+mod agent;
 mod app;
 mod cargo;
 mod ci;
@@ -14,6 +15,7 @@ mod cli;
 mod deny_skips;
 mod engines;
 mod graph_check;
+mod install;
 mod kinds;
 #[cfg(test)]
 mod lint_tables;
@@ -96,6 +98,7 @@ fn run(invocation: Invocation) -> Result<(), XtaskError> {
         Command::Mooringctl => Ok(mooringctl::run(&cargo, mooringctl::MOORINGCTL, &mut out)?),
         Command::Fieldkit => Ok(mooringctl::run(&cargo, mooringctl::FIELDKIT, &mut out)?),
         Command::App => Ok(app::build(&cargo, &mut out)?),
+        Command::Install => Ok(install::run(&cargo, &mut out)?),
         Command::EnginesPins => Ok(engines::pins(cargo.workspace_root(), &mut out)?),
         Command::EnginesPrepare => Ok(engines::prepare(
             cargo.workspace_root(),

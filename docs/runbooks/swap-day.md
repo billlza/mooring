@@ -3,7 +3,7 @@
 
 This runbook is for the operator. It takes the pilot from "the 1pMobile SIM has arrived" to "users connect through it", and lists what must be in place before that day.
 
-The design is §7 (the plan and its cycles), §10.1 and §10.2 (the daemon, preflight, probes, latches), §13.2 (provisioning) and §15.6 (the M7). Every command runs from Terminal.app's own shell in the workspace root, with the signed `mooringctl` (`cargo xtask mooringctl` builds `./target/signed/mooringctl`; below it is written `mooringctl`). `en9` stands for the Mac's interface to the M7, the USB Ethernet adapter: check it with `ifconfig`, it is the one with the address `192.168.1.x`.
+The design is §7 (the plan and its cycles), §10.1 and §10.2 (the daemon, preflight, probes, latches), §13.2 (provisioning) and §15.6 (the M7). Every command runs from Terminal.app's own shell, with the installed app's `mooringctl` (`~/Applications/Mooring.app/Contents/MacOS/mooringctl`, installed in section 0.2; below it is written `mooringctl`), and in the workspace root: the `cargo` commands need it, and the `ops-local/` and `target/` paths below are relative to it. `en9` stands for the Mac's interface to the M7, the USB Ethernet adapter: check it with `ifconfig`, it is the one with the address `192.168.1.x`.
 
 What this build does not do yet: the Mac's report to the phone, and the alert notices. Neither is needed for traffic to flow. Per-user usage has been read since 2026-11-05 (design §10.5).
 
@@ -28,10 +28,11 @@ ditto ~/mooring-engines/out ~/Library/Application\ Support/Mooring/engines
 
 ```
 cargo xtask app
-open target/app/Mooring.app
+cargo xtask install
+open ~/Applications/Mooring.app
 ```
 
-Then **Start the Daemon at Login** from Mooring.app's menu, as in `console.md`, section 2 (on a Mac that ran the development agent before, stop that first, as that section says). While a daemon from an earlier build is registered, `cargo xtask app` refuses: choose **Stop the Daemon** first, and start it again from the new build; that first start fails, and once `launchctl` shows exit code 78, a second **Stop the Daemon** and **Start the Daemon at Login** runs it (`console.md`, section 1). `cargo xtask app` also builds `./target/signed/mooringctl`, the same bytes as the app's copy: use that one for every command below, so that the keys it makes in the keychain are the daemon's to read without asking. Until a deployment exists the daemon serves the router console; at its first poll after `exit init` it serves the exit instead. Install this build before `exit init`: a daemon built before the exit runtime stops when it finds a deployment.
+Then **Start the Daemon at Login** from Mooring.app's menu, as in `console.md`, section 2 (on a Mac that ran the development agent before, stop that first, as that section says). While a daemon is registered, `cargo xtask install` refuses: choose **Stop the Daemon** and quit the app first, and start the daemon again from the newly installed build; that first start fails, and once `launchctl` shows exit code 78, a second **Stop the Daemon** and **Start the Daemon at Login** runs it (`console.md`, section 1). The installed app carries `mooringctl`, the build the daemon runs: use that one for every command below, so that the keys it makes in the keychain are the daemon's to read without asking. Until a deployment exists the daemon serves the router console; at its first poll after `exit init` it serves the exit instead. Install this build before `exit init`: a daemon built before the exit runtime stops when it finds a deployment.
 
 ### 0.3 The deployment
 
