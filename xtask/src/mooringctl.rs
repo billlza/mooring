@@ -252,7 +252,18 @@ pub(crate) fn run(
     tool: Signed,
     out: &mut impl Write,
 ) -> Result<(), MooringctlError> {
-    sign_copy(std::env::consts::OS, tool, &mut System { cargo }, out)
+    run_on(std::env::consts::OS, cargo, tool, out)
+}
+
+/// [`run`] on a host whose `std::env::consts::OS` is `os`: `app` signs
+/// the CLI on the host it was itself given.
+pub(crate) fn run_on(
+    os: &'static str,
+    cargo: &Cargo,
+    tool: Signed,
+    out: &mut impl Write,
+) -> Result<(), MooringctlError> {
+    sign_copy(os, tool, &mut System { cargo }, out)
 }
 
 /// A path known to be absolute. Cargo reports absolute paths, so a relative

@@ -668,21 +668,23 @@ pub(crate) fn remove_tree(path: &Path) -> Result<(), AppError> {
 
 /// `cargo xtask app`.
 pub(crate) fn build(cargo: &Cargo, out: &mut impl Write) -> Result<(), AppError> {
-    require_macos("app", std::env::consts::OS)?;
-    build_with(&mut System, cargo, out)
+    build_with(&mut System, std::env::consts::OS, cargo, out)
 }
 
-/// [`build`] past the host check, with `programs` running every step but
-/// cargo's. A daemon that runs from the build's app, which this would
-/// replace, refuses the build before anything is built or signed
-/// (`DaemonRegistered`), and so does one that cannot be placed
-/// (`AgentUnplaced`); one that runs from the installed app is not in the
-/// way.
+/// [`build`] on a host whose `std::env::consts::OS` is `os`, with
+/// `programs` running every step but cargo's. Off macOS nothing is asked
+/// of cargo or of launchd (`NotMacos`). A daemon that runs from the
+/// build's app, which this would replace, refuses the build before
+/// anything is built or signed (`DaemonRegistered`), and so does one that
+/// cannot be placed (`AgentUnplaced`); one that runs from the installed
+/// app is not in the way.
 fn build_with(
     programs: &mut impl Programs,
+    os: &'static str,
     cargo: &Cargo,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
+    require_macos("app", os)?;
     let root = cargo.workspace_root().to_path_buf();
     let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
     let paths = AppPaths::new(&root, &target);
@@ -692,7 +694,7 @@ fn build_with(
             executable,
         }
     })?;
-    mooringctl::run(cargo, mooringctl::MOORINGCTL, out)?;
+    mooringctl::run_on(os, cargo, mooringctl::MOORINGCTL, out)?;
     let xcodegen = find_xcodegen(std::env::var_os("PATH"))?;
     assemble(programs, &root, &paths, &xcodegen, out)
 }
@@ -1596,7 +1598,7 @@ mod tests {
             let mut fake = Fake::default();
             script_daemon(&mut fake, daemon);
             let mut out = Vec::new();
-            let error = build_with(&mut fake, &cargo, &mut out).unwrap_err();
+            let error = build_with(&mut fake, "macos", &cargo, &mut out).unwrap_err();
             assert!(matches!(&error, AppError::Mooringctl(_)), "{error:?}");
             let steps: Vec<String> = fake.steps.iter().map(|(line, _)| line.clone()).collect();
             assert_eq!(steps, daemon_steps(daemon));
@@ -1606,7 +1608,7 @@ mod tests {
         let mut fake = Fake::default();
         script_daemon(&mut fake, Daemon::Running(&embedded));
         let mut out = Vec::new();
-        let error = build_with(&mut fake, &cargo, &mut out).unwrap_err();
+        let error = build_with(&mut fake, "macos", &cargo, &mut out).unwrap_err();
         assert!(
             matches!(&error, AppError::DaemonRegistered { service: named, executable } if *named == service() && *executable == embedded),
             "{error:?}"
@@ -1629,7 +1631,7 @@ mod tests {
 
         let mut fake = Fake::default();
         script_daemon(&mut fake, Daemon::Refused);
-        let error = build_with(&mut fake, &cargo, &mut Vec::new()).unwrap_err();
+        let error = build_with(&mut fake, "macos", &cargo, &mut Vec::new()).unwrap_err();
         assert!(
             matches!(&error, AppError::AgentUnplaced { service: named } if *named == service()),
             "{error:?}"
@@ -1641,11 +1643,38 @@ mod tests {
         let mut fake = Fake::default();
         fake.outputs.push_back(Ok(b"501\n".to_vec()));
         fake.outcomes.push_back((Some(5), Vec::new()));
-        let error = build_with(&mut fake, &cargo, &mut Vec::new()).unwrap_err();
+        let error = build_with(&mut fake, "macos", &cargo, &mut Vec::new()).unwrap_err();
         assert!(
             matches!(&error, AppError::AgentState { code: Some(5), .. }),
             "{error:?}"
         );
+    }
+
+    /// Off macOS the build stops before launchd or cargo is asked
+    /// anything. The host is the build's input, down to the CLI it signs,
+    /// so the test above finds the same on every system it runs on.
+    #[test]
+    fn a_build_off_macos_asks_nothing() {
+        let scratch = Scratch::new("app-off-macos");
+        let (root, paths, _) = built(&scratch);
+        let target = paths.app.parent().unwrap().parent().unwrap().to_path_buf();
+        let cargo = cargo_with_target(&scratch, &root, &target);
+        let mut fake = Fake::default();
+        let mut out = Vec::new();
+        let error = build_with(&mut fake, "linux", &cargo, &mut out).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                AppError::NotMacos {
+                    command: "app",
+                    os: "linux"
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(fake.steps.is_empty());
+        assert!(asked_of_cargo(&scratch).is_empty());
+        assert!(out.is_empty());
     }
 
     #[test]
