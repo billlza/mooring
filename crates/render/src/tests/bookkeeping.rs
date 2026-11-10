@@ -154,6 +154,33 @@ fn shutting_down_a_retiring_node_changes_no_bundle_and_no_export() {
     assert_eq!(exports, (2, 6));
 }
 
+/// Cancelling a planned node changes no bundle and no export that could be
+/// made: a planned node renders nothing, and an export of a user holding
+/// credentials on it is refused, so the cancel can only let one be made.
+#[test]
+fn cancelling_a_planned_node_changes_no_bundle_and_no_export() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let planned = edit(&fixture.deployment, |parts| {
+        // The first user holds credentials on lon1 alone, so its exports can
+        // be made before the cancel and are compared after it.
+        parts.users[0].per_node.remove(&node("ams1"));
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|candidate| candidate.id == node("ams1"))
+            .unwrap();
+        ams1.lifecycle = NodeLifecycle::Planned;
+    });
+    // The two users who hold credentials on the planned node export nothing
+    // before the cancel, and both formats after it drops them.
+    let exports = assert_neutral(
+        &fixture,
+        &planned,
+        Bookkeeping::PlanCancelled { node: node("ams1") },
+    );
+    assert_eq!(exports, (2, 6));
+}
+
 /// Recording an agreement changes no bundle and no export that could be
 /// made: it only lets the user's own export be made (decision F9).
 #[test]

@@ -100,7 +100,9 @@ pub struct AppliedConfig {
 
 /// A node's lifecycle (design §7, §13). It only moves forward
 /// ([`LifecycleStage::may_change_to`]): the store refuses a configuration
-/// change that moves a node back, or removes it.
+/// change that moves a node back, or removes it. Only the record
+/// [`crate::deployment::Bookkeeping::PlanCancelled`] removes a node, and
+/// only a planned one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum NodeLifecycle {
@@ -156,10 +158,13 @@ impl LifecycleStage {
     /// Whether a node's lifecycle may move from this stage to `next`: to
     /// the same stage or a later one, never back (design §7).
     /// Which later stage a command moves a node to is the command's
-    /// decision. A planned node may be cancelled straight to `Retired`, for
+    /// decision. An adopted node may be retired without an apply, for
     /// example, and only a `Bookkeeping::Applied` record moves a node into
-    /// `Applied`. A move back would make a node that has served look as if
-    /// it never had: the usage collector takes a node it sees planned or
+    /// `Applied`. A planned node is not cancelled to `Retired`: the usage
+    /// figures need records from every node past `Planned`
+    /// (`MissingLedger`), so `Bookkeeping::PlanCancelled` removes it
+    /// instead. A move back would make a node that has served look as if it
+    /// never had: the usage collector takes a node it sees planned or
     /// adopted to have counted no client's bytes yet.
     #[must_use]
     pub const fn may_change_to(self, next: Self) -> bool {

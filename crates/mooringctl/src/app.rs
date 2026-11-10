@@ -221,6 +221,14 @@ pub(crate) fn run(
                 yes,
             },
         ),
+        Command::Node(NodeCommand::Repin {
+            node,
+            host_key,
+            yes,
+        }) => crate::node::repin::repin(env, out, &node, &host_key, yes),
+        Command::Node(NodeCommand::Cancel { node, yes }) => {
+            crate::node::cancel::cancel(env, out, &node, yes)
+        }
         Command::Node(NodeCommand::Target(TargetCommand::Check {
             node,
             host,

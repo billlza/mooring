@@ -884,3 +884,140 @@ fn the_alert_topic_is_deleted_after_the_commit_that_leaves_no_channel_node() {
     assert_references_resolve(&none, &secrets);
     assert_eq!(store.load().unwrap(), none);
 }
+
+/// Cancelling planned lon1 is a record: it keeps the generation, removes
+/// the node, and deletes its nine secrets only once the state on disk no
+/// longer names them, before the lock is released. Nothing is written.
+#[test]
+fn a_cancelled_plans_secrets_are_deleted_only_after_the_state_stops_referencing_them() {
+    let (_dir, store, mut secrets, state) = with_planned_lon1();
+    let next = record_with_secrets(
+        &store,
+        &mut secrets,
+        state.deployment.config_generation(),
+        Bookkeeping::PlanCancelled {
+            node: node_id("lon1"),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        next.deployment.config_generation(),
+        state.deployment.config_generation()
+    );
+    assert!(next.deployment.nodes().is_empty());
+    assert_eq!(
+        next.deployment.next_wg_index(),
+        state.deployment.next_wg_index()
+    );
+    assert_eq!(store.load().unwrap(), next);
+    let deletes = secrets.ops(SecretOp::Delete);
+    let deleted: BTreeSet<SecretRef> = deletes.iter().map(|seen| seen.secret_ref.clone()).collect();
+    assert_eq!(deleted, planned_node_refs("lon1"));
+    assert_eq!(deletes.len(), deleted.len());
+    assert!(
+        deletes
+            .iter()
+            .all(|seen| !seen.referenced_on_disk && seen.lock_held),
+        "{deletes:?}"
+    );
+    assert!(secrets.ops(SecretOp::Put).is_empty());
+    assert!(secrets.inner.is_empty());
+}
+
+/// A cancel that is not a well-ordered record of a planned node writes and
+/// deletes nothing: a plain record (it would drop secrets), a stale
+/// generation, a node past `Planned`, an unknown node.
+#[test]
+fn a_refused_or_stale_cancel_writes_and_deletes_nothing() {
+    let (_dir, store, mut secrets, state) = with_planned_lon1();
+    let cancel = Bookkeeping::PlanCancelled {
+        node: node_id("lon1"),
+    };
+    let generation = state.deployment.config_generation();
+    let on_disk = state_bytes(&store);
+    let error = store.record(generation, cancel.clone()).unwrap_err();
+    assert!(
+        matches!(&error, StoreError::SecretRefsChanged { added, removed }
+            if added.is_empty() && *removed == planned_node_refs("lon1")),
+        "{error:?}"
+    );
+    assert_eq!(state_bytes(&store), on_disk);
+
+    let adopted_state =
+        update_config_with_secrets(&store, &mut secrets, generation, Vec::new(), |parts| {
+            Ok::<_, Infallible>(with_lifecycle(parts, "lon1", adopted([45, 67, 89, 10])))
+        })
+        .unwrap();
+    secrets.log.clear();
+    let on_disk = state_bytes(&store);
+    let stale = record_with_secrets(&store, &mut secrets, generation, cancel.clone()).unwrap_err();
+    assert_eq!(stale.kind(), StoreErrorKind::GenerationConflict);
+    let current = adopted_state.deployment.config_generation();
+    for (entry, refusal) in [
+        (
+            cancel,
+            ModelError::NodeNotPlanned {
+                node: node_id("lon1"),
+                stage: mooring_model::node::LifecycleStage::Adopted,
+            },
+        ),
+        (
+            Bookkeeping::PlanCancelled {
+                node: node_id("par1"),
+            },
+            ModelError::UnknownNode {
+                id: node_id("par1"),
+            },
+        ),
+    ] {
+        let error = record_with_secrets(&store, &mut secrets, current, entry).unwrap_err();
+        assert!(
+            matches!(&error, StoreError::InvalidChange { source } if *source == refusal),
+            "{error:?}"
+        );
+    }
+    assert!(secrets.log.is_empty(), "{:?}", secrets.log);
+    assert_eq!(state_bytes(&store), on_disk);
+}
+
+/// A cancel keeps the generation, so a writer that read the deployment
+/// before it still passes the compare-and-swap. Parts read before the
+/// cancel and written back would bring the node back with its secrets:
+/// both writes refuse that, because its references reappear.
+#[test]
+fn parts_read_before_a_cancel_cannot_bring_the_node_back() {
+    let (_dir, store, mut secrets, state) = with_planned_lon1();
+    let before = state.deployment.clone().into_parts();
+    let generation = state.deployment.config_generation();
+    record_with_secrets(
+        &store,
+        &mut secrets,
+        generation,
+        Bookkeeping::PlanCancelled {
+            node: node_id("lon1"),
+        },
+    )
+    .unwrap();
+    secrets.log.clear();
+    let on_disk = state_bytes(&store);
+    let error = store_error(
+        store
+            .update_config(generation, |_| Ok::<_, Infallible>(before.clone()))
+            .unwrap_err(),
+    );
+    assert!(
+        matches!(&error, StoreError::SecretRefsChanged { added, removed }
+            if *added == planned_node_refs("lon1") && removed.is_empty()),
+        "{error:?}"
+    );
+    let error = store_error(
+        update_config_with_secrets(&store, &mut secrets, generation, Vec::new(), |_| {
+            Ok::<_, Infallible>(before.clone())
+        })
+        .unwrap_err(),
+    );
+    assert_eq!(error.kind(), StoreErrorKind::SecretPlanMismatch);
+    assert!(secrets.log.is_empty(), "{:?}", secrets.log);
+    assert_eq!(state_bytes(&store), on_disk);
+}

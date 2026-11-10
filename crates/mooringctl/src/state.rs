@@ -35,10 +35,29 @@ pub(crate) fn output(error: io::Error) -> CommandError {
     CommandError::Local(LocalError::Output(error))
 }
 
+/// A store failure of a change: `StateCommitted` when the change is
+/// committed and only deleting the secrets it stopped referencing failed
+/// (`SecretCleanup`), `StateChange` when the state is as it was.
+pub(crate) fn store_failure(error: StoreError) -> LocalError {
+    match error {
+        StoreError::SecretCleanup { .. } => LocalError::StateCommitted(Box::new(error)),
+        other => LocalError::StateChange(Box::new(other)),
+    }
+}
+
 /// A change whose closure cannot refuse: only the store can fail it.
 pub(crate) fn state_change(error: ChangeError<Infallible>) -> LocalError {
     match error {
-        ChangeError::Store(error) => LocalError::StateChange(Box::new(error)),
+        ChangeError::Store(error) => store_failure(error),
         ChangeError::Refused(never) => match never {},
+    }
+}
+
+/// A change whose closure refuses with a [`LocalError`]: that refusal, or
+/// the store's failure.
+pub(crate) fn refused_change(error: ChangeError<LocalError>) -> LocalError {
+    match error {
+        ChangeError::Store(error) => store_failure(error),
+        ChangeError::Refused(refusal) => refusal,
     }
 }

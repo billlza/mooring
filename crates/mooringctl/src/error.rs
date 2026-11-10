@@ -33,6 +33,7 @@ use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadEr
 use crate::collected_usage::UsageFault;
 use crate::node::NodeError;
 use crate::node::adopt::Step;
+use crate::node::planned::PlannedAction;
 use crate::router::error::RouterError;
 
 /// A failure on the Mac rather than at the M7.
@@ -76,6 +77,13 @@ pub(crate) enum LocalError {
     /// state as it was.
     #[error("the state was not changed")]
     StateChange(#[source] Box<StoreError>),
+    /// The change is committed, but deleting the keychain items it no
+    /// longer references failed (`StoreError::SecretCleanup`): nothing
+    /// references them any more.
+    #[error(
+        "the change is committed, but some keychain items it no longer references could not be deleted; nothing uses them, and they can be deleted by hand"
+    )]
+    StateCommitted(#[source] Box<StoreError>),
     /// The label typed is not a valid local label.
     #[error("the label was not accepted")]
     Label(#[source] ModelError),
@@ -765,14 +773,58 @@ pub(crate) enum LocalError {
         #[source]
         source: io::Error,
     },
-    /// The host-key file does not hold one Ed25519 OpenSSH public key.
+    /// The host-key file does not hold exactly one Ed25519 OpenSSH public
+    /// key line: none, a malformed one, a second line, or more than one
+    /// line's worth of bytes.
     #[error(
-        "{} does not hold an Ed25519 host key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`)",
+        "{} does not hold exactly one Ed25519 host key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)",
         path.display()
     )]
     HostKey {
         /// The file.
         path: PathBuf,
+    },
+    /// The host-key path is not a regular file: a directory, a FIFO or a
+    /// device.
+    #[error("{} is not a regular file; give the host key's .pub file", path.display())]
+    HostKeyNotAFile {
+        /// The path.
+        path: PathBuf,
+    },
+    /// `node new` found the ssh directory an earlier node with this id
+    /// left, whose operations key the new node would otherwise inherit.
+    #[error(
+        "{} exists already: it holds the ssh files of an earlier node with this id; remove it, then plan the node again",
+        path.display()
+    )]
+    NodeFilesExist {
+        /// The directory.
+        path: PathBuf,
+    },
+    /// The node's ssh directory is not a directory, or holds something
+    /// Mooring does not keep there, which `node cancel` will not remove.
+    #[error(
+        "{} is not what Mooring keeps for the node; move it away, then cancel the node again",
+        path.display()
+    )]
+    NodeFileUnexpected {
+        /// The path.
+        path: PathBuf,
+    },
+    /// The cancel is committed, but the node's ssh directory could not be
+    /// removed.
+    #[error(
+        "node {node} is cancelled, but {} could not be removed; remove it by hand, or `node new {node}` refuses",
+        dir.display()
+    )]
+    NodeFilesLeft {
+        /// The cancelled node.
+        node: NodeId,
+        /// Its ssh directory.
+        dir: PathBuf,
+        /// The first removal that failed.
+        #[source]
+        source: io::Error,
     },
     /// The node's plan was refused by the model.
     #[error("the node's plan was not accepted")]
@@ -783,13 +835,15 @@ pub(crate) enum LocalError {
         /// The id given.
         node: NodeId,
     },
-    /// The node is not planned, so it cannot be adopted.
-    #[error("node {node} is {stage}; only a planned node is adopted")]
+    /// The node is not planned, so the command does not act on it.
+    #[error("node {node} is {stage}; only a planned node is {}", action.past())]
     NodeNotPlanned {
         /// The node.
         node: NodeId,
         /// Its stage.
         stage: LifecycleStage,
+        /// What the command does to a planned node.
+        action: PlannedAction,
     },
     /// A keychain item holds another kind of secret than its reference
     /// names.

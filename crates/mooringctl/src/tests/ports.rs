@@ -357,6 +357,7 @@ fn the_keychain_is_read_once_per_generation_and_a_locked_one_renders_nothing() {
         *keychain.lock().unwrap() = Refusals {
             get: status,
             put: None,
+            delete: None,
         };
     };
     let world = mooring_fixtures::two_nodes_three_users().unwrap();

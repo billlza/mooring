@@ -25,6 +25,10 @@
 //! the reboot is the operator's, and `Hello` checks the running system.
 //! A run that stopped after step 2 is resumed with `--resume`, which starts
 //! at step 3: the operator's root key no longer works then.
+//!
+//! Both state writes find the node again under the lock and refuse when it
+//! is gone or past `Planned` (`node::planned`): a `node cancel` in between
+//! keeps the generation, so their compare-and-swap would not notice it.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -34,9 +38,9 @@ use std::path::Path;
 use mooring_agent_proto::{AgentError, LineRequest, RequestKind, Response, Sha256Hex};
 use mooring_model::iface::BsdName;
 use mooring_model::ipv4::PublicIpv4;
-use mooring_model::node::{NodeAddress, NodeLifecycle, SshPin};
+use mooring_model::node::{NodeAddress, NodeLifecycle};
 use mooring_model::secret::{SecretKind, SecretMaterial, SecretRef};
-use mooring_model::{Ed25519Pub, NodeId, Sha256Digest};
+use mooring_model::{NodeId, Sha256Digest};
 use mooring_render::{adoption_site, ssh_ed25519_key, ssh_ed25519_pub};
 use mooring_store::{Store, update_config_with_secrets};
 
@@ -45,9 +49,10 @@ use crate::error::{CommandError, LocalError};
 use crate::exit::confirm;
 use crate::node::dial::facing_the_m7;
 use crate::node::files::NodeFiles;
+use crate::node::planned::{PlannedAction, pin_in_state, planned, planned_mut};
 use crate::node::ssh::{Remote, SshTarget};
 use crate::node::{NodeError, NodeSession};
-use crate::state::{load, output, state_change};
+use crate::state::{load, output, refused_change};
 
 /// The largest agent binary read, in bytes.
 const MAX_AGENT_BYTES: u64 = 64 * 1024 * 1024;
@@ -75,20 +80,7 @@ pub(crate) fn adopt(
     let support = support_dir(env)?;
     let store = Store::new(support.clone());
     let state = load(&store)?;
-    let node = state
-        .deployment
-        .nodes()
-        .get(args.node)
-        .ok_or_else(|| LocalError::UnknownNode {
-            node: args.node.clone(),
-        })?;
-    if node.lifecycle != NodeLifecycle::Planned {
-        return Err(LocalError::NodeNotPlanned {
-            node: args.node.clone(),
-            stage: node.lifecycle.stage(),
-        }
-        .into());
-    }
+    let node = planned(&state.deployment, args.node, PlannedAction::Adopted)?;
     let address = PublicIpv4::new(args.address).map_err(LocalError::NodeAddress)?;
     let egress = facing_the_m7(env, args.interface)?;
     let agent = read_agent(args.agent)?;
@@ -161,7 +153,7 @@ pub(crate) fn adopt(
         };
         let host = ssh_ed25519_pub(&host_pubkey).map_err(LocalError::Render)?;
         files.pin_host_key(address.get(), host)?;
-        generation = pin_in_state(&store, args.node, generation, host)?;
+        generation = pin_in_state(&store, args.node, generation, host, PlannedAction::Adopted)?;
         writeln!(
             out,
             "bootstrapped {}: new host key {} pinned",
@@ -192,15 +184,20 @@ pub(crate) fn adopt(
             &reply,
         ));
     }
-    update_config_with_secrets(&store, env.secrets, generation, Vec::new(), |mut parts| {
-        for candidate in &mut parts.nodes {
-            if candidate.id == *args.node {
-                candidate.lifecycle = NodeLifecycle::Adopted { site: site.clone() };
-            }
-        }
-        Ok(parts)
-    })
-    .map_err(state_change)?;
+    let recorded =
+        update_config_with_secrets(&store, env.secrets, generation, Vec::new(), |mut parts| {
+            planned_mut(&mut parts, args.node, PlannedAction::Adopted)?.lifecycle =
+                NodeLifecycle::Adopted { site: site.clone() };
+            Ok(parts)
+        })
+        .map_err(refused_change);
+    // A failed deletion of the bootstrap key's keychain item leaves the node
+    // adopted: its file goes all the same, and the failure is reported last.
+    let cleanup = match recorded {
+        Ok(_) => None,
+        Err(committed @ LocalError::StateCommitted(_)) => Some(committed),
+        Err(error) => return Err(error.into()),
+    };
     files.remove_bootstrap_key()?;
     writeln!(
         out,
@@ -215,7 +212,7 @@ pub(crate) fn adopt(
         args.node
     )
     .map_err(output)?;
-    Ok(())
+    cleanup.map_or(Ok(()), |committed| Err(committed.into()))
 }
 
 /// The adoption step a failure happened at.
@@ -285,27 +282,6 @@ pub(crate) fn read_agent(path: &Path) -> Result<Vec<u8>, LocalError> {
         });
     }
     Ok(bytes)
-}
-
-/// Records `host` as the planned node's pinned host key: the key the VPS
-/// has from now on. A configuration change; returns the new generation.
-fn pin_in_state(
-    store: &Store,
-    node: &NodeId,
-    generation: mooring_model::counters::ConfigGeneration,
-    host: Ed25519Pub,
-) -> Result<mooring_model::counters::ConfigGeneration, LocalError> {
-    let state = store
-        .update_config(generation, |mut parts| {
-            for candidate in &mut parts.nodes {
-                if candidate.id == *node {
-                    candidate.ssh = SshPin { host_ed25519: host };
-                }
-            }
-            Ok::<_, std::convert::Infallible>(parts)
-        })
-        .map_err(state_change)?;
-    Ok(state.deployment.config_generation())
 }
 
 /// Step 3: an empty request over the operations key must reach the agent,

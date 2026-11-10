@@ -7,11 +7,15 @@
 //! `/usr/bin/ssh` reads keys from files only, so these keys are files, not
 //! keychain items. Each ssh session's one-time relay socket is bound there
 //! too, so only the operator reaches it (`crate::node::dial::RelaySocket`).
+//! `node cancel` removes the directory once the state no longer names the
+//! node, so a node planned again under the id gets fresh keys
+//! ([`NodeFiles::inspect`]).
 
+use std::ffi::OsStr;
 use std::fs::{self, DirBuilder, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::net::Ipv4Addr;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use mooring_keys::{SshComment, SshKeyPair, SshPublicKey};
@@ -138,27 +142,155 @@ impl NodeFiles {
     }
 }
 
-/// The Ed25519 key of an OpenSSH public key line in `path`.
+/// What [`NodeFiles::inspect`] found in a node's directory before anything
+/// changed: the directory and each entry in it, every one Mooring's own.
+#[derive(Debug)]
+pub(crate) struct NodeDirListing {
+    dir: PathBuf,
+    entries: Vec<PathBuf>,
+}
+
+impl NodeFiles {
+    /// The directory's entries, for [`NodeDirListing::remove`] once the
+    /// state no longer names the node; `None` when there is no directory.
+    /// Nothing Mooring does not keep there is accepted, so the removal
+    /// takes only Mooring's own files: a link or a file where the directory
+    /// belongs, or any entry other than the operations key and its `.pub`,
+    /// `known_hosts`, the bootstrap key, the `.partial` copies a
+    /// replacement writes and the relay sockets, each of its own type, is
+    /// `NodeFileUnexpected`. Links are never followed.
+    pub(crate) fn inspect(&self) -> Result<Option<NodeDirListing>, LocalError> {
+        let failed = |path: &Path| {
+            let path = path.to_path_buf();
+            move |source| LocalError::NodeFile { path, source }
+        };
+        match fs::symlink_metadata(&self.dir) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(failed(&self.dir)(source)),
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(LocalError::NodeFileUnexpected {
+                    path: self.dir.clone(),
+                });
+            }
+            Ok(_) => {}
+        }
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(&self.dir).map_err(failed(&self.dir))? {
+            let entry = entry.map_err(failed(&self.dir))?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(failed(&path))?;
+            if !kept(&entry.file_name(), kind) {
+                return Err(LocalError::NodeFileUnexpected { path });
+            }
+            entries.push(path);
+        }
+        Ok(Some(NodeDirListing {
+            dir: self.dir.clone(),
+            entries,
+        }))
+    }
+}
+
+/// Whether an entry `name` of type `kind` is one Mooring writes in a
+/// node's directory.
+fn kept(name: &OsStr, kind: fs::FileType) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    match name {
+        "ops_ed25519"
+        | "ops_ed25519.pub"
+        | "known_hosts"
+        | "known_hosts.partial"
+        | "bootstrap_ed25519"
+        | "bootstrap_ed25519.partial" => kind.is_file(),
+        _ => name.starts_with("relay-") && name.ends_with(".sock") && kind.is_socket(),
+    }
+}
+
+impl NodeDirListing {
+    /// The directory.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Removes the entries found, then the directory, which must still be
+    /// one: a link put there since is not followed. An entry or a directory
+    /// gone already is fine. Every entry is tried; the first failure is
+    /// returned, and one added since keeps the directory, which is then
+    /// the failure.
+    pub(crate) fn remove(self) -> Result<(), io::Error> {
+        match fs::symlink_metadata(&self.dir) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(io::Error::from(io::ErrorKind::NotADirectory));
+            }
+            Ok(_) => {}
+        }
+        let mut first = None;
+        for entry in &self.entries {
+            match fs::remove_file(entry) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    first.get_or_insert(error);
+                }
+            }
+        }
+        match fs::remove_dir(&self.dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                first.get_or_insert(error);
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+}
+
+/// The Ed25519 key of the one OpenSSH public key line in `path`
+/// (`ssh-ed25519 <base64> [comment]`). The file is opened once, with
+/// `O_NONBLOCK` so a FIFO cannot hold the open, must be a regular file by
+/// its own descriptor (`HostKeyNotAFile`), and is read to at most
+/// [`MAX_PUBLIC_KEY_BYTES`]. Blank lines aside it must hold that one line,
+/// so a file with two keys never pins the first (`HostKey`).
 pub(crate) fn read_public_key(path: &Path) -> Result<Ed25519Pub, LocalError> {
     let read = |source| LocalError::HostKeyFile {
         path: path.to_path_buf(),
         source,
     };
-    if fs::metadata(path).map_err(read)?.len() > MAX_PUBLIC_KEY_BYTES {
-        return Err(LocalError::HostKey {
+    let malformed = || LocalError::HostKey {
+        path: path.to_path_buf(),
+    };
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(read)?;
+    if !file.metadata().map_err(read)?.file_type().is_file() {
+        return Err(LocalError::HostKeyNotAFile {
             path: path.to_path_buf(),
         });
     }
-    let text = fs::read_to_string(path).map_err(read)?;
-    let mut tokens = text.split_ascii_whitespace();
+    let mut bytes = Vec::new();
+    file.take(MAX_PUBLIC_KEY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(read)?;
+    if bytes.len() as u64 > MAX_PUBLIC_KEY_BYTES {
+        return Err(malformed());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| malformed())?;
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let (Some(line), None) = (lines.next(), lines.next()) else {
+        return Err(malformed());
+    };
+    let mut tokens = line.split_ascii_whitespace();
     match (tokens.next(), tokens.next()) {
-        (Some(kind), Some(blob)) => Ed25519Pub::parse_ssh_authorized_key(&format!("{kind} {blob}"))
-            .map_err(|_| LocalError::HostKey {
-                path: path.to_path_buf(),
-            }),
-        _ => Err(LocalError::HostKey {
-            path: path.to_path_buf(),
-        }),
+        (Some(kind), Some(blob)) => {
+            Ed25519Pub::parse_ssh_authorized_key(&format!("{kind} {blob}")).map_err(|_| malformed())
+        }
+        _ => Err(malformed()),
     }
 }
 

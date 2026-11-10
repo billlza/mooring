@@ -209,9 +209,9 @@ fn new_refuses_an_existing_id_a_bad_host_key_and_a_declined_answer() {
     for (content, why) in [
         (
             "ssh-rsa AAAAB3NzaC1yc2E root@lon1\n",
-            "does not hold an Ed25519 host key",
+            "does not hold exactly one Ed25519 host key",
         ),
-        ("", "does not hold an Ed25519 host key"),
+        ("", "does not hold exactly one Ed25519 host key"),
     ] {
         let bad = harness.home.path().join("bad.pub");
         fs::write(&bad, content).unwrap();
@@ -1458,7 +1458,9 @@ fn new_refuses_a_host_key_file_larger_than_one_line() {
     ]);
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert!(
-        outcome.stderr.contains("does not hold an Ed25519 host key"),
+        outcome
+            .stderr
+            .contains("does not hold exactly one Ed25519 host key"),
         "{}",
         outcome.stderr
     );

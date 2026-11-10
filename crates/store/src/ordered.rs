@@ -76,8 +76,9 @@ where
 /// Records progress that changes no rendered bundle and no export
 /// ([`Bookkeeping`], design §7), keeping the configuration generation, and
 /// deletes the secrets it stops referencing: a revoked user's credentials
-/// on a node that committed the revocation (§13.5 step 3), or a retired
-/// node's and its users' secrets (§13.4 step 3).
+/// on a node that committed the revocation (§13.5 step 3), a retired
+/// node's and its users' secrets (§13.4 step 3), or a cancelled plan's
+/// (§13.2).
 ///
 /// Under the exclusive state lock, if the generation is still `expected`:
 /// the record is applied (it never adds a secret reference; one that did

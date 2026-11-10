@@ -514,7 +514,8 @@ impl Entities<'_> {
             }
             match &user.status {
                 // A suspended user keeps its credentials, or holds none
-                // after the nodes it held them on were retired.
+                // after the nodes it held them on were retired or
+                // cancelled.
                 UserStatus::Active | UserStatus::Suspended { .. } => {}
                 UserStatus::RevokePending => {
                     if user.per_node.is_empty() {
@@ -618,6 +619,14 @@ impl Entities<'_> {
 ///   is still denied everywhere), and drops every user's credentials on it
 ///   and its alert channels: a retired node renders nothing, so no bundle
 ///   carries them any more.
+/// - `PlanCancelled` removes a planned node, with every user's credentials
+///   on it and its alert channels. A planned node renders nothing: no
+///   bundle or Mac config includes it, and an export of a user holding
+///   credentials on it is refused, as for a retiring node. It has served
+///   no client either, since `Apply` needs the node adopted. It is the only
+///   way a node leaves the deployment: the store refuses a configuration
+///   change that removes one (`NodeLifecycleEdited`). Its id may be planned
+///   again; its tunnel index is never reused.
 /// - `AgreementRecorded` records which revision of the user agreement a user
 ///   accepted. It is Mac-only and is never rendered, sent or exported; it
 ///   decides only whether `user export` refuses the user (decision F9,
@@ -650,6 +659,15 @@ pub enum Bookkeeping {
     /// credentials only there becomes `Revoked`, and the node's alert
     /// channels are dropped.
     RetirementShutDown {
+        /// The node.
+        node: NodeId,
+    },
+    /// The planned `node` was cancelled (`node cancel`, design §13.2): it
+    /// leaves the deployment with every user's credentials on it and its
+    /// alert channels, and a user pending revocation that held credentials
+    /// only there becomes `Revoked`. A node that is not planned is refused
+    /// (`NodeNotPlanned`).
+    PlanCancelled {
         /// The node.
         node: NodeId,
     },
@@ -737,13 +755,18 @@ impl Deployment {
                 retiring.lifecycle = NodeLifecycle::RetiredPendingProviderDeletion {
                     address: site.address,
                 };
-                for user in &mut parts.users {
-                    user.per_node.remove(&node);
-                    settle_revocation(user);
+                release_node(&mut parts, &node);
+            }
+            Bookkeeping::PlanCancelled { node } => {
+                let planned = node_mut(&mut parts, &node)?;
+                if planned.lifecycle != NodeLifecycle::Planned {
+                    return Err(ModelError::NodeNotPlanned {
+                        stage: planned.lifecycle.stage(),
+                        node,
+                    });
                 }
-                if let Some(alerting) = &mut parts.alerting {
-                    alerting.channels.remove(&node);
-                }
+                parts.nodes.retain(|candidate| candidate.id != node);
+                release_node(&mut parts, &node);
             }
             Bookkeeping::AgreementRecorded { user, record } => {
                 let user = parts
@@ -785,6 +808,20 @@ fn node_mut<'a>(parts: &'a mut DeploymentParts, id: &NodeId) -> Result<&'a mut N
         .iter_mut()
         .find(|node| node.id == *id)
         .ok_or_else(|| ModelError::UnknownNode { id: id.clone() })
+}
+
+/// Drops every user's credentials on `node` and its alert channels, for a
+/// node that renders nothing any more (`RetirementShutDown`,
+/// `PlanCancelled`); a user pending revocation that waited only on it is
+/// revoked.
+fn release_node(parts: &mut DeploymentParts, node: &NodeId) {
+    for user in &mut parts.users {
+        user.per_node.remove(node);
+        settle_revocation(user);
+    }
+    if let Some(alerting) = &mut parts.alerting {
+        alerting.channels.remove(node);
+    }
 }
 
 /// A user pending revocation with no node left to commit it is revoked.
@@ -2213,5 +2250,186 @@ mod tests {
         let user = &retired.users()[&user_id(1)];
         assert!(user.per_node.is_empty());
         assert_eq!(user.status, suspended(SuspendReason::Operator));
+    }
+
+    /// `two_node_parts` with lon1 planned and users holding credentials on
+    /// it in every way a user can: active (1, and 7 on lon1 alone),
+    /// suspended (2), pending revocation on lon1 alone (3), on ams1 alone
+    /// (4) or on both (5), and revoked (6).
+    fn with_lon1_planned() -> DeploymentParts {
+        let mut parts = two_node_parts();
+        parts.nodes[0].lifecycle = NodeLifecycle::Planned;
+        parts.users[1].status = suspended(SuspendReason::Operator);
+        let revoking = |mut user: User| {
+            user.status = UserStatus::RevokePending;
+            user
+        };
+        parts.users.push(revoking(user(3, &[("lon1", 3)])));
+        parts.users.push(revoking(user(4, &[("ams1", 4)])));
+        parts
+            .users
+            .push(revoking(user(5, &[("lon1", 5), ("ams1", 5)])));
+        let mut revoked = user(6, &[]);
+        revoked.status = UserStatus::Revoked;
+        parts.users.push(revoked);
+        parts.users.push(user(7, &[("lon1", 7)]));
+        parts
+    }
+
+    /// Cancelling planned lon1 removes it and every credential on it, keeps
+    /// the generation and the tunnel index, settles the revocations that
+    /// waited only on lon1, and drops exactly the secrets that name it.
+    #[test]
+    fn cancelling_a_planned_node_removes_it_and_every_credential_there() {
+        let planned = build(with_lon1_planned()).unwrap();
+        let cancelled = planned
+            .clone()
+            .record(Bookkeeping::PlanCancelled {
+                node: node_id("lon1"),
+            })
+            .unwrap();
+        let nodes: Vec<&str> = cancelled.nodes().keys().map(NodeId::as_str).collect();
+        assert_eq!(nodes, ["ams1"]);
+        assert_eq!(
+            cancelled.node(&node_id("ams1")),
+            planned.node(&node_id("ams1"))
+        );
+        assert_eq!(cancelled.config_generation(), planned.config_generation());
+        assert_eq!(cancelled.next_wg_index(), planned.next_wg_index());
+        for (n, held, status) in [
+            (1, &["ams1"][..], UserStatus::Active),
+            (2, &["ams1"][..], suspended(SuspendReason::Operator)),
+            (3, &[][..], UserStatus::Revoked),
+            (4, &["ams1"][..], UserStatus::RevokePending),
+            (5, &["ams1"][..], UserStatus::RevokePending),
+            (6, &[][..], UserStatus::Revoked),
+            (7, &[][..], UserStatus::Active),
+        ] {
+            let after = &cancelled.users()[&user_id(n)];
+            let nodes: Vec<&str> = after.per_node.keys().map(NodeId::as_str).collect();
+            assert_eq!(nodes, held, "user {n}");
+            assert_eq!(after.status, status, "user {n}");
+            assert_eq!(
+                after.per_node.get(&node_id("ams1")),
+                planned.users()[&user_id(n)].per_node.get(&node_id("ams1")),
+                "user {n}"
+            );
+        }
+        let (before, after) = (planned.required_secrets(), cancelled.required_secrets());
+        assert!(after.is_subset(&before));
+        let dropped: BTreeSet<SecretRef> = before.difference(&after).cloned().collect();
+        let naming_lon1: BTreeSet<SecretRef> = before
+            .iter()
+            .filter(|secret_ref| secret_ref.node().map(NodeId::as_str) == Some("lon1"))
+            .cloned()
+            .collect();
+        assert_eq!(dropped, naming_lon1);
+        assert!(dropped.contains(&SecretRef::NodeSshBootstrapPrivate(node_id("lon1"))));
+        let json = serde_json::to_string(&cancelled).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Deployment>(&json).unwrap(),
+            cancelled
+        );
+    }
+
+    /// Only a planned node is cancelled: a node at any other stage is
+    /// refused with its stage, and an unknown one too. The match names
+    /// every stage, so a new one must be decided here.
+    #[test]
+    fn only_a_planned_node_is_cancelled() {
+        let lon1 = node_id("lon1");
+        for &stage in LifecycleStage::ALL {
+            let lifecycle = match stage {
+                LifecycleStage::Planned => NodeLifecycle::Planned,
+                LifecycleStage::Adopted => NodeLifecycle::Adopted {
+                    site: site([45, 67, 89, 10]),
+                },
+                LifecycleStage::Applied => applied([45, 67, 89, 10], 1),
+                LifecycleStage::Retiring => NodeLifecycle::Retiring {
+                    site: site([45, 67, 89, 10]),
+                },
+                LifecycleStage::RetiredPendingProviderDeletion => {
+                    NodeLifecycle::RetiredPendingProviderDeletion {
+                        address: site([45, 67, 89, 10]).address,
+                    }
+                }
+                LifecycleStage::Retired => NodeLifecycle::Retired,
+            };
+            let mut parts = two_node_parts();
+            if !lifecycle.is_active() {
+                for user in &mut parts.users {
+                    user.per_node.remove(&lon1);
+                }
+            }
+            parts.nodes[0].lifecycle = lifecycle;
+            let cancelled = build(parts)
+                .unwrap()
+                .record(Bookkeeping::PlanCancelled { node: lon1.clone() });
+            if stage == LifecycleStage::Planned {
+                assert!(!cancelled.unwrap().nodes().contains_key(&lon1));
+            } else {
+                assert_eq!(
+                    cancelled,
+                    Err(ModelError::NodeNotPlanned {
+                        node: lon1.clone(),
+                        stage
+                    }),
+                    "{stage:?}"
+                );
+            }
+        }
+        assert_eq!(
+            build(two_node_parts())
+                .unwrap()
+                .record(Bookkeeping::PlanCancelled {
+                    node: node_id("par1"),
+                }),
+            Err(ModelError::UnknownNode {
+                id: node_id("par1")
+            })
+        );
+    }
+
+    /// Cancelling a planned node drops its alert channels and with them its
+    /// two checks. The topic stays while another node has channels and goes
+    /// with the last one; channels on other nodes, or none, stay as they
+    /// are.
+    #[test]
+    fn cancelling_a_planned_node_drops_its_alert_channels() {
+        let cancel = |alerting: Option<AlertSettings>| {
+            let mut parts = two_node_parts();
+            parts.nodes[0].lifecycle = NodeLifecycle::Planned;
+            parts.alerting = alerting;
+            let planned = build(parts).unwrap();
+            let cancelled = planned
+                .clone()
+                .record(Bookkeeping::PlanCancelled {
+                    node: node_id("lon1"),
+                })
+                .unwrap();
+            (planned, cancelled)
+        };
+        let (planned, both) = cancel(channels(&["lon1", "ams1"]));
+        assert_eq!(both.alerting(), channels(&["ams1"]).as_ref());
+        let refs = both.required_secrets();
+        for secret_ref in checks_of("lon1") {
+            assert!(planned.required_secrets().contains(&secret_ref));
+            assert!(!refs.contains(&secret_ref), "{secret_ref}");
+        }
+        for secret_ref in checks_of("ams1") {
+            assert!(refs.contains(&secret_ref), "{secret_ref}");
+        }
+        assert!(refs.contains(&SecretRef::AlertTopic));
+        let (planned, alone) = cancel(channels(&["lon1"]));
+        assert!(planned.required_secrets().contains(&SecretRef::AlertTopic));
+        assert_eq!(alone.alerting(), channels(&[]).as_ref());
+        assert!(!alone.required_secrets().contains(&SecretRef::AlertTopic));
+        let alerting = alone.alerting().unwrap();
+        assert_eq!(alerting.digest_zone, WallClockZone::EuropeLondon);
+        assert_eq!(alerting.digest_at, AlertSettings::pilot().digest_at);
+        for kept in [channels(&["ams1"]), channels(&[]), None] {
+            let (_, cancelled) = cancel(kept.clone());
+            assert_eq!(cancelled.alerting(), kept.as_ref());
+        }
     }
 }

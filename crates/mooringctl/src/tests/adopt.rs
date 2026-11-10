@@ -14,8 +14,11 @@ use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::SecretRef;
 use mooring_store::SecretStore;
 
-use super::node::{ADDRESS, adopt_args, agent_file, hello, planned, root_key};
-use super::support::{Answered, Expected, ExpectedRemote, Harness};
+use super::cancel::{lon1_dir, partially_adopted};
+use super::node::{
+    ADDRESS, adopt_args, agent_file, hello, planned, root_key, script_after_bootstrap,
+};
+use super::support::{Answered, Expected, ExpectedRemote, Harness, Refusals};
 use super::user::store;
 use crate::error::EXIT_LOCAL;
 use crate::node::NodeError;
@@ -181,7 +184,7 @@ fn a_host_that_ran_mooring_before_stops_the_adoption_at_bootstrap() {
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert_eq!(
         outcome.stderr,
-        "mooringctl: adoption stopped at Bootstrap\n  caused by: the agent refused the request\n  caused by: the host ran Mooring before (Usage at /var/lib/mooring/usage); Bootstrap changed nothing: copy the host key the node pins (/etc/ssh/ssh_host_ed25519_key and its .pub) off the VPS, reinstall it, put the key back (owned by root, mode 0600), restart ssh, and adopt it again\n"
+        "mooringctl: adoption stopped at Bootstrap\n  caused by: the agent refused the request\n  caused by: the host ran Mooring before (Usage at /var/lib/mooring/usage); Bootstrap changed nothing: reinstall the VPS, check its new host key's fingerprint on the provider's console, pin that key (node repin), and adopt it again\n"
     );
     assert!(harness.nodes.script.borrow().is_empty());
     let lon1 = NodeId::parse("lon1").unwrap();
@@ -244,4 +247,41 @@ fn an_unknown_node_or_an_unusable_agent_is_refused_before_any_session() {
     );
     assert!(harness.nodes.seen.borrow().is_empty());
     assert_eq!(lon1_lifecycle(&harness), NodeLifecycle::Planned);
+}
+
+/// The final record of an adoption drops the bootstrap key's keychain item;
+/// when that deletion fails, the node is adopted all the same: the key's
+/// file goes, the adoption is reported, and the failure says the change is
+/// committed rather than that nothing changed.
+#[test]
+fn an_adoption_whose_bootstrap_key_cannot_be_deleted_is_adopted_and_says_so() {
+    let (mut harness, _) = partially_adopted();
+    let bootstrap = SecretRef::NodeSshBootstrapPrivate(NodeId::parse("lon1").unwrap());
+    script_after_bootstrap(&harness, 13);
+    *harness.keychain.lock().unwrap() = Refusals {
+        delete: Some(-25_308),
+        ..Refusals::default()
+    };
+    let agent = agent_file(&harness);
+    let outcome = harness.run(&adopt_args(agent.to_str().unwrap(), None));
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome.stdout.contains("adopted lon1: Debian 13"),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(
+        outcome.stderr.lines().next().unwrap(),
+        "mooringctl: the change is committed, but some keychain items it no longer references could not be deleted; nothing uses them, and they can be deleted by hand"
+    );
+    assert!(matches!(
+        lon1_lifecycle(&harness),
+        NodeLifecycle::Adopted { .. }
+    ));
+    assert!(!lon1_dir(&harness).join("bootstrap_ed25519").exists());
+    assert!(
+        harness.secrets.get(&bootstrap).is_ok(),
+        "the refused deletion left it"
+    );
+    assert!(harness.nodes.script.borrow().is_empty());
 }

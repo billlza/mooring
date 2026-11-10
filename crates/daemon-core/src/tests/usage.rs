@@ -9,7 +9,7 @@ use mooring_agent_proto::{
 };
 use mooring_model::node::NodeLifecycle;
 use mooring_model::user::{SuspendReason, UserStatus};
-use mooring_model::{ModelError, NodeId, UnixTime, UserId};
+use mooring_model::{Bookkeeping, ModelError, NodeId, UnixTime, UserId};
 use proptest::prelude::*;
 
 use super::support::{
@@ -664,6 +664,41 @@ fn every_node_that_may_have_counted_traffic_needs_a_ledger() {
     });
     let report = aggregate(&planned, &[lon1(u1, u2, u3)], through).unwrap();
     assert_eq!(report.users[u1].cycle_by_node().unwrap().len(), 1);
+}
+
+/// A cancelled plan leaves the deployment (`Bookkeeping::PlanCancelled`),
+/// so it needs no ledger either, the figures are those of the deployment
+/// that still planned it, and a ledger for it is one for an unknown node.
+#[test]
+fn a_cancelled_plan_needs_no_ledger_and_changes_no_figure() {
+    let ids = user_ids();
+    let (u1, u2, u3) = (&ids[0], &ids[1], &ids[2]);
+    let through = at("2026-10-08", 10 * HOUR);
+    let planned = edited(|parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == node("ams1"))
+            .unwrap();
+        ams1.lifecycle = NodeLifecycle::Planned;
+    });
+    let cancelled = planned
+        .clone()
+        .record(Bookkeeping::PlanCancelled { node: node("ams1") })
+        .unwrap();
+    let report = aggregate(&cancelled, &[lon1(u1, u2, u3)], through).unwrap();
+    assert_eq!(
+        aggregate(&planned, &[lon1(u1, u2, u3)], through),
+        Ok(report)
+    );
+    assert_eq!(
+        aggregate(
+            &cancelled,
+            &[lon1(u1, u2, u3), nothing("ams1", through)],
+            through
+        ),
+        Err(UsageError::LedgerForUnknownNode { node: node("ams1") })
+    );
 }
 
 /// A node first served during a period is covered from then: nothing was

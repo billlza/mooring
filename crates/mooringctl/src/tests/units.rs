@@ -6,7 +6,7 @@
 
 use std::ffi::OsString;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser};
 use mooring_daemon_core::router::RouterUnavailableReason;
@@ -48,6 +48,37 @@ fn set_password_has_no_argv_secret() {
         &["mooringctl", "router", "set-password", "--stdin=x"],
     ] {
         assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+    }
+}
+
+/// `node cancel` takes a node id; `node repin` a node id and the host key
+/// file, which it needs. Anything else is clap's usage error.
+#[test]
+fn node_cancel_and_repin_take_a_node_and_repin_a_host_key_file() {
+    use crate::cli::{Command, NodeCommand};
+    let cancel = Cli::try_parse_from(["mooringctl", "node", "cancel", "lon1", "--yes"]).unwrap();
+    assert!(
+        matches!(&cancel.command, Command::Node(NodeCommand::Cancel { node, yes: true }) if node.as_str() == "lon1"),
+        "{:?}",
+        cancel.command
+    );
+    let repin = Cli::try_parse_from(["mooringctl", "node", "repin", "lon1", "--host-key", "k.pub"])
+        .unwrap();
+    assert!(
+        matches!(&repin.command, Command::Node(NodeCommand::Repin { node, host_key, yes: false })
+            if node.as_str() == "lon1" && host_key.as_path() == Path::new("k.pub")),
+        "{:?}",
+        repin.command
+    );
+    for args in [
+        &["mooringctl", "node", "cancel"][..],
+        &["mooringctl", "node", "cancel", "LON1"],
+        &["mooringctl", "node", "cancel", "lon1", "extra"],
+        &["mooringctl", "node", "repin", "lon1"],
+        &["mooringctl", "node", "repin", "--host-key", "k.pub"],
+    ] {
+        let error = Cli::try_parse_from(args).unwrap_err();
+        assert_eq!(error.exit_code(), i32::from(EXIT_USAGE), "{args:?}");
     }
 }
 

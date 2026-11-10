@@ -411,12 +411,19 @@ pub(crate) enum Answered {
     Replied(Result<Response, NodeError>),
 }
 
+/// What another command does while a scripted session runs
+/// ([`FakeNodes::meanwhile`]).
+pub(crate) type Meanwhile = Box<dyn FnOnce() + Send>;
+
 /// Nodes whose sessions follow a script, in order, recording each session's
 /// target and what was sent.
 #[derive(Default)]
 pub(crate) struct FakeNodes {
     pub(crate) script: RefCell<VecDeque<(Expected, Answered)>>,
     pub(crate) seen: RefCell<Vec<(SshTarget, Sent)>>,
+    /// Once this many more steps are answered, this runs once, before the
+    /// next step is answered.
+    pub(crate) meanwhile: RefCell<Option<(usize, Meanwhile)>>,
 }
 
 /// What a session sent.
@@ -434,6 +441,20 @@ impl FakeNodes {
     }
 
     fn next(&self, target: &SshTarget, sent: Sent) -> Answered {
+        let due = {
+            let mut meanwhile = self.meanwhile.borrow_mut();
+            match meanwhile.as_mut() {
+                Some((0, _)) => meanwhile.take(),
+                Some((steps, _)) => {
+                    *steps -= 1;
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some((_, run)) = due {
+            run();
+        }
         let (expected, answered) = self
             .script
             .borrow_mut()
@@ -631,11 +652,13 @@ impl Write for FailingLog {
 }
 
 /// What the fake keychain refuses, with the `OSStatus` the Security
-/// framework gives: every read (`get`) or every write (`put`).
+/// framework gives: every read (`get`), every write (`put`) or every
+/// deletion (`delete`).
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Refusals {
     pub(crate) get: Option<i32>,
     pub(crate) put: Option<i32>,
+    pub(crate) delete: Option<i32>,
 }
 
 /// The harness's secrets as a command sees them: its in-memory store, with
@@ -673,7 +696,13 @@ impl SecretStore for RefusingStore<'_> {
     }
 
     fn delete(&mut self, secret_ref: &SecretRef) -> Result<(), SecretStoreError> {
-        self.store.delete(secret_ref)
+        match self.refusals().delete {
+            Some(status) => Err(SecretStoreError::Keychain {
+                op: SecretOp::Delete,
+                status,
+            }),
+            None => self.store.delete(secret_ref),
+        }
     }
 }
 

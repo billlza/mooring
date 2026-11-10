@@ -11,8 +11,8 @@
 use std::collections::BTreeMap;
 
 use mooring_agent_proto::{Inbound, Resolution, Traffic, UsageMonth, UsageV1};
-use mooring_model::UnixTime;
 use mooring_model::node::{LifecycleStage, NodeLifecycle};
+use mooring_model::{Bookkeeping, UnixTime};
 
 use super::support::{
     at, deployment_billed_on, edited, email, node, series, traffic, user_ids, wire,
@@ -78,6 +78,11 @@ fn planned_then_applied() -> [UnixTime; 2] {
 /// lon1's history as stored.
 fn lon1(collected: &CollectedUsage) -> serde_json::Value {
     serde_json::to_value(collected).unwrap()["nodes"]["lon1"].clone()
+}
+
+/// ams1's history as stored.
+fn ams1(collected: &CollectedUsage) -> serde_json::Value {
+    serde_json::to_value(collected).unwrap()["nodes"]["ams1"].clone()
 }
 
 /// lon1's lifetime in the fixture's first user's history at `now`.
@@ -443,4 +448,45 @@ fn only_planned_and_adopted_nodes_are_sighted() {
         }
         assert!(collected.node(&node("ams1")).is_none(), "ams1 is applied");
     }
+}
+
+/// A cancelled plan changes no figure: the aggregate needs nothing from a
+/// node the deployment no longer holds. The sighting the cancelled node
+/// left is replaced when its id is planned again, since it holds nothing,
+/// and the prune drops it before that.
+#[test]
+fn a_cancelled_plan_changes_no_figure_and_its_id_is_sighted_afresh() {
+    let now = at("2026-12-15", 12 * 3600);
+    let planned = edited(|parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|held| held.id == node("ams1"))
+            .unwrap();
+        ams1.lifecycle = NodeLifecycle::Planned;
+    });
+    let cancelled = planned
+        .clone()
+        .record(Bookkeeping::PlanCancelled { node: node("ams1") })
+        .unwrap();
+    let mut collected = CollectedUsage::default();
+    collected.observe_unserved(node("lon1"), at("2026-10-28", 0));
+    let mut history = collected.node(&node("lon1")).unwrap().clone();
+    record_months(&mut history, "lon1", "2026-11", 2, now);
+    collected.set_node(node("lon1"), history);
+    collected.observe_unserved_nodes(&planned, at("2026-12-01", 0));
+    assert_eq!(ams1(&collected)["origin"], at("2026-12-01", 0).as_secs());
+    let report = collected.aggregate(&cancelled, now).unwrap();
+    assert_eq!(collected.aggregate(&planned, now).unwrap(), report);
+
+    let mut replanned = collected.clone();
+    replanned.observe_unserved_nodes(&planned, at("2026-12-10", 0));
+    assert_eq!(ams1(&replanned)["origin"], at("2026-12-10", 0).as_secs());
+
+    collected.prune(&cancelled, now).unwrap();
+    assert!(collected.node(&node("ams1")).is_none());
+    assert!(collected.node(&node("lon1")).is_some());
+    collected.observe_unserved_nodes(&planned, now);
+    assert_eq!(ams1(&collected)["origin"], now.as_secs());
+    assert_eq!(ams1(&collected)["lifetime_complete"], true);
 }

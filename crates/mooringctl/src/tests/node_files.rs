@@ -126,3 +126,106 @@ fn a_bootstrap_key_gone_already_is_fine_and_one_that_stays_is_an_error() {
         "{error:?}"
     );
 }
+
+/// A public key file holds one line of at most 4096 bytes, blank lines
+/// aside, in a regular file; bytes that are not UTF-8 hold no key.
+#[test]
+fn a_public_key_file_is_one_line_of_at_most_4096_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = host_key().ssh_authorized_key();
+    let padded = |total: usize| {
+        let line = format!("{key} ");
+        format!("{line}{}\n", "c".repeat(total - line.len() - 1))
+    };
+    for (name, text, holds) in [
+        (
+            "blank-lines.pub",
+            format!("\n  \n{key} root@lon1\n\n"),
+            true,
+        ),
+        ("at-the-limit.pub", padded(4096), true),
+        ("past-the-limit.pub", padded(4097), false),
+    ] {
+        let path = dir.path().join(name);
+        fs::write(&path, &text).unwrap();
+        let read = read_public_key(&path);
+        if holds {
+            assert_eq!(read.unwrap().ssh_authorized_key(), key, "{name}");
+        } else {
+            assert!(
+                matches!(&read, Err(LocalError::HostKey { path: named }) if *named == path),
+                "{name}: {read:?}"
+            );
+        }
+    }
+    let path = dir.path().join("not-utf8.pub");
+    let mut bytes = format!("{key} ").into_bytes();
+    bytes.extend_from_slice(&[0xff, 0xfe, b'\n']);
+    fs::write(&path, bytes).unwrap();
+    let read = read_public_key(&path);
+    assert!(
+        matches!(&read, Err(LocalError::HostKey { path: named }) if *named == path),
+        "{read:?}"
+    );
+}
+
+/// A node's directory is listed with Mooring's own files, every one, and
+/// removed with them, leaving `ssh/`; with no directory there is nothing.
+#[test]
+fn a_node_directory_is_listed_with_moorings_own_files_and_removed_with_them() {
+    let (support, files) = files();
+    assert!(files.inspect().unwrap().is_none());
+    files.create_dir().unwrap();
+    for name in [
+        "ops_ed25519",
+        "ops_ed25519.pub",
+        "known_hosts",
+        "known_hosts.partial",
+        "bootstrap_ed25519",
+        "bootstrap_ed25519.partial",
+    ] {
+        fs::write(files.dir().join(name), b"").unwrap();
+    }
+    let listing = files.inspect().unwrap().unwrap();
+    assert_eq!(listing.dir(), files.dir());
+    listing.remove().unwrap();
+    assert!(!files.dir().exists());
+    assert!(support.path().join("ssh").is_dir());
+}
+
+/// The removal follows no link put where the directory was, keeps an
+/// entry added since and with it the directory, and takes an entry or a
+/// directory removed already as gone.
+#[test]
+fn a_removal_follows_no_link_and_keeps_what_was_added_since() {
+    let (support, files) = files();
+    files.create_dir().unwrap();
+    fs::write(files.known_hosts(), b"pinned\n").unwrap();
+    let listing = files.inspect().unwrap().unwrap();
+    let moved = support.path().join("moved");
+    fs::rename(files.dir(), &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, files.dir()).unwrap();
+    let error = listing.remove().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+    assert_eq!(fs::read(moved.join("known_hosts")).unwrap(), b"pinned\n");
+    fs::remove_file(files.dir()).unwrap();
+    fs::rename(&moved, files.dir()).unwrap();
+
+    let listing = files.inspect().unwrap().unwrap();
+    let added = files.dir().join("ops_ed25519");
+    fs::write(&added, b"").unwrap();
+    let error = listing.remove().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::DirectoryNotEmpty);
+    assert!(!files.known_hosts().exists());
+    assert!(added.exists());
+
+    let listing = files.inspect().unwrap().unwrap();
+    fs::remove_file(&added).unwrap();
+    listing.remove().unwrap();
+    assert!(!files.dir().exists());
+
+    files.create_dir().unwrap();
+    let listing = files.inspect().unwrap().unwrap();
+    fs::remove_dir(files.dir()).unwrap();
+    listing.remove().unwrap();
+}
