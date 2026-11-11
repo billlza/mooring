@@ -263,9 +263,9 @@ fn evaluate_reads_the_paid_policy() {
     let usage = |served: u64| CycleUsage {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), NOW).unwrap(),
         through: NOW,
-        served: ids.iter().map(|id| (id.clone(), served)).collect(),
+        served: ids.iter().map(|id| (id.clone(), Some(served))).collect(),
     };
-    let actions = evaluate(&deployment, &paid, &usage(0), NOW).unwrap();
+    let actions = evaluate(&deployment, &paid, Some(&usage(0)), NOW).unwrap();
     let expected_first = UserAction {
         user: ids[0].clone(),
         action: PolicyAction::Suspend(mooring_model::SuspendReason::Expired),
@@ -275,7 +275,7 @@ fn evaluate_reads_the_paid_policy() {
         !actions.iter().any(|action| action.user == ids[1]),
         "{actions:?}"
     );
-    let over = evaluate(&deployment, &paid, &usage(100 * GB), NOW).unwrap();
+    let over = evaluate(&deployment, &paid, Some(&usage(100 * GB)), NOW).unwrap();
     assert!(
         over.contains(&UserAction {
             user: ids[1].clone(),
@@ -286,7 +286,7 @@ fn evaluate_reads_the_paid_policy() {
             }),
         })
     );
-    let near = evaluate(&deployment, &paid, &usage(80 * GB), NOW).unwrap();
+    let near = evaluate(&deployment, &paid, Some(&usage(80 * GB)), NOW).unwrap();
     assert!(near.contains(&UserAction {
         user: ids[1].clone(),
         action: PolicyAction::Warn(PolicyWarning::QuotaNear {
@@ -299,9 +299,9 @@ fn evaluate_reads_the_paid_policy() {
     let soon_usage = CycleUsage {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), soon).unwrap(),
         through: soon,
-        served: ids.iter().map(|id| (id.clone(), 0)).collect(),
+        served: ids.iter().map(|id| (id.clone(), Some(0))).collect(),
     };
-    let warned = evaluate(&deployment, &paid, &soon_usage, soon).unwrap();
+    let warned = evaluate(&deployment, &paid, Some(&soon_usage), soon).unwrap();
     assert!(warned.contains(&UserAction {
         user: ids[1].clone(),
         action: PolicyAction::Warn(PolicyWarning::ExpiresSoon {
@@ -347,9 +347,9 @@ fn a_dispute_never_suspends_the_user() {
     let usage = CycleUsage {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), two_days_on).unwrap(),
         through: two_days_on,
-        served: ids.iter().map(|id| (id.clone(), 0)).collect(),
+        served: ids.iter().map(|id| (id.clone(), Some(0))).collect(),
     };
-    let actions = evaluate(&deployment, &after, &usage, two_days_on).unwrap();
+    let actions = evaluate(&deployment, &after, Some(&usage), two_days_on).unwrap();
     assert!(
         !actions.iter().any(|action| action.user == ids[0]),
         "{actions:?}"

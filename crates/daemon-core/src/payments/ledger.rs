@@ -28,10 +28,10 @@
 //!   only while the operator rehearses ([`ApplyRefusal::TestMode`]), and its
 //!   grants count only while the rehearsal lasts ([`Entitlements`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mooring_model::date::SECS_PER_DAY;
-use mooring_model::{CalendarDate, UnixTime, User, UserId, UserStatus};
+use mooring_model::{CalendarDate, Deployment, UnixTime, User, UserId, UserStatus};
 use serde::{Deserialize, Serialize};
 
 use super::entitlement::{Entitlements, PaidPack, PaidPeriod};
@@ -337,6 +337,16 @@ pub struct Applied {
     pub events: Vec<LedgerEvent>,
 }
 
+/// What [`PaymentLedger::without_removed_users`] took out, by count: the
+/// daemon's log names no removed user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pruned {
+    /// The removed users whose orders went.
+    pub users: usize,
+    /// The orders that went.
+    pub orders: usize,
+}
+
 /// The payment ledger.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaymentLedger {
@@ -422,6 +432,52 @@ impl PaymentLedger {
     #[must_use]
     pub const fn orders(&self) -> &BTreeMap<OrderId, OrderRecord> {
         &self.orders
+    }
+
+    /// A copy without the orders of users removed from `deployment`, or
+    /// `None` when it has none (design §9.6; the agreement's clause 4: a
+    /// user's payment records go 13 months after the revocation, or at once
+    /// on the user's request). An order goes when the deployment no longer
+    /// holds its user and either keeps the user's bare id (a removal at the
+    /// user's request) or the ledger granted the order, or held it while
+    /// the user was being revoked or beyond the calendar: the user was the
+    /// deployment's then, so it has been removed since. An order held for
+    /// an id the deployment never held (`unknown_user`), or known only from
+    /// a refund or dispute, stays unless the id is kept: nothing tells it
+    /// apart from an order the portal sent for a user Mooring never had,
+    /// which the operator settles at Stripe. The cursor, the last pull and
+    /// the stop stay. Dropping an order forgets that it was granted, which
+    /// matters only if the portal sent it again, which it does only after
+    /// its journal was rewound (contract §5.1).
+    #[must_use]
+    pub fn without_removed_users(&self, deployment: &Deployment) -> Option<(Self, Pruned)> {
+        let removed = |record: &OrderRecord| {
+            let user = &record.terms.user;
+            !deployment.users().contains_key(user)
+                && (deployment.forgotten().contains_key(user)
+                    || record.grant.is_some_and(|grant| {
+                        grant.outcome
+                            != (GrantOutcome::Held {
+                                reason: HeldReason::UnknownUser,
+                            })
+                    }))
+        };
+        let gone: Vec<&OrderRecord> = self
+            .orders
+            .values()
+            .filter(|record| removed(record))
+            .collect();
+        if gone.is_empty() {
+            return None;
+        }
+        let users: BTreeSet<&UserId> = gone.iter().map(|record| &record.terms.user).collect();
+        let pruned = Pruned {
+            users: users.len(),
+            orders: gone.len(),
+        };
+        let mut next = self.clone();
+        next.orders.retain(|_, record| !removed(record));
+        Some((next, pruned))
     }
 
     /// A copy with `stop` in force (or none), and nothing else changed.

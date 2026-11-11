@@ -41,7 +41,7 @@ pub use feed::{
 pub use ids::{Currency, IdError, MAX_PLAN_ID_CHARS, ORDER_ID_CHARS, OrderId, PlanId};
 pub use ledger::{
     Applied, DisputeRecord, GrantOutcome, GrantRecord, HeldReason, LEDGER_VERSION, LedgerEvent,
-    MAX_LEDGER_BYTES, OrderRecord, PaymentLedger, RefundRecord, Stop, StopReason,
+    MAX_LEDGER_BYTES, OrderRecord, PaymentLedger, Pruned, RefundRecord, Stop, StopReason,
 };
 pub use settings::{
     ENTITLEMENTS_PATH, MAX_SETTINGS_BYTES, OriginError, PortalOrigin, PullSettings,

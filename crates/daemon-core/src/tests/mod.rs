@@ -6,10 +6,12 @@
 //! builders.
 
 mod alerts;
+mod apply;
 mod canary;
 mod collected_usage;
 mod control;
 mod exit;
+mod forgotten_usage;
 mod lifetime_origin;
 mod meter;
 mod netgear;

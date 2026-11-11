@@ -192,6 +192,14 @@ pub enum PolicyWarning {
         /// When.
         at: UnixTime,
     },
+    /// The user has a quota, but the cycle's usage of the user is unknown,
+    /// so the quota was not checked: neither read as within it nor acted
+    /// on (design §13.6). A node the Mac cannot reach makes every user's
+    /// unknown.
+    QuotaUnchecked {
+        /// The quota.
+        quota_bytes: u64,
+    },
 }
 
 /// What the daemon would do about one user.
@@ -355,6 +363,22 @@ fn quota_suspension_holds(
     Ok(since >= moment.cycle.starts_at())
 }
 
+/// Whether user `id`'s suspension for quota, made at `since`, still holds
+/// at `now` in `deployment`'s billing cycle (design §13.6, §15.3): the
+/// predicate the automatic quota counts with, made public for the apply
+/// job, which resumes exactly the suspensions for quota it does not hold,
+/// so that a suspension for quota is always either counted or due for
+/// resume. A suspension made after `now` is `QuotaSuspensionAfterNow`,
+/// neither held nor lapsed; a cycle outside the calendar is `Model`.
+pub fn quota_suspension_holds_at(
+    deployment: &Deployment,
+    id: &UserId,
+    since: UnixTime,
+    now: UnixTime,
+) -> Result<bool, PolicyError> {
+    quota_suspension_holds(id, since, Moment::of(deployment, now)?)
+}
+
 /// One user's share of the served budget: `budget_bytes × 1000 × percent /
 /// (factor × 100 × sharing)`, rounded down, in one step so that only the
 /// final division rounds. `sharing` is at least 1 (the caller has checked
@@ -444,7 +468,8 @@ pub const fn paid_quota(bytes: NonZeroU64) -> UserQuota {
 }
 
 /// The actions due for `deployment`'s users at `now`, given the cycle's
-/// `usage` and what their paid orders gave (`paid`).
+/// `usage` (`None` when no usage report could be made) and what their paid
+/// orders gave (`paid`).
 ///
 /// Only active users are evaluated, each against their
 /// [`effective_policy`] (the automatic quota of the cycle `now` is in is
@@ -461,27 +486,33 @@ pub const fn paid_quota(bytes: NonZeroU64) -> UserQuota {
 /// `usage` must be for the cycle `now` is in (`UsageForOtherCycle`) and
 /// must not run past `now` (`UsageAfterNow`); every active user with a
 /// quota, their own or the automatic one, needs a usage entry
-/// (`UsageMissing`), and absent usage is never read as zero. With an
+/// (`UsageMissing`), and absent usage is never read as zero. A user whose
+/// entry is unknown, or every user when there is no `usage`, gets no quota
+/// action and the warning `QuotaUnchecked` instead, so that what does not
+/// need the usage (an expiry) is still carried out (design §13.6: a node
+/// the Mac cannot reach makes the report unavailable). With an
 /// `AutoQuotaPolicy`, a suspension for quota made after `now` is
 /// `QuotaSuspensionAfterNow` ([`automatic_quota`]).
 pub fn evaluate(
     deployment: &Deployment,
     paid: &Entitlements,
-    usage: &CycleUsage,
+    usage: Option<&CycleUsage>,
     now: UnixTime,
 ) -> Result<Vec<UserAction>, PolicyError> {
     let moment = Moment::of(deployment, now)?;
-    if usage.cycle != moment.cycle {
-        return Err(PolicyError::UsageForOtherCycle {
-            usage_cycle: usage.cycle.start(),
-            current_cycle: moment.cycle.start(),
-        });
-    }
-    if usage.through > now {
-        return Err(PolicyError::UsageAfterNow {
-            through: usage.through,
-            now,
-        });
+    if let Some(usage) = usage {
+        if usage.cycle != moment.cycle {
+            return Err(PolicyError::UsageForOtherCycle {
+                usage_cycle: usage.cycle.start(),
+                current_cycle: moment.cycle.start(),
+            });
+        }
+        if usage.through > now {
+            return Err(PolicyError::UsageAfterNow {
+                through: usage.through,
+                now,
+            });
+        }
     }
     let automatic = cycle_quota(deployment, moment)?;
     let mut actions = Vec::new();
@@ -491,15 +522,17 @@ pub fn evaluate(
         }
         let policy = effective_policy(user, automatic, paid, moment.cycle, now);
         let effective = policy.quota;
-        let quota = match effective {
-            None => QuotaState::NoQuota,
-            Some(_) => {
-                let used = *usage
-                    .served
-                    .get(id)
-                    .ok_or_else(|| PolicyError::UsageMissing { user: id.clone() })?;
-                QuotaState::of(effective, used)
-            }
+        let quota = match (effective, usage) {
+            (None, _) => QuotaState::NoQuota,
+            (Some(_), None) => QuotaState::without_usage(effective),
+            (Some(_), Some(usage)) => match usage
+                .served
+                .get(id)
+                .ok_or_else(|| PolicyError::UsageMissing { user: id.clone() })?
+            {
+                Some(used) => QuotaState::of(effective, *used),
+                None => QuotaState::without_usage(effective),
+            },
         };
         let suspend_on_quota = effective.is_some_and(|quota| quota.action == QuotaAction::Suspend);
         let expiry = ExpiryState::of(policy.expires_at, now);
@@ -534,9 +567,10 @@ pub fn evaluate(
                 used_bytes,
                 quota_bytes,
             }),
-            QuotaState::NoQuota
-            | QuotaState::Within { .. }
-            | QuotaState::UsageUnavailable { .. } => None,
+            QuotaState::UsageUnavailable { quota_bytes } => {
+                Some(PolicyWarning::QuotaUnchecked { quota_bytes })
+            }
+            QuotaState::NoQuota | QuotaState::Within { .. } => None,
         };
         let expiry_warning = match expiry {
             ExpiryState::Expires { at, .. }
@@ -573,6 +607,9 @@ pub fn user_alerts(users: &BTreeMap<UserId, User>, actions: &[UserAction]) -> Ve
             | PolicyAction::Suspend(SuspendReason::QuotaExceeded { .. }) => &mut over,
             PolicyAction::Warn(PolicyWarning::ExpiresSoon { .. }) => &mut expiring,
             PolicyAction::Suspend(SuspendReason::Expired) => &mut expired,
+            // A quota not checked raises no alert of its own: the usage
+            // view says why the usage is unavailable.
+            PolicyAction::Warn(PolicyWarning::QuotaUnchecked { .. }) => continue,
             // `evaluate` never proposes these reasons; they are operator
             // decisions.
             PolicyAction::Suspend(SuspendReason::Operator | SuspendReason::AbuseReview) => continue,

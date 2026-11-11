@@ -20,6 +20,7 @@ use crate::payments::{FeedError, FeedPage, OrderId};
 mod feed;
 mod ledger;
 mod policy;
+mod retention;
 mod settings;
 
 /// The contract's `pilot.json`: six entries of all three kinds, in

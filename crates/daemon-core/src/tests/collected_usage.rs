@@ -38,7 +38,7 @@ fn empty_other(history: &mut CollectedUsage, now: UnixTime) {
     history.set_node(node("ams1"), other);
 }
 
-fn today_history() -> (CollectedUsage, UnixTime) {
+pub(super) fn today_history() -> (CollectedUsage, UnixTime) {
     let now = at("2026-11-05", 12 * 3600);
     let user = &user_ids()[0];
     let mut lon = NodeUsageHistory::default();
@@ -246,7 +246,8 @@ fn a_lost_split_across_the_bill_day_is_unknown_but_the_month_is_known() {
     assert_eq!(row.cycle_shares(), None);
     assert_eq!(row.month(), Some(traffic(40, 60)));
     assert_eq!(row.today(), Some(traffic(15, 15)));
-    assert!(report.cycle_usage().is_none());
+    // The quota input says the figure is unknown, never zero.
+    assert_eq!(report.cycle_usage().served[user], None);
     let bytes = serde_json::to_vec(row).unwrap();
     assert_eq!(serde_json::from_slice::<UserUsage>(&bytes).unwrap(), *row);
     let mut mixed = serde_json::to_value(row).unwrap();

@@ -212,11 +212,16 @@ fn each_period_counts_exactly_the_bins_that_start_in_it() {
         )])
     );
     // The quota input is the cycle's served bytes per user.
-    let cycle = report.cycle_usage().unwrap();
+    let cycle = report.cycle_usage();
     assert_eq!(cycle.cycle, report.periods.cycle);
     assert_eq!(cycle.through, through);
-    assert_eq!(cycle.served[u1], 493);
-    assert_eq!(cycle.served[u3], 18);
+    assert_eq!(cycle.served[u1], Some(493));
+    assert_eq!(cycle.served[u3], Some(18));
+    assert_eq!(
+        cycle.served.len(),
+        report.users.len(),
+        "every user is covered"
+    );
 }
 
 #[test]
