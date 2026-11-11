@@ -77,6 +77,24 @@ pub(crate) enum Command {
     /// the router pin records, and serve the console's status on the
     /// control socket. It logs to ~/Library/Logs/Mooring/daemon.log.
     Daemon,
+    /// The nightly apply job: suspend the users whose expiry or quota says
+    /// so, resume the lapsed suspensions the cap on active users leaves
+    /// room for, remove users revoked 13 months ago, then apply every node
+    /// behind the deployment's generation. launchd runs `--pending` every
+    /// hour; it logs to ~/Library/Logs/Mooring/apply.log, by counts.
+    #[command(group(clap::ArgGroup::new("when").required(true).args(["pending", "now"])))]
+    Apply {
+        /// Run only between 19:15 and 19:45 UTC (03:15 to 03:45 Beijing
+        /// time), as launchd's hourly firing does; outside it, do nothing.
+        #[arg(long)]
+        pending: bool,
+        /// Run at once, whatever the time.
+        #[arg(long)]
+        now: bool,
+        /// Print the outcome as one JSON line instead of a report.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// A user command.

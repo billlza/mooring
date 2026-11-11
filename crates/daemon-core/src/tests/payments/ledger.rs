@@ -49,14 +49,14 @@ fn a_rehearsal_grants_the_pilot_golden() {
                 user: id("pilotusera"),
                 outcome: period(now, now + 30 * DAY),
                 livemode: false,
-                suspended: false,
+                suspended: None,
             },
             LedgerEvent::Granted {
                 order: order(B),
                 user: id("pilotuserb"),
                 outcome: period(now, now + 30 * DAY),
                 livemode: false,
-                suspended: false,
+                suspended: None,
             },
             LedgerEvent::Refunded {
                 order: order(A),
@@ -70,7 +70,7 @@ fn a_rehearsal_grants_the_pilot_golden() {
                 user: id("pilotuserb"),
                 outcome: period(now + 30 * DAY, now + 60 * DAY),
                 livemode: false,
-                suspended: false,
+                suspended: None,
             },
             LedgerEvent::Disputed {
                 order: order(A),
@@ -427,7 +427,7 @@ fn grants_for_unknown_or_revoked_users_are_held() {
                 user: id("pilotuserd"),
                 outcome: period(now, now + 30 * DAY),
                 livemode: true,
-                suspended: true
+                suspended: Some(SuspendReason::Expired)
             },
         ]
     );
@@ -549,7 +549,7 @@ fn a_rehearsal_never_moves_real_time() {
             user: id("pilotuserb"),
             outcome: period(later, later + 30 * DAY),
             livemode: true,
-            suspended: false,
+            suspended: None,
         }
     );
     let off = applied.ledger.entitlements(false);

@@ -11,6 +11,7 @@ mod adopt;
 mod answered;
 mod app;
 mod apply;
+mod apply_job;
 mod canary;
 mod cancel;
 mod capture;

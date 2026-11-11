@@ -7,7 +7,8 @@ use mooring_daemon_core::payments::{
     FeedPage, GrantOutcome, HeldReason, LedgerEvent, OrderId, PaymentLedger, PortalOrigin,
     PullSettings, Stop, StopReason,
 };
-use mooring_model::{UnixTime, UserId};
+use mooring_model::user::SuspendReason;
+use mooring_model::{CalendarDate, UnixTime, UserId};
 use serde_json::{Value, json};
 
 use super::super::support::NOW;
@@ -230,7 +231,7 @@ fn every_event_has_its_line() {
                     until: UnixTime::from_secs(NOW + 86_400),
                 },
                 true,
-                false,
+                None,
             ),
             format!(
                 "payment: order {order} granted user {user} service from {} until {}",
@@ -239,9 +240,33 @@ fn every_event_has_its_line() {
             ),
         ),
         (
-            granted(GrantOutcome::Pack, false, true),
+            granted(GrantOutcome::Pack, false, Some(SuspendReason::Operator)),
             format!(
                 "payment: order {order} granted user {user} a traffic pack for this billing cycle (rehearsal, Stripe test mode); the user is suspended, and only the operator resumes them"
+            ),
+        ),
+        (
+            granted(GrantOutcome::Pack, true, Some(SuspendReason::AbuseReview)),
+            format!(
+                "payment: order {order} granted user {user} a traffic pack for this billing cycle; the user is suspended, and only the operator resumes them"
+            ),
+        ),
+        (
+            granted(GrantOutcome::Pack, true, Some(SuspendReason::Expired)),
+            format!(
+                "payment: order {order} granted user {user} a traffic pack for this billing cycle; the user is suspended at expiry, and the nightly apply job resumes them once their paid time covers it, while the cap on active users leaves room"
+            ),
+        ),
+        (
+            granted(
+                GrantOutcome::Pack,
+                true,
+                Some(SuspendReason::QuotaExceeded {
+                    cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
+                }),
+            ),
+            format!(
+                "payment: order {order} granted user {user} a traffic pack for this billing cycle; the user is suspended for quota until the next billing cycle, when the nightly apply job resumes them"
             ),
         ),
         (
@@ -250,7 +275,7 @@ fn every_event_has_its_line() {
                     reason: HeldReason::BeyondCalendar,
                 },
                 true,
-                false,
+                None,
             ),
             format!("payment: order {order} granted user {user} nothing (beyond_calendar)"),
         ),

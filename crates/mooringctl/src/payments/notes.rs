@@ -6,6 +6,7 @@
 
 use mooring_daemon_core::payments::{GrantOutcome, LedgerEvent};
 use mooring_model::UnixTime;
+use mooring_model::user::SuspendReason;
 
 use crate::router::output::utc_stamp;
 
@@ -37,10 +38,17 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
             } else {
                 " (rehearsal, Stripe test mode)"
             };
-            let suspended = if *suspended {
-                "; the user is suspended, and only the operator resumes them"
-            } else {
-                ""
+            let suspended = match suspended {
+                None => "",
+                Some(SuspendReason::Expired) => {
+                    "; the user is suspended at expiry, and the nightly apply job resumes them once their paid time covers it, while the cap on active users leaves room"
+                }
+                Some(SuspendReason::QuotaExceeded { .. }) => {
+                    "; the user is suspended for quota until the next billing cycle, when the nightly apply job resumes them"
+                }
+                Some(SuspendReason::Operator | SuspendReason::AbuseReview) => {
+                    "; the user is suspended, and only the operator resumes them"
+                }
             };
             format!("payment: order {order} granted user {user} {what}{mode}{suspended}")
         }

@@ -31,6 +31,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mooring_model::date::SECS_PER_DAY;
+use mooring_model::user::SuspendReason;
 use mooring_model::{CalendarDate, Deployment, UnixTime, User, UserId, UserStatus};
 use serde::{Deserialize, Serialize};
 
@@ -283,8 +284,11 @@ pub enum LedgerEvent {
         outcome: GrantOutcome,
         /// Whether it was paid in Stripe's live mode.
         livemode: bool,
-        /// Whether the user is suspended, which only the operator lifts.
-        suspended: bool,
+        /// Why the user is suspended, if they are: the apply job resumes a
+        /// suspension at expiry once the user's paid time runs past its
+        /// run, and one for quota in the next billing cycle; only the
+        /// operator lifts the others (design §13.6).
+        suspended: Option<SuspendReason>,
     },
     /// A grant was held.
     Held {
@@ -683,19 +687,19 @@ impl PaymentLedger {
                 GrantOutcome::Held {
                     reason: HeldReason::UnknownUser,
                 },
-                false,
+                None,
             ),
             Some(user) => match user.status {
                 UserStatus::RevokePending | UserStatus::Revoked { .. } => (
                     GrantOutcome::Held {
                         reason: HeldReason::UserRevoked,
                     },
-                    false,
+                    None,
                 ),
-                UserStatus::Active | UserStatus::Suspended { .. } => (
-                    self.outcome_for(user, terms, livemode, now),
-                    matches!(user.status, UserStatus::Suspended { .. }),
-                ),
+                UserStatus::Active => (self.outcome_for(user, terms, livemode, now), None),
+                UserStatus::Suspended { reason, .. } => {
+                    (self.outcome_for(user, terms, livemode, now), Some(reason))
+                }
             },
         };
         let mut record = OrderRecord::new(entry.order.clone(), terms.clone(), livemode);

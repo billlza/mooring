@@ -313,6 +313,20 @@ pub(crate) fn run(
         ),
         Command::SshRelay { socket } => crate::node::dial::ssh_relay(&socket),
         Command::Daemon => daemon(env),
+        Command::Apply {
+            pending,
+            now: _,
+            json,
+        } => crate::apply::apply(
+            env,
+            out,
+            if pending {
+                crate::apply::When::Pending
+            } else {
+                crate::apply::When::Now
+            },
+            json,
+        ),
     };
     let Err(error) = result else {
         return 0;
@@ -377,8 +391,9 @@ fn execute(
 /// the log as well.
 fn daemon(env: &mut Env<'_>) -> Result<(), CommandError> {
     let dir = crate::daemon::log::log_dir(env.home.clone())?;
-    let mut log = crate::daemon::log::DaemonLog::open(
+    let mut log = crate::daemon::log::RotatingLog::open(
         &dir,
+        crate::daemon::log::DAEMON_LOG,
         crate::daemon::log::ROTATE_AT_BYTES,
         env.redirect_stderr,
     )?;

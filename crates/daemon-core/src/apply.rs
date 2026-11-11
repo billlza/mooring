@@ -39,6 +39,7 @@ use std::num::NonZeroU16;
 use mooring_model::removal::removal_due;
 use mooring_model::user::SuspendReason;
 use mooring_model::{Deployment, ModelError, UnixTime, UserId, UserStatus};
+use serde::Serialize;
 
 use crate::error::PolicyError;
 use crate::payments::Entitlements;
@@ -67,7 +68,7 @@ pub const fn in_window(now: UnixTime) -> bool {
 }
 
 /// A suspension the policy step carries out at the run's `now`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Suspension {
     /// The user, active when the run began.
     pub user: UserId,
@@ -77,7 +78,7 @@ pub struct Suspension {
 
 /// A suspension whose cause has gone, which the policy step resumes, or
 /// reports when it cannot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Lapsed {
     /// The suspended user.
     pub user: UserId,
@@ -89,7 +90,7 @@ pub struct Lapsed {
 
 /// A lapsed suspension the policy step does not resume, because the user
 /// would be suspended again at once.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Kept {
     /// The lapsed suspension.
     pub lapsed: Lapsed,
