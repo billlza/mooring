@@ -204,3 +204,50 @@ fn a_reading_lists_every_measured_set_or_fails_whole() {
     );
     assert_eq!(read(&garbled), None);
 }
+
+/// The hosted lane (`.github/workflows/ci.yml`, "The rendered rulesets on a
+/// Linux kernel") loads a rendered ruleset into a network namespace, gives
+/// each measured set one element of 198.18.0.5, and writes what
+/// `nft -j list set` prints into the directory `MOORING_NFT_LISTINGS`
+/// names; this reads each listing with the watch's parser. It runs there,
+/// with `--ignored`, and nowhere else: this Mac has no Linux kernel.
+#[test]
+#[ignore = "run by the hosted lane, which writes the listings from a real kernel"]
+fn real_nft_listings_are_read() {
+    let dir = std::env::var_os("MOORING_NFT_LISTINGS")
+        .expect("the lane names the directory of listings");
+    let source = Ipv4Addr::new(198, 18, 0, 5);
+    for set in AbuseSet::ALL.iter().copied().filter(|set| set.is_measured()) {
+        let path = std::path::Path::new(&dir).join(format!("{}.json", set.name()));
+        let bytes = std::fs::read(&path).expect("a listing per measured set");
+        let elements = parse(&bytes, set)
+            .unwrap_or_else(|| panic!("{set:?}: {}", String::from_utf8_lossy(&bytes)));
+        assert_eq!(elements.len(), 1, "{set:?}");
+        let element = &elements[0];
+        assert_eq!(element.source, source, "{set:?}");
+        assert!(
+            element.age.is_some_and(|age| age < 600),
+            "{set:?}: an element added now is young: {element:?}"
+        );
+        let expected = match set {
+            AbuseSet::Burst => Some((3, 180)),
+            AbuseSet::Login => Some((2, 120)),
+            AbuseSet::MeterNew => Some((9, 540)),
+            AbuseSet::MeterOut => Some((1_000, 1_200_000)),
+            AbuseSet::MeterIn => Some((7, 9_000)),
+            AbuseSet::Capped => Some((4, 240)),
+            _ => None,
+        };
+        assert_eq!(
+            element.counter.map(|counter| (counter.packets, counter.bytes)),
+            expected,
+            "{set:?}"
+        );
+        let proto = match set {
+            AbuseSet::MeterNew => Some(Proto::Tcp),
+            AbuseSet::MeterOut => Some(Proto::Udp),
+            _ => None,
+        };
+        assert_eq!(element.proto, proto, "{set:?}");
+    }
+}

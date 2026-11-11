@@ -185,6 +185,28 @@ mooringctl exit disallow-network --name "my phone"
 
 With the network declared the exit stays `Serving` while the Mac is joined to it, even when it holds the default route (every exit connection is bound to the M7, design §10.4), and the console's Exit screen lists it under **Allowed networks**. The declaration is Mac-local (`allowed-networks.json` beside `state.json`); if it cannot be read the daemon treats it as none, the network becomes foreign again and the exit shows `Degraded` with `own networks unreadable` while it serves: `exit allowed-networks` names the fault. The store never writes a file it would refuse to read, so that fault is a hand edit (or a file past its 16 KiB bound): mend or remove `~/Library/Application Support/Mooring/allowed-networks.json` by hand and declare the networks again.
 
+## Abuse cases (2026-11-11)
+
+The abuse guard (design §11.8) runs on each node by itself. A user whose connections look like a scan, a flood, password guessing or bulk mail is cut on that node at once: every flow of theirs is refused, and nobody else is touched. The console's node row then shows `Users cut off for abuse: 1`, and `Users with abuse findings below the cut level` for a user only alerted on. No content is read and no destination is kept: the records hold an opaque user id and counts.
+
+Review each case from Terminal.app's own shell with the installed app's `mooringctl`, as section 1 says (`--interface` names the interface facing the M7):
+
+```
+mooringctl abuse records lon1 --interface en9
+```
+
+It prints the users cut and every record the node keeps (30 days), with their figures, and keeps a copy on this Mac (`abuse/records.json`, 13 months). Then one of:
+
+- **A false positive:** `mooringctl abuse clear lon1 <user> --interface en9`. The user is served again at once; the record says so.
+- **To examine further:** `mooringctl user suspend <user> --reason abuse-review`, then `node apply` on each node the user holds, then `abuse clear` on each, once the apply has removed the user (the cut has nothing left to hold). `mooringctl user resume <user>` and `node apply` undo it.
+- **A confirmed case:** a ban, the operator's rule of 2026-11-06 with no refund: revoke the user (design §13.5), ban the account at the portal (`delivery.md` §11), and copy the records into the ban record. Lift the node's cut once the revocation has committed.
+
+To cut a user yourself, on a complaint for example: `mooringctl abuse cut lon1 <user> --interface en9`.
+
+If a node's SSH cannot be reached, its guard still cuts by itself, and the console shows it once the node answers again. To stop a user the node has not detected meanwhile, stop the exit for everyone: `mooringctl exit disable` on this Mac, or the phone's emergency stop. This Mac cannot stop one user alone: every user's flows reach it from the node's single tunnel address.
+
+**Rolling the guard out:** the agreement must state it first (design §11.8, decision F21). Then `node upgrade-agent` before `node apply` on each node: an older agent cannot read the new `watch.json`. The first apply restarts the tunnel once. Until it runs, the node shows `The abuse guard is not installed`.
+
 ## Troubleshooting
 
 **`the Mooring daemon is not running`:** the daemon is not started, or it stopped.
