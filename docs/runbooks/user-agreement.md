@@ -230,6 +230,42 @@
       keeps a banned person out is the operator's binding by account
       number after a call, with the ban records checked before it
       (delivery.md, section 1).
+  - Clauses 1, 3 and 4 also state the node's abuse guard. That is the
+    operator's decision of 2026-11-11, which took every default of decision
+    F21 and the text suggested with the guard, in their words: «全部按建议».
+    The guard's design is design §11.8 and its defaults are F21 (§20.2), on
+    the branch lza/abuse-guard (at 17017bf, which records the decision),
+    which was not merged when these notes were written. If what it builds
+    comes to differ from what the text says, the text changes with it.
+    - Clause 3 forbids the uses the guard detects: scanning networks or
+      ports, intrusion, an attack after a penetration test, a penetration
+      test without the target's written consent, guessing passwords,
+      attacks including denial of service, and bulk mail. The node limits
+      each user's new flows, concurrent flows and datagrams sent, detects
+      those uses and P2P from per-user connection figures, cuts the user at
+      once and tells the operator. A cut the operator finds mistaken is
+      lifted at once; a confirmed case is banned as above, without a
+      refund.
+    - Clause 1 makes up every mistaken cut, however short, as it makes up
+      an outage on the operator's side: more time than the cut, or
+      traffic, and a refund by the cut's time if the user insists. F21's
+      seventh item counted a mistaken cut as such an outage; asked whether
+      a cut shorter than clause 1's 8 hours is made up too, the operator
+      answered the same day, in their words: «每次都补».
+    - Clause 4: an abuse record holds the time, the user id, the finding,
+      its figures and the action, never a destination, port, address or
+      bucket. A node keeps its records 30 days and the Mac its copies 13
+      months; neither is erased early when the user leaves or asks, since
+      they show that the abuse was handled (the guard's design cites UK
+      GDPR art. 17(3)(e); whether it applies is the operator's to check,
+      as for the ban records). A ban copies the user's records into the ban
+      record (delivery.md, section 10). The node's firewall keeps per-user
+      counts, destinations as buckets of 4,096 and each port's low ten bits,
+      for at most an hour. Clause 4 names the ports as well as the
+      addresses' buckets, since a port below 1,024 is its own bucket: it
+      lists all that the firewall keeps.
+    - The guard must not run on a node with users before they have
+      accepted this text.
   - Clause 5's shared line: the operator undertakes to keep the line's
     monthly cap from being reached. Their example was more SIMs, which
     design §18 leaves to a later decision. A pause from the cap is an
@@ -256,6 +292,7 @@
 - 门户所在的服务器和 Stripe 是新的保存地点：第 4 条写明它们保存什么、保存多久、谁能看到。
 - 服务到期 3 个月后仍未续费，你的账户会被作废（第 6 条）。
 - 用本服务从事违法活动的，会被封禁，以后换用别的邮箱、门户账号或银行卡也不能再使用本服务。为此，运营者会保留认出被封禁的人所需的记录，直到本服务停止，并把每位新用户与他们比对（第 3、4 条）。
+- 服务器会限制每位用户的连接，并根据连接的统计数字识别扫描、入侵、猜密码、攻击和群发邮件等用途，识别出来时立即切断你的服务（第 3、4 条）。
 
 ## 1. 收费，不转售
 
@@ -280,6 +317,7 @@
   - 运营者一方的原因包括：运营者的电脑、线路或服务器出故障；服务器被封锁，包括只在你所用的运营商或地区被封锁；所有用户共用的月度流量上限用尽（第 5 条）。
   - 发生这种情况时，请按第 5 条告诉运营者。
 - 你坚持要退款时，运营者按中断的时间退款。
+- 服务器误判而切断你的服务时，不论切断了多久，运营者都会补偿你：把你的服务期延长，延长的时间比被切断的时间长；或者给你增加流量。你坚持要退款时，按被切断的时间退款（第 3 条）。
 - 运营者停止提供本服务时，按你还没用到的天数退款。
 - 封禁之后，如果有人用被封禁的人付过款的银行卡付款，运营者不开通服务，并退回这笔付款（第 3 条）。
 - 封禁后发现是误封的，运营者补回被封禁时还没用到的天数；你坚持要退款时，按这些天数退款（第 3 条）。
@@ -303,9 +341,12 @@
 ## 3. 合法使用，不用 P2P
 
 - 不得用于违反英国法律或英国运营商使用条款的活动。
+- 不得用本服务扫描他人的网络或端口，入侵或试图入侵他人的系统（包括渗透测试之后发动的攻击），猜测或批量尝试他人的密码，发动攻击（包括拒绝服务攻击），或者批量发送邮件。未经对方书面授权的渗透测试也在此列。
 - 不得使用 BitTorrent 等 P2P 下载或分享，不得通过 25 端口直接投递邮件。服务器会拦截 25 端口，以及它能识别出的 P2P 流量。
 - 服务器拒绝中国大陆的网站和 IP。访问国内网站时，请按《使用指南》打开 CFM 的“中国大陆直连”开关，国内网站就会直接连接，不经过本服务。
 - 所有流量都从运营者在英国的个人手机线路出去，在运营商那里记在运营者名下。
+- 服务器会限制每位用户每秒新建的连接数、同时打开的连接数和每秒发出的数据包数，并根据连接的统计数字识别上面这些用途和 P2P：连接的次数和速率、连到了大约多少个不同的地址和端口、收发了多少字节。它不看内容，也不记录你连到的地址。
+- 识别出来时，服务器立即切断你的服务，并通知运营者核实。核实是误判的，运营者马上恢复你的服务，并按第 1 条补回被切断的时间；确认是滥用或违法活动的，按下一条封禁，已付的费用不退。
 - 运营者确认你用本服务从事违法活动时，会封禁你：作废你的账户，删除你的门户账号，你的订阅链接永久失效。已付的费用不退。
 - 被封禁后，你不得再使用本服务，换用别的邮箱、门户账号或银行卡也不行。运营者会保留认出你所需的记录，直到本服务停止，并把每位新用户与被封禁的人比对（第 4 条）。封禁之后，如果有人用你付过款的银行卡付款，运营者不开通服务，并退回这笔付款。
 - 封禁后发现是误封的，运营者会删除第 4 条所说的封禁记录、邮箱摘要和银行卡识别码，你可以重新加入，并按第 1 条补回被封禁时还没用到的天数。
@@ -319,7 +360,8 @@
 - 你的账户状态变化（启用、暂停、作废），以及运营者为你做的操作（例如导出配置、更换凭据）及其时间；
 - 从门户取回的你的付款记录：订单编号、买了什么、金额和币种、付款时间、为你开通了什么，以及开通的时间；
 - 你接受本约定的版本号和日期；
-- 如果你被封禁：你的名字、你和运营者 FaceTime 通话用的电话号码或 Apple ID、封禁的日期，你按小时和按日汇总的流量记录和付款记录在封禁时的副本，以及 Stripe 后台显示的你付款时的 IP 地址、大致位置和设备信息，用来认出你是否换了账号回来（第 3 条）。
+- 从服务器取回的滥用记录（见下文「服务器上会保存」）；
+- 如果你被封禁：你的名字、你和运营者 FaceTime 通话用的电话号码或 Apple ID、封禁的日期，你按小时和按日汇总的流量记录、付款记录和滥用记录在封禁时的副本，以及 Stripe 后台显示的你付款时的 IP 地址、大致位置和设备信息，用来认出你是否换了账号回来（第 3 条）。
 
 你的名字和别名只保存在运营者的电脑上，不会发送到服务器或门户。
 
@@ -329,6 +371,8 @@
 **服务器（你在 CFM 里连接的节点）上会保存：**
 - 按用户编号统计的流量明细和每月合计，以及每个编号最近一次使用的时间；
 - 运营者的电脑定时发来的一份状态报告，供运营者在手机上查看。报告里有每位未作废用户的编号、账户状态、本计费周期的流量和最近一次使用的时间。新报告会覆盖旧报告。
+- 滥用记录：每次识别出第 3 条所说的用途、切断或恢复你的服务时，记下时间、你的用户编号、识别出的用途、当时的统计数字（例如 5 分钟内连到的不同地址的估计数、每秒发出的数据包数）和采取的措施。记录里没有你连到的地址、端口或域名。
+- 服务器的防火墙按用户编号统计上面这些连接数字，每个数字最多保存 1 小时，到时自动清除。其中的地址只记作 4,096 组中的组号，从组号算不出原来的地址；端口只记作端口号除以 1,024 的余数，所以 1,024 以下的端口（例如网页用的 443）能直接看出来。
 
 **门户上会保存：**
 
@@ -376,12 +420,13 @@
 **保存多久：**
 - 运营者的电脑上：五分钟粒度的流量记录保存 7 天，按小时汇总的保存 35 天，按日和按月的合计保存 13 个月。
 - 你的累计总量、最近一次使用的时间、账户状态变化和这些操作记录、付款记录、你接受本约定的记录，以及你的名字和别名，在你的账户作废 13 个月后全部删除；你被封禁时，其中一部分另有副本保存在封禁记录里（见下一条）。
-- 你被封禁时，运营者电脑上的封禁记录（第 3 条）保留到本服务停止：你的名字、FaceTime 联系方式、封禁的日期，流量记录和付款记录的副本，以及你付款时的 IP 地址、大致位置和设备信息。封禁后发现是误封的，这些记录随即删除。
+- 你被封禁时，运营者电脑上的封禁记录（第 3 条）保留到本服务停止：你的名字、FaceTime 联系方式、封禁的日期，流量记录、付款记录和滥用记录的副本，以及你付款时的 IP 地址、大致位置和设备信息。封禁后发现是误封的，这些记录随即删除。
 - FaceTime 通话记录：你的账户作废时，运营者在手机和电脑上删除和你的通话记录；这些设备此前的备份里如果还有，要到备份被删除或覆盖时才会消失。
 - 服务器上：流量明细保存 48 小时，每月合计在当月结束 7 天后删除，运营者的电脑会在此之前取回它们；你最近一次使用的时间在你的账户作废、服务器不再为你服务时删除。
+- 滥用记录：服务器上保存 30 天；运营者电脑上的副本保存 13 个月。你退出或请运营者删除你的记录时，这些记录也不提前删除：它们用来证明运营者及时处理了滥用。你被封禁时，它们复制到封禁记录里，保留到本服务停止。
 - 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会保留你登录邮箱的摘要、你付款用过的银行卡在 Stripe 的识别码（Stripe 给同一个卡号的编号，不是卡号本身），以及封禁的时间，直到本服务停止：用来拒绝这个邮箱再注册，并认出用这些卡付的款（不开通服务，退回付款，见第 3 条）。封禁后发现是误封的，这些也随即删除。门户不保存邮箱本身，但拿到门户数据的人，可以很快核对一个或一批邮箱是否被封禁过：一台普通电脑一两个小时就能核对一百万个。像 QQ 号邮箱这样由数字组成的邮箱，要把所有号码逐个试一遍，需要大量计算，随手做不到；但如果有人租用足够多的电脑，几天内就能试完，而且试完这一遍，就能同时认出所有被封禁过的这类邮箱。
 - Stripe 上：你的账户作废时，运营者会取消你的自动续费，并删除 Stripe 上保存的你的银行卡。付款记录本身由 Stripe 按它自己的规定保存，运营者不能删除。
-- 你可以随时请运营者告诉你，运营者保存了哪些关于你的记录。退出时，你可以请运营者立即删除运营者电脑上的这些记录，不必等 13 个月；门户上的记录在运营者删除你的门户账号时删除；服务器上的记录按上面的期限自动删除。
+- 你可以随时请运营者告诉你，运营者保存了哪些关于你的记录。退出时，你可以请运营者立即删除运营者电脑上的这些记录（滥用记录除外），不必等 13 个月；门户上的记录在运营者删除你的门户账号时删除；服务器上的记录按上面的期限自动删除。
 
 ## 5. 连不上或被封锁时
 

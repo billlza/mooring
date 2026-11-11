@@ -161,7 +161,8 @@ In the M8 pilot there is one node, so a blocked node means a rotation and a new 
 | The portal's host compromised, or its database or a backup leaked | Every bound user's credentials and the nodes' addresses are out. `user reissue` every user, `node apply` every node at once, export the bundle and import it at a host you trust again, and have every user generate a new link and import it (or download the file again). Rotate the nodes when they are blocked (§13.4) |
 | Someone asked the user for the file or the link, and the user refused | Nothing to rotate. Remind the user of clause 2 of the agreement |
 | A device seized or inspected by someone else, or the user under pressure | Revoke the user (§13.5) and delete their portal account (section 10). Then rotate every node the user held (§13.4), and update every other user on those nodes (section 7). Serving the person again is a new admission: `user add` and a new acceptance |
-| You established that the user used the service for unlawful activity (clause 3) | Ban, as section 10 says: revoke the user (§13.5), write the ban record, then ban the portal account. Nothing is refunded. Rotate the nodes the user held if the activity may draw attention to them (§13.4) |
+| A node cut the user for abuse (clause 3; with the abuse guard) | Review the cut at once, from the node's abuse records. A mistake: lift the cut, and make up the time cut, however short (section 9). Abuse or unlawful activity confirmed: ban, as in the next row |
+| You established that the user used the service for unlawful activity or abuse (clause 3) | Ban, as section 10 says: revoke the user (§13.5), write the ban record, then ban the portal account. Nothing is refunded. Rotate the nodes the user held if the activity may draw attention to them (§13.4) |
 
 Record nothing about the incident itself (what happened, where, to whom) in Mooring, a note or a message: the commands record the changes they make.
 
@@ -174,16 +175,17 @@ Record nothing about the incident itself (what happened, where, to whom) in Moor
   - The reasons that count: the Mac, the line, a node, a block (one on the user's carrier or region only counts too), or the line's shared cap.
   - Make it up with more service time than the outage, or extra traffic, granted through the payment pull's grants (with the payment work).
   - Refund by the outage's time, through Stripe, only if the user insists.
+- **A mistaken cut (clauses 1 and 3; with the abuse guard).** Make up every cut the review found mistaken, however short, in the same way: more service time than the user was cut for, from the cut to its lift, or extra traffic. Refund by the time cut only if the user insists.
 - **Refunds.** When the service ends, refund every user's unused days. A refund goes back to the card that paid. Once that card can take no refund, make it up in time or traffic instead, except for a payment by a card on the ban list, which is only ever refunded (section 1, step 6). A ban found to be a mistake is made up as section 10 says. Nothing else is compensated or refunded.
 - **Auto-renewal.** The user cancels it at the portal (to be built with payment), or asks on a call and you cancel it in the Stripe Dashboard. The period already paid runs to its end.
 
 ## 10. Requests about the user's records
 
 On the user's request, tell the user what is held about them (clause 4 of the agreement):
-- **On the operator's Mac:** the label, the alias, the client line, the policy, the usage history and totals (`mooringctl user usage <uid>` prints them: each node's hourly and daily bins and its monthly, folded and lifetime totals, by id and alias and never the label; the five-minute bins, kept 7 days, are not printed), the last-active time, the status changes, the journal's operator actions that name the user (exports, reissues), the payments pulled from the portal (with the payment work) and the acceptance.
-- **On each node:** the usage bins (48 hours), the monthly totals (until 7 days after the month), the last-active time and the user's row in the Mac report.
+- **On the operator's Mac:** the label, the alias, the client line, the policy, the usage history and totals (`mooringctl user usage <uid>` prints them: each node's hourly and daily bins and its monthly, folded and lifetime totals, by id and alias and never the label; the five-minute bins, kept 7 days, are not printed), the last-active time, the status changes, the journal's operator actions that name the user (exports, reissues), the payments pulled from the portal (with the payment work), the abuse records pulled from the nodes (with the abuse guard; 13 months) and the acceptance.
+- **On each node:** the usage bins (48 hours), the monthly totals (until 7 days after the month), the last-active time, the user's row in the Mac report and, with the abuse guard, the abuse records (30 days) and the firewall's per-user connection counts (at most an hour).
 - **At the portal:** the account (number, email, password hash, the registration and password-change times), the sessions (token digests, login and expiry times), the link's token digest and its time, the binding and its time, the latest snapshot record, the CFM profile, and the orders (with the payment work). After a ban, only the email's digest, the Stripe fingerprints of the cards the user paid with (with the payment work) and the ban's time, until the service ends.
-- **After a ban, in the ban record on the operator's Mac:** the label, the phone number or Apple ID of the FaceTime calls, the ban's day, the copies of the user's hourly and daily usage and of their payments, and what the Stripe Dashboard showed of those payments (IP address, location, device) (below).
+- **After a ban, in the ban record on the operator's Mac:** the label, the phone number or Apple ID of the FaceTime calls, the ban's day, the copies of the user's hourly and daily usage, of their payments and of their abuse records, and what the Stripe Dashboard showed of those payments (IP address, location, device) (below).
 - **On the operator's phone and Mac:** FaceTime's call history with the user (number or Apple ID, call times), until the revocation.
 - **At Stripe:** the payments, with what the payment page collected (email, cardholder name), the card's brand, last four digits, expiry and country, and the IP address, location and device data Stripe's fraud checks gather; the saved card while auto-renewal runs.
 
@@ -214,16 +216,17 @@ On the user's request, tell the user what is held about them (clause 4 of the ag
       - For the usage, run `mooringctl user usage <uid>` until its first line says `revoked`, which it says once every node has removed the user, and note the time on that line. Once each node listed as `applied` has a held hourly range covering that time's hour (or the next hour, if the time is in an hour's last minute), write the copy with `mooringctl user usage <uid> --bins-only --out <bans>/<file>`. With the daemon serving, that is a few minutes after the hour.
       - A node keeps its bins for 48 hours after they end (design §11.5). If a node's range does not reach that hour by then, for example because the node cannot be reached, write the copy all the same: its held ranges show the gap.
       - The copy holds whole hours and days only, since five-minute bins are not printed. It names the user by id and alias, never the label. It is a new file with mode 0600, which Mooring never deletes: it is part of the ban record and is deleted with it. Its `retention` field describes the Mac's own history, not the copy.
+    - copies of the user's abuse records (with the abuse guard): pull the records of every node that served the user, then copy the user's from the Mac's copy.
     - what the Stripe Dashboard shows of those payments: IP address, location and device. Each payment carries the portal's order number, which Stripe keeps as the Checkout Session's `client_reference_id` (the portal's `docs/payments.md` §2), so they can still be found once the portal's orders are gone.
   - Never write in it the portal login email: that would undo the portal's digest. When the FaceTime Apple ID is that same address, record it as the FaceTime contact all the same.
-  - Never write in it what happened or any evidence (section 8), links or credentials.
+  - Never write in it what happened or any evidence (section 8), links or credentials. The abuse records' copy is the one exception, which clause 4 states: it holds each finding's kind and figures, never where or to whom.
 - **Recognising a banned person** (clause 4). Compare every new user with the ban records:
   - before `user add` (section 1);
   - at their payments: the card, and the IP address, location and device the Stripe Dashboard shows;
   - while they are served: their hourly and daily usage (`mooringctl user usage <uid>`) and payments, against the copies.
 
   The line's own address and Safari on a Mac are no likeness (section 1, step 6). A likeness is a reason to check, never a ban by itself: ban only once you have confirmed that it is the same person.
-- A user who leaves may ask for the Mac's records to be deleted at once: revoke the user, then `user forget <uid>` (M5) once the user is `Revoked`, instead of waiting for the 13-month rule (§15.7). A ban record stays (clause 4).
+- A user who leaves may ask for the Mac's records to be deleted at once: revoke the user, then `user forget <uid>` (M5) once the user is `Revoked`, instead of waiting for the 13-month rule (§15.7). A ban record stays, and the abuse records stay for their 13 months (clause 4).
 - The nodes' records expire on their own schedule (§11.5), and Stripe keeps its payment records by its own rules; tell the user so.
 
 ## 11. The user portal
