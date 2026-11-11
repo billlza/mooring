@@ -220,3 +220,32 @@ fn a_node_past_the_bound_is_refused() {
         AbuseRecordsError::TooMany { node: lon1 }
     );
 }
+
+/// A copy longer than is read back is not written: its encoding is refused
+/// past the limit and kept at it.
+#[test]
+fn a_copy_longer_than_is_read_back_is_refused() {
+    let mut copy = MacAbuseRecords::default();
+    copy.merge(
+        &node("lon1"),
+        &page(vec![
+            record(0, NOW, AbuseAction::OperatorCut),
+            record(1, NOW + 5, AbuseAction::Cleared),
+        ]),
+    )
+    .unwrap();
+    let bytes = copy.encode().unwrap();
+    assert_eq!(copy.encode_within(bytes.len()), Ok(bytes.clone()));
+    let error = copy.encode_within(bytes.len() - 1).unwrap_err();
+    assert_eq!(
+        error,
+        AbuseRecordsError::TooLarge {
+            limit: bytes.len() - 1
+        }
+    );
+    assert_eq!(error.kind(), AbuseRecordsErrorKind::TooLarge);
+    assert_eq!(
+        AbuseRecordsError::TooLarge { limit: 9 }.to_string(),
+        "the abuse records would be longer than the 9 bytes this Mac reads back"
+    );
+}

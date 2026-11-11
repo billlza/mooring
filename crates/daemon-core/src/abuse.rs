@@ -32,8 +32,8 @@ pub const MAC_ABUSE_RETENTION_SECS: u64 = 393 * 86_400;
 /// 4,096 at any time, so 13 months of a busy node fit many times over.
 pub const MAC_ABUSE_RECORDS_PER_NODE: usize = 65_536;
 
-/// The most bytes of the document read: every node's records at their
-/// longest fit.
+/// The most bytes of the document read back. [`MacAbuseRecords::encode`]
+/// refuses a longer one, so no copy is written that could not be read.
 pub const MAC_ABUSE_RECORDS_MAX_BYTES: usize = 64 << 20;
 
 /// The Mac's copy, by node, each node's records in number order.
@@ -91,11 +91,22 @@ impl MacAbuseRecords {
         Self::try_from(raw)
     }
 
-    /// The document as written: pretty JSON and a newline.
+    /// The document as written: pretty JSON and a newline, refused
+    /// ([`AbuseRecordsError::TooLarge`]) past
+    /// [`MAC_ABUSE_RECORDS_MAX_BYTES`], the most that is read back.
     pub fn encode(&self) -> Result<Vec<u8>, AbuseRecordsError> {
+        self.encode_within(MAC_ABUSE_RECORDS_MAX_BYTES)
+    }
+
+    /// The document as [`MacAbuseRecords::encode`] writes it, refused past
+    /// `limit` bytes.
+    pub(crate) fn encode_within(&self, limit: usize) -> Result<Vec<u8>, AbuseRecordsError> {
         let mut bytes =
             serde_json::to_vec_pretty(self).map_err(|_| AbuseRecordsError::Unencodable)?;
         bytes.push(b'\n');
+        if bytes.len() > limit {
+            return Err(AbuseRecordsError::TooLarge { limit });
+        }
         Ok(bytes)
     }
 
@@ -210,6 +221,12 @@ pub enum AbuseRecordsError {
     /// The document could not be written as JSON.
     #[error("the abuse records could not be written as JSON")]
     Unencodable,
+    /// The document would be longer than is read back.
+    #[error("the abuse records would be longer than the {limit} bytes this Mac reads back")]
+    TooLarge {
+        /// The most bytes read back.
+        limit: usize,
+    },
 }
 
 impl AbuseRecordsError {
@@ -223,6 +240,7 @@ impl AbuseRecordsError {
             Self::Conflict { .. } => AbuseRecordsErrorKind::Conflict,
             Self::TooMany { .. } => AbuseRecordsErrorKind::TooMany,
             Self::Unencodable => AbuseRecordsErrorKind::Unencodable,
+            Self::TooLarge { .. } => AbuseRecordsErrorKind::TooLarge,
         }
     }
 }
@@ -242,5 +260,7 @@ kinds! {
         TooMany,
         /// See [`AbuseRecordsError::Unencodable`].
         Unencodable,
+        /// See [`AbuseRecordsError::TooLarge`].
+        TooLarge,
     }
 }

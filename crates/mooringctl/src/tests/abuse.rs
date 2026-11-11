@@ -257,7 +257,14 @@ fn records_are_printed_and_kept_in_the_macs_copy_once() {
     assert!(
         outcome
             .stdout
-            .contains("lon1: 2 records kept on the node, 2 new to this Mac's copy")
+            .contains("lon1: 2 records kept on the node\n")
+    );
+    assert!(
+        outcome
+            .stdout
+            .ends_with("lon1: 2 of them new to this Mac's copy\n"),
+        "{}",
+        outcome.stdout
     );
     assert!(
         outcome.stdout.contains(": cut for mass-contact [about "),
@@ -330,7 +337,8 @@ fn records_are_read_page_by_page() {
 }
 
 /// A record the node gives with other content than the Mac's copy holds
-/// for its number is refused, and the copy is left as it was.
+/// for its number is refused, and the copy is left as it was; the node's
+/// cuts and records are printed all the same, before the refusal.
 #[test]
 fn a_record_contradicting_the_macs_copy_is_refused() {
     let (mut harness, user) = ready();
@@ -365,6 +373,19 @@ fn a_record_contradicting_the_macs_copy_is_refused() {
     );
     let outcome = harness.run(&["abuse", "records", "lon1", "--interface", "lo0"]);
     assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome.stdout.starts_with("lon1: 0 users cut\n"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains(&format!(" {user}: cut by the operator\n")),
+        "{}",
+        outcome.stdout
+    );
+    assert!(!outcome.stdout.contains("new to this Mac's copy"));
     assert!(
         outcome.stderr.contains("cannot be kept"),
         "{}",
@@ -457,8 +478,40 @@ fn the_operator_cuts_and_lifts_on_a_node() {
     assert_eq!(sent["cut"], user.as_str());
 }
 
+/// A cut can be lifted for a user this Mac no longer holds: the node keeps
+/// the cut until it is lifted.
+#[test]
+fn a_user_the_mac_no_longer_holds_can_be_lifted() {
+    let (mut harness, _) = ready();
+    expect(
+        &harness,
+        RequestKind::AbuseClear,
+        Ok(Response::AbuseCleared {
+            record: Some(AbuseSeq::new(7)),
+            cuts: AbuseCuts::EMPTY,
+        }),
+    );
+    let outcome = harness.run(&["abuse", "clear", "lon1", "aaaaaaaaaa", "--interface", "lo0"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "lon1: user aaaaaaaaaa's cut is lifted (record 7)\nlon1: 0 users cut\n"
+    );
+    let lifted: Vec<String> = harness
+        .nodes
+        .seen
+        .borrow()
+        .iter()
+        .filter_map(|(_, sent)| match sent {
+            Sent::Request(LineRequest::AbuseClear { user }) => Some(user.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lifted, ["aaaaaaaaaa"]);
+}
+
 /// A user the deployment does not know is refused before any node is
-/// asked; the node's own refusal is reported as it gives it.
+/// asked for a cut; the node's own refusal is reported as it gives it.
 #[test]
 fn refusals_are_reported_and_an_unknown_user_asks_no_node() {
     let (mut harness, _) = ready();

@@ -219,7 +219,8 @@ pub(crate) enum AbuseCommand {
         #[arg(long, value_name = "BSD_NAME")]
         interface: BsdName,
     },
-    /// Lift a user's cut on a node at once, recorded.
+    /// Lift a user's cut on a node at once, recorded. The user need not be
+    /// one this Mac still holds.
     Clear {
         /// The node.
         node: NodeId,

@@ -37,8 +37,11 @@ const NODE_DEADLINE: Duration = Duration::from_secs(45);
 const MAX_PAGES: usize = 16;
 
 /// `abuse records <node>`: every record the node keeps, page by page,
-/// merged into this Mac's copy (pruned of what is past its 13 months), then
-/// printed: one JSON line per page with `--json`, else a summary.
+/// printed (one JSON line per page with `--json`, else a summary), then
+/// merged into this Mac's copy, pruned of what is past its 13 months. What
+/// the node holds is printed first, so a copy that refuses the pages (a
+/// record unlike the one it holds, for one) still leaves the review the
+/// node's cuts and records, and the refusal follows.
 pub(crate) fn records(
     env: &Env<'_>,
     out: &mut dyn Write,
@@ -62,29 +65,24 @@ pub(crate) fn records(
             _ => break,
         }
     }
-    let now = (env.clock)()?;
-    let now = mooring_agent_proto::UnixTime::from_secs(now.as_secs());
-    let added = keep(env, node, &pages, now)?;
-    let Some(last) = pages.last() else {
-        return Ok(());
-    };
     if json {
         for page in &pages {
             let line = encode_line(page, MAX_REPLY_LINE_BYTES).map_err(LocalError::ClientEncode)?;
             out.write_all(&line).map_err(output)?;
         }
-        return Ok(());
+    } else if let Some(last) = pages.last() {
+        write_cuts(out, node, last.cuts())?;
+        let records: Vec<&AbuseRecord> = pages.iter().flat_map(|page| page.records()).collect();
+        writeln!(out, "{node}: {} records kept on the node", records.len()).map_err(output)?;
+        for record in records {
+            writeln!(out, "  {}", record_line(record)).map_err(output)?;
+        }
     }
-    write_cuts(out, node, last.cuts())?;
-    let records: Vec<&AbuseRecord> = pages.iter().flat_map(|page| page.records()).collect();
-    writeln!(
-        out,
-        "{node}: {} records kept on the node, {added} new to this Mac's copy",
-        records.len()
-    )
-    .map_err(output)?;
-    for record in records {
-        writeln!(out, "  {}", record_line(record)).map_err(output)?;
+    let now = (env.clock)()?;
+    let now = mooring_agent_proto::UnixTime::from_secs(now.as_secs());
+    let added = keep(env, node, &pages, now)?;
+    if !json {
+        writeln!(out, "{node}: {added} of them new to this Mac's copy").map_err(output)?;
     }
     Ok(())
 }
@@ -114,6 +112,8 @@ pub(crate) fn cut(
 }
 
 /// `abuse clear <node> <user>`: lifts the user's cut on the node at once.
+/// The user need not be one the Mac still holds: a node keeps a cut until
+/// it is lifted, also for a user the Mac has since removed.
 pub(crate) fn clear(
     env: &Env<'_>,
     out: &mut dyn Write,
@@ -121,7 +121,7 @@ pub(crate) fn clear(
     user: &UserId,
     interface: &BsdName,
 ) -> Result<(), CommandError> {
-    let opaque = known_user(env, user)?;
+    let opaque = node_user(user)?;
     let mut session = session(env, node, interface)?;
     match session.request(&LineRequest::AbuseClear { user: opaque })? {
         Response::AbuseCleared { record, cuts } => {
@@ -157,6 +157,12 @@ fn known_user(env: &Env<'_>, user: &UserId) -> Result<OpaqueUserId, CommandError
     if !state.deployment.users().contains_key(user) {
         return Err(LocalError::UnknownUser { user: user.clone() }.into());
     }
+    node_user(user)
+}
+
+/// The user's id as a node knows it: the same text, which every user id is
+/// a valid one of.
+fn node_user(user: &UserId) -> Result<OpaqueUserId, CommandError> {
     OpaqueUserId::new(user.as_str())
         .map_err(|_| LocalError::UnknownUser { user: user.clone() }.into())
 }
