@@ -195,11 +195,11 @@ Review each case from Terminal.app's own shell with the installed app's `mooring
 mooringctl abuse records lon1 --interface en9
 ```
 
-It prints the users cut and every record the node keeps (30 days), with their figures, and keeps a copy on this Mac (`abuse/records.json`, 13 months). Then one of:
+It prints the users cut and every record the node keeps (30 days), with their figures, and then keeps a copy on this Mac (`abuse/records.json`, 13 months). If it then reports a record unlike the one this Mac holds, the node's abuse state was lost and its numbering began again (design §11.8): the printout is still the node's, and the copy keeps the earlier records as they were. Then one of:
 
-- **A false positive:** `mooringctl abuse clear lon1 <user> --interface en9`. The user is served again at once; the record says so.
+- **A false positive:** `mooringctl abuse clear lon1 <user> --interface en9`. The user is served again at once and judged afresh: what led to the cut is no longer counted. The record says so.
 - **To examine further:** `mooringctl user suspend <user> --reason abuse-review`, then `node apply` on each node the user holds, then `abuse clear` on each, once the apply has removed the user (the cut has nothing left to hold). `mooringctl user resume <user>` and `node apply` undo it.
-- **A confirmed case:** a ban, the operator's rule of 2026-11-06 with no refund: revoke the user (design §13.5), ban the account at the portal (`delivery.md` §11), and copy the records into the ban record. Lift the node's cut once the revocation has committed.
+- **A confirmed case:** a ban, the operator's rule of 2026-11-06 with no refund: revoke the user (design §13.5), ban the account at the portal (`delivery.md` §11), and copy the records into the ban record. Lift the node's cut once the revocation has committed; `abuse clear` works for a user this Mac no longer holds.
 
 To cut a user yourself, on a complaint for example: `mooringctl abuse cut lon1 <user> --interface en9`.
 
