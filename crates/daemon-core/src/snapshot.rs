@@ -17,8 +17,9 @@ use crate::alert::OpenAlert;
 use crate::capacity::CapacityStatus;
 use crate::error::{PolicyError, StatusError, UsageError};
 use crate::forecast::{DailySimBytes, SimForecast};
+use crate::payments::Entitlements;
 use crate::period::BillingCycle;
-use crate::policy::{ExpiryState, QuotaState, automatic_quota, effective_quota};
+use crate::policy::{ExpiryState, QuotaState, automatic_quota, effective_policy};
 use crate::router::RouterReading;
 use crate::status::{
     ExitSection, ForecastView, MacStatusParts, MacStatusV2, MeterAccuracy, NodeAgentState,
@@ -95,6 +96,9 @@ pub struct StatusInputs<'a> {
     pub pending_apply: &'a BTreeMap<NodeId, UnixTime>,
     /// The open alerts, in key order.
     pub alerts: Vec<OpenAlert>,
+    /// What the users' paid orders gave (design §9.6), from the payment
+    /// ledger; [`Entitlements::none`] without one.
+    pub entitlements: &'a Entitlements,
 }
 
 /// Why no status line could be made.
@@ -162,6 +166,7 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV2, SnapshotError> 
         Some(Err(reason)) => (UsageView::Unavailable { reason }, None),
     };
     let automatic = automatic_quota(deployment, inputs.at).map_err(SnapshotError::Quota)?;
+    let cycle = BillingCycle::of_instant(sim.cycle(), inputs.at).map_err(SnapshotError::Cycle)?;
     let mut rows = BTreeMap::new();
     for (id, user) in users {
         let missing = || SnapshotError::RowMissing { user: id.clone() };
@@ -170,10 +175,10 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV2, SnapshotError> 
             None => None,
         };
         let activity = activity.remove(id).ok_or_else(missing)?;
-        let quota = effective_quota(user, automatic);
+        let policy = effective_policy(user, automatic, inputs.entitlements, cycle, inputs.at);
         let quota = match usage.as_ref().and_then(|usage| usage.cycle_served_bytes()) {
-            Some(bytes) => QuotaState::of(quota, bytes),
-            None => QuotaState::without_usage(quota),
+            Some(bytes) => QuotaState::of(policy.quota, bytes),
+            None => QuotaState::without_usage(policy.quota),
         };
         rows.insert(
             id.clone(),
@@ -184,7 +189,7 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV2, SnapshotError> 
                 activity,
                 usage,
                 quota,
-                expiry: ExpiryState::of(&user.policy, inputs.at),
+                expiry: ExpiryState::of(policy.expires_at, inputs.at),
                 accuracy: UsageAccuracy::of(user),
             },
         );

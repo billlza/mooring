@@ -397,9 +397,72 @@ fn the_power_values_seen_are_read() {
     }
 }
 
-/// Every device enumeration accepts exactly the values the M2a capture
-/// showed; any other spelling, in another case too, is `UnknownValue`
-/// naming the path, never the value.
+/// The M7 with the 1pMobile SIM in and no data session, as `router capture`
+/// read it on 2026-11-11 (M2.md): registered as `1p` on 234-30 with LTE
+/// readings, and `wwan.connection` `Disconnected`. Every leaf the capture
+/// holds apart from the fixture's is written into the fixture; the
+/// document reads as no service, and its other parts as captured.
+#[test]
+fn the_m7_without_a_data_session_reads_as_no_service() {
+    use NetgearLeaf as L;
+    let captured: [(NetgearLeaf, Value); 17] = [
+        (L::GeneralTemperature, json!(33)),
+        (L::GeneralUptime, json!(1860)),
+        (L::BatteryTemperature, json!(31)),
+        (L::SimSpn, json!("1p")),
+        (L::WwanConnection, json!("Disconnected")),
+        (L::WwanNetworkService, json!("LteService")),
+        (L::WwanDataService, json!("4G")),
+        (L::WwanNetworkName, json!("1p")),
+        (L::WwanSessionDuration, json!(0)),
+        (L::WwanRxBytes, json!("0")),
+        (L::WwanTxBytes, json!("0")),
+        (L::LteCarrierBand, json!(7)),
+        (L::SignalRsrp, json!(-105)),
+        (L::SignalRsrq, json!(-9)),
+        (L::SignalSinr, json!(8)),
+        (L::SignalRssi, json!(-75)),
+        (L::CurrentBand, json!("LTE B7")),
+    ];
+    let body = edited(|value| {
+        for (leaf, captured) in &captured {
+            *value.pointer_mut(&pointer(*leaf, 0)).unwrap() = captured.clone();
+        }
+    });
+    let status = parse(&body).unwrap();
+    let parts = status.parts();
+    assert_eq!(parts.radio, RadioState::NoService);
+    assert_eq!(parts.sim_spn.as_ref().map(|spn| spn.as_str()), Some("1p"));
+    assert_eq!((parts.counters.rx_bytes, parts.counters.tx_bytes), (0, 0));
+    assert_eq!(parts.uptime_secs, 1860);
+}
+
+/// Without a data session no other radio leaf is read: a band the attached
+/// reading refuses still reads as no service, while the same document with
+/// `Connected` is refused at that band.
+#[test]
+fn a_disconnected_m7_reads_no_other_radio_leaf() {
+    use NetgearLeaf as L;
+    let body = |connection: &str| {
+        edited(|value| {
+            *value.pointer_mut(&pointer(L::WwanConnection, 0)).unwrap() = json!(connection);
+            *value.pointer_mut(&pointer(L::CurrentBand, 0)).unwrap() = json!("NR5G n78");
+        })
+    };
+    assert_eq!(
+        parse(&body("Disconnected")).unwrap().parts().radio,
+        RadioState::NoService
+    );
+    assert_eq!(
+        parse(&body("Connected")).map(|_| ()),
+        Err(field(L::CurrentBand, None, FieldFaultKind::UnknownValue))
+    );
+}
+
+/// Every device enumeration accepts exactly the values the M7 has been
+/// seen to report (the M2a capture, and the later captures M2.md records);
+/// any other spelling, in another case too, is `UnknownValue` naming the
+/// path, never the value.
 #[test]
 fn unknown_enum_values_name_the_path_not_the_value() {
     use NetgearLeaf as L;
@@ -415,7 +478,7 @@ fn unknown_enum_values_name_the_path_not_the_value() {
         (
             L::WwanConnection,
             "Connected",
-            &["Disconnected", "connected"],
+            &["connected", "disconnected", "DISCONNECTED", "Connecting"],
         ),
         (
             L::WwanNetworkService,

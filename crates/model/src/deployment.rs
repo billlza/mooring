@@ -317,7 +317,8 @@ impl Deployment {
 
     /// Every secret the deployment references; anything else in the
     /// keychain is orphaned, except the M7's admin password
-    /// ([`SecretRef::RouterAdmin`]), which no deployment references and
+    /// ([`SecretRef::RouterAdmin`]) and the portal's pull token
+    /// ([`SecretRef::PortalPullToken`]), which no deployment references and
     /// this set never contains. While at least one node has its alert
     /// channels set up, the deployment references its one ntfy topic
     /// ([`SecretRef::AlertTopic`]), which every channel node sends to, and
@@ -1201,11 +1202,11 @@ mod tests {
             let required = build(parts).unwrap().required_secrets();
             assert!(!required.is_empty());
             assert!(!required.contains(&SecretRef::RouterAdmin));
-            assert!(
-                required
-                    .iter()
-                    .all(|secret_ref| secret_ref.kind() != SecretKind::RouterAdminPassword)
-            );
+            assert!(!required.contains(&SecretRef::PortalPullToken));
+            assert!(required.iter().all(|secret_ref| !matches!(
+                secret_ref.kind(),
+                SecretKind::RouterAdminPassword | SecretKind::PortalPullToken
+            )));
         }
     }
 

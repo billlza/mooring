@@ -26,8 +26,12 @@ use crate::router::{
 /// The value the M7 reports for a reading it does not have.
 pub(crate) const NOT_REPORTED: i128 = -32_768;
 
-/// The only `wwan.connection` value read: a data session is up.
+/// `wwan.connection` while a data session is up.
 const CONNECTED: &str = "Connected";
+
+/// `wwan.connection` while the M7 has no data session: reported with the
+/// 1pMobile SIM in before it had one (2026-11-11, M2.md).
+const DISCONNECTED: &str = "Disconnected";
 
 /// The prefix of an LTE band in `wwanadv.curBand`.
 const LTE_BAND_PREFIX: &str = "LTE B";
@@ -443,10 +447,14 @@ fn status_parts(leaves: &Leaves) -> Result<RouterStatusParts, RouterParseError> 
     })
 }
 
+/// The radio: attached while a data session is up; without one, no
+/// service, and no other radio leaf is read.
 fn radio(leaves: &Leaves) -> Result<RadioState, RouterParseError> {
     use NetgearLeaf as L;
-    if leaves.text(L::WwanConnection)? != CONNECTED {
-        return Err(field(L::WwanConnection, None, FieldFaultKind::UnknownValue));
+    match leaves.text(L::WwanConnection)? {
+        CONNECTED => {}
+        DISCONNECTED => return Ok(RadioState::NoService),
+        _ => return Err(field(L::WwanConnection, None, FieldFaultKind::UnknownValue)),
     }
     Ok(RadioState::Attached(Radio {
         network_service: leaves.vocabulary(

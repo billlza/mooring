@@ -37,6 +37,16 @@ pub(crate) fn pull_budget(next_probe_in: Option<Duration>) -> Option<Duration> {
     (room >= Duration::from_secs(1)).then_some(room)
 }
 
+/// What one tick of the collection did.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Pulled {
+    /// No node was asked anything.
+    Nothing,
+    /// A node was asked one request: with its `Status` poll, when the
+    /// request was one and it succeeded.
+    Asked(Option<Box<(NodeId, NodePoll)>>),
+}
+
 #[derive(Debug)]
 enum StoreState {
     Ready(CollectedUsage),
@@ -116,9 +126,11 @@ impl Collector {
         std::mem::take(&mut self.gaps)
     }
 
-    /// Uses at most one bounded request. Failed batches are tried at the
-    /// next interval; fresh persisted snapshots remain timestamped and the
-    /// core refuses them once their three-minute freshness limit expires.
+    /// Uses at most one bounded request, and says whether it made one
+    /// ([`Pulled`]), so that nothing else asks on the same tick. Failed
+    /// batches are tried at the next interval; fresh persisted snapshots
+    /// remain timestamped and the core refuses them once their three-minute
+    /// freshness limit expires.
     pub(crate) fn tick(
         &mut self,
         env: &Env<'_>,
@@ -127,12 +139,12 @@ impl Collector {
         now: UnixTime,
         budget: Duration,
         interval: Duration,
-    ) -> Option<(NodeId, NodePoll)> {
+    ) -> Pulled {
         let StoreState::Ready(history) = &mut self.store else {
-            return None;
+            return Pulled::Nothing;
         };
         if Instant::now() < self.first {
-            return None;
+            return Pulled::Nothing;
         }
         if self
             .pending
@@ -157,19 +169,25 @@ impl Collector {
                         .is_none_or(|at| Instant::now() >= *at)
                 })
                 .min_by_key(|node| self.due.get(&node.id).copied());
-            let node = node?;
+            let Some(node) = node else {
+                return Pulled::Nothing;
+            };
             let saved = history.node(&node.id).cloned().unwrap_or_default();
             match batch(node.clone(), saved, now) {
                 Ok(batch) => self.pending = Some(batch),
                 Err(error) => {
                     self.failure = Some(error.to_string());
                     self.due.insert(node.id.clone(), Instant::now() + interval);
-                    return None;
+                    return Pulled::Nothing;
                 }
             }
         }
-        let mut batch = self.pending.take()?;
-        let task = batch.tasks.pop_front()?;
+        let Some(mut batch) = self.pending.take() else {
+            return Pulled::Nothing;
+        };
+        let Some(task) = batch.tasks.pop_front() else {
+            return Pulled::Nothing;
+        };
         let request = match task {
             Task::Status => LineRequest::Status,
             Task::Month(month) => LineRequest::Usage { month },
@@ -182,7 +200,7 @@ impl Collector {
             Err(error) => {
                 self.failure = Some(format!("usage pull clock failed: {error}"));
                 self.due.insert(batch.node.id, Instant::now() + interval);
-                return None;
+                return Pulled::Asked(None);
             }
         };
         if let StoreState::Ready(history) = &self.store
@@ -200,12 +218,12 @@ impl Collector {
                     super::chain(&error)
                 ));
                 self.due.insert(batch.node.id, Instant::now() + interval);
-                return None;
+                return Pulled::Asked(None);
             }
         };
         if batch.tasks.is_empty() {
             let StoreState::Ready(history) = &self.store else {
-                return None;
+                return Pulled::Asked(None);
             };
             let mut candidate = history.clone();
             let node = batch.node.id;
@@ -221,7 +239,7 @@ impl Collector {
         } else {
             self.pending = Some(batch);
         }
-        polled
+        Pulled::Asked(polled.map(Box::new))
     }
 
     /// Local retention and persistence continue even with the M7 unplugged.

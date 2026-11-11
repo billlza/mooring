@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use mooring_model::{NodeId, UnixTime};
 
 use crate::error::UsageErrorKind;
+use crate::payments::Entitlements;
 use crate::policy::QuotaState;
 use crate::router::{RouterReading, RouterUnavailableReason};
 use crate::snapshot::{Ledgers, SimTotals, StatusInputs, assemble};
@@ -59,6 +60,15 @@ fn at() -> UnixTime {
 /// The status assembled before any node poll, with `ledgers` and the nodes
 /// the last poll did not reach.
 fn assembled(ledgers: Ledgers<'_>, unreachable: &BTreeMap<NodeId, NodeAgentState>) -> MacStatusV2 {
+    assembled_with(ledgers, unreachable, &Entitlements::none())
+}
+
+/// [`assembled`], with what the users' paid orders gave.
+fn assembled_with(
+    ledgers: Ledgers<'_>,
+    unreachable: &BTreeMap<NodeId, NodeAgentState>,
+    entitlements: &Entitlements,
+) -> MacStatusV2 {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
     assemble(StatusInputs {
         deployment: &fixture.deployment,
@@ -82,6 +92,7 @@ fn assembled(ledgers: Ledgers<'_>, unreachable: &BTreeMap<NodeId, NodeAgentState
         verdicts: &BTreeMap::new(),
         pending_apply: &BTreeMap::new(),
         alerts: Vec::new(),
+        entitlements,
     })
     .unwrap()
 }
@@ -148,4 +159,58 @@ fn while_no_ledger_is_pulled_the_usage_view_is_not_pulled_and_no_row_carries_usa
             .values()
             .all(|row| row.usage.is_none() && row.quota == QuotaState::NoQuota)
     );
+}
+
+/// A paid user's row shows the quota and the expiry their paid order gave
+/// (design §9.6); the other users' rows are as before.
+#[test]
+fn a_paid_users_row_shows_the_paid_policy() {
+    use crate::payments::{FeedPage, PaymentLedger};
+    use crate::policy::{ExpiryState, paid_quota};
+
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let ids: Vec<_> = fixture.deployment.users().keys().cloned().collect();
+    let document = serde_json::json!({
+        "format": "mooring-portal-entitlements",
+        "version": 1,
+        "generated_at": at().as_secs(),
+        "livemode": true,
+        "after": 0,
+        "entries": [{
+            "seq": 1, "kind": "grant", "order": "aaaaaaaaaaaaaaaaaaaa", "user": ids[0].as_str(),
+            "plan": "month-100", "plan_kind": "month", "days": 30, "traffic_bytes": 100_000_000_000_u64,
+            "amount": 800, "currency": "gbp", "paid_at": at().as_secs(), "renewal_of": null,
+            "amount_refunded": null, "refunded_in_full": null, "amount_disputed": null,
+            "recorded_at": at().as_secs()
+        }],
+        "next": 1,
+        "more": false
+    });
+    let page = FeedPage::decode(&serde_json::to_vec(&document).unwrap(), 0).unwrap();
+    let ledger = PaymentLedger::new()
+        .apply(&page, fixture.deployment.users(), at(), false)
+        .unwrap()
+        .ledger;
+    let paid = assembled_with(
+        Ledgers::NotPulled,
+        &BTreeMap::new(),
+        &ledger.entitlements(false),
+    );
+    let plain = assembled(Ledgers::NotPulled, &BTreeMap::new());
+    let row = &paid.parts().users[&ids[0]];
+    assert_eq!(
+        row.quota,
+        QuotaState::without_usage(Some(paid_quota(
+            std::num::NonZeroU64::new(100_000_000_000).unwrap()
+        )))
+    );
+    assert_eq!(
+        row.expiry,
+        ExpiryState::Expires {
+            at: UnixTime::from_secs(at().as_secs() + 30 * 86_400),
+            days_left: 30
+        }
+    );
+    assert_ne!(row, &plain.parts().users[&ids[0]]);
+    assert_eq!(paid.parts().users[&ids[1]], plain.parts().users[&ids[1]]);
 }
