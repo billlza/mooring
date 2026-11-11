@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooring_model::counters::{ConfigGeneration, RuntimeRevision};
 use mooring_model::deployment::{Bookkeeping, Deployment, DeploymentInit, DeploymentParts};
@@ -13,7 +14,8 @@ use mooring_model::ids::{NodeId, UserId};
 use mooring_model::node::{AppliedConfig, LifecycleStage};
 use mooring_model::secret::SecretRef;
 use mooring_model::sim::SimPolicy;
-use mooring_model::state::{RuntimeIntent, StateFile, StateV2};
+use mooring_model::state::{RuntimeIntent, StateFile, StateV3};
+use mooring_model::time::UnixTime;
 use mooring_model::user::UserStatus;
 
 use crate::durable::{self, LockMode, StateLock};
@@ -41,16 +43,57 @@ pub const LOCK_FILE: &str = "state.lock";
 ///
 /// The store never reads `HOME`: callers pass the directory, which must
 /// already exist (for example `~/Library/Application Support/Mooring`).
+///
+/// Lifting a document of version 2 or older dates its revoked users'
+/// revocations at the lift (design §7, §15.7): by the Mac's clock unless
+/// the caller fixes the time ([`Store::lifting_at`]).
 #[derive(Debug, Clone)]
 pub struct Store {
     dir: PathBuf,
+    lifted_at: LiftClock,
+}
+
+/// What dates a lift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiftClock {
+    /// The Mac's clock, read when a lift is made.
+    System,
+    /// A time the caller fixed.
+    Fixed(UnixTime),
 }
 
 impl Store {
-    /// A store rooted at `dir`. No I/O happens until the first operation.
+    /// A store rooted at `dir`, lifting older documents at the Mac's clock.
+    /// No I/O happens until the first operation.
     #[must_use]
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+            lifted_at: LiftClock::System,
+        }
+    }
+
+    /// This store, lifting older documents at `at` rather than at the Mac's
+    /// clock: a caller that reads time from a clock of its own, a test's.
+    #[must_use]
+    pub fn lifting_at(self, at: UnixTime) -> Self {
+        Self {
+            dir: self.dir,
+            lifted_at: LiftClock::Fixed(at),
+        }
+    }
+
+    /// The time a lift is dated at.
+    fn lift_time(&self) -> Result<UnixTime, StoreError> {
+        match self.lifted_at {
+            LiftClock::Fixed(at) => Ok(at),
+            LiftClock::System => SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|since| UnixTime::from_secs(since.as_secs()))
+                .map_err(|_| StoreError::Clock {
+                    to: StateFile::CURRENT_VERSION,
+                }),
+        }
     }
 
     /// The directory the store lives in.
@@ -83,7 +126,7 @@ impl Store {
     /// exit. It references no secrets. `InvalidChange` if `init` breaks a
     /// model invariant (`PlanNotRecorded` unless the exit's SIM plan is
     /// recorded), checked before anything is read or written.
-    pub fn init(&self, init: DeploymentInit) -> Result<StateV2, StoreError> {
+    pub fn init(&self, init: DeploymentInit) -> Result<StateV3, StoreError> {
         let deployment =
             Deployment::new(init).map_err(|source| StoreError::InvalidChange { source })?;
         let _lock = StateLock::acquire(&self.lock_path(), LockMode::Exclusive)?;
@@ -91,7 +134,7 @@ impl Store {
         if durable::state_exists(&path)? {
             return Err(StoreError::AlreadyInitialized { path });
         }
-        let state = StateV2 {
+        let state = StateV3 {
             deployment,
             runtime: RuntimeIntent::new(),
         };
@@ -101,11 +144,11 @@ impl Store {
 
     /// Reads the state, lifted to the newest version. Nothing is written,
     /// even when the document on disk is older.
-    pub fn load(&self) -> Result<StateV2, StoreError> {
+    pub fn load(&self) -> Result<StateV3, StoreError> {
         let _lock = StateLock::acquire(&self.lock_path(), LockMode::Shared)?;
         let path = self.state_path();
         let bytes = durable::read_state(&path)?;
-        Ok(migrate::decode(&path, &bytes)?.state)
+        Ok(migrate::decode(&path, &bytes, || self.lift_time())?.state)
     }
 
     /// Applies a change to the deployment, if the configuration generation
@@ -127,9 +170,11 @@ impl Store {
     /// remove no node (`NodeLifecycleEdited`): a planned node is removed
     /// only by the record `Bookkeeping::PlanCancelled`, through
     /// [`crate::record_with_secrets`]. It may change a user's
-    /// status only along the user transitions, and remove only a revoked
-    /// user (`UserStatusEdited`): a revocation settles only through
-    /// `Bookkeeping`. It may edit the exit's SIM policy only to one whose
+    /// status only along the user transitions, and remove no user
+    /// (`UserStatusEdited`): a revocation settles only through
+    /// `Bookkeeping`, and a user leaves only by the record
+    /// `RevokedUserRemoved`. It may not edit the ids of removed users kept
+    /// while a node may still name them (`ForgottenEdited`). It may edit the exit's SIM policy only to one whose
     /// plan is recorded (`InvalidChange{PlanNotRecorded}`, P0-1). And it
     /// must not change which secrets the state references: such changes go
     /// through [`crate::update_config_with_secrets`], which orders the
@@ -138,7 +183,7 @@ impl Store {
         &self,
         expected: ConfigGeneration,
         change: F,
-    ) -> Result<StateV2, ChangeError<E>>
+    ) -> Result<StateV3, ChangeError<E>>
     where
         F: FnOnce(DeploymentParts) -> Result<DeploymentParts, E>,
     {
@@ -163,7 +208,7 @@ impl Store {
         &self,
         expected: ConfigGeneration,
         entry: Bookkeeping,
-    ) -> Result<StateV2, StoreError> {
+    ) -> Result<StateV3, StoreError> {
         let (txn, current) = self.begin()?;
         let old_refs = current.deployment.required_secrets();
         let next = record_entry(current, expected, entry)?;
@@ -179,14 +224,14 @@ impl Store {
         &self,
         expected: RuntimeRevision,
         exit_enabled: bool,
-    ) -> Result<StateV2, StoreError> {
+    ) -> Result<StateV3, StoreError> {
         let (txn, current) = self.begin()?;
         let found = current.runtime.revision;
         if found != expected {
             return Err(StoreError::RevisionConflict { expected, found });
         }
         let revision = expected.next().map_err(counter_overflow)?;
-        let next = StateV2 {
+        let next = StateV3 {
             deployment: current.deployment,
             runtime: RuntimeIntent {
                 exit_enabled,
@@ -199,11 +244,11 @@ impl Store {
 
     /// Takes the exclusive lock and reads the current state for one
     /// read-modify-write.
-    pub(crate) fn begin(&self) -> Result<(Txn<'_>, StateV2), StoreError> {
+    pub(crate) fn begin(&self) -> Result<(Txn<'_>, StateV3), StoreError> {
         let lock = StateLock::acquire(&self.lock_path(), LockMode::Exclusive)?;
         let path = self.state_path();
         let bytes = durable::read_state(&path)?;
-        let decoded = migrate::decode(&path, &bytes)?;
+        let decoded = migrate::decode(&path, &bytes, || self.lift_time())?;
         let backup = (decoded.from != StateFile::CURRENT_VERSION).then_some(PendingBackup {
             from: decoded.from,
             original: bytes,
@@ -237,7 +282,7 @@ impl Txn<'_> {
     /// older version, its original bytes are first written durably to
     /// `state.json.bak-<from>-<to>`. Returns the lock, so the caller can
     /// finish work that must precede any other writer before releasing it.
-    pub(crate) fn commit(self, state: &StateV2) -> Result<StateLock, StoreError> {
+    pub(crate) fn commit(self, state: &StateV3) -> Result<StateLock, StoreError> {
         let bytes = encode(state)?;
         let dir = &self.store.dir;
         if let Some(backup) = &self.backup {
@@ -250,7 +295,7 @@ impl Txn<'_> {
 }
 
 /// Requires the generation on disk to be `expected`.
-fn require_generation(current: &StateV2, expected: ConfigGeneration) -> Result<(), StoreError> {
+fn require_generation(current: &StateV3, expected: ConfigGeneration) -> Result<(), StoreError> {
     let found = current.deployment.config_generation();
     if found == expected {
         Ok(())
@@ -264,10 +309,10 @@ fn require_generation(current: &StateV2, expected: ConfigGeneration) -> Result<(
 /// every node's confirmed generation is the one it had before, and every
 /// node is still there, at its stage or a later one.
 pub(crate) fn change_config<E, F>(
-    current: StateV2,
+    current: StateV3,
     expected: ConfigGeneration,
     change: F,
-) -> Result<StateV2, ChangeError<E>>
+) -> Result<StateV3, ChangeError<E>>
 where
     F: FnOnce(DeploymentParts) -> Result<DeploymentParts, E>,
 {
@@ -276,6 +321,7 @@ where
     let confirmed = confirmed_generations(&current.deployment);
     let stages = node_stages(&current.deployment);
     let statuses = user_statuses(&current.deployment);
+    let forgotten = current.deployment.forgotten().clone();
     let sim = current.deployment.exit().sim.clone();
     let parts = change(current.deployment.into_parts()).map_err(ChangeError::Refused)?;
     if parts.config_generation != expected {
@@ -293,8 +339,11 @@ where
     require_confirmations_kept(&confirmed, &deployment)?;
     require_lifecycles_forward(&stages, &deployment)?;
     require_user_transitions(&statuses, &deployment)?;
+    if deployment.forgotten() != &forgotten {
+        return Err(StoreError::ForgottenEdited.into());
+    }
     require_recorded_plan_if_edited(&sim, &deployment)?;
-    Ok(StateV2 {
+    Ok(StateV3 {
         deployment,
         runtime: current.runtime,
     })
@@ -374,21 +423,19 @@ fn user_statuses(deployment: &Deployment) -> BTreeMap<UserId, UserStatus> {
 }
 
 /// Refuses a change that moves a user's status other than by the user
-/// transitions, or removes a user who is not revoked
-/// (`UserStatus::may_change_to`, `may_be_removed`): the model documents
-/// the transitions, and this is where a closure could otherwise skip them,
-/// as it could forge a confirmation (design §7). A new user may start in
-/// any status the model accepts.
+/// transitions (`UserStatus::may_change_to`), or removes a user: the model
+/// documents the transitions, and this is where a closure could otherwise
+/// skip them, as it could forge a confirmation (design §7). A user leaves
+/// only by the record `RevokedUserRemoved` (§15.7), which keeps the bare
+/// id while a node may still name it, so a closure removes none, not even
+/// a revoked one. A new user may start in any status the model accepts.
 fn require_user_transitions(
     before: &BTreeMap<UserId, UserStatus>,
     after: &Deployment,
 ) -> Result<(), StoreError> {
     for (id, &from) in before {
         let to = after.users().get(id).map(|user| user.status);
-        let allowed = match to {
-            Some(to) => from.may_change_to(to),
-            None => from.may_be_removed(),
-        };
+        let allowed = to.is_some_and(|to| from.may_change_to(to));
         if !allowed {
             return Err(StoreError::UserStatusEdited {
                 user: id.clone(),
@@ -423,16 +470,16 @@ fn require_recorded_plan_if_edited(
 /// Checks the generation and applies a bookkeeping record, which keeps it;
 /// the result is a validated state with the same runtime intent.
 pub(crate) fn record_entry(
-    current: StateV2,
+    current: StateV3,
     expected: ConfigGeneration,
     entry: Bookkeeping,
-) -> Result<StateV2, StoreError> {
+) -> Result<StateV3, StoreError> {
     require_generation(&current, expected)?;
     let deployment = current
         .deployment
         .record(entry)
         .map_err(|source| StoreError::InvalidChange { source })?;
-    Ok(StateV2 {
+    Ok(StateV3 {
         deployment,
         runtime: current.runtime,
     })
@@ -462,7 +509,7 @@ fn backup_name(from: u32, to: u32) -> String {
 }
 
 /// The on-disk form: pretty-printed JSON with a trailing newline.
-fn encode(state: &StateV2) -> Result<Vec<u8>, StoreError> {
+fn encode(state: &StateV3) -> Result<Vec<u8>, StoreError> {
     let mut bytes =
         serde_json::to_vec_pretty(state).map_err(|source| StoreError::Encode { source })?;
     bytes.push(b'\n');

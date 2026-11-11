@@ -13,6 +13,7 @@ use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_model::secret::{MAX_ROUTER_ADMIN_PASSWORD_BYTES, SecretMaterial, SecretRef};
 use mooring_store::{SecretOp, SecretStoreError};
 
+use super::support::NOW;
 use crate::cli::Cli;
 use crate::error::{CommandError, EXIT_LOCAL, EXIT_USAGE, LocalError, reason_exit_code};
 use crate::keychain::{
@@ -24,6 +25,7 @@ use crate::prompt::{
 };
 use crate::router::cookies::{CookieJar, MAX_COOKIE_BYTES, MAX_COOKIES, parse_set_cookie};
 use crate::router::error::{HttpFault, Missing, RouterError};
+use mooring_model::UnixTime;
 
 #[test]
 fn the_cli_definition_is_valid() {
@@ -388,7 +390,10 @@ fn a_record_is_tried_on_a_deployment_before_anything_is_written() {
     use crate::state::recorded;
 
     let ams1 = NodeId::parse("ams1").unwrap();
-    let cancel = || Bookkeeping::PlanCancelled { node: ams1.clone() };
+    let cancel = || Bookkeeping::PlanCancelled {
+        node: ams1.clone(),
+        at: UnixTime::from_secs(NOW),
+    };
     let planned = fixture(|parts| {
         let node = parts.nodes.iter_mut().find(|node| node.id == ams1).unwrap();
         node.lifecycle = NodeLifecycle::Planned;

@@ -119,31 +119,35 @@ fn corrupt_documents_are_refused() {
         ("not JSON", "garbage".to_owned()),
         ("truncated", valid[..valid.len() / 2].to_owned()),
         ("trailing bytes", format!("{valid}x")),
-        ("no version", valid.replacen("\"version\": 2,", "", 1)),
+        ("no version", valid.replacen("\"version\": 3,", "", 1)),
         (
             "string version",
-            valid.replacen("\"version\": 2", "\"version\": \"2\"", 1),
+            valid.replacen("\"version\": 3", "\"version\": \"3\"", 1),
         ),
         (
             "negative version",
-            valid.replacen("\"version\": 2", "\"version\": -1", 1),
+            valid.replacen("\"version\": 3", "\"version\": -1", 1),
         ),
         (
             "version beyond u32",
-            valid.replacen("\"version\": 2", "\"version\": 4294967296", 1),
+            valid.replacen("\"version\": 3", "\"version\": 4294967296", 1),
         ),
         (
             "version 0",
-            valid.replacen("\"version\": 2", "\"version\": 0", 1),
+            valid.replacen("\"version\": 3", "\"version\": 0", 1),
         ),
-        // A version-2 document announced as version 1 fails version 1's schema.
+        // A version-3 document announced as version 1 or 2 fails that version's schema.
         (
             "version 1 schema",
-            valid.replacen("\"version\": 2", "\"version\": 1", 1),
+            valid.replacen("\"version\": 3", "\"version\": 1", 1),
+        ),
+        (
+            "version 2 schema",
+            valid.replacen("\"version\": 3", "\"version\": 2", 1),
         ),
         (
             "unknown field",
-            valid.replacen("\"version\": 2,", "\"version\": 2, \"secrets\": {},", 1),
+            valid.replacen("\"version\": 3,", "\"version\": 3, \"secrets\": {},", 1),
         ),
         (
             "invalid counter",
@@ -175,22 +179,22 @@ fn newer_versions_are_never_downgraded() {
     let (_dir, store, _) = initialised();
     let valid = String::from_utf8(state_bytes(&store)).unwrap();
     for (found, text) in [
-        (3, valid.replacen("\"version\": 2", "\"version\": 3", 1)),
+        (4, valid.replacen("\"version\": 3", "\"version\": 4", 1)),
         // The newer schema is unknown, so only its version is read.
         (
-            4,
-            r#"{"version": 4, "a_field_from_the_future": [1, 2, 3]}"#.to_owned(),
+            5,
+            r#"{"version": 5, "a_field_from_the_future": [1, 2, 3]}"#.to_owned(),
         ),
         (u32::MAX, format!(r#"{{"version": {}}}"#, u32::MAX)),
     ] {
         fs::write(store.state_path(), &text).unwrap();
         let error = store.load().unwrap_err();
         assert!(
-            matches!(error, StoreError::DowngradeRefused { found: f, newest: 2 } if f == found),
+            matches!(error, StoreError::DowngradeRefused { found: f, newest: 3 } if f == found),
             "{error:?}"
         );
         assert_every_operation_fails(&store, StoreErrorKind::DowngradeRefused);
         assert_eq!(state_bytes(&store), text.as_bytes());
-        assert!(!store.backup_path(found, 2).exists());
+        assert!(!store.backup_path(found, 3).exists());
     }
 }

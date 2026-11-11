@@ -656,7 +656,9 @@ fn grammar_shaped_text_in_dropped_fields_stays_out() {
 fn revoked_users_are_left_out() {
     let mut status = scenario("serving");
     let ids: Vec<UserId> = status.users.keys().cloned().collect();
-    status.users.get_mut(&ids[0]).unwrap().status = UserStatus::Revoked;
+    status.users.get_mut(&ids[0]).unwrap().status = UserStatus::Revoked {
+        since: UnixTime::from_secs(1_791_417_600),
+    };
     status.users.get_mut(&ids[1]).unwrap().status = UserStatus::Suspended {
         reason: SuspendReason::AbuseReview,
         since: status.at,

@@ -138,7 +138,9 @@ fn export_profiles_holds_only_the_users_named() {
 fn a_bundle_withholding_everyone_is_written_without_reading_a_secret() {
     let deployment = fixture(|parts| {
         parts.users[0].agreement = None;
-        parts.users[1].status = UserStatus::Revoked;
+        parts.users[1].status = UserStatus::Revoked {
+            since: UnixTime::from_secs(NOW),
+        };
         parts.users[1].per_node.clear();
     });
     let users = ids(&deployment);

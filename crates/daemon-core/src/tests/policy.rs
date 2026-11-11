@@ -322,8 +322,14 @@ fn only_active_users_are_evaluated_and_no_policy_proposes_nothing() {
         .unwrap()
         .suspend(SuspendReason::Operator, now)
         .unwrap();
-    users.get_mut(&ids[1]).unwrap().revoke().unwrap();
-    users.get_mut(&ids[2]).unwrap().status = UserStatus::Revoked;
+    users
+        .get_mut(&ids[1])
+        .unwrap()
+        .revoke(UnixTime::from_secs(1_791_417_600))
+        .unwrap();
+    users.get_mut(&ids[2]).unwrap().status = UserStatus::Revoked {
+        since: UnixTime::from_secs(1_791_417_600),
+    };
     users.get_mut(&ids[2]).unwrap().per_node.clear();
     // Inactive users need no usage either.
     assert_eq!(
@@ -663,9 +669,13 @@ fn revoking_users_share_nothing_and_admission_lowers_every_share() {
     let mut parts = twenty(6, Some(AutoQuotaPolicy::PILOT)).into_parts();
     // Of the fourteen suspended users, one is revoking and one revoked.
     parts.users[10].resume().unwrap();
-    parts.users[10].revoke().unwrap();
+    parts.users[10]
+        .revoke(UnixTime::from_secs(1_791_417_600))
+        .unwrap();
     parts.users[11].resume().unwrap();
-    parts.users[11].status = UserStatus::Revoked;
+    parts.users[11].status = UserStatus::Revoked {
+        since: UnixTime::from_secs(1_791_417_600),
+    };
     parts.users[11].per_node.clear();
     let deployment = Deployment::try_from(parts.clone()).unwrap();
     assert_eq!(active_ids(&deployment).len(), 6);

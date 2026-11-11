@@ -2429,6 +2429,16 @@
         }
       }
     },
+    "Revoked since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %@ 起已撤销"
+          }
+        }
+      }
+    },
     "Role": {
       "localizations": {
         "zh-Hans": {

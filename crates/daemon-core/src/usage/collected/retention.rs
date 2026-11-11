@@ -27,7 +27,10 @@ fn after_thirteen_months(at: UnixTime) -> Result<UnixTime, UsageError> {
 }
 
 fn revoked(status: UserStatus) -> bool {
-    matches!(status, UserStatus::Revoked | UserStatus::RevokePending)
+    matches!(
+        status,
+        UserStatus::Revoked { .. } | UserStatus::RevokePending
+    )
 }
 
 /// When a user's retained usage goes, as the prune decides it.

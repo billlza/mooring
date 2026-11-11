@@ -231,7 +231,7 @@ fn checked_nodes<'a>(
     // operator or daemon action, never a side effect of exporting.
     match user.status {
         UserStatus::Active => {}
-        UserStatus::Suspended { .. } | UserStatus::RevokePending | UserStatus::Revoked => {
+        UserStatus::Suspended { .. } | UserStatus::RevokePending | UserStatus::Revoked { .. } => {
             return Err(ExportError::UserNotActive {
                 user: user.id.clone(),
             });

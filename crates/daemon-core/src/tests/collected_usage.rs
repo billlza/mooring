@@ -423,7 +423,9 @@ fn detail_rolls_up_before_expiry_and_revoked_user_bytes_are_deleted_everywhere()
     let mut parts = deployment.into_parts();
     for user in &mut parts.users {
         if user.id == id {
-            user.status = UserStatus::Revoked;
+            user.status = UserStatus::Revoked {
+                since: UnixTime::from_secs(1_791_417_600),
+            };
             user.per_node.clear();
         }
     }

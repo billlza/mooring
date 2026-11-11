@@ -20,6 +20,7 @@ use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_
 use super::cancel::{lon1_dir, partially_adopted};
 use super::export::exporting;
 use super::node::{ADDRESS, adopt_args, agent_file, host_key_file, planned};
+use super::support::NOW;
 use super::support::{Answered, Expected, FailingLog, Harness, MOVED, Refusals};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::{EXIT_LOCAL, LocalError};
@@ -27,6 +28,7 @@ use crate::node::NodeError;
 use crate::node::files::read_public_key;
 use crate::node::planned::{PlannedAction, pin_in_state};
 use crate::prompt::Answer;
+use mooring_model::UnixTime;
 
 fn node_id(text: &str) -> NodeId {
     NodeId::parse(text).unwrap()
@@ -389,6 +391,7 @@ fn the_pin_refuses_a_node_cancelled_or_past_planned_since_it_was_read() {
         generation,
         Bookkeeping::PlanCancelled {
             node: node_id("lon1"),
+            at: UnixTime::from_secs(NOW),
         },
     )
     .unwrap();
@@ -604,6 +607,7 @@ fn a_repin_whose_node_is_cancelled_while_the_question_waits_is_refused() {
             generation,
             Bookkeeping::PlanCancelled {
                 node: node_id("lon1"),
+                at: UnixTime::from_secs(NOW),
             },
         );
         // Its keychain is not this one: the commit stands.

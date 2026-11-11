@@ -196,9 +196,12 @@ pub enum StoreError {
     /// A migration step could not lift the state to the next version; the
     /// document on disk is valid for its own version and unchanged.
     ///
-    /// In this build only `V1 → V2` can fail, with `StopPolicyUnchosen`: a
+    /// In this build `V1 → V2` fails with `StopPolicyUnchosen` for a
     /// version-1 SIM policy without a hard stop, which the lifted policy
-    /// cannot keep (`mooring_model::v1`). Every explicit hard stop lifts.
+    /// cannot keep (`mooring_model::v1`), and for a version-1 document that
+    /// breaks a rule version 2 added; every explicit hard stop lifts. `V2 →
+    /// V3` fails only for a revocation in the calendar's last month, whose
+    /// nodes' records have no expiry inside the calendar.
     #[error("migrating the state from version {from} to {to} failed")]
     MigrationFailed {
         /// The version the step started from.
@@ -208,6 +211,14 @@ pub enum StoreError {
         /// Why the step failed.
         #[source]
         source: ModelError,
+    },
+    /// The Mac's clock reads before 1970, so the lift of an older state
+    /// cannot be dated (design §7, `Revoked{since}`); nothing is read or
+    /// written.
+    #[error("the Mac's clock reads before 1970, so the state cannot be lifted to version {to}")]
+    Clock {
+        /// The version the lift targets.
+        to: u32,
     },
     /// The state could not be serialised.
     #[error("failed to encode a document for the store")]
@@ -285,7 +296,7 @@ pub enum StoreError {
     /// in progress settles only through `Bookkeeping` and never goes back.
     /// `to` is `None` when the change removed the user.
     #[error(
-        "the change moved user {user} from {from:?} to {to:?}; a status changes only by suspend, resume and revoke, a revocation settles only through Bookkeeping, and only a revoked user may be removed"
+        "the change moved user {user} from {from:?} to {to:?}; a status changes only by suspend, resume and revoke, a revocation settles only through Bookkeeping, and a user is removed only by the record RevokedUserRemoved"
     )]
     UserStatusEdited {
         /// The user.
@@ -295,6 +306,15 @@ pub enum StoreError {
         /// The status the change left; `None` if it removed the user.
         to: Option<UserStatus>,
     },
+    /// A configuration change edited the ids of removed users a node may
+    /// still name (`Deployment::forgotten`), which only the records
+    /// `RevokedUserRemoved` and `ForgottenExpired` set (design §15.7): a
+    /// closure that added one would hide a node's entries for an unknown
+    /// user, and one that dropped one early would make them refused.
+    #[error(
+        "the change edited the ids of removed users kept while a node may still name them; only the records RevokedUserRemoved and ForgottenExpired change them"
+    )]
+    ForgottenEdited,
     /// A change, or the initial deployment ([`crate::Store::init`]), breaks
     /// a model invariant.
     #[error("the new or changed deployment is invalid")]
@@ -430,6 +450,8 @@ kinds! {
         DowngradeRefused,
         /// See [`StoreError::MigrationFailed`].
         MigrationFailed,
+        /// See [`StoreError::Clock`].
+        Clock,
         /// See [`StoreError::Encode`].
         Encode,
         /// See [`StoreError::GenerationConflict`].
@@ -446,6 +468,8 @@ kinds! {
         NodeLifecycleEdited,
         /// See [`StoreError::UserStatusEdited`].
         UserStatusEdited,
+        /// See [`StoreError::ForgottenEdited`].
+        ForgottenEdited,
         /// See [`StoreError::InvalidChange`].
         InvalidChange,
         /// See [`StoreError::SecretRefsChanged`].
@@ -485,6 +509,7 @@ impl StoreError {
             Self::StateCorrupt { .. } => StoreErrorKind::StateCorrupt,
             Self::DowngradeRefused { .. } => StoreErrorKind::DowngradeRefused,
             Self::MigrationFailed { .. } => StoreErrorKind::MigrationFailed,
+            Self::Clock { .. } => StoreErrorKind::Clock,
             Self::Encode { .. } => StoreErrorKind::Encode,
             Self::GenerationConflict { .. } => StoreErrorKind::GenerationConflict,
             Self::RevisionConflict { .. } => StoreErrorKind::RevisionConflict,
@@ -493,6 +518,7 @@ impl StoreError {
             Self::AppliedEdited { .. } => StoreErrorKind::AppliedEdited,
             Self::NodeLifecycleEdited { .. } => StoreErrorKind::NodeLifecycleEdited,
             Self::UserStatusEdited { .. } => StoreErrorKind::UserStatusEdited,
+            Self::ForgottenEdited => StoreErrorKind::ForgottenEdited,
             Self::InvalidChange { .. } => StoreErrorKind::InvalidChange,
             Self::SecretRefsChanged { .. } => StoreErrorKind::SecretRefsChanged,
             Self::SecretPlanMismatch { .. } => StoreErrorKind::SecretPlanMismatch,

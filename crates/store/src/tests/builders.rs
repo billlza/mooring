@@ -34,7 +34,7 @@ use mooring_model::secret::{
 use mooring_model::sim::{
     BillDay, Carrier, CycleRule, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy,
 };
-use mooring_model::state::StateV2;
+use mooring_model::state::StateV3;
 use mooring_model::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
     TargetAttestation, TargetFacts, TargetSpec, TlsHandshake, TlsOutcome, TlsVersion, qualify,
@@ -51,6 +51,9 @@ use crate::secrets::InMemorySecretStore;
 use crate::store::Store;
 
 /// The warning threshold of the version-1 goldens, 450e9 bytes.
+/// The time the tests' revocations and records are made at.
+pub(crate) const RECORDED_AT: UnixTime = UnixTime::from_secs(1_791_417_600);
+
 pub(crate) const V1_GOLDEN_WARN_BYTES: u64 = 450_000_000_000;
 /// The hard stop of the version-1 goldens, 560e9 bytes.
 pub(crate) const V1_GOLDEN_HARD_STOP_BYTES: u64 = 560_000_000_000;
@@ -123,7 +126,7 @@ pub(crate) fn deployment_init() -> DeploymentInit {
 }
 
 /// A store initialised with an empty deployment.
-pub(crate) fn initialised() -> (TempDir, Store, StateV2) {
+pub(crate) fn initialised() -> (TempDir, Store, StateV3) {
     let (dir, store) = empty_store();
     let state = store.init(deployment_init()).unwrap();
     (dir, store, state)
@@ -312,7 +315,7 @@ pub(crate) fn target() -> TargetSpec {
 /// A store whose deployment holds `lon1`, adopted at 45.67.89.10 with a
 /// REALITY target, and user 1 on it, with every secret written; the
 /// deployment is at generation 3.
-pub(crate) fn adopted_store() -> (TempDir, Store, StateV2, InMemorySecretStore) {
+pub(crate) fn adopted_store() -> (TempDir, Store, StateV3, InMemorySecretStore) {
     let (dir, store, state) = initialised();
     let mut secrets = InMemorySecretStore::new();
     let add = |parts| with_node(parts, planned_node("lon1", 1, 10));

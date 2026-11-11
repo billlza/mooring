@@ -15,6 +15,7 @@ use crate::payments::{
     ApplyRefusal, Contradiction, FeedPage, GrantOutcome, HeldReason, LedgerError, LedgerEvent,
     MAX_LEDGER_BYTES, PaymentLedger, Stop, StopReason,
 };
+use mooring_model::UnixTime;
 
 const A: &str = "0123456789abcdefghjk";
 const B: &str = "zzzzzzzzzzzzzzzzzzzz";
@@ -370,7 +371,13 @@ fn a_contradiction_refuses_the_whole_page() {
 fn grants_for_unknown_or_revoked_users_are_held() {
     let users = by_id(vec![
         user("pilotuserb", UserStatus::RevokePending, None),
-        user("pilotuserc", UserStatus::Revoked, None),
+        user(
+            "pilotuserc",
+            UserStatus::Revoked {
+                since: UnixTime::from_secs(1_791_417_600),
+            },
+            None,
+        ),
         user(
             "pilotuserd",
             UserStatus::Suspended {

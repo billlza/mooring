@@ -166,7 +166,7 @@ impl UserState {
                 since,
             },
             UserStatus::RevokePending => Self::RevokePending,
-            UserStatus::Revoked => Self::Revoked,
+            UserStatus::Revoked { .. } => Self::Revoked,
         }
     }
 }
@@ -402,7 +402,12 @@ mod tests {
         let cases = [
             (UserStatus::Active, json!("active")),
             (UserStatus::RevokePending, json!("revoke_pending")),
-            (UserStatus::Revoked, json!("revoked")),
+            (
+                UserStatus::Revoked {
+                    since: UnixTime::from_secs(1_791_417_600),
+                },
+                json!("revoked"),
+            ),
             (
                 suspended(SuspendReason::Operator),
                 json!({"suspended": {"reason": "operator", "since": 1_793_000_000}}),

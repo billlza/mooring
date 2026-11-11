@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The frozen version-1 state schema (design §7), and its lift to the
-//! current version.
+//! The frozen version-1 state schema (design §7), and its lift to version 2,
+//! which [`crate::v2`] lifts on to the current version.
 //!
 //! Version 1 is read, never written. A version-1 `state.json` decodes into
 //! these types, which check the version-1 invariants exactly as version 1
@@ -25,7 +25,9 @@
 //!   stop against;
 //! - users get no expiry, quota, alias or agreement record; the deployment
 //!   gets no cap on active users, no automatic quotas, no alert channels
-//!   and no viewers; the uplink has no baseline.
+//!   and no viewers; the uplink has no baseline; a revoked user is revoked
+//!   in version 2's terms, without a time, which the lift from version 2
+//!   gives it.
 //!
 //! The version-1 format was never released (design §22, "Format note"), so
 //! no version-1 document exists outside the goldens, and Mooring ships no
@@ -43,15 +45,16 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::counters::ConfigGeneration;
-use crate::deployment::{CapacityPolicy, Deployment, DeploymentParts, Entities, index_by_id};
+use crate::deployment::{CapacityPolicy, Entities, index_by_id};
 use crate::error::{EntityId, ModelError};
 use crate::exit::{EgressCheck, ExitSite, FlowCap, ProbePolicy, TrafficPolicy, Uplink};
 use crate::ids::{LocalLabel, NodeId, UserId};
 use crate::iface::InterfaceSelector;
 use crate::node::Node;
 use crate::sim::{BillDay, CycleRule, SimPolicy, StopPolicy};
-use crate::state::{RuntimeIntent, StateV2};
-use crate::user::{ClientProfile, User, UserNodePublic, UserPolicy, UserStatus};
+use crate::state::RuntimeIntent;
+use crate::user::{ClientProfile, User, UserNodePublic, UserPolicy};
+use crate::v2::{CHECKED_WITH, DeploymentV2, DeploymentV2Parts, StateV2, UserStatusV2, UserV2};
 use crate::wg::WgIndex;
 
 /// The version-1 SIM billing cycle start day, 1..=28 so that it exists in
@@ -261,7 +264,12 @@ impl TryFrom<DeploymentV1Parts> for DeploymentV1 {
     fn try_from(parts: DeploymentV1Parts) -> Result<Self, Self::Error> {
         let nodes = index_by_id(parts.nodes.clone(), |node: &Node| &node.id, EntityId::Node)?;
         let users = index_by_id(
-            parts.users.iter().cloned().map(User::from).collect(),
+            parts
+                .users
+                .iter()
+                .cloned()
+                .map(|user| UserV2::from(user).lift(CHECKED_WITH))
+                .collect(),
             |user: &User| &user.id,
             EntityId::User,
         )?;
@@ -346,7 +354,7 @@ impl Serialize for StateV1 {
 
 // The lift to version 2.
 
-impl From<UserStatusV1> for UserStatus {
+impl From<UserStatusV1> for UserStatusV2 {
     fn from(status: UserStatusV1) -> Self {
         match status {
             UserStatusV1::Active => Self::Active,
@@ -356,7 +364,7 @@ impl From<UserStatusV1> for UserStatus {
     }
 }
 
-impl From<UserV1> for User {
+impl From<UserV1> for UserV2 {
     fn from(user: UserV1) -> Self {
         Self {
             id: user.id,
@@ -409,12 +417,12 @@ impl TryFrom<ExitSiteV1> for ExitSite {
     }
 }
 
-impl TryFrom<DeploymentV1> for Deployment {
+impl TryFrom<DeploymentV1> for DeploymentV2 {
     type Error = ModelError;
 
     fn try_from(deployment: DeploymentV1) -> Result<Self, Self::Error> {
         let parts = deployment.0;
-        Self::try_from(DeploymentParts {
+        Self::try_from(DeploymentV2Parts {
             config_generation: parts.config_generation,
             exit: parts.exit.try_into()?,
             policy: parts.policy,
@@ -423,7 +431,7 @@ impl TryFrom<DeploymentV1> for Deployment {
             alerting: None,
             viewers: Vec::new(),
             nodes: parts.nodes,
-            users: parts.users.into_iter().map(User::from).collect(),
+            users: parts.users.into_iter().map(UserV2::from).collect(),
             next_wg_index: parts.next_wg_index,
         })
     }
@@ -445,8 +453,21 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::deployment::Deployment;
+    use crate::state::StateV3;
     use crate::testing::{TEST_FAIR_USE_BYTES, exit_site, two_node_parts};
+    use crate::time::UnixTime;
+    use crate::user::UserStatus;
     use proptest::prelude::*;
+
+    /// The time the tests lift version 2 to the current version at.
+    const LIFTED_AT: UnixTime = UnixTime::from_secs(1_794_441_600);
+
+    /// `state` lifted through version 2 to the current version at
+    /// [`LIFTED_AT`].
+    fn lift(state: StateV1) -> Result<StateV3, ModelError> {
+        StateV2::try_from(state)?.lift(LIFTED_AT)
+    }
 
     /// The warning threshold of the version-1 goldens, 450e9 bytes.
     const V1_GOLDEN_WARN_BYTES: u64 = 450_000_000_000;
@@ -592,7 +613,7 @@ mod tests {
         let mut parts = v1_parts();
         parts.users[1].status = UserStatusV1::RevokePending;
         let source = DeploymentV1::try_from(parts.clone()).unwrap();
-        let lifted = StateV2::try_from(StateV1 {
+        let lifted = lift(StateV1 {
             deployment: source.clone(),
             runtime: RuntimeIntent::new(),
         })
@@ -644,15 +665,22 @@ mod tests {
             assert_eq!(user.label, old.label);
             assert_eq!(user.client, old.client);
             assert_eq!(user.per_node, old.per_node);
-            assert_eq!(user.status, UserStatus::from(old.status));
+            assert_eq!(user.status, UserStatusV2::from(old.status).lift(LIFTED_AT));
             assert_eq!(user.policy, UserPolicy::NONE);
             assert_eq!((user.alias.as_ref(), user.agreement.as_ref()), (None, None));
         }
         assert_eq!(
-            UserStatus::from(UserStatusV1::RevokePending),
-            UserStatus::RevokePending
+            UserStatusV2::from(UserStatusV1::RevokePending),
+            UserStatusV2::RevokePending
         );
-        assert_eq!(UserStatus::from(UserStatusV1::Revoked), UserStatus::Revoked);
+        assert_eq!(
+            UserStatusV2::from(UserStatusV1::Revoked),
+            UserStatusV2::Revoked
+        );
+        assert_eq!(
+            UserStatusV2::from(UserStatusV1::Active),
+            UserStatusV2::Active
+        );
         assert_eq!(lifted.runtime, RuntimeIntent::new());
         // The lifted deployment equals the same deployment built in version 2.
         let mut v2 = two_node_parts();
@@ -685,7 +713,7 @@ mod tests {
         parts.exit.sim = no_stop;
         let deployment = DeploymentV1::try_from(parts).unwrap();
         assert_eq!(
-            StateV2::try_from(StateV1 {
+            lift(StateV1 {
                 deployment,
                 runtime: RuntimeIntent::new(),
             }),
@@ -730,7 +758,7 @@ mod tests {
             let mut parts = v1_parts();
             parts.exit.sim = v1;
             let deployment = DeploymentV1::try_from(parts).unwrap();
-            let state = StateV2::try_from(StateV1 {
+            let state = lift(StateV1 {
                 deployment,
                 runtime: RuntimeIntent::new(),
             })

@@ -630,7 +630,7 @@ impl PaymentLedger {
                 false,
             ),
             Some(user) => match user.status {
-                UserStatus::RevokePending | UserStatus::Revoked => (
+                UserStatus::RevokePending | UserStatus::Revoked { .. } => (
                     GrantOutcome::Held {
                         reason: HeldReason::UserRevoked,
                     },

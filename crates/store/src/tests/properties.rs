@@ -9,10 +9,13 @@ use std::path::Path;
 use mooring_model::counters::{ConfigGeneration, RuntimeRevision};
 use proptest::prelude::*;
 
-use super::builders::{adopted_store, applied_record};
+use super::builders::{RECORDED_AT, adopted_store, applied_record};
 use super::store_error;
 use crate::error::{StoreError, StoreErrorKind};
 use crate::migrate::decode;
+
+/// The time an older document is lifted at.
+const LIFTED_AT: mooring_model::time::UnixTime = RECORDED_AT;
 
 /// One write with either the current token or a stale one.
 #[derive(Debug, Clone, Copy)]
@@ -44,8 +47,8 @@ proptest! {
 
     #[test]
     fn decoding_classifies_any_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
-        match decode(Path::new("state.json"), &bytes) {
-            Ok(decoded) => prop_assert!(matches!(decoded.from, 1 | 2)),
+        match decode(Path::new("state.json"), &bytes, || Ok(LIFTED_AT)) {
+            Ok(decoded) => prop_assert!(matches!(decoded.from, 1..=3)),
             Err(error) => prop_assert!(
                 matches!(
                     error.kind(),
@@ -61,11 +64,11 @@ proptest! {
     #[test]
     fn any_newer_version_is_refused_before_parsing(version in any::<u32>()) {
         let bytes = format!(r#"{{"version": {version}, "unknown": true}}"#);
-        let result = decode(Path::new("state.json"), bytes.as_bytes());
+        let result = decode(Path::new("state.json"), bytes.as_bytes(), || Ok(LIFTED_AT));
         let error = result.unwrap_err();
-        if version > 2 {
+        if version > 3 {
             prop_assert!(
-                matches!(error, StoreError::DowngradeRefused { found, newest: 2 } if found == version),
+                matches!(error, StoreError::DowngradeRefused { found, newest: 3 } if found == version),
                 "{:?}", error
             );
         } else {

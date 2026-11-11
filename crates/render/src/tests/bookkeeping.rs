@@ -18,6 +18,7 @@ use mooring_model::{
 
 use crate::tests::support::{edit, engines, node};
 use crate::vps::bundle;
+use mooring_model::UnixTime;
 
 /// Everything a deployment renders that a generation stands for: the
 /// bundle digest of every node that can be applied, and every export that
@@ -108,6 +109,7 @@ fn committing_a_revocation_changes_no_bundle_and_no_export() {
         Bookkeeping::RevocationCommitted {
             user: user.clone(),
             node: node("lon1"),
+            at: UnixTime::from_secs(1_791_417_600),
         },
     );
     assert_eq!(exports, (4, 4));
@@ -116,6 +118,7 @@ fn committing_a_revocation_changes_no_bundle_and_no_export() {
         .record(Bookkeeping::RevocationCommitted {
             user: user.clone(),
             node: node("lon1"),
+            at: UnixTime::from_secs(1_791_417_600),
         })
         .unwrap();
     let exports = assert_neutral(
@@ -124,6 +127,7 @@ fn committing_a_revocation_changes_no_bundle_and_no_export() {
         Bookkeeping::RevocationCommitted {
             user,
             node: node("ams1"),
+            at: UnixTime::from_secs(1_791_417_600),
         },
     );
     assert_eq!(exports, (4, 4));
@@ -149,7 +153,10 @@ fn shutting_down_a_retiring_node_changes_no_bundle_and_no_export() {
     let exports = assert_neutral(
         &fixture,
         &retiring,
-        Bookkeeping::RetirementShutDown { node: node("ams1") },
+        Bookkeeping::RetirementShutDown {
+            node: node("ams1"),
+            at: UnixTime::from_secs(1_791_417_600),
+        },
     );
     assert_eq!(exports, (2, 6));
 }
@@ -176,7 +183,10 @@ fn cancelling_a_planned_node_changes_no_bundle_and_no_export() {
     let exports = assert_neutral(
         &fixture,
         &planned,
-        Bookkeeping::PlanCancelled { node: node("ams1") },
+        Bookkeeping::PlanCancelled {
+            node: node("ams1"),
+            at: UnixTime::from_secs(1_791_417_600),
+        },
     );
     assert_eq!(exports, (2, 6));
 }
@@ -204,6 +214,46 @@ fn recording_an_agreement_changes_no_bundle_and_no_export() {
         },
     );
     assert_eq!(exports, (4, 6));
+}
+
+/// Removing a revoked user (`RevokedUserRemoved`, design §15.7) changes no
+/// bundle and no export: a revoked user is in neither. Its bare id stays
+/// while a node may still name it, and the record that expires that id
+/// changes none either.
+#[test]
+fn removing_a_revoked_user_changes_no_bundle_and_no_export() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let revoked_at = UnixTime::from_secs(1_791_417_600);
+    let revoked = edit(&fixture.deployment, |parts| {
+        parts.users[2].per_node.clear();
+        parts.users[2].status = UserStatus::Revoked { since: revoked_at };
+    });
+    let user = revoked.users().keys().nth(2).unwrap().clone();
+    // The revoked user exports nothing; the other two export both formats.
+    let exports = assert_neutral(
+        &fixture,
+        &revoked,
+        Bookkeeping::RevokedUserRemoved {
+            user: user.clone(),
+            at: revoked_at,
+        },
+    );
+    assert_eq!(exports, (4, 4));
+    let removed = revoked
+        .record(Bookkeeping::RevokedUserRemoved {
+            user: user.clone(),
+            at: revoked_at,
+        })
+        .unwrap();
+    assert!(removed.forgotten().contains_key(&user));
+    let exports = assert_neutral(
+        &fixture,
+        &removed,
+        Bookkeeping::ForgottenExpired {
+            at: removed.forgotten()[&user],
+        },
+    );
+    assert_eq!(exports, (4, 4));
 }
 
 /// Recording the carrier check changes only the Mac's guard: no bundle and
@@ -276,7 +326,10 @@ fn cancelling_a_planned_node_changes_neither_mac_config() {
     });
     let cancelled = planned
         .clone()
-        .record(Bookkeeping::PlanCancelled { node: node("ams1") })
+        .record(Bookkeeping::PlanCancelled {
+            node: node("ams1"),
+            at: UnixTime::from_secs(1_791_417_600),
+        })
         .unwrap();
     let exit = |deployment: &Deployment| {
         crate::mac::exit(deployment, &fixture.interfaces, &fixture.secrets).unwrap()

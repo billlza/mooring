@@ -12,6 +12,7 @@ use crate::counters::RuntimeRevision;
 use crate::deployment::Deployment;
 use crate::error::ModelError;
 use crate::v1::StateV1;
+use crate::v2::StateV2;
 
 /// Mac-only runtime intent; it never affects VPS digests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,26 +41,28 @@ impl Default for RuntimeIntent {
     }
 }
 
-/// Version 2 of the state document, the version this build writes,
-/// serialised as `{"version": 2, "deployment": …, "runtime": …}`.
+/// Version 3 of the state document, the version this build writes,
+/// serialised as `{"version": 3, "deployment": …, "runtime": …}`.
 ///
-/// Version 2 adds the SIM plan record, bill day and stop policy, the
+/// Version 2 added the SIM plan record, bill day and stop policy, the
 /// uplink baseline, user suspension, policy, alias and agreement records,
 /// the cap on active users, automatic quotas (decision F4), the alert
 /// channels (F6) and the remote viewers (F5) ([`crate::v1`] lists how
-/// version 1 lifts).
+/// version 1 lifts). Version 3 (M5, 2026-11-11) adds the time a user was
+/// revoked and the bare ids of removed users that a node's records may
+/// still name ([`crate::v2`] lists how version 2 lifts).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "StateV2Repr")]
-pub struct StateV2 {
+#[serde(try_from = "StateV3Repr")]
+pub struct StateV3 {
     /// Every node and user.
     pub deployment: Deployment,
     /// Mac-only runtime intent.
     pub runtime: RuntimeIntent,
 }
 
-impl StateV2 {
+impl StateV3 {
     /// The schema version this type reads and writes.
-    pub const VERSION: u32 = 2;
+    pub const VERSION: u32 = 3;
 
     /// Accepts only this type's version.
     pub(crate) fn require_version(found: u32) -> Result<(), ModelError> {
@@ -76,16 +79,16 @@ impl StateV2 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StateV2Repr {
+struct StateV3Repr {
     version: u32,
     deployment: Deployment,
     runtime: RuntimeIntent,
 }
 
-impl TryFrom<StateV2Repr> for StateV2 {
+impl TryFrom<StateV3Repr> for StateV3 {
     type Error = ModelError;
 
-    fn try_from(repr: StateV2Repr) -> Result<Self, Self::Error> {
+    fn try_from(repr: StateV3Repr) -> Result<Self, Self::Error> {
         Self::require_version(repr.version)?;
         Ok(Self {
             deployment: repr.deployment,
@@ -94,9 +97,9 @@ impl TryFrom<StateV2Repr> for StateV2 {
     }
 }
 
-impl Serialize for StateV2 {
+impl Serialize for StateV3 {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("StateV2", 3)?;
+        let mut state = serializer.serialize_struct("StateV3", 3)?;
         state.serialize_field("version", &Self::VERSION)?;
         state.serialize_field("deployment", &self.deployment)?;
         state.serialize_field("runtime", &self.runtime)?;
@@ -109,8 +112,10 @@ impl Serialize for StateV2 {
 pub enum StateVersion {
     /// Version 1, read only to be lifted.
     V1,
-    /// Version 2, the version this build writes.
+    /// Version 2, read only to be lifted.
     V2,
+    /// Version 3, the version this build writes.
+    V3,
 }
 
 impl StateVersion {
@@ -120,6 +125,7 @@ impl StateVersion {
         match self {
             Self::V1 => StateV1::VERSION,
             Self::V2 => StateV2::VERSION,
+            Self::V3 => StateV3::VERSION,
         }
     }
 }
@@ -132,6 +138,7 @@ impl TryFrom<u32> for StateVersion {
         match found {
             StateV1::VERSION => Ok(Self::V1),
             StateV2::VERSION => Ok(Self::V2),
+            StateV3::VERSION => Ok(Self::V3),
             found => Err(ModelError::UnknownStateVersion { found }),
         }
     }
@@ -147,13 +154,15 @@ impl TryFrom<u32> for StateVersion {
 pub enum StateFile {
     /// Version 1, read only to be lifted.
     V1(StateV1),
-    /// Version 2.
+    /// Version 2, read only to be lifted.
     V2(StateV2),
+    /// Version 3.
+    V3(StateV3),
 }
 
 impl StateFile {
     /// The newest version this build writes.
-    pub const CURRENT_VERSION: u32 = StateV2::VERSION;
+    pub const CURRENT_VERSION: u32 = StateV3::VERSION;
 
     /// This document's schema version.
     #[must_use]
@@ -161,6 +170,7 @@ impl StateFile {
         match self {
             Self::V1(_) => StateV1::VERSION,
             Self::V2(_) => StateV2::VERSION,
+            Self::V3(_) => StateV3::VERSION,
         }
     }
 
@@ -173,6 +183,7 @@ impl StateFile {
         match version {
             StateVersion::V1 => StateV1::deserialize(deserializer).map(Self::V1),
             StateVersion::V2 => StateV2::deserialize(deserializer).map(Self::V2),
+            StateVersion::V3 => StateV3::deserialize(deserializer).map(Self::V3),
         }
     }
 }
@@ -182,6 +193,7 @@ impl Serialize for StateFile {
         match self {
             Self::V1(state) => state.serialize(serializer),
             Self::V2(state) => state.serialize(serializer),
+            Self::V3(state) => state.serialize(serializer),
         }
     }
 }
@@ -200,8 +212,8 @@ mod tests {
     use super::*;
     use crate::testing::two_node_parts;
 
-    fn state() -> StateV2 {
-        StateV2 {
+    fn state() -> StateV3 {
+        StateV3 {
             deployment: Deployment::try_from(two_node_parts()).unwrap(),
             runtime: RuntimeIntent::new(),
         }
@@ -220,27 +232,28 @@ mod tests {
 
     #[test]
     fn state_round_trips_with_a_leading_version() {
-        let file = StateFile::V2(state());
+        let file = StateFile::V3(state());
         let json = serde_json::to_string(&file).unwrap();
-        assert!(json.starts_with(r#"{"version":2,"deployment":{"config_generation":1,"#));
+        assert!(json.starts_with(r#"{"version":3,"deployment":{"config_generation":1,"#));
+        assert!(json.contains(r#""forgotten":[],"next_wg_index""#), "{json}");
         assert!(json.ends_with(r#""runtime":{"exit_enabled":false,"revision":1}}"#));
         let back = decode(&json).unwrap();
         assert_eq!(back, file);
         assert_eq!(back.version(), StateFile::CURRENT_VERSION);
-        assert_eq!(serde_json::from_str::<StateV2>(&json).unwrap(), state());
+        assert_eq!(serde_json::from_str::<StateV3>(&json).unwrap(), state());
         let header: StateHeader = serde_json::from_str(&json).unwrap();
-        assert_eq!(header.version, 2);
+        assert_eq!(header.version, 3);
     }
 
     #[test]
     fn other_versions_and_unknown_fields_are_refused() {
-        let json = serde_json::to_string(&StateFile::V2(state())).unwrap();
-        for found in [0, 1, 3] {
-            let other = json.replacen("\"version\":2", &format!("\"version\":{found}"), 1);
-            let err = serde_json::from_str::<StateV2>(&other)
+        let json = serde_json::to_string(&StateFile::V3(state())).unwrap();
+        for found in [0, 1, 2, 4] {
+            let other = json.replacen("\"version\":3", &format!("\"version\":{found}"), 1);
+            let err = serde_json::from_str::<StateV3>(&other)
                 .unwrap_err()
                 .to_string();
-            let expected = ModelError::StateVersionMismatch { expected: 2, found }.to_string();
+            let expected = ModelError::StateVersionMismatch { expected: 3, found }.to_string();
             assert!(err.contains(&expected), "{err}");
             // The header still reads a newer document's version for DowngradeRefused.
             assert_eq!(
@@ -248,34 +261,38 @@ mod tests {
                 found
             );
         }
-        // A version-2 document announced as version 1 fails version 1's schema.
-        let as_v1 = json.replacen("\"version\":2", "\"version\":1", 1);
-        assert!(decode(&as_v1).is_err());
-        for found in [0, 3] {
-            let other = json.replacen("\"version\":2", &format!("\"version\":{found}"), 1);
+        // A version-3 document announced as an older version fails that
+        // version's schema: version 2 has no forgotten ids.
+        for older in [1, 2] {
+            let as_older = json.replacen("\"version\":3", &format!("\"version\":{older}"), 1);
+            assert!(decode(&as_older).is_err(), "{older}");
+        }
+        for found in [0, 4] {
+            let other = json.replacen("\"version\":3", &format!("\"version\":{found}"), 1);
             let err = decode(&other).unwrap_err().to_string();
             let expected = ModelError::UnknownStateVersion { found }.to_string();
             assert!(err.contains(&expected), "{err}");
         }
-        let quoted = json.replacen("\"version\":2", "\"version\":\"2\"", 1);
-        assert!(serde_json::from_str::<StateV2>(&quoted).is_err());
+        let quoted = json.replacen("\"version\":3", "\"version\":\"3\"", 1);
+        assert!(serde_json::from_str::<StateV3>(&quoted).is_err());
         assert!(decode(&quoted).is_err());
-        let extra = json.replacen("\"version\":2", "\"version\":2,\"secrets\":{}", 1);
-        assert!(serde_json::from_str::<StateV2>(&extra).is_err());
+        let extra = json.replacen("\"version\":3", "\"version\":3,\"secrets\":{}", 1);
+        assert!(serde_json::from_str::<StateV3>(&extra).is_err());
         assert!(decode(&extra).is_err());
-        let missing = json.replacen("\"version\":2,", "", 1);
-        assert!(serde_json::from_str::<StateV2>(&missing).is_err());
+        let missing = json.replacen("\"version\":3,", "", 1);
+        assert!(serde_json::from_str::<StateV3>(&missing).is_err());
         assert!(decode(&missing).is_err());
     }
 
     #[test]
     fn only_known_versions_select_a_schema() {
-        for version in [StateVersion::V1, StateVersion::V2] {
+        for version in [StateVersion::V1, StateVersion::V2, StateVersion::V3] {
             assert_eq!(StateVersion::try_from(version.number()), Ok(version));
         }
         assert_eq!(StateVersion::V1.number(), 1);
-        assert_eq!(StateVersion::V2.number(), StateFile::CURRENT_VERSION);
-        for found in [0, 3, u32::MAX] {
+        assert_eq!(StateVersion::V2.number(), 2);
+        assert_eq!(StateVersion::V3.number(), StateFile::CURRENT_VERSION);
+        for found in [0, 4, u32::MAX] {
             assert_eq!(
                 StateVersion::try_from(found),
                 Err(ModelError::UnknownStateVersion { found })
@@ -285,11 +302,11 @@ mod tests {
 
     #[test]
     fn invalid_deployments_inside_state_are_refused() {
-        let json = serde_json::to_string(&StateFile::V2(state())).unwrap();
+        let json = serde_json::to_string(&StateFile::V3(state())).unwrap();
         // Retiring ams1 while users still hold credentials on it breaks an invariant.
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
         value["deployment"]["nodes"][0]["lifecycle"] = serde_json::json!("retired");
-        assert!(serde_json::from_value::<StateV2>(value.clone()).is_err());
+        assert!(serde_json::from_value::<StateV3>(value.clone()).is_err());
         assert!(decode(&value.to_string()).is_err());
     }
 }

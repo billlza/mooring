@@ -319,7 +319,7 @@ fn shares_the_budget(id: &UserId, user: &User, moment: Moment) -> Result<bool, P
             ..
         }
         | UserStatus::RevokePending
-        | UserStatus::Revoked => Ok(false),
+        | UserStatus::Revoked { .. } => Ok(false),
     }
 }
 

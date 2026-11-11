@@ -410,9 +410,18 @@ fn a_snapshot_larger_than_the_portal_reads_is_refused() {
             }
             User {
                 id: id(&text),
-                status: UserStatus::Revoked,
+                status: UserStatus::Revoked {
+                    since: UnixTime::from_secs(1_791_417_600),
+                },
                 per_node: BTreeMap::new(),
-                ..pilot(b'f', UserStatus::Revoked, None, None)
+                ..pilot(
+                    b'f',
+                    UserStatus::Revoked {
+                        since: UnixTime::from_secs(1_791_417_600),
+                    },
+                    None,
+                    None,
+                )
             }
         })
         .collect();
