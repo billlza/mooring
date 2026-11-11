@@ -8,13 +8,14 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
 use mooring_export::{ExportErrorKind, export_secret_refs};
+use mooring_model::deployment::Bookkeeping;
 use mooring_model::{
     Capability, ClientLine, Deployment, NodeId, NodeLifecycle, SecretRef, UnixTime, User, UserId,
     UserPolicy, UserStatus,
 };
-use mooring_store::SecretStore;
+use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_with_secrets};
 
-use super::support::{Harness, NOW};
+use super::support::{CAP_RAISED_MEANWHILE, Harness, NOW, change_the_configuration_meanwhile};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
 
@@ -190,6 +191,92 @@ fn a_user_added_with_no_active_node_holds_no_credentials() {
         )),
         "{}",
         outcome.stdout
+    );
+}
+
+/// The label is typed at the terminal, which waits as long as the operator
+/// takes, so the nodes the user gets credentials on are read once it is
+/// there. A planned node cancelled meanwhile (`node cancel` in another
+/// terminal) leaves with a record that keeps the generation, which the
+/// add's own compare-and-swap would not notice: read before the prompt,
+/// the user would hold credentials on a node that is gone, and the store
+/// would refuse it once the label was typed.
+#[test]
+fn a_node_cancelled_while_the_label_is_typed_is_not_one_the_user_is_added_to() {
+    let before = fixture(|parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|candidate| candidate.id == node("ams1"))
+            .unwrap();
+        ams1.lifecycle = NodeLifecycle::Planned;
+    });
+    let mut harness = adding(before.clone(), Some(LABEL));
+    let support = harness.support_dir();
+    harness.console.meanwhile = Some(Box::new(move || {
+        let store = Store::new(support);
+        let generation = store.load().unwrap().deployment.config_generation();
+        let cancelled = record_with_secrets(
+            &store,
+            &mut InMemorySecretStore::new(),
+            generation,
+            Bookkeeping::PlanCancelled { node: node("ams1") },
+        );
+        // Its keychain is not this one: the commit stands.
+        assert!(
+            matches!(cancelled, Err(StoreError::SecretCleanup { .. })),
+            "{cancelled:?}"
+        );
+    }));
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stderr, "");
+    assert!(harness.console.meanwhile.is_none());
+    let after = store(&harness).load().unwrap().deployment;
+    assert!(!after.nodes().contains_key(&node("ams1")));
+    let user = added(&before, &after);
+    let held: Vec<&str> = user.per_node.keys().map(NodeId::as_str).collect();
+    assert_eq!(held, ["lon1"]);
+    assert_eq!(harness.secrets.refs(), user_refs(&user.id, &["lon1"]));
+    assert!(
+        outcome.stdout.starts_with(&format!(
+            "added user {}: CFM 0.5, credentials on lon1\n",
+            user.id
+        )),
+        "{}",
+        outcome.stdout
+    );
+    // The cancel kept the generation; the add is the one change since.
+    assert_eq!(
+        after.config_generation(),
+        before.config_generation().next().unwrap()
+    );
+}
+
+/// A configuration change made while the label is typed (another command
+/// in another terminal) is in the state the add reads once the label is
+/// there, so the add builds on it instead of being refused for a
+/// generation it read before the prompt.
+#[test]
+fn a_configuration_change_made_while_the_label_is_typed_does_not_refuse_the_add() {
+    let before = fixture(|_| {});
+    let mut harness = adding(before.clone(), Some(LABEL));
+    change_the_configuration_meanwhile(&mut harness);
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(harness.console.meanwhile.is_none());
+    let after = store(&harness).load().unwrap().deployment;
+    let user = added(&before, &after);
+    let held: Vec<&str> = user.per_node.keys().map(NodeId::as_str).collect();
+    assert_eq!(held, ["ams1", "lon1"]);
+    assert_eq!(
+        after.capacity().max_active_users,
+        NonZeroU16::new(CAP_RAISED_MEANWHILE)
+    );
+    // The other command's change, then the add.
+    assert_eq!(
+        after.config_generation(),
+        before.config_generation().next().unwrap().next().unwrap()
     );
 }
 

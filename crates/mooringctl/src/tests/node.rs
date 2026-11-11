@@ -29,7 +29,10 @@ use mooring_model::secret::SecretRef;
 use mooring_model::{CalendarDate, DeploymentInit, Ed25519Pub, NodeId, Sha256Digest, UserStatus};
 use mooring_store::{SecretStore, Store};
 
-use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent};
+use super::support::{
+    Answered, Expected, ExpectedRemote, Harness, PINNED, Sent, change_the_configuration_meanwhile,
+    changed_since,
+};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
 use crate::node::dial::{CONNECT_TIMEOUT, M7Egress, RelaySocket, Served, relay};
@@ -1481,12 +1484,13 @@ fn plan(harness: &mut Harness, id: &str, host_key: &Path) -> super::support::Out
 }
 
 /// `node new` refuses an id whose ssh path is taken by anything, and says
-/// what frees it. A link there, one that leads nowhere included, or a
-/// directory that holds something Mooring does not keep, is named for the
-/// operator to move away, since `node cancel` would refuse it too. A
-/// directory of Mooring's own files is what an earlier node of the id
-/// left, which `node cancel` removes. Each step the refusals name leads to
-/// the next, and the node is planned at the end.
+/// what frees it, before it shows the plan or asks. A link there, one that
+/// leads nowhere included, or a directory that holds something Mooring
+/// does not keep, is named for the operator to move away, since
+/// `node cancel` would refuse it too. A directory of Mooring's own files
+/// is what an earlier node of the id left, which `node cancel` removes.
+/// Each step the refusals name leads to the next, and the node is planned
+/// at the end.
 #[test]
 fn new_names_what_is_in_the_way_of_an_ids_ssh_directory() {
     let (mut harness, _) = planned();
@@ -1500,6 +1504,7 @@ fn new_names_what_is_in_the_way_of_an_ids_ssh_directory() {
         let outcome = plan(harness, "ams1", &path);
         assert_eq!(outcome.code, EXIT_LOCAL);
         assert_eq!(outcome.stderr, report);
+        assert_eq!(outcome.stdout, "", "refused before the plan is shown");
         assert_eq!(state_bytes(harness), before);
         assert_eq!(harness.secrets.refs(), refs);
     };
@@ -1542,6 +1547,84 @@ fn new_names_what_is_in_the_way_of_an_ids_ssh_directory() {
             .nodes()
             .contains_key(&NodeId::parse("ams1").unwrap())
     );
+}
+
+/// The answer may have waited. A configuration change that another
+/// command made meanwhile refuses the plan before a single secret is
+/// written: the store checks the generation under its lock first.
+#[test]
+fn a_configuration_change_while_the_question_waits_plans_nothing_and_writes_no_secret() {
+    let mut harness = deployed();
+    let before = store(&harness).load().unwrap().deployment;
+    let read = before.config_generation().get();
+    let (path, _) = host_key_file(&harness, "host.pub");
+    change_the_configuration_meanwhile(&mut harness);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&[
+        "node",
+        "new",
+        "lon1",
+        "--role",
+        "primary",
+        "--host-key",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stderr, changed_since(read));
+    assert_eq!(harness.console.asked, ["Plan this node?"]);
+    assert!(harness.console.meanwhile.is_none());
+    assert!(
+        !outcome.stdout.contains("planned node"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(harness.secrets.is_empty(), "{:?}", harness.secrets.refs());
+    let after = store(&harness).load().unwrap().deployment;
+    assert!(after.nodes().is_empty());
+    assert_eq!(after.next_wg_index(), before.next_wg_index());
+    assert_eq!(after.config_generation().get(), read + 1);
+}
+
+/// The id's ssh directory is looked for again once the question is
+/// answered: no write guards it. An adoption of an earlier node of the
+/// id, which had read the state before that node was cancelled, makes the
+/// directory and its operations key after the cancel found none, and the
+/// new node would take that key over. Nothing is planned, and no secret is
+/// written.
+#[test]
+fn an_ssh_directory_made_while_the_question_waits_plans_nothing() {
+    let mut harness = deployed();
+    let before = state_bytes(&harness);
+    let (path, _) = host_key_file(&harness, "host.pub");
+    let dir = harness.support_dir().join("ssh").join("lon1");
+    let made = dir.clone();
+    harness.console.meanwhile = Some(Box::new(move || {
+        fs::create_dir_all(&made).unwrap();
+        fs::write(made.join("ops_ed25519"), b"an earlier node's key\n").unwrap();
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&[
+        "node",
+        "new",
+        "lon1",
+        "--role",
+        "primary",
+        "--host-key",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: {} exists already: an earlier node with this id left it; `node cancel lon1` removes the ssh files Mooring kept there, then plan the node again\n",
+            dir.display()
+        )
+    );
+    assert_eq!(harness.console.asked, ["Plan this node?"]);
+    assert!(harness.console.meanwhile.is_none());
+    assert_eq!(state_bytes(&harness), before);
+    assert!(harness.secrets.is_empty(), "{:?}", harness.secrets.refs());
+    assert!(dir.join("ops_ed25519").is_file());
 }
 
 /// `node new` reads its host key as `node repin` does: a file with two

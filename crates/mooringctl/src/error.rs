@@ -255,6 +255,16 @@ pub(crate) enum LocalError {
         /// The pinned link-layer address.
         pinned: MacAddr,
     },
+    /// Another `router pin` pinned a different identity while this one's
+    /// question waited: the answer was to a question about no pin, or
+    /// about another one.
+    #[error(
+        "another `router pin` pinned {pinned} as the M7's identity while this question waited, so nothing was written: check which device is the M7 before replacing either (`router pin --replace`)"
+    )]
+    PinnedMeanwhile {
+        /// The link-layer address pinned meanwhile.
+        pinned: MacAddr,
+    },
     /// The password is not 1 to 128 bytes of printable ASCII.
     #[error("the password is not 1 to 128 bytes of printable ASCII")]
     Password(#[source] ModelError),
