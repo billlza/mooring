@@ -119,6 +119,18 @@ pub(crate) enum UserCommand {
         #[arg(value_name = "USER_ID")]
         user: UserId,
     },
+    /// Remove a revoked user at once, on the user's request, with its
+    /// label, alias and agreement record; the daemon then deletes its usage
+    /// history and payment orders. The bare id stays while a node may still
+    /// name it. It cannot be undone, so it asks first.
+    Forget {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// Do not ask before removing.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Record that the user accepted the agreement revision this build
     /// ships, dated today (UTC). It takes neither a revision nor a date, so
     /// neither can be mistyped; it needs no node apply.

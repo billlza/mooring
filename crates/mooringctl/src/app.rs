@@ -122,6 +122,9 @@ pub(crate) fn run(
         }
         Command::User(UserCommand::Alias { user }) => crate::user::alias(env, out, &user),
         Command::User(UserCommand::Agree { user }) => crate::user::agree(env, out, &user),
+        Command::User(UserCommand::Forget { user, yes }) => {
+            crate::user_forget::forget(env, out, &user, yes)
+        }
         Command::User(UserCommand::Export {
             user,
             format,

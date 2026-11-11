@@ -136,6 +136,8 @@ mod tests;
 #[cfg(target_os = "macos")]
 mod user;
 #[cfg(target_os = "macos")]
+mod user_forget;
+#[cfg(target_os = "macos")]
 mod user_history;
 
 use std::io;
