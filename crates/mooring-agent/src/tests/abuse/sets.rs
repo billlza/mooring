@@ -214,10 +214,14 @@ fn a_reading_lists_every_measured_set_or_fails_whole() {
 #[test]
 #[ignore = "run by the hosted lane, which writes the listings from a real kernel"]
 fn real_nft_listings_are_read() {
-    let dir = std::env::var_os("MOORING_NFT_LISTINGS")
-        .expect("the lane names the directory of listings");
+    let dir =
+        std::env::var_os("MOORING_NFT_LISTINGS").expect("the lane names the directory of listings");
     let source = Ipv4Addr::new(198, 18, 0, 5);
-    for set in AbuseSet::ALL.iter().copied().filter(|set| set.is_measured()) {
+    for set in AbuseSet::ALL
+        .iter()
+        .copied()
+        .filter(|set| set.is_measured())
+    {
         let path = std::path::Path::new(&dir).join(format!("{}.json", set.name()));
         let bytes = std::fs::read(&path).expect("a listing per measured set");
         let elements = parse(&bytes, set)
@@ -239,7 +243,9 @@ fn real_nft_listings_are_read() {
             _ => None,
         };
         assert_eq!(
-            element.counter.map(|counter| (counter.packets, counter.bytes)),
+            element
+                .counter
+                .map(|counter| (counter.packets, counter.bytes)),
             expected,
             "{set:?}"
         );

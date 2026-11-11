@@ -58,8 +58,10 @@ impl TryFrom<RawDocument> for MacAbuseRecords {
             return Err(AbuseRecordsError::UnsupportedVersion { found: raw.version });
         }
         for (node, records) in &raw.nodes {
-            let ordered = records.windows(2).all(|pair| pair[0].seq < pair[1].seq);
-            if !ordered || records.len() > MAC_ABUSE_RECORDS_PER_NODE {
+            if records.len() > MAC_ABUSE_RECORDS_PER_NODE {
+                return Err(AbuseRecordsError::TooMany { node: node.clone() });
+            }
+            if !records.windows(2).all(|pair| pair[0].seq < pair[1].seq) {
                 return Err(AbuseRecordsError::OutOfOrder { node: node.clone() });
             }
         }
@@ -180,9 +182,9 @@ pub enum AbuseRecordsError {
         /// The version found.
         found: u32,
     },
-    /// A node's records are not in number order, repeat a number, or are
-    /// more than the Mac keeps.
-    #[error("the abuse records of node {node} are out of order or too many")]
+    /// A node's records in the document read are not in number order, or
+    /// repeat a number.
+    #[error("the abuse records of node {node} are out of number order or repeat a number")]
     OutOfOrder {
         /// The node.
         node: NodeId,
@@ -195,10 +197,10 @@ pub enum AbuseRecordsError {
         /// The record's number.
         seq: u64,
     },
-    /// Merging would keep more than [`MAC_ABUSE_RECORDS_PER_NODE`] records
-    /// for one node.
+    /// A node's records are more than [`MAC_ABUSE_RECORDS_PER_NODE`]: in the
+    /// document read, or after a merge, which is then refused.
     #[error(
-        "the Mac would hold more than {} abuse records of node {node}",
+        "the Mac keeps at most {} abuse records of node {node}",
         MAC_ABUSE_RECORDS_PER_NODE
     )]
     TooMany {

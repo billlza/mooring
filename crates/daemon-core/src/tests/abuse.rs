@@ -149,15 +149,25 @@ fn only_a_whole_valid_document_is_read() {
             String::from_utf8_lossy(bytes)
         );
     }
-    let out_of_order = format!(
-        r#"{{"version":1,"nodes":{{"lon1":[{},{}]}}}}"#,
-        serde_json::to_string(&record(1, NOW, AbuseAction::Cleared)).unwrap(),
-        serde_json::to_string(&record(0, NOW, AbuseAction::Cleared)).unwrap()
-    );
-    assert_eq!(
-        MacAbuseRecords::decode(Some(out_of_order.as_bytes())).unwrap_err(),
-        AbuseRecordsError::OutOfOrder { node: node("lon1") }
-    );
+    // Out of order, and a number repeated: a node never gives either.
+    for (first, second) in [(1, 0), (0, 0)] {
+        let document = format!(
+            r#"{{"version":1,"nodes":{{"lon1":[{},{}]}}}}"#,
+            serde_json::to_string(&record(first, NOW, AbuseAction::Cleared)).unwrap(),
+            serde_json::to_string(&record(second, NOW, AbuseAction::Cleared)).unwrap()
+        );
+        let error = MacAbuseRecords::decode(Some(document.as_bytes())).unwrap_err();
+        assert_eq!(
+            error,
+            AbuseRecordsError::OutOfOrder { node: node("lon1") },
+            "{first}, {second}"
+        );
+        assert_eq!(error.kind(), AbuseRecordsErrorKind::OutOfOrder);
+        assert_eq!(
+            error.to_string(),
+            "the abuse records of node lon1 are out of number order or repeat a number"
+        );
+    }
     assert_eq!(
         AbuseRecordsError::UnsupportedVersion { found: 2 }.to_string(),
         "the abuse records name version 2; this build reads version 1"
@@ -173,7 +183,8 @@ fn only_a_whole_valid_document_is_read() {
 }
 
 /// A node's records past the bound the Mac keeps are refused rather than
-/// any dropped within their retention.
+/// any dropped within their retention, whether a merge would pass it or the
+/// document read already does.
 #[test]
 fn a_node_past_the_bound_is_refused() {
     let lon1 = node("lon1");
@@ -191,5 +202,21 @@ fn a_node_past_the_bound_is_refused() {
         .unwrap_err();
     assert_eq!(error, AbuseRecordsError::TooMany { node: lon1.clone() });
     assert_eq!(error.kind(), AbuseRecordsErrorKind::TooMany);
+    assert_eq!(
+        error.to_string(),
+        "the Mac keeps at most 65536 abuse records of node lon1"
+    );
     assert_eq!(copy.records(&lon1).len(), MAC_ABUSE_RECORDS_PER_NODE);
+
+    // The bound itself is read back; one record past it is refused.
+    let at_bound = copy.encode().unwrap();
+    assert_eq!(MacAbuseRecords::decode(Some(&at_bound)).unwrap(), copy);
+    let mut document: serde_json::Value = serde_json::from_slice(&at_bound).unwrap();
+    let records = document["nodes"]["lon1"].as_array_mut().unwrap();
+    records.push(serde_json::to_value(record(seq, NOW, AbuseAction::Cleared)).unwrap());
+    let past_bound = serde_json::to_vec(&document).unwrap();
+    assert_eq!(
+        MacAbuseRecords::decode(Some(&past_bound)).unwrap_err(),
+        AbuseRecordsError::TooMany { node: lon1 }
+    );
 }
