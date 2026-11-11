@@ -122,8 +122,9 @@ The Mac collector uses one pinned, deadline-bounded SSH request in each spare pr
 **A malicious user**
 - *Can:*
   - use the exit within policy;
-  - saturate the shared uplink (neither engine supports per-user rate limits, which is an accepted risk);
-  - open many flows, up to the node-wide flow cap (§8.5).
+  - saturate the shared uplink: neither engine supports per-user rate limits, and since 2026-11-11 the node's kernel limits each user's new flows, concurrent flows and datagrams (§11.8) but not TCP bandwidth, which is an accepted risk;
+  - open many flows, up to the per-user limits and the node-wide flow cap (§8.5, §11.8);
+  - attack third parties through the exit (scans, password guessing, floods, bulk mail, P2P at scale), which the node limits, detects from connection statistics and cuts off per user (§11.8).
 - *Cannot:* chain through a node to multiply SIM usage, because node IPs are denied to every identity except the probe (§8.2), and cannot reach VPS-local services.
 
 **CFM running on the same Mac.** CFM's NetworkExtension sets `includeAllNetworks=false` and `enforceRoutes=false` (CFM `HostBridge.swift:1603-1608`). Interface-bound sockets should therefore bypass its tunnel *(inference; proven in M2 and L6-bypass)*. If that ever changes, the carrier check fails and the exit stops.
@@ -1921,6 +1922,107 @@ A stored `TargetSpec` re-checks the attestation when decoded, but not the deny l
 
 **Changing the target means reissuing user files,** because the SNI is part of each client config.
 
+### 11.8 Abuse guard (decided 2026-11-11; built in steps, §22)
+
+**What the operator asked for (2026-11-11).** A disputed payment does not suspend a user (the operator's decision of the same day, recorded with the payment pull), but a user whose traffic is used for crime, or for gross abuse, is cut off at once and then reviewed, and a confirmed case is banned for good without a refund (the ban rule of 2026-11-06). Detection reads connection features only: never content, and no record of destinations. The operator named attacks on companies' and governments' sites after a penetration test as the case to stop. He agreed to three layers: limits that stop the worst before it starts; detection on the node from per-user connection statistics, with an automatic cut for the clear cases; and his own review, with a minimal record that shows each case was handled in time.
+
+**Why it matters (not legal advice).** All exit traffic leaves through the operator's SIM and is attributed to him (§1.1). In the UK the Computer Misuse Act 1990 makes unauthorised access (s. 1) and unauthorised acts that impair a computer's operation, denial of service included (s. 3), offences. In China, article 27 of the Cybersecurity Law forbids giving technical support to someone known to endanger network security, and article 287-2 of the Criminal Law (helping information-network crime) also turns on knowledge (明知). Under each, what matters is what the operator does once he knows: notice early, stop it at once, and be able to show that he did.
+
+**Threat model.**
+- *Who:* a user, or whoever holds a user's file (§1.2), who uses the exit against third parties: scanning address ranges or ports, guessing passwords (brute force and credential stuffing against login services), flooding a target with datagrams or connections, sending mail in bulk, or running P2P at scale, which the agreement forbids (clause 3).
+- *Capability:* any TCP or UDP flow a proxied client can open, through either protocol, up to the shared uplink (§3: about 15–18 Mbps for every user together). No raw packets: the Mac's gVisor stack terminates TCP (§2), so a SYN flood or a spoofed source is impossible. A flood is of real connections or datagrams, at most at the uplink's rate.
+- *Harm:* to third parties, traced to the SIM holder; under the carrier's terms (§19.1); and to every other user, when one user fills the uplink.
+- *Out of reach:* abuse inside allowed connections (an attack carried in one TLS connection, spam through a webmail page, unlawful content). Detecting it needs content, which is refused (§15.5). An attacker who stays under every threshold is limited to the rate the thresholds allow. The thresholds are public with this repository, so they bound the harm per user rather than hide it.
+- *Not added:* reading content or SNI, keeping destinations, DNS logs or users' IPs (§15.5), device fingerprints, IP bans, phone numbers. A cut is by opaque user only.
+
+**Where a user's flows can be told apart.** Two places know which user a flow belongs to:
+- *Xray on the node* knows the user of every flow (`<uid>@reality`, `<uid>@hy2`, §8.2; Hysteria2 users reach it over the loopback handoff, §8.3). But it exposes only bytes per user: no per-connection events without an access log, which is refused (§15.5), and no live user changes (§18).
+- *The node's kernel* sees every flow Xray opens on `wgexit`, in conntrack, but until now from one source, 10.77.k.1 for every user (§1.1).
+- The Mac sees only 10.77.k.1 too, and the carrier sees only the line.
+
+So the guard gives each user a source address of their own inside the node, and does the rest in the node's kernel, where nftables already gates and counts (§8.5):
+- **Per-user source addresses.** Each served user gets an outbound of their own, `exit-<uid>`: the `exit` freedom outbound with the same socket options (§8.2) and `sendThrough` set to the user's address in `198.18.0.0/15`. That is RFC 2544's benchmarking range: in `SPECIAL_V4`, never routed, and used by no provider. One routing rule per user, `{"user": ["<uid>@reality", "<uid>@hy2"], "outboundTag": "exit-<uid>"}`, takes the place of the final rule that sent every user to `exit`. The last rule now sends only the probe to `exit`, and a flow no rule names falls to the first outbound, `deny` (fail closed).
+  - The address is `198.18.0.0 + 1 + (v mod 131070)`, where `v` is the 50-bit value of the user id's base32 text (agent-proto's `user_source`: one function for the renderer, the agent and `user add`). It is a pure function of the user id, the same on every node and in every generation, so a cut follows the user across applies and reboots with no slot to record.
+  - Two served users on one node with the same address are refused at render (`UserSourceCollision{node, first, second}`, §14). `user add` draws another id when the new one would share an address with any user, so only a state that already held such a pair can meet the refusal: for n users the chance is about n²/262,000, 1 in 10,000 for five.
+- **Local, not routed.** `wgexit.conf` gains `PostUp = ip -4 route replace local 198.18.0.0/15 dev %i table local`. It makes every address of the range local on the node while the tunnel exists, so that Xray can bind one, and goes with the interface. A bind before the route exists fails, and the user's flow fails with it: an unattributed flow cannot leave.
+  - *A change to the agent:* a transaction restarts the tunnel when any of wg-quick's own keys differs (`Address`, `MTU`, `Table` and the four hooks), not only `Address` and `MTU` (§11.2 step 5). Otherwise the first apply with the guard would only `wg syncconf`, the route would wait for the next reboot, and every user's dial would fail until then.
+- **Translated back before the tunnel.** A new chain, `postrouting_nat` (`type nat hook postrouting priority srcnat`), rewrites `oifname "wgexit" ip saddr 198.18.0.0/15` to `10.77.k.1` (`snat`). The Mac therefore sees exactly what it sees today: its peer's `allowed_ips` stays `10.77.k.1/32` (§1.1), the Mac's exit config does not change, and no per-user identity reaches the Mac or the line. Conntrack keeps the original tuple, so the output chain (before NAT) and the input chain (after replies are translated back) see each user's own address.
+- **Rules that name no user.** `nftables.conf` and `wgexit.conf` name the range, never a user. Adding, suspending or removing a user still changes only `xray.json`, `hy2.json` and `watch.json`, which §8.1's render invariants check.
+
+**Layer 1: prevention, always on, per user, in the kernel.** In `exit_flow` (§8.5), packets from the range jump to a new chain, `user_flow`, which measures them (below) and then limits each user:
+
+| Limit | Default (pending F21) | Over the limit |
+|---|---|---|
+| New flows | 50 a second, burst 500 | rejected |
+| Concurrent flows | 1,024 (`ct count`) | the new flow rejected |
+| UDP datagrams sent | 1,500 a second, burst 3,000 | dropped |
+| TCP/25 | blocked, as since M1 (Xray's `deny_smtp25` rule and the Mac's reject, §8.2, §8.7) | never dialled |
+| The node's flow cap | unchanged (§8.5) | rejected |
+
+A browser opening a heavy page opens a few dozen flows in a burst, and a user keeps a few hundred open at most *(inference, to be checked against the alert-level findings the guard records)*; a video call sends 100 to 300 datagrams a second. The limits bound what one user can do before detection acts: about 3,000 new flows a minute, and fewer datagrams than the uplink carries. The submission ports 465 and 587 stay open, since they carry authenticated mail clients; their abuse is detected instead.
+
+**Layer 2: detection on the node.** The kernel keeps per-user aggregates in nftables sets, which the watch reads every 15 s (three ticks). No set holds a destination address. A new flow's destination is reduced to one of 4,096 buckets (`ct mark set jhash ip daddr mod 4096 seed <fixed>`), each of which stands for about a million addresses, so a user's set of buckets is a linear-counting sketch of how many destinations they reached. A port is reduced to its low ten bits. Elements expire on their own (`timeout`), so the kernel holds the windows, and the watch keeps only what it needs to tell two consecutive minutes apart; a watch that restarts loses at most that.
+
+| Set | Key | Held | Feature |
+|---|---|---|---|
+| `user_dst` | user . destination bucket | 5 min since last used (`update`) | distinct destinations, estimated as −4096 ln(1 − b/4096) from b buckets |
+| `user_port` | user . port & 1023 | 5 min since last used | distinct destination ports, in buckets |
+| `user_burst` | user . destination bucket, with a counter | 2 min from the first flow (`add`) | new flows to one destination |
+| `user_login` | user . destination bucket, with a counter; TCP to 21, 22, 23, 110, 143, 445, 993, 995, 1433, 3306, 3389, 5432, 5900, 6379 and 27017 | 10 min from the first flow | new flows to one login service |
+| `user_mail` | user . destination bucket; TCP to 465 and 587 | 60 min since last used | distinct mail-submission servers |
+| `meter_new`, `meter_out` | user . protocol, with a counter | 1 min from the first packet | new flows, and datagrams and bytes sent, per second: the counter over the element's age (`timeout − expires`) |
+| `meter_in` | user, with a counter; the input chain's replies from `wgexit` | 1 min | bytes received per second |
+| `user_capped` | user, with a counter | 5 min | packets layer 1 refused |
+
+The findings, per user:
+
+| Finding | What it catches | Alert at | Cut at (default, pending F21) |
+|---|---|---|---|
+| `MassContact` | horizontal scans, and P2P at scale (the agreement forbids both) | 600 distinct destinations in 5 min | 2,000 |
+| `PortSweep` | vertical scans, many ports of few hosts | 50 port buckets in 5 min | 200 |
+| `DatagramFlood` | a flood of datagrams | 400 a second, over one full minute | 1,000 a second, over two minutes in a row |
+| `ConnectionFlood` | a flood of connections against one target | 1,200 new flows to one destination in 2 min | 2,400 |
+| `LoginGuessing` | brute force and credential stuffing against login services | 60 new flows to one login service in 10 min | 300 |
+| `MailBlast` | bulk mail through submission servers | 5 servers in 60 min | 20 |
+
+- *False positives, and what keeps them rare.* Browsing reaches at most a few hundred destinations in five minutes, and an application keeps its connection to a service open rather than opening a new one every second *(inference)*. The cases expected near the cut levels are themselves forbidden (P2P), or fill the shared uplink: a VPN carried through the proxy and uploading at over 10 Mbps for two minutes would be cut by `DatagramFlood`. A finding below its cut level is recorded as an alert with its figures, so the thresholds can be calibrated on the pilot's own traffic (§19). A cut is reversible: the operator's review lifts it at once (layer 3). `DatagramFlood` needs two minutes in a row, so a burst does not cut.
+- *Recorded with every finding for the review, but not used to decide* (the operator's list of 2026-11-11): new flows a minute, the share of UDP in the bytes sent, the bytes received against the bytes sent, the bytes received per new flow, and the packets layer 1 refused. A scan's flows carry almost nothing back, so the bytes per flow stand in for the failed connections the node cannot see: the Mac's gVisor stack completes each handshake before it dials (§2) *(inference)*. Concurrency is limited (1,024) but not measured, since nftables does not expose a `ct count` element's current count.
+
+**Layer 2: the cut.** A finding at its cut level cuts the user on that node at once, without the Mac:
+1. The watch writes the cut to `/var/lib/mooring/watch/abuse-cuts.json` (0640, atomically, under `gate.lock`), then adds the user's address to the set `abuse_cut`.
+2. `exit_flow` rejects every packet a cut user's flows send (`reject with tcp reset` for TCP, as the gate does, and `reject` otherwise), and the input chain drops what `wgexit` brings them. Existing flows end as soon as they send, new ones never open, and no other user is touched.
+3. **A ruleset load cannot drop a cut while the gate is open.** Every load (a transaction's `nft -f`, a boot, a rollback) empties `abuse_cut` and, in the same atomic load, closes the gate: `exit_closed` holds `wgexit` at load (§8.5). Only the watch opens the gate (§11.3), and it does so with one nft command line that sets `abuse_cut` to exactly the cut users' addresses and then takes `wgexit` out of `exit_closed`. nft commits one command line as one transaction, so the gate is never open with a cut missing.
+4. The cut lasts until the operator lifts it. It survives Xray restarts (the address does not change), reboots (the file) and applies, including one that removes the user: an unserved user's address stays in the set, and it belongs to no one else.
+- *The operator's own cut:* `AbuseCut{user}` (ops role) does the same for a user the operator names, on a complaint for example, and `AbuseClear{user}` lifts a cut. The root handler writes the file and the set under `gate.lock`, as `GateSet` writes a hold (§11.3).
+- *Without the Mac, or without SSH.* Detection and the cut run on the node alone, so a node the Mac cannot reach over SSH (lon1 on 2026-11-11) still cuts. The operator learns of it from the node's status: through the Mac once it reaches the node again, through the phone's viewer role, which may also read the records, and, once M4's alert unit sends from the node, by a push notice. To stop a user the node has not detected while its SSH is down, the operator stops the exit for everyone, with `exit disable` on the Mac or the phone's emergency stop (§15.9). The Mac cannot stop one user by itself, since every user's flows reach it as 10.77.k.1.
+
+**Telling the operator.** The watch raises three conditions (§14), which `Status` and `Events` carry to the console and the phone. None names a user (§15.5), none touches the gate, and none stops the dead-man ping (`dead_man_pings`), since the watch's own work goes on:
+- `AbuseCut{users}`: how many users are cut on this node, while any is. It becomes a critical alert once the Mac's alert machine is wired (M5).
+- `AbuseSuspected{users}`: how many users have an alert-level finding from the last hour (a warning).
+- `AbuseGuardUnavailable{cause}`: `NotInstalled`, when the node runs a generation rendered before the guard and there is no per-user identity to measure, or `ReadFailed`, when the sets could not be read; detection is then off, and layer 1 and the cuts stay. A failure of the guard must not stop every user's service, the lesson of `TargetReadFailed` (§11.3).
+
+**Layer 3: the operator's review.**
+- `mooringctl abuse records <node> [--json]` (`AbuseRecords{since}`, ops and viewer roles) shows the node's cuts and findings and copies them to the Mac's record (below).
+- `mooringctl abuse cut <node> <user>` and `mooringctl abuse clear <node> <user>` (ops role) cut by hand and lift a cut.
+- `mooringctl user suspend <user> --reason abuse-review|operator` and `user resume <user>` keep the Mac's own record of a user under review (`SuspendReason::AbuseReview`, §7). A suspension takes effect at the next `node apply`, which removes the user from every node's bundle; the node's cut holds the user meanwhile.
+- **Outcomes.** A false positive: `abuse clear`, and the user is served again at once; the record says so. A case to examine further: `user suspend --reason abuse-review`, `node apply`, then the cut lifted once the apply has removed the user. A confirmed case: the operator bans the user, which is a revocation here (§13.5) and a ban at the portal (`delivery.md` §11), with the ban record kept outside Mooring. A ban gets no refund (the operator's rule of 2026-11-06), which the portal and Stripe carry out, not Mooring.
+
+**The record: minimal, kept to show the handling.** Each finding or action is one record: its number, its time in UTC seconds, the opaque user id, the guard's version, what happened (`Cut` or `Alerted` with the finding's kind, or the operator's `OperatorCut` or `Cleared`), and the figures above. No destination, port, address or bucket is in it.
+- **On the node:** `/var/lib/mooring/watch/abuse-records.jsonl` (0640), appended and pruned as the journal is (§15.7), 30 days after each record and beyond 4,096 records. The cut state stays until it is lifted.
+- **On the Mac:** the records that `abuse records` pulls, in `abuse/records.jsonl` under the support directory (0600), kept 13 months from each record's time, like the journal's entries (§15.7). The daemon's pull with each status poll is the next step (§22); until it is built, a record reaches the Mac when the operator reviews it, within the node's 30 days.
+- **Not removed by `user forget`.** An abuse record stays for its 13 months even when the user leaves and asks for their records to be erased, for the establishment or defence of legal claims (UK GDPR art. 17(3)(e)). A ban copies it into the ban record, which is kept until the service ends. The agreement must say so (below).
+- **In the kernel:** the sets above, for at most 60 minutes (`user_mail`) and otherwise at most 10; buckets and counts, no address.
+
+**Quotas, suspension, revocation and payments.**
+- A cut belongs to the node; it is not a state change. It bumps no generation and needs no apply, and the user stays `Active` on the Mac until the operator suspends or revokes them. A cut user therefore still counts among the active users for the cap (F3) and for the automatic quota's N (F4), and an `AbuseReview` suspension, as before, does not (§15.3).
+- The SIM's hard stop, the quotas and expiry work as before; a cut user's traffic is zero.
+- A dispute does not suspend a user, and a cut does not depend on the state of any payment.
+- A revocation (§13.5) removes the user's credentials. The operator lifts the node's cut of a revoked user once the revocation has committed.
+
+**The agreement.** Connection features are not content, but measuring them is new: revision 1 says only that the operator does not inspect content (clause 4) and forbids P2P and port 25 (clause 3). The agreement session (PR #28) owns the text. The suggested additions, which are the operator's to decide: clause 3 names the forbidden uses (scanning, intrusion, password guessing, attacks including denial of service, bulk mail, P2P at scale), and says that the server limits each user's connections, detects these uses from connection statistics (counts and rates, never content or destinations), cuts the user's service at once when it detects one, and bans a confirmed case for good without a refund; clause 4 lists the abuse record (time, user number, kind, figures, action) with its retention (30 days on the server, 13 months on the operator's computer, not erased when a user leaves) and the per-user statistics the server holds in memory for at most an hour.
+
+**Built, next, and residual risks.** Built in this change (§22): the per-user source addresses, layer 1, the cut and its reload rule, the six findings with their records, the three conditions, the three requests, the commands above, and a hosted lane that checks the rendered rulesets against a Linux kernel (`nft -c`). Next: the daemon's pull of the records and the alert machine's notices (M5), the node's push (M4's alert unit), and calibrating the thresholds on pilot data. *Residual risks:* the nft rules and the JSON the watch reads are checked by the hosted lane and by every node's own stage validation (`nft -c`, §11.2 step 3), but not yet on a live node with traffic; an attacker who stays below the thresholds; and the sketches under-count once a set is full (more than eight users scanning at once).
+
 ---
 
 ## 12. Secrets and security calibration
@@ -2223,7 +2325,10 @@ Mooring never models, stores or sends any of the following. Anything that leaves
 What is recorded:
 - bytes per opaque user × node × protocol, in time bins;
 - last-active times;
-- lifecycle events and operator actions.
+- lifecycle events and operator actions;
+- *(2026-11-11, §11.8)* the abuse guard's records: per finding or action, the time, the opaque user, what happened and aggregate figures (counts and rates), never a destination, port or address; 30 days on a node, 13 months on the Mac.
+
+What the abuse guard holds without recording it (§11.8): per-user sets in the node's kernel, for at most an hour, of destination buckets (a hash of the destination modulo 4,096, so each bucket stands for about a million addresses), the low ten bits of destination ports, and per-user counters. The watch reads them every 15 s and keeps only the figures it decides by. This is new monitoring of connection features, not of content, and the agreement must state it before the guard serves real users (§11.8, "The agreement").
 
 Retention is decision F7, decided on 2026-10-15 by delegation as its recommended default (§20.2). Users learn of it in the agreement they accept before their first file (F9; `docs/runbooks/user-agreement.md`), so the deletion rules of §11.5 and §15.7 must be built and tested before M8 (M4, M5). "Usage" (用网情况) in the console therefore means bytes and times, never destinations; the operator confirmed on 2026-10-08 that this is what he wants (F16).
 
@@ -2508,7 +2613,7 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 - Clients other than CFM on macOS (F10). Mooring writes no client rules: mainland China traffic goes direct through CFM's own switch, which the user guide turns on.
 - IPv6 entry or exit.
 - Automatic switching between tunnels, uplinks, exits, carriers or egress-check modes. This stays a non-goal in revision 5.
-- Per-user rate limits in the engines; live API user changes; multiple Macs or exits. Revision 5 restatement: if per-user fairness is ever needed, it lives in the VPS kernel (M10: per-user source addresses and cake on `wgexit`), never in the engines.
+- Per-user rate limits in the engines; live API user changes; multiple Macs or exits. Revision 5 restatement: if per-user fairness is ever needed, it lives in the VPS kernel (M10: per-user source addresses and cake on `wgexit`), never in the engines. *2026-11-11:* the abuse guard brings the per-user source addresses forward, for limits and detection rather than fairness, and keeps them in the node's kernel (§11.8); the engines still limit nothing per user.
 - Writing the M7's settings. Mooring reads the M7's status and never writes its settings (§15.6). Offload, Wi-Fi, Ethernet, UPnP and firmware are the operator's manual checklist (M2a, D-4).
 - A second carrier beside SMARTY. The MR7450 has one nano-SIM slot and no eSIM (manual 202-12721-02, "Install or replace a SIM card"); NETGEAR has said eSIM may come to the M7 Pro but has not confirmed it. Even dual-SIM hotspots run one modem, so only one SIM is active at a time. If M2/M8 data show the SMARTY line is inadequate at the exit site, first compare carriers by swapping the SIM in the same M7 (EE needs a credit check the operator currently fails, F12). A second cellular device with a typed, measured switching policy is a later decision, not v1 (each carrier would need its own `carrier_prefixes`, SIM meter and exit-IP change handling).
   - Revision 5: the operator asked to use the better of two carriers. Choosing by measurement is already allowed: swap the SIM in the same M7 at the real spot and compare 24 h `fieldkit uplink` runs, p10 during the China evening. Revision 6: SMARTY, on Three's network, became the line (F1), so the comparison of F12 is superseded; EE could be compared only later, by a SIM swap. O2 is unsuitable: its unlimited SIMs must be used in devices that do not need to be plugged in, which rules out Plugged-In mode (§19).
@@ -2516,7 +2621,7 @@ L6 and L7 run the signed lab bundle (`xtask release --lab`, signed by the user),
 - In-house protocol implementations, C++, or Xray prerelease features (XHTTP, VLESS encryption, `finalRules`).
 - Modifying CFM. Extracting its importer, changing its ML-KEM client handling, the mainland China direct switch (F10) and Hysteria2 URI pins are separate CFM tasks (the last two committed as `d828f92` on CFM's branch `feat/mainland-direct-routing` on 2026-10-16, in no release yet).
 - Running without a logged-in session; changing system power, firewall or network settings.
-- Inspecting traffic or logging destinations; automated reachability probing from China. Revision 5 makes the console's side explicit (§15.5). Mooring never models, stores or sends:
+- Inspecting traffic or logging destinations; automated reachability probing from China. Revision 5 makes the console's side explicit (§15.5). The abuse guard of 2026-11-11 (§11.8) reads connection features, never content, and holds destinations only as buckets of about a million addresses each, in kernel memory, for at most an hour. Mooring never models, stores or sends:
   - destinations, or any per-connection or access log;
   - users' IP addresses;
   - M7 identifiers: cell ID, IMEI, ICCID, phone number and the rest;
@@ -2727,6 +2832,7 @@ The console review of 2026-10-08 raised twenty decisions, F1–F20. They are not
 | F18 | Backup escrow (changes §13.7's accepted model) | An `hdiutil` AES-256 image of the state, the Keychain secrets and the SSH material, with the passphrase kept offline, never in iCloud and never in a chat app, made again after each deletion the agreement promises (§15.7). Until decided, no backup exists |
 | F19 | Serving on battery, and the Mac's sleep and display-lock settings | Keep §10.3's behaviour on battery. Set display sleep to about 10 minutes with a password required immediately, so the screen locks; Mooring's assertions keep the system awake |
 | F20 | Accept the PRC-law exposure as part of D-1 | The operator's own call. Nothing in this design can reduce it below the constraints listed under D-1. Pending: not asked on 2026-10-08, when D-1 was accepted for the carrier terms |
+| F21 | **The abuse guard's defaults (§11.8), pending; the guard was decided on 2026-11-11.** (a) Ports: TCP/25 stays blocked, 465 and 587 stay open and are watched. (b) Layer 1 per user: 50 new flows a second (burst 500), 1,024 concurrent flows, 1,500 datagrams a second (burst 3,000). (c) Cut levels: 2,000 destinations or 200 port buckets in 5 min, 1,000 datagrams a second for two minutes, 2,400 new flows to one destination in 2 min, 300 new flows to one login service in 10 min, 20 submission servers in an hour; alerts at about a third of each. (d) Which findings cut automatically: all six, or only the four attack findings (scans, floods, login guessing), with `MassContact` and `MailBlast` alerting only. (e) Retention: findings 30 days on a node and 13 months on the Mac, not erased when a user leaves; kernel windows at most an hour. (f) The agreement's new text (§11.8, "The agreement"), which the agreement session drafts | (a) as stated; (b) and (c) as stated, recalibrated after the pilot's first month of alert-level findings; (d) all six, since each is either an attack or a use clause 3 forbids, and a cut is lifted at once on review; (e) as stated; (f) before the guard's first apply on a node with users |
 
 ---
 
