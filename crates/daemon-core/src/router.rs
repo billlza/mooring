@@ -860,8 +860,10 @@ pub struct Radio {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RadioState {
-    /// Not attached: no service. The parser cannot produce it until the M7's
-    /// no-service report is captured (M2.md, "Still to capture").
+    /// No data session: `wwan.connection` is `Disconnected`, as the M7
+    /// reported with a SIM that had not connected yet (2026-11-11, M2.md).
+    /// The M7's other radio readings are not kept. How it reports a missing
+    /// SIM is still to capture (M2.md, "Still to capture").
     NoService,
     /// Attached (`wwan.connection` is `Connected`).
     Attached(Radio),
