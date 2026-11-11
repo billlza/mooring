@@ -2,6 +2,12 @@
 
 //! `clean`: runs `cargo clean` and reports the bytes it freed.
 //!
+//! On macOS it is refused while the daemon runs from inside a directory it
+//! removes, as one started from a build in the target directory does, or
+//! cannot be placed ([`crate::agent`]). A daemon started from the installed
+//! app (`cargo xtask install`) runs from outside them and is not in the
+//! way.
+//!
 //! The freed amount is the allocated size (`st_blocks`) of the target and
 //! build directories before cleaning, counting hard-linked files once (on
 //! Linux cargo hard-links final binaries into `target/<profile>/`). On macOS
@@ -16,7 +22,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::app::{self, AppError};
+use crate::app::{self, AppError, Programs};
 use crate::cargo::{Cargo, CommandError};
 use crate::metadata::{self, MetadataError};
 use crate::output::{OutputError, say};
@@ -45,12 +51,23 @@ pub(crate) enum CleanError {
 }
 
 pub(crate) fn run(cargo: &Cargo, out: &mut impl Write) -> Result<(), CleanError> {
-    if cfg!(target_os = "macos") {
-        // The development agent runs from the target directory.
-        app::refuse_while_agent_loaded_on_this_mac(cargo.workspace_root())?;
-    }
+    run_with(&mut app::System, cfg!(target_os = "macos"), cargo, out)
+}
+
+/// [`run`], with `programs` asking launchd for the daemon when the host
+/// can have one (`macos`).
+fn run_with(
+    programs: &mut impl Programs,
+    macos: bool,
+    cargo: &Cargo,
+    out: &mut impl Write,
+) -> Result<(), CleanError> {
     let metadata = metadata::load(cargo, &["--no-deps"])?;
     let roots = distinct_roots([metadata.target_directory, metadata.build_directory]);
+    if macos {
+        let dirs: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
+        app::refuse_while_agent_runs_within(programs, cargo.workspace_root(), &dirs)?;
+    }
     let mut seen = BTreeSet::new();
     let mut freed = 0_u64;
     for root in &roots {
@@ -134,8 +151,12 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
     use std::path::{Path, PathBuf};
 
-    use super::{BLOCK_SIZE, allocated_bytes, distinct_roots};
-    use crate::testing::Scratch;
+    use super::{BLOCK_SIZE, CleanError, allocated_bytes, distinct_roots, run_with};
+    use crate::app::AppError;
+    use crate::testing::{
+        Daemon, Fake, Scratch, asked_of_cargo, cargo_with_target, daemon_steps, script_daemon,
+        service,
+    };
 
     fn blocks(path: &Path) -> u64 {
         fs::symlink_metadata(path).unwrap().blocks() * BLOCK_SIZE
@@ -176,6 +197,60 @@ mod tests {
             allocated_bytes(&scratch.0.join("target"), &mut BTreeSet::new()).unwrap(),
             0
         );
+    }
+
+    /// The target directory is not removed while the daemon runs from
+    /// inside it, or cannot be placed: cargo is asked where the directory
+    /// is, and never to clean. A daemon that is not registered, or runs
+    /// from the installed app, is not in the way, and on another system
+    /// launchd is not asked: the clean goes on to cargo, here one that
+    /// cleans nothing.
+    #[test]
+    fn clean_is_refused_only_while_the_daemon_runs_from_the_target_directory() {
+        let scratch = Scratch::new("clean-daemon");
+        let resolved = fs::canonicalize(&scratch.0).unwrap();
+        let root = resolved.join("repo");
+        let target = resolved.join("target");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(target.join("app")).unwrap();
+        let cargo = cargo_with_target(&scratch, &root, &target);
+        let inside = target.join("app/Mooring.app/Contents/MacOS/mooringctl");
+        let installed = resolved.join("Applications/Mooring.app/Contents/MacOS/mooringctl");
+
+        for daemon in [Daemon::Running(&inside), Daemon::Refused] {
+            let mut fake = Fake::default();
+            script_daemon(&mut fake, daemon);
+            let mut out = Vec::new();
+            let error = run_with(&mut fake, true, &cargo, &mut out).unwrap_err();
+            match daemon {
+                Daemon::Running(_) => assert!(
+                    matches!(&error, CleanError::App(AppError::AgentLoaded { service: named, executable }) if *named == service() && *executable == inside),
+                    "{error:?}"
+                ),
+                _ => assert!(
+                    matches!(&error, CleanError::App(AppError::AgentUnplaced { service: named }) if *named == service()),
+                    "{error:?}"
+                ),
+            }
+            assert!(out.is_empty());
+            assert_eq!(asked_of_cargo(&scratch), ["metadata"]);
+        }
+
+        for daemon in [Daemon::NotRegistered, Daemon::Running(&installed)] {
+            let mut fake = Fake::default();
+            script_daemon(&mut fake, daemon);
+            let error = run_with(&mut fake, true, &cargo, &mut Vec::new()).unwrap_err();
+            assert!(matches!(error, CleanError::Command(_)), "{error:?}");
+            let steps: Vec<String> = fake.steps.iter().map(|(line, _)| line.clone()).collect();
+            assert_eq!(steps, daemon_steps(daemon));
+            assert_eq!(asked_of_cargo(&scratch), ["metadata", "clean"]);
+        }
+
+        let mut fake = Fake::default();
+        let error = run_with(&mut fake, false, &cargo, &mut Vec::new()).unwrap_err();
+        assert!(matches!(error, CleanError::Command(_)), "{error:?}");
+        assert!(fake.steps.is_empty(), "launchd is asked on macOS only");
+        assert_eq!(asked_of_cargo(&scratch), ["metadata", "clean"]);
     }
 
     #[test]

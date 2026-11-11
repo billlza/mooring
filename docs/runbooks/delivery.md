@@ -7,6 +7,8 @@ The rules come from design §9.2, §9.4, §13.4, §13.5 and §13.6, and from dec
 
 Of the commands named here `hdiutil`, `tmutil` and `mooringctl user add | alias | agree | export` exist today (the `mooringctl` ones since 2026-10-18, in the development build, which keeps its secrets in the login keychain until M5's data-protection keychain; they need the state that `exit init` will create). The other `mooringctl` commands below (`user reissue`, `node apply`, `apply`, `doctor`) arrive in M5, and so does the console's rotation tracker. Until then this runbook is the procedure they will follow. The portal's `mooringctl portal export` and `user export-profiles` (2026-11-06) exist too, but refuse to run until the agreement covers the portal (section 11). `mooringctl user usage` (2026-11-07), which section 10 uses, exists too.
 
+`mooringctl` is the one inside the installed app, `~/Applications/Mooring.app/Contents/MacOS/mooringctl`, run from Terminal.app's own shell (`console.md`, section 1): it is the build the daemon runs, so what it stores in the keychain is the daemon's to read.
+
 ## 0. Once, on the operator's Mac
 
 Make one folder for exports, outside iCloud Drive, Desktop and Documents, and keep it out of Time Machine, so that no backup keeps a file after it is deleted (design §12):
