@@ -557,6 +557,14 @@ pub enum ModelError {
         /// Its lifecycle stage.
         stage: LifecycleStage,
     },
+    /// A cancellation names a node that is not planned.
+    #[error("node {node} is {stage}, not planned")]
+    NodeNotPlanned {
+        /// The node.
+        node: NodeId,
+        /// Its lifecycle stage.
+        stage: LifecycleStage,
+    },
     /// A revoked user still holds per-node credentials.
     #[error("revoked user {user} still holds credentials")]
     RevokedUserHoldsCredentials {
@@ -755,6 +763,8 @@ kinds! {
         CarrierAlreadyRecorded,
         /// See [`ModelError::NodeNotRetiring`].
         NodeNotRetiring,
+        /// See [`ModelError::NodeNotPlanned`].
+        NodeNotPlanned,
         /// See [`ModelError::RevokedUserHoldsCredentials`].
         RevokedUserHoldsCredentials,
         /// See [`ModelError::RevokePendingWithoutCredentials`].
@@ -856,6 +866,7 @@ impl ModelError {
             Self::AgreementRegressed { .. } => ModelErrorKind::AgreementRegressed,
             Self::CarrierAlreadyRecorded => ModelErrorKind::CarrierAlreadyRecorded,
             Self::NodeNotRetiring { .. } => ModelErrorKind::NodeNotRetiring,
+            Self::NodeNotPlanned { .. } => ModelErrorKind::NodeNotPlanned,
             Self::RevokedUserHoldsCredentials { .. } => ModelErrorKind::RevokedUserHoldsCredentials,
             Self::RevokePendingWithoutCredentials { .. } => {
                 ModelErrorKind::RevokePendingWithoutCredentials
@@ -1318,6 +1329,12 @@ mod tests {
             (
                 K::NodeNotRetiring,
                 record_error(Bookkeeping::RetirementShutDown {
+                    node: node_id("lon1"),
+                }),
+            ),
+            (
+                K::NodeNotPlanned,
+                record_error(Bookkeeping::PlanCancelled {
                     node: node_id("lon1"),
                 }),
             ),

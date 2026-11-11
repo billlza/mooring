@@ -10,6 +10,7 @@ mod canary;
 mod collected_usage;
 mod control;
 mod exit;
+mod lifetime_origin;
 mod meter;
 mod netgear;
 mod notify;

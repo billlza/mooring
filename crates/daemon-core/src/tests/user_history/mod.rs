@@ -521,9 +521,10 @@ fn a_month_is_final_from_its_end_and_a_lifetime_needs_an_origin() {
 }
 
 /// A month held from before a node's recorded origin was counted before it
-/// (a VPS adopted again with its old files, or a clock that ran ahead when
-/// the origin was recorded): a lifetime summed from the origin would leave
-/// it out, so it is unknown, in the status line's aggregate as here.
+/// (a VPS adopted again with its old files, before adoption refused one,
+/// or a clock that ran ahead when the origin was recorded): a lifetime
+/// summed from the origin would leave it out, so it is unknown, in the
+/// status line's aggregate as here.
 #[test]
 fn a_month_from_before_the_origin_leaves_the_lifetime_unknown() {
     let mut lon = two_months("lon1", true, end_of_october());

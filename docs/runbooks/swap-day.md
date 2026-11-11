@@ -3,9 +3,9 @@
 
 This runbook is for the operator. It takes the pilot from "the 1pMobile SIM has arrived" to "users connect through it", and lists what must be in place before that day.
 
-The design is §7 (the plan and its cycles), §10.1 and §10.2 (the daemon, preflight, probes, latches), §13.2 (provisioning) and §15.6 (the M7). Every command runs from Terminal.app's own shell in the workspace root, with the signed `mooringctl` (`cargo xtask mooringctl` builds `./target/signed/mooringctl`; below it is written `mooringctl`). `en9` stands for the Mac's interface to the M7, the USB Ethernet adapter: check it with `ifconfig`, it is the one with the address `192.168.1.x`.
+The design is §7 (the plan and its cycles), §10.1 and §10.2 (the daemon, preflight, probes, latches), §13.2 (provisioning) and §15.6 (the M7). Every command runs from Terminal.app's own shell, with the installed app's `mooringctl` (`~/Applications/Mooring.app/Contents/MacOS/mooringctl`, installed in section 0.2; below it is written `mooringctl`), and in the workspace root: the `cargo` commands need it, and the `ops-local/` and `target/` paths below are relative to it. `en9` stands for the Mac's interface to the M7, the USB Ethernet adapter: check it with `ifconfig`, it is the one with the address `192.168.1.x`.
 
-What this build does not do yet: per-user usage (the status's usage view is `not_pulled`, and the console says the build does not read it), the Mac's report to the phone, and the alert notices. None of them is needed for traffic to flow.
+What this build does not do yet: the Mac's report to the phone, and the alert notices. Neither is needed for traffic to flow. Per-user usage has been read since 2026-11-05 (design §10.5).
 
 ## 0. Before the SIM arrives
 
@@ -28,10 +28,11 @@ ditto ~/mooring-engines/out ~/Library/Application\ Support/Mooring/engines
 
 ```
 cargo xtask app
-open target/app/Mooring.app
+cargo xtask install
+open ~/Applications/Mooring.app
 ```
 
-Then **Start the Daemon at Login** from Mooring.app's menu, as in `console.md`, section 2 (on a Mac that ran the development agent before, stop that first, as that section says). While a daemon from an earlier build is registered, `cargo xtask app` refuses: choose **Stop the Daemon** first, and start it again from the new build; that first start fails, and once `launchctl` shows exit code 78, a second **Stop the Daemon** and **Start the Daemon at Login** runs it (`console.md`, section 1). `cargo xtask app` also builds `./target/signed/mooringctl`, the same bytes as the app's copy: use that one for every command below, so that the keys it makes in the keychain are the daemon's to read without asking. Until a deployment exists the daemon serves the router console; at its first poll after `exit init` it serves the exit instead. Install this build before `exit init`: a daemon built before the exit runtime stops when it finds a deployment.
+Then **Start the Daemon at Login** from Mooring.app's menu, as in `console.md`, section 2 (on a Mac that ran the development agent before, stop that first, as that section says). While a daemon is registered, `cargo xtask install` refuses: choose **Stop the Daemon** and quit the app first, and start the daemon again from the newly installed build; that first start fails, and once `launchctl` shows exit code 78, a second **Stop the Daemon** and **Start the Daemon at Login** runs it (`console.md`, section 1). The installed app carries `mooringctl`, the build the daemon runs: use that one for every command below, so that the keys it makes in the keychain are the daemon's to read without asking. Until a deployment exists the daemon serves the router console; at its first poll after `exit init` it serves the exit instead. Install this build before `exit init`: a daemon built before the exit runtime stops when it finds a deployment.
 
 ### 0.3 The deployment
 
@@ -50,7 +51,14 @@ cargo build -p mooring-agent --release --target x86_64-unknown-linux-musl
 mooringctl node adopt lon1 --address <lon1's IPv4> --interface en9 --root-identity ~/.ssh/mooring_m2b_ed25519 --agent target/x86_64-unknown-linux-musl/release/mooring-agent
 ```
 
-`ops-local/known_hosts` holds lon1's host key, checked against the fingerprint Mythic Beasts' control panel shows; `node new` takes it as a `.pub` line. The address is in `ops-local/vps-lon1.md`. **`node adopt` removes your own root key from lon1**: afterwards only Mooring's operations key logs in, forced to the agent, and the Mythic Beasts control panel is the way in if it is lost (its web console, or a reinstall). It runs `Bootstrap`, then checks the running system (`Hello`: Debian 13, a 6.12 kernel, bbr and fq) and records lon1 `Adopted`; no reboot is needed. If it stops after `Bootstrap` (it names the step), fix the cause, for example by rebooting lon1 from the control panel, and run it again with `--resume` in place of `--root-identity`.
+`ops-local/known_hosts` holds lon1's host key, checked against the fingerprint Mythic Beasts' control panel shows; `node new` takes it as a `.pub` line. The address is in `ops-local/vps-lon1.md`. **`node adopt` removes your own root key from lon1**: afterwards only Mooring's operations key logs in, forced to the agent, and the Mythic Beasts control panel is the way in if it is lost (its web console, or a reinstall). It runs `Bootstrap`, then checks the running system (`Hello`: Debian 13, a 6.12 kernel, bbr and fq) and records lon1 `Adopted`; no reboot is needed. If it stops after `Bootstrap` (it names the step), fix the cause, for example by rebooting lon1 from the control panel, and run it again with `--resume` in place of `--root-identity`. `node adopt` needs a VPS that never ran Mooring. A VPS that Mooring adopted before no longer takes your root key, and its host key is one its earlier adoption made, so `node adopt` would stop at the upload: reinstall such a VPS from the control panel, and take its new host key into `ops-local/known_hosts` as above, before `node new` (or, once lon1 is planned, re-pin it as below). On any other VPS that ran Mooring before, `node adopt` stops at `Bootstrap`, with `the host ran Mooring before` among its causes (design §13.2), and changes nothing, so your root key still works. Reinstall Debian 13 from the control panel, take the reinstalled lon1's host key into `ops-local/known_hosts` in place of the old line, checked against the fingerprint the control panel shows, and pin it:
+
+```
+awk '$2 == "ssh-ed25519" {print $2, $3}' ops-local/known_hosts > ops-local/lon1-host-ed25519.pub
+mooringctl node repin lon1 --host-key ops-local/lon1-host-ed25519.pub
+```
+
+`node repin` shows the pinned and the new fingerprint, and refuses a file with more than one key line, so the old line must be gone from `ops-local/known_hosts`. Then run `node adopt` again with `--root-identity`. If `node adopt` stops after `Bootstrap` because the key `Bootstrap` made was not recorded as the pin, its error names that key: save it to a file, re-pin lon1 to it, and run `node adopt` with `--resume`. If a `--resume` stops at the host key (ssh's `Host key verification failed`), read `/etc/ssh/ssh_host_ed25519_key.pub` in the control panel's web console, re-pin lon1 to it, and resume. To give a planned lon1 up instead, `mooringctl node cancel lon1` removes it from the state, its keys from the keychain and its files from `ssh/lon1/` (if it stops midway, run it again: it removes what is left of `ssh/lon1/`; keychain items it did not get to delete stay, and nothing uses them); if its `Bootstrap` ran, reinstall or delete the VPS afterwards, since only the Mooring keys the cancel deletes log in there.
 
 Then the REALITY target. None of Mythic Beasts' own names qualifies (each answers HTTP/1.1 only, redirects `/`, or resolves to two addresses), so find one in lon1's /24 with the pinned scanner (design §11.7). It dials by the Mac's default route: turn Wi-Fi off first (section 0.6), so that it leaves over the M7. It makes two handshakes at a time and is done in about ten minutes; its warning about `Country.mmdb` only means the country column stays empty:
 

@@ -22,7 +22,7 @@ use crate::error::{CommandError, LocalError};
 use crate::node::engines::Engines;
 use crate::node::session::{deployed_node, ops_session};
 use crate::node::{NodeError, NodeSession, upload_missing};
-use crate::state::{load, output};
+use crate::state::{load, output, store_failure};
 
 /// How often the transaction's state is read.
 pub(crate) const POLL: Duration = Duration::from_secs(2);
@@ -102,7 +102,7 @@ pub(crate) fn apply(
                 },
             },
         )
-        .map_err(|error| LocalError::StateChange(Box::new(error)))?;
+        .map_err(store_failure)?;
     writeln!(
         out,
         "applied: {node} confirmed generation {} (node generation {}); users holding it can be exported",

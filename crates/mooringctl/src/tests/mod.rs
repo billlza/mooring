@@ -8,9 +8,11 @@
 
 mod add;
 mod adopt;
+mod answered;
 mod app;
 mod apply;
 mod canary;
+mod cancel;
 mod capture;
 mod console;
 mod control;
@@ -40,6 +42,7 @@ mod power;
 mod probe;
 mod profiles;
 mod relay_failures;
+mod repin;
 mod router;
 mod runtime;
 mod sockopt;

@@ -29,7 +29,10 @@ use mooring_model::secret::SecretRef;
 use mooring_model::{CalendarDate, DeploymentInit, Ed25519Pub, NodeId, Sha256Digest, UserStatus};
 use mooring_store::{SecretStore, Store};
 
-use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent};
+use super::support::{
+    Answered, Expected, ExpectedRemote, Harness, PINNED, Sent, change_the_configuration_meanwhile,
+    changed_since,
+};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
 use crate::node::dial::{CONNECT_TIMEOUT, M7Egress, RelaySocket, Served, relay};
@@ -209,9 +212,9 @@ fn new_refuses_an_existing_id_a_bad_host_key_and_a_declined_answer() {
     for (content, why) in [
         (
             "ssh-rsa AAAAB3NzaC1yc2E root@lon1\n",
-            "does not hold an Ed25519 host key",
+            "does not hold exactly one Ed25519 public key",
         ),
-        ("", "does not hold an Ed25519 host key"),
+        ("", "does not hold exactly one Ed25519 public key"),
     ] {
         let bad = harness.home.path().join("bad.pub");
         fs::write(&bad, content).unwrap();
@@ -242,7 +245,7 @@ fn new_refuses_an_existing_id_a_bad_host_key_and_a_declined_answer() {
     ]);
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert!(
-        outcome.stderr.contains("cannot read the host key"),
+        outcome.stderr.contains("cannot read the public key"),
         "{}",
         outcome.stderr
     );
@@ -1458,8 +1461,227 @@ fn new_refuses_a_host_key_file_larger_than_one_line() {
     ]);
     assert_eq!(outcome.code, EXIT_LOCAL);
     assert!(
-        outcome.stderr.contains("does not hold an Ed25519 host key"),
+        outcome
+            .stderr
+            .contains("does not hold exactly one Ed25519 public key"),
         "{}",
         outcome.stderr
     );
+}
+
+/// Runs `node new <id> --role standby --host-key <file> --yes`.
+fn plan(harness: &mut Harness, id: &str, host_key: &Path) -> super::support::Outcome {
+    harness.run(&[
+        "node",
+        "new",
+        id,
+        "--role",
+        "standby",
+        "--host-key",
+        host_key.to_str().unwrap(),
+        "--yes",
+    ])
+}
+
+/// `node new` refuses an id whose ssh path is taken by anything, and says
+/// what frees it, before it shows the plan or asks. A link there, one that
+/// leads nowhere included, or a directory that holds something Mooring
+/// does not keep, is named for the operator to move away, since
+/// `node cancel` would refuse it too. A directory of Mooring's own files
+/// is what an earlier node of the id left, which `node cancel` removes.
+/// Each step the refusals name leads to the next, and the node is planned
+/// at the end.
+#[test]
+fn new_names_what_is_in_the_way_of_an_ids_ssh_directory() {
+    let (mut harness, _) = planned();
+    let before = state_bytes(&harness);
+    let refs = harness.secrets.refs();
+    let ssh = harness.support_dir().join("ssh");
+    fs::create_dir_all(&ssh).unwrap();
+    let dir = ssh.join("ams1");
+    let (path, _) = host_key_file(&harness, "ams1.pub");
+    let refused = |harness: &mut Harness, report: String| {
+        let outcome = plan(harness, "ams1", &path);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        assert_eq!(outcome.stderr, report);
+        assert_eq!(outcome.stdout, "", "refused before the plan is shown");
+        assert_eq!(state_bytes(harness), before);
+        assert_eq!(harness.secrets.refs(), refs);
+    };
+    let not_moorings = |path: &Path| {
+        format!(
+            "mooringctl: {} is not what Mooring keeps for a node; move it away, then run the command again\n",
+            path.display()
+        )
+    };
+
+    std::os::unix::fs::symlink(harness.home.path().join("gone"), &dir).unwrap();
+    refused(&mut harness, not_moorings(&dir));
+    fs::remove_file(&dir).unwrap();
+
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("ops_ed25519"), b"an earlier node's key\n").unwrap();
+    let notes = dir.join("notes.txt");
+    fs::write(&notes, b"mine\n").unwrap();
+    refused(&mut harness, not_moorings(&notes));
+    fs::remove_file(&notes).unwrap();
+
+    refused(
+        &mut harness,
+        format!(
+            "mooringctl: {} exists already: an earlier node with this id left it; `node cancel ams1` removes the ssh files Mooring kept there, then plan the node again\n",
+            dir.display()
+        ),
+    );
+    let outcome = harness.run(&["node", "cancel", "ams1", "--yes"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(!dir.exists());
+
+    let outcome = plan(&mut harness, "ams1", &path);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        store(&harness)
+            .load()
+            .unwrap()
+            .deployment
+            .nodes()
+            .contains_key(&NodeId::parse("ams1").unwrap())
+    );
+}
+
+/// The answer may have waited. A configuration change that another
+/// command made meanwhile refuses the plan before a single secret is
+/// written: the store checks the generation under its lock first.
+#[test]
+fn a_configuration_change_while_the_question_waits_plans_nothing_and_writes_no_secret() {
+    let mut harness = deployed();
+    let before = store(&harness).load().unwrap().deployment;
+    let read = before.config_generation().get();
+    let (path, _) = host_key_file(&harness, "host.pub");
+    change_the_configuration_meanwhile(&mut harness);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&[
+        "node",
+        "new",
+        "lon1",
+        "--role",
+        "primary",
+        "--host-key",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stderr, changed_since(read));
+    assert_eq!(harness.console.asked, ["Plan this node?"]);
+    assert!(harness.console.meanwhile.is_none());
+    assert!(
+        !outcome.stdout.contains("planned node"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(harness.secrets.is_empty(), "{:?}", harness.secrets.refs());
+    let after = store(&harness).load().unwrap().deployment;
+    assert!(after.nodes().is_empty());
+    assert_eq!(after.next_wg_index(), before.next_wg_index());
+    assert_eq!(after.config_generation().get(), read + 1);
+}
+
+/// The id's ssh directory is looked for again once the question is
+/// answered: no write guards it. An adoption of an earlier node of the
+/// id, which had read the state before that node was cancelled, makes the
+/// directory and its operations key after the cancel found none, and the
+/// new node would take that key over. Nothing is planned, and no secret is
+/// written.
+#[test]
+fn an_ssh_directory_made_while_the_question_waits_plans_nothing() {
+    let mut harness = deployed();
+    let before = state_bytes(&harness);
+    let (path, _) = host_key_file(&harness, "host.pub");
+    let dir = harness.support_dir().join("ssh").join("lon1");
+    let made = dir.clone();
+    harness.console.meanwhile = Some(Box::new(move || {
+        fs::create_dir_all(&made).unwrap();
+        fs::write(made.join("ops_ed25519"), b"an earlier node's key\n").unwrap();
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&[
+        "node",
+        "new",
+        "lon1",
+        "--role",
+        "primary",
+        "--host-key",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: {} exists already: an earlier node with this id left it; `node cancel lon1` removes the ssh files Mooring kept there, then plan the node again\n",
+            dir.display()
+        )
+    );
+    assert_eq!(harness.console.asked, ["Plan this node?"]);
+    assert!(harness.console.meanwhile.is_none());
+    assert_eq!(state_bytes(&harness), before);
+    assert!(harness.secrets.is_empty(), "{:?}", harness.secrets.refs());
+    assert!(dir.join("ops_ed25519").is_file());
+}
+
+/// `node new` reads its host key as `node repin` does: a file with two
+/// keys pins neither, and a directory or a FIFO is refused without waiting
+/// on it.
+#[test]
+fn new_refuses_a_file_with_two_keys_and_what_is_no_regular_file() {
+    let mut harness = deployed();
+    let before = state_bytes(&harness);
+    let (first, _) = host_key_file(&harness, "first.pub");
+    let (second, _) = host_key_file(&harness, "second.pub");
+    let two = harness.home.path().join("two.pub");
+    fs::write(
+        &two,
+        format!(
+            "{}{}",
+            fs::read_to_string(&first).unwrap(),
+            fs::read_to_string(&second).unwrap()
+        ),
+    )
+    .unwrap();
+    let outcome = plan(&mut harness, "lon1", &two);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: {} does not hold exactly one Ed25519 public key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)\n",
+            two.display()
+        )
+    );
+    let fifo = harness.home.path().join("fifo.pub");
+    assert!(
+        std::process::Command::new("/usr/bin/mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    // A writer is held open, so that a reader that waited for one would
+    // not hang the run; `a_fifo_is_refused_without_waiting_for_a_writer`
+    // is the test of the wait.
+    let _writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+    for path in [harness.home.path().to_path_buf(), fifo] {
+        let outcome = plan(&mut harness, "lon1", &path);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        assert_eq!(
+            outcome.stderr,
+            format!(
+                "mooringctl: {} is not a regular file, so no public key was read from it\n",
+                path.display()
+            )
+        );
+    }
+    assert_eq!(state_bytes(&harness), before);
+    assert!(harness.secrets.is_empty());
 }

@@ -321,6 +321,22 @@ fn retention_runs_even_while_xray_is_stopped() {
     assert!(september.exists(), "kept until its seven days end");
 }
 
+/// Before a node's first generation the watch polls nothing, even with
+/// Xray's unit active and counters to read, so it leaves nothing that a
+/// retried `Bootstrap` takes for a node's earlier use (design §13.2).
+#[test]
+fn with_no_generation_the_watch_leaves_nothing_bootstrap_refuses() {
+    let world = World::new();
+    let node = world.node(OCT_8);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    world.xray().counters = BTreeMap::from([("u01@reality", (1, 1))]);
+    for _ in 0..3 {
+        minute(&mut watch, &world, &node);
+    }
+    assert_eq!(world.status().accounting.at, None);
+    assert_eq!(crate::bootstrap::prior_state(&world.paths), Ok(None));
+}
+
 #[test]
 fn the_uplink_transfer_counts_its_month_across_resets() {
     let world = World::new();

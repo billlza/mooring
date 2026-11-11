@@ -15,7 +15,7 @@ use mooring_macsys::MacsysError;
 use mooring_model::iface::BsdName;
 use mooring_model::iface::MacAddr;
 use mooring_model::time::UnixTime;
-use mooring_store::{ROUTER_PIN_FILE, RouterPin, StoredPin, read_router_pin};
+use mooring_store::{ROUTER_PIN_FILE, RouterPin, StoredPin, read_router_pin, write_router_pin};
 
 use super::stub::{Received, Stub};
 use super::support::{
@@ -141,6 +141,112 @@ fn an_identical_pin_is_not_rewritten() {
     );
     assert_eq!(fs::read(&file).unwrap(), before);
     assert_eq!(pinned(&harness), Some(pin_of(PINNED, NOW - 60)));
+}
+
+/// Another device's link-layer address, neither the gateway's nor
+/// [`OTHER`].
+const THIRD: [u8; 6] = [0x02, 0x00, 0x5e, 0x44, 0x44, 0x44];
+
+/// Has another `router pin` record `lladdr` on `interface` at `at` while
+/// the next question waits.
+fn record_meanwhile(harness: &mut Harness, lladdr: [u8; 6], interface: &'static str, at: u64) {
+    let dir = harness.support_dir();
+    harness.console.meanwhile = Some(Box::new(move || {
+        fs::create_dir_all(&dir).unwrap();
+        write_router_pin(
+            &dir,
+            &RouterPin {
+                gateway_lladdr: MacAddr::from_bytes(lladdr).unwrap(),
+                interface: BsdName::parse(interface).unwrap(),
+                pinned_at: UnixTime::from_secs(at),
+            },
+        )
+        .unwrap();
+    }));
+}
+
+/// The answer may have waited, and the pin's write compares nothing, so
+/// the pin is decided on again once the answer is there. A different
+/// address that another `router pin` recorded meanwhile is replaced only
+/// with `--replace`, as one recorded before the command started is, and
+/// the refusal says that it was pinned while the question waited: the
+/// operator answered a question about no pin.
+#[test]
+fn an_address_recorded_while_the_question_waits_is_replaced_only_with_replace() {
+    let mut harness = Harness::new(9);
+    record_meanwhile(&mut harness, OTHER, "lo0", NOW - 5);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(PIN);
+    assert_eq!(outcome.code, 1, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "interface lo0: gateway 127.0.0.1, link-layer address 02:00:5e:10:20:30\n"
+    );
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: another `router pin` pinned 02:00:5e:99:99:99 as the M7's identity while this question waited, so nothing was written: check which device is the M7 before replacing either (`router pin --replace`)\n"
+    );
+    assert!(harness.console.meanwhile.is_none());
+    assert_eq!(pinned(&harness), Some(pin_of(OTHER, NOW - 5)));
+    // With --replace the operator asked for whatever is pinned to be
+    // replaced, and it is.
+    let mut harness = Harness::new(9);
+    harness.pin(OTHER);
+    record_meanwhile(&mut harness, THIRD, "lo0", NOW - 5);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&["router", "pin", "--interface", "lo0", "--replace"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(harness.console.meanwhile.is_none());
+    assert_eq!(pinned(&harness), Some(pin_of(PINNED, NOW)));
+    let file = harness.support_dir().join(ROUTER_PIN_FILE);
+    assert!(outcome.stdout.ends_with(&format!(
+        "pinned as the M7's identity, on lo0, in {}\n",
+        file.display()
+    )));
+}
+
+/// The address the operator confirmed, recorded meanwhile by another
+/// `router pin`, is pinned already: nothing is written, so the pin keeps
+/// the time it was recorded at, and the command says so.
+#[test]
+fn the_same_address_recorded_while_the_question_waits_is_not_written_again() {
+    let mut harness = Harness::new(9);
+    record_meanwhile(&mut harness, PINNED, "lo0", NOW - 5);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(PIN);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(harness.console.meanwhile.is_none());
+    assert!(
+        outcome
+            .stdout
+            .ends_with("already pinned; nothing was written\n"),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(pinned(&harness), Some(pin_of(PINNED, NOW - 5)));
+}
+
+/// The same address recorded meanwhile with another interface: this
+/// command's interface is recorded with it, and the command says that the
+/// address was pinned already.
+#[test]
+fn the_same_address_recorded_on_another_interface_meanwhile_gets_this_interface() {
+    let mut harness = Harness::new(9);
+    record_meanwhile(&mut harness, PINNED, "en7", NOW - 5);
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(PIN);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(harness.console.meanwhile.is_none());
+    let file = harness.support_dir().join(ROUTER_PIN_FILE);
+    assert!(
+        outcome.stdout.ends_with(&format!(
+            "already pinned; the interface lo0 is recorded with it in {}\n",
+            file.display()
+        )),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(pinned(&harness), Some(pin_of(PINNED, NOW)));
 }
 
 /// A first read that finds an address decides at once: the table is read
@@ -446,7 +552,7 @@ fn the_interface_is_recorded_with_the_same_address_without_asking() {
         interface: BsdName::parse("en9").unwrap(),
         pinned_at: UnixTime::from_secs(NOW - 60),
     };
-    mooring_store::write_router_pin(&dir, &other).unwrap();
+    write_router_pin(&dir, &other).unwrap();
     let outcome = harness.run(PIN);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     assert!(harness.console.asked.is_empty());

@@ -81,8 +81,8 @@ mod watch;
 pub use deadman::{DeadManCheck, dead_man_pings};
 pub use digest::{BlobLen, MAX_BLOB_BYTES, Sha256Hex};
 pub use error::{
-    AgentError, AgentErrorKind, ApplyStep, BootstrapStep, HealthCheck, IoOp, RollbackCause,
-    SystemdOp, TargetTool, ValidationTool, ValueError, ValueErrorKind,
+    AgentError, AgentErrorKind, ApplyStep, BootstrapStep, HealthCheck, IoOp, PriorState,
+    RollbackCause, SystemdOp, TargetTool, ValidationTool, ValueError, ValueErrorKind,
 };
 pub use event::{AgentEvent, AgentEventKind, EventSeq, EventsV1, MAX_EVENTS};
 pub use framing::{

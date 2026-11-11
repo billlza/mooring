@@ -18,7 +18,7 @@ use mooring_daemon_core::meter::MeterError;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_daemon_core::snapshot::SnapshotError;
 use mooring_export::{ExportError, ProfilesError};
-use mooring_keys::KeysError;
+use mooring_keys::{KeysError, SshPublicKey};
 use mooring_macsys::MacsysError;
 use mooring_model::dns::DnsName;
 use mooring_model::error::ModelError;
@@ -33,6 +33,7 @@ use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadEr
 use crate::collected_usage::UsageFault;
 use crate::node::NodeError;
 use crate::node::adopt::Step;
+use crate::node::planned::PlannedAction;
 use crate::router::error::RouterError;
 
 /// A failure on the Mac rather than at the M7.
@@ -76,6 +77,23 @@ pub(crate) enum LocalError {
     /// state as it was.
     #[error("the state was not changed")]
     StateChange(#[source] Box<StoreError>),
+    /// The state is no longer the one the command read and described:
+    /// another command changed it meanwhile, as while a question waited
+    /// (`state::unchanged`). What was described, and answered if the
+    /// command asked, was about the state read, so the command stopped
+    /// before acting on it.
+    #[error(
+        "the state changed since this command read it, so it stopped before acting: run the command again"
+    )]
+    StateChangedSinceRead,
+    /// The change is committed, but deleting the keychain items it no
+    /// longer references failed for some (`StoreError::SecretCleanup`,
+    /// which names each: one that could not be deleted, or one that was
+    /// gone already). Nothing references them any more.
+    #[error(
+        "the change is committed, but deleting the keychain items it no longer references failed for those named below; nothing uses them, and any that is still there can be deleted by hand"
+    )]
+    StateCommitted(#[source] Box<StoreError>),
     /// The label typed is not a valid local label.
     #[error("the label was not accepted")]
     Label(#[source] ModelError),
@@ -235,6 +253,16 @@ pub(crate) enum LocalError {
     #[error("the M7's identity is already pinned as {pinned}; rerun with --replace to replace it")]
     PinExists {
         /// The pinned link-layer address.
+        pinned: MacAddr,
+    },
+    /// Another `router pin` pinned a different identity while this one's
+    /// question waited: the answer was to a question about no pin, or
+    /// about another one.
+    #[error(
+        "another `router pin` pinned {pinned} as the M7's identity while this question waited, so nothing was written: check which device is the M7 before replacing either (`router pin --replace`)"
+    )]
+    PinnedMeanwhile {
+        /// The link-layer address pinned meanwhile.
         pinned: MacAddr,
     },
     /// The password is not 1 to 128 bytes of printable ASCII.
@@ -756,8 +784,9 @@ pub(crate) enum LocalError {
         /// The id given.
         node: NodeId,
     },
-    /// The host-key file could not be read.
-    #[error("cannot read the host key in {}", path.display())]
+    /// A public key's file (the host key's, or a node's own `.pub`) could
+    /// not be read.
+    #[error("cannot read the public key in {}", path.display())]
     HostKeyFile {
         /// The file.
         path: PathBuf,
@@ -765,14 +794,81 @@ pub(crate) enum LocalError {
         #[source]
         source: io::Error,
     },
-    /// The host-key file does not hold one Ed25519 OpenSSH public key.
+    /// A public key's file does not hold exactly one Ed25519 OpenSSH public
+    /// key line: none, a malformed one, a second line, a character that
+    /// ends a line on a screen, or more than one line's worth of bytes.
     #[error(
-        "{} does not hold an Ed25519 host key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`)",
+        "{} does not hold exactly one Ed25519 public key as OpenSSH writes it (`ssh-ed25519 <base64> [comment]`, one line)",
         path.display()
     )]
     HostKey {
         /// The file.
         path: PathBuf,
+    },
+    /// A public key's path (the host key's file, or a node's own `.pub`)
+    /// is not a regular file: a directory, a FIFO or a device.
+    #[error("{} is not a regular file, so no public key was read from it", path.display())]
+    HostKeyNotAFile {
+        /// The path.
+        path: PathBuf,
+    },
+    /// `node new` found the ssh directory an earlier node with this id
+    /// left, whose operations key the new node would otherwise inherit.
+    /// It holds only what Mooring keeps there, which `node cancel` removes
+    /// (anything else is `NodeFileUnexpected`).
+    #[error(
+        "{} exists already: an earlier node with this id left it; `node cancel {node}` removes the ssh files Mooring kept there, then plan the node again",
+        path.display()
+    )]
+    NodeFilesExist {
+        /// The id given.
+        node: NodeId,
+        /// The directory.
+        path: PathBuf,
+    },
+    /// A node's ssh directory is not a directory, or holds something
+    /// Mooring does not keep there. `node cancel` will not remove it, and
+    /// `node new` will not plan a node beside it.
+    #[error(
+        "{} is not what Mooring keeps for a node; move it away, then run the command again",
+        path.display()
+    )]
+    NodeFileUnexpected {
+        /// The path.
+        path: PathBuf,
+    },
+    /// The cancel is committed, but the node's ssh directory could not be
+    /// removed.
+    #[error(
+        "node {node} is cancelled, but {} could not be removed; until it is removed, by `node cancel {node}` again or by hand, `node new {node}` refuses",
+        dir.display()
+    )]
+    NodeFilesLeft {
+        /// The cancelled node.
+        node: NodeId,
+        /// Its ssh directory.
+        dir: PathBuf,
+        /// The first removal that failed.
+        #[source]
+        source: io::Error,
+    },
+    /// The cancel is committed, but neither the node's ssh directory nor
+    /// all of the keychain items the state stopped referencing could be
+    /// removed.
+    #[error(
+        "node {node} is cancelled, but {} could not be removed ({removal}); until it is removed, by `node cancel {node}` again or by hand, `node new {node}` refuses; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
+        dir.display()
+    )]
+    NodeFilesAndSecretsLeft {
+        /// The cancelled node.
+        node: NodeId,
+        /// Its ssh directory.
+        dir: PathBuf,
+        /// The first removal that failed.
+        removal: io::Error,
+        /// The keychain deletions that failed.
+        #[source]
+        source: Box<StoreError>,
     },
     /// The node's plan was refused by the model.
     #[error("the node's plan was not accepted")]
@@ -783,13 +879,15 @@ pub(crate) enum LocalError {
         /// The id given.
         node: NodeId,
     },
-    /// The node is not planned, so it cannot be adopted.
-    #[error("node {node} is {stage}; only a planned node is adopted")]
+    /// The node is not planned, so the command does not act on it.
+    #[error("node {node} is {stage}; only a planned node is {}", action.past())]
     NodeNotPlanned {
         /// The node.
         node: NodeId,
         /// Its stage.
         stage: LifecycleStage,
+        /// What the command does to a planned node.
+        action: PlannedAction,
     },
     /// A keychain item holds another kind of secret than its reference
     /// names.
@@ -804,6 +902,57 @@ pub(crate) enum LocalError {
     /// ProxyCommand.
     #[error("cannot find this mooringctl's path")]
     CurrentExe(#[source] io::Error),
+    /// `Bootstrap` ran, so the VPS holds a new host key and lets in only
+    /// Mooring's keys, but that key could not be recorded as the node's
+    /// pin (the source says why): `--resume` would check the host against
+    /// the old one.
+    #[error(
+        "Bootstrap ran, so node {node}'s VPS now holds host key {} and lets in only Mooring's keys, but that key was not recorded as the node's pin: if the node is still planned, save `{}` to a file, pin it with `node repin {node} --host-key <file>`, then run `node adopt {node} --resume`; if it was cancelled, reinstall the VPS or delete it from the provider's console",
+        key.fingerprint(),
+        key.authorized_key()
+    )]
+    BootstrapKeyUnpinned {
+        /// The node.
+        node: NodeId,
+        /// The host key `Bootstrap` made.
+        key: SshPublicKey,
+        /// Why the pin was not recorded.
+        #[source]
+        source: Box<LocalError>,
+    },
+    /// The node is adopted, but the file of its one-time bootstrap key
+    /// could not be removed. `RevokeBootstrap` ran before the commit, so
+    /// the VPS no longer accepts that key.
+    #[error(
+        "node {node} is adopted, but its one-time bootstrap key could not be removed from {}: the VPS no longer accepts that key, so remove the file by hand",
+        path.display()
+    )]
+    BootstrapKeyLeft {
+        /// The adopted node.
+        node: NodeId,
+        /// The key's file.
+        path: PathBuf,
+        /// Why it stays.
+        #[source]
+        source: io::Error,
+    },
+    /// The node is adopted, but neither the file of its one-time bootstrap
+    /// key nor the key's keychain item could be removed.
+    #[error(
+        "node {node} is adopted, but its one-time bootstrap key could not be removed from {} ({removal}): the VPS no longer accepts that key, so remove the file by hand; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
+        path.display()
+    )]
+    BootstrapKeyAndSecretsLeft {
+        /// The adopted node.
+        node: NodeId,
+        /// The key's file.
+        path: PathBuf,
+        /// Why the file stays.
+        removal: io::Error,
+        /// The keychain deletions that failed.
+        #[source]
+        source: Box<StoreError>,
+    },
     /// `node adopt` without `--resume` needs the operator's root key.
     #[error("give --root-identity, the key that logs in as root on the VPS now, or --resume")]
     RootIdentityMissing,

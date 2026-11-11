@@ -394,6 +394,32 @@ pub(crate) enum NodeCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Replace a planned node's pinned host key with the one in a file, as
+    /// after reinstalling its VPS; check its fingerprint on the provider's
+    /// console first.
+    Repin {
+        /// The node's id.
+        node: NodeId,
+        /// The VPS's Ed25519 host key, as OpenSSH writes it
+        /// (/etc/ssh/ssh_host_ed25519_key.pub).
+        #[arg(long, value_name = "PATH")]
+        host_key: PathBuf,
+        /// Re-pin without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Give a planned node up: remove it from the state with every user's
+    /// credentials on it, and delete its keys from the keychain and its ssh
+    /// files. No VPS is contacted; the id may be planned again. Given the id
+    /// of a cancel that stopped midway, it removes the ssh files that cancel
+    /// left.
+    Cancel {
+        /// The node's id.
+        node: NodeId,
+        /// Cancel without asking.
+        #[arg(long)]
+        yes: bool,
+    },
     /// The node's REALITY target.
     #[command(subcommand)]
     Target(TargetCommand),

@@ -42,6 +42,7 @@ fn a_keychain_that_refuses_the_password_is_refused_before_any_request() {
     *harness.keychain.lock().unwrap() = Refusals {
         get: Some(-25_293),
         put: None,
+        delete: None,
     };
     let outcome = harness.run(&["router", "status", "--interface", "lo0"]);
     assert_eq!(outcome.code, EXIT_LOCAL);

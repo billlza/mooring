@@ -11,6 +11,7 @@ use mooring_model::collections::NonEmpty;
 use mooring_model::counters::{ConfigGeneration, RuntimeRevision};
 use mooring_model::error::ModelError;
 use mooring_model::ids::{NodeId, UserId};
+use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretRef;
 use mooring_model::user::UserStatus;
 
@@ -241,13 +242,35 @@ pub enum StoreError {
     },
     /// The change set, replaced or lowered a node's confirmed generation,
     /// which only a `Bookkeeping::Applied` record sets (design §7). Moving
-    /// a node out of `Applied` is not such an edit.
+    /// a node on from `Applied` is not such an edit; moving it back to an
+    /// earlier stage is `NodeLifecycleEdited`.
     #[error(
         "the change edited node {node}'s confirmed generation; only a Bookkeeping::Applied record sets it"
     )]
     AppliedEdited {
         /// The node whose confirmed generation the change edited.
         node: NodeId,
+    },
+    /// The change moved a node back to an earlier lifecycle stage, moved a
+    /// planned node anywhere but to `Adopted`, or removed a node
+    /// (`LifecycleStage::may_change_to`; design §7). A node only moves on,
+    /// and retired nodes stay, so the id of a node that may have served is
+    /// never reused: the usage collector takes a node it sees planned or
+    /// adopted to have counted no client's bytes. A planned node is never
+    /// retired, since the usage figures need records from every node past
+    /// `Planned`: only the record `Bookkeeping::PlanCancelled` removes a
+    /// node, and only a planned one. A move back into `Applied` is
+    /// `AppliedEdited`. `to` is `None` when the change removed the node.
+    #[error(
+        "the change moved node {node} from {from:?} to {to:?}; a node's lifecycle only moves forward, a planned node only to adopted, and a configuration change removes no node"
+    )]
+    NodeLifecycleEdited {
+        /// The node.
+        node: NodeId,
+        /// The node's stage before the change.
+        from: LifecycleStage,
+        /// The stage the change left; `None` if it removed the node.
+        to: Option<LifecycleStage>,
     },
     /// The change moved a user's status outside the user transitions
     /// (`User::suspend`, `resume`, `revoke`; design §7), or removed a user
@@ -412,6 +435,8 @@ kinds! {
         GenerationEdited,
         /// See [`StoreError::AppliedEdited`].
         AppliedEdited,
+        /// See [`StoreError::NodeLifecycleEdited`].
+        NodeLifecycleEdited,
         /// See [`StoreError::UserStatusEdited`].
         UserStatusEdited,
         /// See [`StoreError::InvalidChange`].
@@ -459,6 +484,7 @@ impl StoreError {
             Self::CounterOverflow { .. } => StoreErrorKind::CounterOverflow,
             Self::GenerationEdited { .. } => StoreErrorKind::GenerationEdited,
             Self::AppliedEdited { .. } => StoreErrorKind::AppliedEdited,
+            Self::NodeLifecycleEdited { .. } => StoreErrorKind::NodeLifecycleEdited,
             Self::UserStatusEdited { .. } => StoreErrorKind::UserStatusEdited,
             Self::InvalidChange { .. } => StoreErrorKind::InvalidChange,
             Self::SecretRefsChanged { .. } => StoreErrorKind::SecretRefsChanged,

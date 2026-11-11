@@ -20,6 +20,8 @@ Users are asked to accept revision 2 only once payment is built (the operator no
 
 Until then this runbook is the procedure they will follow.
 
+`mooringctl` is the one inside the installed app, `~/Applications/Mooring.app/Contents/MacOS/mooringctl`, run from Terminal.app's own shell (`console.md`, section 1): it is the build the daemon runs, so what it stores in the keychain is the daemon's to read.
+
 ## 0. Once, before the first user
 
 **On the operator's Mac.** Make one folder for exports, outside iCloud Drive, Desktop and Documents, and keep it out of Time Machine, so that no backup keeps a file after it is deleted (design §12):

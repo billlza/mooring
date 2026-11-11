@@ -28,7 +28,7 @@ use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
 use crate::prompt::{Console, Line};
-use crate::state::{load, output, state_change};
+use crate::state::{load, output, state_change, store_failure};
 
 /// The most bytes read for a label: [`MAX_LABEL_CHARS`] characters of at
 /// most four UTF-8 bytes each.
@@ -50,6 +50,14 @@ const fn line_name(line: ClientLine) -> &'static str {
 /// shell history would keep, and is never printed. The user has no alias
 /// and no agreement record yet.
 ///
+/// A Mac with no deployment, or a state that cannot be read, is refused
+/// before the label is asked for. The label may wait as long as the
+/// operator takes to type it, so the state the user is added to is read
+/// once it is there: a planned node cancelled meanwhile is gone with a
+/// record that keeps the generation (`node cancel`), and a user given
+/// credentials on it from an earlier read would be refused by the store
+/// (`UnknownNode`), after the label was typed.
+///
 /// The credentials are written to the keychain before the state that
 /// references them (`update_config_with_secrets`); the model refuses a
 /// user over the cap, and then nothing is written. Adding a user is a
@@ -70,8 +78,9 @@ pub(crate) fn add(
         BTreeSet::new()
     };
     let store = Store::new(support_dir(env)?);
-    let state = load(&store)?;
+    load(&store)?;
     let label = read_label(env.console)?;
+    let state = load(&store)?;
     let id = credentials::user_id().map_err(LocalError::Keys)?;
     let mut per_node = BTreeMap::new();
     let mut secrets = Vec::new();
@@ -225,7 +234,7 @@ pub(crate) fn agree(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result
                 record: offered,
             },
         )
-        .map_err(|error| LocalError::StateChange(Box::new(error)))?;
+        .map_err(store_failure)?;
     // The model keeps a record of the same revision with its first day
     // (`Bookkeeping::AgreementRecorded`); the tests hold the two together.
     let line = match before {

@@ -9,8 +9,15 @@
 //! 2026-10-22, already has its host key, so the operator gives that key,
 //! read on the VPS, and `node adopt` checks the first connection against
 //! it. No user-data is written.
+//!
+//! An id may be planned again once `node cancel` has removed the earlier
+//! node with it, but not while that node's ssh directory is still there:
+//! the new node would inherit its operations key. The directory is looked
+//! for before the question and again once it is answered, since no write
+//! guards it: an adoption of the earlier node that had read the state
+//! before that node was cancelled makes the directory, and its key, after
+//! the cancel found none.
 
-use std::fs;
 use std::io::Write;
 use std::path::Path;
 
@@ -20,16 +27,29 @@ use mooring_model::node::{Hy2Server, Node, NodeLifecycle, NodeRole, RealityServe
 use mooring_model::ports::{DEBIAN_EPHEMERAL_PORTS, PortPlan};
 use mooring_model::secret::SecretEntry;
 use mooring_model::wg::{Keepalive, WgLink};
-use mooring_model::{Ed25519Pub, NodeId, UserNodePublic, UserStatus};
+use mooring_model::{NodeId, UserNodePublic, UserStatus};
 use mooring_store::{Store, update_config_with_secrets};
 
 use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::exit::confirm;
+use crate::node::files::{NodeFiles, read_public_key};
 use crate::state::{load, output, state_change};
 
-/// The longest host-key file read, in bytes: one public key line.
-const MAX_HOST_KEY_BYTES: u64 = 4096;
+/// `NodeFilesExist` while an earlier node of the id has left its ssh
+/// directory: the new node would reuse its operations key. `node cancel`
+/// removes it. Anything else at its path, or in it, is not that command's
+/// to remove, and is named as such (`NodeFileUnexpected`).
+fn refuse_an_earlier_nodes_files(files: &NodeFiles, id: &NodeId) -> Result<(), CommandError> {
+    if files.inspect()?.is_some() {
+        return Err(LocalError::NodeFilesExist {
+            path: files.dir().to_path_buf(),
+            node: id.clone(),
+        }
+        .into());
+    }
+    Ok(())
+}
 
 /// `node new`: a `Planned` node with its REALITY, tunnel and Hysteria2
 /// keys, its probe credentials and its one-time bootstrap key, the next
@@ -47,12 +67,15 @@ pub(crate) fn new(
     host_key: &Path,
     yes: bool,
 ) -> Result<(), CommandError> {
-    let store = Store::new(support_dir(env)?);
+    let support = support_dir(env)?;
+    let store = Store::new(support.clone());
     let state = load(&store)?;
     if state.deployment.nodes().contains_key(&id) {
         return Err(LocalError::NodeExists { node: id }.into());
     }
-    let host = read_host_key(host_key)?;
+    let files = NodeFiles::of(&support, &id);
+    refuse_an_earlier_nodes_files(&files, &id)?;
+    let host = read_public_key(host_key)?;
     let now = (env.clock)()?;
     let (reality_private, reality_public) = RealityKeyPair::generate()
         .map_err(LocalError::Keys)?
@@ -170,6 +193,7 @@ pub(crate) fn new(
     )
     .map_err(output)?;
     confirm(env, yes, "Plan this node?")?;
+    refuse_an_earlier_nodes_files(&files, &id)?;
     let next = state
         .deployment
         .next_wg_index()
@@ -201,32 +225,4 @@ pub(crate) fn new(
     .map_err(state_change)?;
     writeln!(out, "planned node {id}; next: `mooringctl node adopt {id}`").map_err(output)?;
     Ok(())
-}
-
-/// The Ed25519 host key in `path`: one OpenSSH public key line,
-/// `ssh-ed25519 <base64>`, with an optional comment.
-fn read_host_key(path: &Path) -> Result<Ed25519Pub, LocalError> {
-    let read = |source| LocalError::HostKeyFile {
-        path: path.to_path_buf(),
-        source,
-    };
-    let metadata = fs::metadata(path).map_err(read)?;
-    if metadata.len() > MAX_HOST_KEY_BYTES {
-        return Err(LocalError::HostKey {
-            path: path.to_path_buf(),
-        });
-    }
-    let text = fs::read_to_string(path).map_err(read)?;
-    let mut tokens = text.split_ascii_whitespace();
-    let key = match (tokens.next(), tokens.next()) {
-        (Some(kind), Some(blob)) => format!("{kind} {blob}"),
-        _ => {
-            return Err(LocalError::HostKey {
-                path: path.to_path_buf(),
-            });
-        }
-    };
-    Ed25519Pub::parse_ssh_authorized_key(&key).map_err(|_| LocalError::HostKey {
-        path: path.to_path_buf(),
-    })
 }

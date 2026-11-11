@@ -7,7 +7,8 @@
 //! deployment's one ntfy topic ([`crate::secret::SecretRef::AlertTopic`]),
 //! which the operator's phone subscribes to and every channel node sends
 //! to (a rotation keeps it when the replacement gets its channels before
-//! the last channel node retires, design §13.4), and per channel node the
+//! the last channel node retires or is cancelled, design §13.4), and per
+//! channel node the
 //! UUIDs of its two Healthchecks checks
 //! ([`crate::secret::SecretRef::NodeDeadManCheck`],
 //! [`crate::secret::SecretRef::NodeMacAliveCheck`]), because a dead-man

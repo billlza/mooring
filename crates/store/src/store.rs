@@ -10,7 +10,7 @@ use mooring_model::counters::{ConfigGeneration, RuntimeRevision};
 use mooring_model::deployment::{Bookkeeping, Deployment, DeploymentInit, DeploymentParts};
 use mooring_model::error::ModelError;
 use mooring_model::ids::{NodeId, UserId};
-use mooring_model::node::AppliedConfig;
+use mooring_model::node::{AppliedConfig, LifecycleStage};
 use mooring_model::secret::SecretRef;
 use mooring_model::sim::SimPolicy;
 use mooring_model::state::{RuntimeIntent, StateFile, StateV2};
@@ -122,15 +122,18 @@ impl Store {
     /// received, because only the store sets it (`GenerationEdited`). It
     /// must not set, replace or lower any node's confirmed generation
     /// (`AppliedEdited`), because only a node's own confirmation, recorded
-    /// as `Bookkeeping::Applied`, sets it; moving a node out of `Applied` is
-    /// allowed. It may change a user's status only along the user
-    /// transitions, and remove only a revoked user (`UserStatusEdited`):
-    /// a revocation settles only through `Bookkeeping`. It may edit the
-    /// exit's SIM policy only to one whose plan is recorded
-    /// (`InvalidChange{PlanNotRecorded}`, P0-1). And it must not
-    /// change which secrets the state references:
-    /// such changes go through [`crate::update_config_with_secrets`], which
-    /// orders the secret writes.
+    /// as `Bookkeeping::Applied`, sets it. It may move a node only on to a
+    /// later lifecycle stage, out of `Applied` too, never back, and it may
+    /// remove no node (`NodeLifecycleEdited`): a planned node is removed
+    /// only by the record `Bookkeeping::PlanCancelled`, through
+    /// [`crate::record_with_secrets`]. It may change a user's
+    /// status only along the user transitions, and remove only a revoked
+    /// user (`UserStatusEdited`): a revocation settles only through
+    /// `Bookkeeping`. It may edit the exit's SIM policy only to one whose
+    /// plan is recorded (`InvalidChange{PlanNotRecorded}`, P0-1). And it
+    /// must not change which secrets the state references: such changes go
+    /// through [`crate::update_config_with_secrets`], which orders the
+    /// secret writes.
     pub fn update_config<E, F>(
         &self,
         expected: ConfigGeneration,
@@ -152,7 +155,8 @@ impl Store {
     /// generation is still `expected`; the generation is checked and kept.
     ///
     /// A record that drops secret references (a committed revocation, a
-    /// shut-down retirement) is refused with `SecretRefsChanged`: it goes
+    /// shut-down retirement, a cancelled plan) is refused with
+    /// `SecretRefsChanged`: it goes
     /// through [`crate::record_with_secrets`], which deletes the dropped
     /// secrets after the state stops referencing them.
     pub fn record(
@@ -257,7 +261,8 @@ fn require_generation(current: &StateV2, expected: ConfigGeneration) -> Result<(
 
 /// Checks the generation, applies `change` and stamps the next generation;
 /// the result is a validated state with the same runtime intent, in which
-/// every node's confirmed generation is the one it had before.
+/// every node's confirmed generation is the one it had before, and every
+/// node is still there, at its stage or a later one.
 pub(crate) fn change_config<E, F>(
     current: StateV2,
     expected: ConfigGeneration,
@@ -269,6 +274,7 @@ where
     require_generation(&current, expected)?;
     let stamped = expected.next().map_err(counter_overflow)?;
     let confirmed = confirmed_generations(&current.deployment);
+    let stages = node_stages(&current.deployment);
     let statuses = user_statuses(&current.deployment);
     let sim = current.deployment.exit().sim.clone();
     let parts = change(current.deployment.into_parts()).map_err(ChangeError::Refused)?;
@@ -285,6 +291,7 @@ where
     })
     .map_err(|source| StoreError::InvalidChange { source })?;
     require_confirmations_kept(&confirmed, &deployment)?;
+    require_lifecycles_forward(&stages, &deployment)?;
     require_user_transitions(&statuses, &deployment)?;
     require_recorded_plan_if_edited(&sim, &deployment)?;
     Ok(StateV2 {
@@ -315,6 +322,43 @@ fn require_confirmations_kept(
             && before.get(id) != Some(applied)
         {
             return Err(StoreError::AppliedEdited { node: id.clone() });
+        }
+    }
+    Ok(())
+}
+
+/// Every node's lifecycle stage.
+fn node_stages(deployment: &Deployment) -> BTreeMap<NodeId, LifecycleStage> {
+    deployment
+        .nodes()
+        .iter()
+        .map(|(id, node)| (id.clone(), node.lifecycle.stage()))
+        .collect()
+}
+
+/// Refuses a change that moves a node back to an earlier lifecycle stage,
+/// moves a planned node anywhere but to `Adopted`, or removes a node
+/// (`LifecycleStage::may_change_to`, design §7). No closure may do any of
+/// them. Retirement only moves on and retired nodes stay, so the
+/// id of a node that may have served is never reused, and the usage
+/// collector can take a node it sees planned or adopted to have counted no
+/// client's bytes. Only the record `Bookkeeping::PlanCancelled`, which
+/// skips this check, removes a node: a planned one, which served no
+/// client, so its id may be planned again. A move into
+/// `Applied` was refused already, as `AppliedEdited`. A new node may start
+/// in any stage the model accepts but `Applied`, which only a record sets.
+fn require_lifecycles_forward(
+    before: &BTreeMap<NodeId, LifecycleStage>,
+    after: &Deployment,
+) -> Result<(), StoreError> {
+    for (id, &from) in before {
+        let to = after.nodes().get(id).map(|node| node.lifecycle.stage());
+        if !to.is_some_and(|to| from.may_change_to(to)) {
+            return Err(StoreError::NodeLifecycleEdited {
+                node: id.clone(),
+                from,
+                to,
+            });
         }
     }
     Ok(())

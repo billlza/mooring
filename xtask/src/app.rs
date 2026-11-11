@@ -24,10 +24,17 @@
 //! registration after a rebuild is refused too: Background Task Management
 //! keeps the stopped daemon's record with the earlier build's constraint,
 //! and replaces it only after launchd's second failed start (measured
-//! 2026-10-24). `app` is therefore refused while launchd lists the daemon,
-//! before anything is built: the operator stops it from the app's menu,
-//! builds, starts it from the new build, and once that start has failed
-//! with 78, stops and starts it once more.
+//! 2026-10-24).
+//!
+//! Since 2026-11-10 the app the daemon is registered from is not this
+//! build but the copy `cargo xtask install` moves to
+//! `~/Applications/Mooring.app` ([`crate::install`]), so the build can be
+//! made, and the target directory cleaned, while the daemon serves. `app`
+//! is still refused, before anything is built, while the daemon runs from
+//! the build it would replace, as one started from the build does, or
+//! cannot be placed ([`crate::agent`]): the operator stops it from the
+//! app's menu, builds, installs, starts it from the installed app, and once
+//! that start has failed with 78, stops and starts it once more.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -39,6 +46,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use serde::Deserialize;
 
+use crate::agent;
 use crate::cargo::Cargo;
 use crate::metadata::{self, MetadataError};
 use crate::mooringctl::{
@@ -55,9 +63,19 @@ pub(crate) const POWER_IDENTIFIER: &str = "com.bill.mooring.power";
 /// The daemon's launchd label (design §5.1: `com.bill.mooring.daemon.plist`).
 pub(crate) const AGENT_LABEL: &str = "com.bill.mooring.daemon";
 
+/// The app's own executable, `Contents/MacOS/Mooring` (`apple/project.yml`).
+pub(crate) const APP_EXECUTABLE: &str = "Mooring";
+
+/// The `mooringctl` the app carries beside it, which launchd runs as the
+/// daemon (`BundleProgram` in the daemon's plist).
+pub(crate) const CLI_EXECUTABLE: &str = "mooringctl";
+
+/// The power helper beside them (`apple/project.yml`).
+pub(crate) const POWER_EXECUTABLE: &str = "mooring-power";
+
 /// `launchctl print`'s exit status for a service that is not loaded
 /// (observed on macOS 27.0.1, 2026-10-22).
-const LAUNCHCTL_NOT_FOUND: i32 = 113;
+pub(crate) const LAUNCHCTL_NOT_FOUND: i32 = 113;
 
 const XCRUN: &str = "/usr/bin/xcrun";
 
@@ -65,15 +83,13 @@ const XCRUN: &str = "/usr/bin/xcrun";
 /// (design §2, a MacBookPro18,2). Naming it keeps xcodebuild from picking
 /// the first of several matching destinations, which it warns about.
 const DESTINATION: &str = "platform=macOS,arch=arm64";
-const DITTO: &str = "/usr/bin/ditto";
+pub(crate) const DITTO: &str = "/usr/bin/ditto";
 const PLUTIL: &str = "/usr/bin/plutil";
 
 /// The Info.plist keys whose text macOS shows in its own alerts, each of
 /// which the built app must carry in Simplified Chinese
 /// (`apple/App/InfoPlist.xcstrings`): the local network alert's.
 const ALERT_KEYS: [&str; 1] = ["NSLocalNetworkUsageDescription"];
-const LAUNCHCTL: &str = "/bin/launchctl";
-const ID: &str = "/usr/bin/id";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AppError {
@@ -126,13 +142,85 @@ pub(crate) enum AppError {
     )]
     AgentState { service: String, code: Option<i32> },
     #[error(
-        "{service} is loaded and runs from the target directory; stop it first (Mooring.app's menu: Stop the Daemon)"
+        "{service} runs {}, inside the target directory: stop it first (Mooring.app's menu: Stop the Daemon). A daemon started from the installed app (`cargo xtask install`) is not in the way",
+        executable.display()
     )]
-    AgentLoaded { service: String },
+    AgentLoaded {
+        service: String,
+        executable: PathBuf,
+    },
     #[error(
-        "{service} is registered, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start: choose Stop the Daemon in Mooring.app's menu, then run `cargo xtask app` again, whose last line says how to start the new build's daemon"
+        "{service} runs {}, which this build replaces, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so the rebuilt one would not start: choose Stop the Daemon in Mooring.app's menu and quit the app, then run `cargo xtask app` and `cargo xtask install`, whose last line says how to start the installed build's daemon",
+        executable.display()
     )]
-    DaemonRegistered { service: String },
+    DaemonRegistered {
+        service: String,
+        executable: PathBuf,
+    },
+    #[error(
+        "{service} is registered but has no process that tells where it runs from (launchd is starting it, or refuses its starts): run this again once it runs, or stop it first (Mooring.app's menu: Stop the Daemon)"
+    )]
+    AgentUnplaced { service: String },
+    #[error(
+        "{service} is registered, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so one installed over it would not start: choose Stop the Daemon in Mooring.app's menu and quit the app, then run `cargo xtask install` again, whose last line says how to start the installed build's daemon"
+    )]
+    InstallWhileRegistered { service: String },
+    #[error("{} is not there: `cargo xtask app` builds it", path.display())]
+    NotBuilt { path: PathBuf },
+    #[error("HOME is not set, so there is no ~/Applications to install into")]
+    HomeUnset,
+    #[error(
+        "HOME is {}, not an absolute path, so ~/Applications cannot be told from a directory of the repository",
+        home.display()
+    )]
+    HomeRelative { home: PathBuf },
+    #[error(
+        "{} is in use: process {pid} runs {}. Quit Mooring.app (its menu: Quit Mooring), let any `mooringctl` command started from that app end, then run `cargo xtask install` again",
+        app.display(),
+        executable.display()
+    )]
+    AppInUse {
+        app: PathBuf,
+        pid: u32,
+        executable: PathBuf,
+    },
+    #[error(
+        "`pgrep` for the app's processes ended with {code:?}, neither a match (0) nor none (1)"
+    )]
+    ProcessState { code: Option<i32> },
+    #[error("`pgrep` printed {0:?}, not a process id")]
+    ProcessList(String),
+    #[error(
+        "process {pid} has one of the app's names, and ended or could not be examined before it was known where it runs from: run `cargo xtask install` again"
+    )]
+    ProcessUnplaced { pid: u32 },
+    #[error(
+        "another `cargo xtask install` is at work in {}: wait for it to end",
+        dir.display()
+    )]
+    InstallRunning { dir: PathBuf },
+    #[error(
+        "no app is installed at {}: the checked copy could not be moved there after the app installed before was removed. The build's app is still at {}; run `cargo xtask install` again",
+        installed.display(),
+        built.display()
+    )]
+    NotPutInPlace {
+        installed: PathBuf,
+        built: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "{} is installed, but the build's copy at {} could not be removed: remove it by hand, so that only the installed app is there to open",
+        installed.display(),
+        built.display()
+    )]
+    BuildCopyLeft {
+        installed: PathBuf,
+        built: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error(
         "the built app's {} is not the daemon's plist {}",
         embedded.display(),
@@ -268,6 +356,28 @@ pub(crate) fn check_build_results(json: &[u8]) -> Result<(), AppError> {
     }))
 }
 
+/// A Mooring.app and the two executables signed inside it, wherever the
+/// app is: the build's, the copy being installed, or the installed one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Bundle {
+    pub(crate) app: PathBuf,
+    /// `mooringctl`, which launchd runs as the daemon.
+    pub(crate) embedded: PathBuf,
+    /// The power helper, beside `mooringctl`.
+    pub(crate) power: PathBuf,
+}
+
+impl Bundle {
+    pub(crate) fn at(app: PathBuf) -> Self {
+        let executables = app.join("Contents").join("MacOS");
+        Self {
+            embedded: executables.join(CLI_EXECUTABLE),
+            power: executables.join(POWER_EXECUTABLE),
+            app,
+        }
+    }
+}
+
 /// Where everything is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppPaths {
@@ -294,7 +404,11 @@ pub(crate) struct AppPaths {
 impl AppPaths {
     pub(crate) fn new(root: &Path, target: &Path) -> Self {
         let apple = root.join("apple");
-        let app = target.join("app").join("Mooring.app");
+        let Bundle {
+            app,
+            embedded,
+            power,
+        } = Bundle::at(target.join("app").join("Mooring.app"));
         Self {
             catalog: apple.join("App").join("Localizable.xcstrings"),
             strings_data: target.join("apple").join(
@@ -309,8 +423,8 @@ impl AppPaths {
             built: target
                 .join("apple")
                 .join("DerivedData/Build/Products/Release/Mooring.app"),
-            embedded: app.join("Contents").join("MacOS").join("mooringctl"),
-            power: app.join("Contents").join("MacOS").join("mooring-power"),
+            embedded,
+            power,
             agent_plist_source: apple
                 .join("App")
                 .join("LaunchAgents")
@@ -324,6 +438,15 @@ impl AppPaths {
             signed: signed_copy(target),
         }
     }
+
+    /// The build's app, with the executables signed inside it.
+    pub(crate) fn bundle(&self) -> Bundle {
+        Bundle {
+            app: self.app.clone(),
+            embedded: self.embedded.clone(),
+            power: self.power.clone(),
+        }
+    }
 }
 
 /// One program run: what to run, with which arguments, from where.
@@ -334,7 +457,7 @@ pub(crate) struct Step {
     pub(crate) dir: PathBuf,
 }
 
-fn step(program: impl Into<PathBuf>, args: &[&OsStr], dir: &Path) -> Step {
+pub(crate) fn step(program: impl Into<PathBuf>, args: &[&OsStr], dir: &Path) -> Step {
     Step {
         program: program.into(),
         args: args.iter().map(|arg| arg.to_os_string()).collect(),
@@ -438,13 +561,14 @@ pub(crate) enum Capture {
 pub(crate) trait Programs {
     /// Runs `step`; fails unless it exits 0. Returns the captured stream.
     fn run(&mut self, step: &Step, capture: Capture) -> Result<Vec<u8>, AppError>;
-    /// Runs `step` and returns its exit code, whatever it is.
-    fn status(&mut self, step: &Step) -> Result<Option<i32>, AppError>;
+    /// Runs `step` and returns its exit code, whatever it is, with its
+    /// standard output.
+    fn outcome(&mut self, step: &Step) -> Result<(Option<i32>, Vec<u8>), AppError>;
 }
 
 /// The real programs.
 #[derive(Debug)]
-struct System;
+pub(crate) struct System;
 
 fn describe(step: &Step) -> String {
     std::iter::once(step.program.as_os_str())
@@ -490,15 +614,15 @@ impl Programs for System {
         })
     }
 
-    fn status(&mut self, step: &Step) -> Result<Option<i32>, AppError> {
+    fn outcome(&mut self, step: &Step) -> Result<(Option<i32>, Vec<u8>), AppError> {
         Command::new(&step.program)
             .args(&step.args)
             .current_dir(&step.dir)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .status()
-            .map(|status| status.code())
+            .output()
+            .map(|output| (output.status.code(), output.stdout))
             .map_err(|source| AppError::Spawn {
                 program: step.program.display().to_string(),
                 source,
@@ -506,7 +630,7 @@ impl Programs for System {
     }
 }
 
-fn require_macos(command: &'static str, os: &'static str) -> Result<(), AppError> {
+pub(crate) fn require_macos(command: &'static str, os: &'static str) -> Result<(), AppError> {
     if os == "macos" {
         Ok(())
     } else {
@@ -524,7 +648,7 @@ fn find_xcodegen(path: Option<OsString>) -> Result<PathBuf, AppError> {
         .ok_or(AppError::XcodegenMissing)
 }
 
-fn file_error(action: &'static str, path: &Path) -> impl FnOnce(io::Error) -> AppError {
+pub(crate) fn file_error(action: &'static str, path: &Path) -> impl FnOnce(io::Error) -> AppError {
     let path = path.to_path_buf();
     move |source| AppError::File {
         action,
@@ -534,7 +658,7 @@ fn file_error(action: &'static str, path: &Path) -> impl FnOnce(io::Error) -> Ap
 }
 
 /// Removes `path` and everything under it; a missing path is fine.
-fn remove_tree(path: &Path) -> Result<(), AppError> {
+pub(crate) fn remove_tree(path: &Path) -> Result<(), AppError> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -544,45 +668,49 @@ fn remove_tree(path: &Path) -> Result<(), AppError> {
 
 /// `cargo xtask app`.
 pub(crate) fn build(cargo: &Cargo, out: &mut impl Write) -> Result<(), AppError> {
-    require_macos("app", std::env::consts::OS)?;
-    build_with(&mut System, cargo, out)
+    build_with(&mut System, std::env::consts::OS, cargo, out)
 }
 
-/// [`build`] past the host check, with `programs` running every step but
-/// cargo's. A registered daemon refuses the build before anything is built
-/// or signed, so the CLI's copy, the app and the daemon stay one build.
+/// [`build`] on a host whose `std::env::consts::OS` is `os`, with
+/// `programs` running every step but cargo's. Off macOS nothing is asked
+/// of cargo or of launchd (`NotMacos`). A daemon that runs from the
+/// build's app, which this would replace, refuses the build before
+/// anything is built or signed (`DaemonRegistered`), and so does one that
+/// cannot be placed (`AgentUnplaced`); one that runs from the installed
+/// app is not in the way.
 fn build_with(
     programs: &mut impl Programs,
+    os: &'static str,
     cargo: &Cargo,
     out: &mut impl Write,
 ) -> Result<(), AppError> {
+    require_macos("app", os)?;
     let root = cargo.workspace_root().to_path_buf();
-    if let Some(service) = loaded_agent(programs, &root)? {
-        return Err(AppError::DaemonRegistered { service });
-    }
-    mooringctl::run(cargo, mooringctl::MOORINGCTL, out)?;
     let target = metadata::load(cargo, &["--no-deps"])?.target_directory;
     let paths = AppPaths::new(&root, &target);
+    agent::agent(programs, &root)?.clear_of(&[&paths.app], |service, executable| {
+        AppError::DaemonRegistered {
+            service,
+            executable,
+        }
+    })?;
+    mooringctl::run_on(os, cargo, mooringctl::MOORINGCTL, out)?;
     let xcodegen = find_xcodegen(std::env::var_os("PATH"))?;
     assemble(programs, &root, &paths, &xcodegen, out)
 }
 
-/// `AgentLoaded` while the daemon is loaded: removing the target directory
-/// would pull its executable away from under it.
-pub(crate) fn refuse_while_agent_loaded(
+/// `AgentLoaded` while the daemon runs from inside one of `dirs`, which
+/// `clean` removes, and `AgentUnplaced` while it cannot be placed:
+/// removing its executable would pull it away from under it.
+pub(crate) fn refuse_while_agent_runs_within(
     programs: &mut impl Programs,
     root: &Path,
+    dirs: &[&Path],
 ) -> Result<(), AppError> {
-    match loaded_agent(programs, root)? {
-        Some(service) => Err(AppError::AgentLoaded { service }),
-        None => Ok(()),
-    }
-}
-
-/// [`refuse_while_agent_loaded`] against the real `launchctl`, from
-/// `root`.
-pub(crate) fn refuse_while_agent_loaded_on_this_mac(root: &Path) -> Result<(), AppError> {
-    refuse_while_agent_loaded(&mut System, root)
+    agent::agent(programs, root)?.clear_of(dirs, |service, executable| AppError::AgentLoaded {
+        service,
+        executable,
+    })
 }
 
 /// The build after `mooringctl` is signed: the steps, the result bundle's
@@ -667,22 +795,41 @@ pub(crate) fn assemble(
         ),
         Capture::Inherit,
     )?;
+    check_signatures(programs, root, &paths.bundle())?;
+    say!(
+        out,
+        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} and {} inside; `cargo xtask install` moves it to ~/Applications, where the daemon is started from",
+        paths.app.display(),
+        paths.embedded.display(),
+        paths.power.display()
+    )?;
+    Ok(())
+}
+
+/// Checks `bundle`'s seal (`codesign --verify --strict`) and that the app,
+/// the `mooringctl` inside it and the power helper are each signed under
+/// their own identifier.
+pub(crate) fn check_signatures(
+    programs: &mut impl Programs,
+    root: &Path,
+    bundle: &Bundle,
+) -> Result<(), AppError> {
     programs.run(
         &step(
             CODESIGN,
             &[
                 OsStr::new("--verify"),
                 OsStr::new("--strict"),
-                paths.app.as_os_str(),
+                bundle.app.as_os_str(),
             ],
             root,
         ),
         Capture::Inherit,
     )?;
     for (path, expected) in [
-        (&paths.app, APP_IDENTIFIER),
-        (&paths.embedded, mooringctl::SIGNING_IDENTIFIER),
-        (&paths.power, POWER_IDENTIFIER),
+        (&bundle.app, APP_IDENTIFIER),
+        (&bundle.embedded, mooringctl::SIGNING_IDENTIFIER),
+        (&bundle.power, POWER_IDENTIFIER),
     ] {
         let report = programs.run(
             &step(CODESIGN, &[OsStr::new("-dv"), path.as_os_str()], root),
@@ -694,13 +841,6 @@ pub(crate) fn assemble(
             fault,
         })?;
     }
-    say!(
-        out,
-        "app: {} is built and signed ad hoc as {APP_IDENTIFIER}, with {} and {} inside; open it and choose Start the Daemon at Login. If the daemon was registered from an earlier build, macOS refuses that first start under the earlier build's launch constraint: once `launchctl print gui/$(id -u)/{AGENT_LABEL}` shows `last exit code = 78: EX_CONFIG` (about a minute later), choose Stop the Daemon, then Start the Daemon at Login again",
-        paths.app.display(),
-        paths.embedded.display(),
-        paths.power.display()
-    )?;
     Ok(())
 }
 
@@ -929,101 +1069,21 @@ pub(crate) fn check_catalog(
     }
 }
 
-/// The user's launchd domain, `gui/<uid>`.
-fn gui_domain(programs: &mut impl Programs, root: &Path) -> Result<String, AppError> {
-    let printed = programs.run(&step(ID, &[OsStr::new("-u")], root), Capture::Stdout)?;
-    let text = String::from_utf8_lossy(&printed).trim().to_owned();
-    if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()) {
-        Ok(format!("gui/{text}"))
-    } else {
-        Err(AppError::UserId(text))
-    }
-}
-
-/// The daemon's service, `gui/<uid>/com.bill.mooring.daemon`, if launchd
-/// lists it.
-fn loaded_agent(programs: &mut impl Programs, root: &Path) -> Result<Option<String>, AppError> {
-    let domain = gui_domain(programs, root)?;
-    let service = format!("{domain}/{AGENT_LABEL}");
-    Ok(agent_loaded(programs, root, &service)?.then_some(service))
-}
-
-/// Whether launchd lists `service`, by `launchctl print`'s exit status.
-fn agent_loaded(
-    programs: &mut impl Programs,
-    root: &Path,
-    service: &str,
-) -> Result<bool, AppError> {
-    let print = step(LAUNCHCTL, &[OsStr::new("print"), OsStr::new(service)], root);
-    match programs.status(&print)? {
-        Some(0) => Ok(true),
-        Some(LAUNCHCTL_NOT_FOUND) => Ok(false),
-        code => Err(AppError::AgentState {
-            service: service.to_owned(),
-            code,
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
 
     use super::{
-        AGENT_LABEL, AppError, AppPaths, Capture, Programs, Step, assemble, build_steps,
-        build_with, check_build_results, find_xcodegen, refuse_while_agent_loaded, require_macos,
-        tail,
+        AppError, AppPaths, Bundle, Capture, assemble, build_steps, build_with,
+        check_build_results, find_xcodegen, refuse_while_agent_runs_within, require_macos, tail,
     };
-    use crate::cargo::Cargo;
     use crate::mooringctl::SignatureFault;
-    use crate::testing::Scratch;
-
-    /// A stand-in for the programs: records each step, answers `run` from
-    /// `outputs` (the next one each time) and `status` from `statuses`, and
-    /// makes the app directory when `ditto` is asked to copy it, with the
-    /// daemon's plist in it when the repository has one.
-    #[derive(Default)]
-    struct Fake {
-        steps: Vec<(String, Capture)>,
-        outputs: VecDeque<Result<Vec<u8>, AppError>>,
-        statuses: VecDeque<Option<i32>>,
-    }
-
-    fn line(step: &Step) -> String {
-        std::iter::once(step.program.as_os_str())
-            .chain(step.args.iter().map(OsString::as_os_str))
-            .map(|part| part.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    impl Programs for Fake {
-        fn run(&mut self, step: &Step, capture: Capture) -> Result<Vec<u8>, AppError> {
-            self.steps.push((line(step), capture));
-            if step.program == Path::new(super::DITTO) {
-                let app = PathBuf::from(&step.args[1]);
-                fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-                let source = step
-                    .dir
-                    .join("apple/App/LaunchAgents")
-                    .join(format!("{AGENT_LABEL}.plist"));
-                if let Ok(plist) = fs::read(source) {
-                    let agents = app.join("Contents/Library/LaunchAgents");
-                    fs::create_dir_all(&agents).unwrap();
-                    fs::write(agents.join(format!("{AGENT_LABEL}.plist")), plist).unwrap();
-                }
-            }
-            self.outputs.pop_front().unwrap_or(Ok(Vec::new()))
-        }
-
-        fn status(&mut self, step: &Step) -> Result<Option<i32>, AppError> {
-            self.steps.push((line(step), Capture::Inherit));
-            Ok(self.statuses.pop_front().unwrap())
-        }
-    }
+    use crate::testing::{
+        Daemon, Fake, Scratch, asked_of_cargo, cargo_with_target, daemon_steps, line,
+        script_daemon, service, signed_report,
+    };
 
     const CLEAN: &str = r#"{"actionTitle":"Build","status":"succeeded","errorCount":0,"errors":[],"warningCount":0,"warnings":[],"analyzerWarningCount":0,"analyzerWarnings":[],"destination":{}}"#;
 
@@ -1210,7 +1270,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).unwrap(),
             format!(
-                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} and {power} inside; open it and choose Start the Daemon at Login. If the daemon was registered from an earlier build, macOS refuses that first start under the earlier build's launch constraint: once `launchctl print gui/$(id -u)/com.bill.mooring.daemon` shows `last exit code = 78: EX_CONFIG` (about a minute later), choose Stop the Daemon, then Start the Daemon at Login again\n"
+                "app: {app} is built and signed ad hoc as com.bill.mooring, with {embedded} and {power} inside; `cargo xtask install` moves it to ~/Applications, where the daemon is started from\n"
             )
         );
     }
@@ -1372,15 +1432,6 @@ mod tests {
         }
     }
 
-    /// `codesign -dv`'s report of an ad-hoc hardened-runtime signature with
-    /// `identifier`, as macOS 27 writes it.
-    fn signed_report(identifier: &str) -> Vec<u8> {
-        format!(
-            "Executable=x\nIdentifier={identifier}\nFormat=Mach-O thin (arm64)\nCodeDirectory v=20500 size=44028 flags=0x10002(adhoc,runtime) hashes=1370+2 location=embedded\nSignature=adhoc\n"
-        )
-        .into_bytes()
-    }
-
     /// An app without the daemon's plist fails the assembly before the
     /// bundle is signed, and one whose plist differs from the repository's
     /// (as if Xcode had processed it) is refused.
@@ -1448,76 +1499,182 @@ mod tests {
         }
     }
 
-    /// Clean is refused while the agent is loaded.
+    /// The executables are where the app's bundle keeps them, wherever the
+    /// app is.
     #[test]
-    fn clean_is_refused_while_the_agent_is_loaded() {
-        let scratch = Scratch::new("app-clean");
-        let (root, _) = paths(&scratch);
-        for (status, refused) in [(113, false), (0, true)] {
-            let mut fake = Fake::default();
-            fake.outputs.push_back(Ok(b"501\n".to_vec()));
-            fake.statuses.push_back(Some(status));
-            let result = refuse_while_agent_loaded(&mut fake, &root);
-            assert_eq!(
-                matches!(&result, Err(AppError::AgentLoaded { service }) if *service == format!("gui/501/{AGENT_LABEL}")),
-                refused,
-                "{result:?}"
-            );
-            assert_eq!(result.is_ok(), !refused);
-        }
+    fn a_bundle_names_the_executables_inside_the_app() {
+        let bundle = Bundle::at(PathBuf::from("/a/Mooring.app"));
+        assert_eq!(bundle.app, Path::new("/a/Mooring.app"));
+        assert_eq!(
+            bundle.embedded,
+            Path::new("/a/Mooring.app/Contents/MacOS/mooringctl")
+        );
+        assert_eq!(
+            bundle.power,
+            Path::new("/a/Mooring.app/Contents/MacOS/mooring-power")
+        );
+        let paths = AppPaths::new(Path::new("/r"), Path::new("/t"));
+        assert_eq!(
+            paths.bundle(),
+            Bundle::at(PathBuf::from("/t/app/Mooring.app"))
+        );
     }
 
-    /// `app` refuses before it builds anything while launchd lists the
-    /// daemon: launchd starts only the `mooringctl` the daemon was
-    /// registered with, so a rebuilt one would not start (design §5.1).
-    /// Not listed, the build goes on to cargo, here one that is missing.
-    #[test]
-    fn a_build_is_refused_while_the_daemon_is_registered() {
-        let scratch = Scratch::new("app-registered");
-        let (root, _) = paths(&scratch);
+    /// A scratch workspace whose target directory holds a built app, as
+    /// the kernel names it: the root, the paths, and the `mooringctl` a
+    /// daemon started from the build runs.
+    fn built(scratch: &Scratch) -> (PathBuf, AppPaths, PathBuf) {
+        let resolved = fs::canonicalize(&scratch.0).unwrap();
+        let root = resolved.join("repo");
+        let target = resolved.join("target");
+        let paths = AppPaths::new(&root, &target);
         fs::create_dir_all(&root).unwrap();
-        let cargo = Cargo::stand_in(scratch.0.join("no-cargo"), root);
-        let service = format!("gui/501/{AGENT_LABEL}");
-        let print = format!("/bin/launchctl print {service}");
-        for (status, refused) in [(0, true), (113, false)] {
+        fs::create_dir_all(paths.embedded.parent().unwrap()).unwrap();
+        let embedded = paths.embedded.clone();
+        (root, paths, embedded)
+    }
+
+    /// Clean is refused while the daemon runs from inside a directory it
+    /// removes, or cannot be placed, and not while the daemon is not
+    /// registered or runs from the installed app.
+    #[test]
+    fn clean_is_refused_while_the_daemon_runs_from_what_it_removes() {
+        let scratch = Scratch::new("app-clean");
+        let (root, paths, embedded) = built(&scratch);
+        let target = paths.app.parent().unwrap().parent().unwrap().to_path_buf();
+        let installed = root.join("Applications/Mooring.app/Contents/MacOS/mooringctl");
+        for daemon in [Daemon::NotRegistered, Daemon::Running(&installed)] {
             let mut fake = Fake::default();
-            fake.outputs.push_back(Ok(b"501\n".to_vec()));
-            fake.statuses.push_back(Some(status));
-            let mut out = Vec::new();
-            let error = build_with(&mut fake, &cargo, &mut out).unwrap_err();
-            if refused {
-                assert_eq!(
-                    error.to_string(),
-                    format!(
-                        "{service} is registered, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so a rebuilt one would not start: choose Stop the Daemon in Mooring.app's menu, then run `cargo xtask app` again, whose last line says how to start the new build's daemon"
-                    )
-                );
-            }
-            assert_eq!(
-                matches!(&error, AppError::DaemonRegistered { service: named } if *named == service),
-                refused,
-                "{error:?}"
-            );
-            assert_eq!(
-                matches!(&error, AppError::Mooringctl(_)),
-                !refused,
-                "{error:?}"
-            );
-            // Only `id` and `launchctl print` ran: nothing was built,
-            // copied, signed or restarted.
-            let steps: Vec<&str> = fake.steps.iter().map(|(line, _)| line.as_str()).collect();
-            assert_eq!(steps, ["/usr/bin/id -u", print.as_str()]);
-            assert!(out.is_empty());
+            script_daemon(&mut fake, daemon);
+            refuse_while_agent_runs_within(&mut fake, &root, &[&target]).unwrap();
+            let steps: Vec<String> = fake.steps.iter().map(|(line, _)| line.clone()).collect();
+            assert_eq!(steps, daemon_steps(daemon));
         }
+        let mut fake = Fake::default();
+        script_daemon(&mut fake, Daemon::Running(&embedded));
+        let error = refuse_while_agent_runs_within(&mut fake, &root, &[&target]).unwrap_err();
+        assert!(
+            matches!(&error, AppError::AgentLoaded { service: named, executable } if *named == service() && *executable == embedded),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "{} runs {}, inside the target directory: stop it first (Mooring.app's menu: Stop the Daemon). A daemon started from the installed app (`cargo xtask install`) is not in the way",
+                service(),
+                embedded.display()
+            )
+        );
+        let mut fake = Fake::default();
+        script_daemon(&mut fake, Daemon::Refused);
+        let error = refuse_while_agent_runs_within(&mut fake, &root, &[&target]).unwrap_err();
+        assert!(
+            matches!(&error, AppError::AgentUnplaced { service: named } if *named == service()),
+            "{error:?}"
+        );
+    }
+
+    /// `app` refuses before it builds anything while the daemon runs from
+    /// the build's app, which it would replace: launchd starts only the
+    /// `mooringctl` the daemon was registered with, so the rebuilt one
+    /// would not start (design §5.1). It refuses a daemon that cannot be
+    /// placed too. A daemon that is not registered, or runs from the
+    /// installed app, is not in the way: the build goes on to cargo, here
+    /// one that builds nothing.
+    #[test]
+    fn a_build_is_refused_only_while_the_daemon_runs_from_the_build() {
+        let scratch = Scratch::new("app-registered");
+        let (root, paths, embedded) = built(&scratch);
+        let target = paths.app.parent().unwrap().parent().unwrap().to_path_buf();
+        let cargo = cargo_with_target(&scratch, &root, &target);
+        let installed = root.join("Applications/Mooring.app/Contents/MacOS/mooringctl");
+        // Beside the build's app, in the target directory, is not in it.
+        let signed = paths.signed.clone();
+        for daemon in [
+            Daemon::NotRegistered,
+            Daemon::Running(&installed),
+            Daemon::Running(&signed),
+        ] {
+            let mut fake = Fake::default();
+            script_daemon(&mut fake, daemon);
+            let mut out = Vec::new();
+            let error = build_with(&mut fake, "macos", &cargo, &mut out).unwrap_err();
+            assert!(matches!(&error, AppError::Mooringctl(_)), "{error:?}");
+            let steps: Vec<String> = fake.steps.iter().map(|(line, _)| line.clone()).collect();
+            assert_eq!(steps, daemon_steps(daemon));
+            assert_eq!(asked_of_cargo(&scratch), ["metadata", "build"]);
+        }
+
+        let mut fake = Fake::default();
+        script_daemon(&mut fake, Daemon::Running(&embedded));
+        let mut out = Vec::new();
+        let error = build_with(&mut fake, "macos", &cargo, &mut out).unwrap_err();
+        assert!(
+            matches!(&error, AppError::DaemonRegistered { service: named, executable } if *named == service() && *executable == embedded),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "{} runs {}, which this build replaces, and launchd starts only the mooringctl it was registered with (an ad-hoc signature is pinned by its cdhash), so the rebuilt one would not start: choose Stop the Daemon in Mooring.app's menu and quit the app, then run `cargo xtask app` and `cargo xtask install`, whose last line says how to start the installed build's daemon",
+                service(),
+                embedded.display()
+            )
+        );
+        // Only launchd and the daemon's process were looked at, and cargo
+        // was asked only where the target directory is: nothing was built,
+        // copied or signed.
+        let steps: Vec<String> = fake.steps.iter().map(|(line, _)| line.clone()).collect();
+        assert_eq!(steps, daemon_steps(Daemon::Running(&embedded)));
+        assert!(out.is_empty());
+        assert_eq!(asked_of_cargo(&scratch), ["metadata"]);
+
+        let mut fake = Fake::default();
+        script_daemon(&mut fake, Daemon::Refused);
+        let error = build_with(&mut fake, "macos", &cargo, &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(&error, AppError::AgentUnplaced { service: named } if *named == service()),
+            "{error:?}"
+        );
+        assert_eq!(fake.steps.len(), 2);
+        assert_eq!(asked_of_cargo(&scratch), ["metadata"]);
+
         // launchd answering neither found nor not found stops the build too.
         let mut fake = Fake::default();
         fake.outputs.push_back(Ok(b"501\n".to_vec()));
-        fake.statuses.push_back(Some(5));
-        let error = build_with(&mut fake, &cargo, &mut Vec::new()).unwrap_err();
+        fake.outcomes.push_back((Some(5), Vec::new()));
+        let error = build_with(&mut fake, "macos", &cargo, &mut Vec::new()).unwrap_err();
         assert!(
             matches!(&error, AppError::AgentState { code: Some(5), .. }),
             "{error:?}"
         );
+    }
+
+    /// Off macOS the build stops before launchd or cargo is asked
+    /// anything. The host is the build's input, down to the CLI it signs,
+    /// so the test above finds the same on every system it runs on.
+    #[test]
+    fn a_build_off_macos_asks_nothing() {
+        let scratch = Scratch::new("app-off-macos");
+        let (root, paths, _) = built(&scratch);
+        let target = paths.app.parent().unwrap().parent().unwrap().to_path_buf();
+        let cargo = cargo_with_target(&scratch, &root, &target);
+        let mut fake = Fake::default();
+        let mut out = Vec::new();
+        let error = build_with(&mut fake, "linux", &cargo, &mut out).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                AppError::NotMacos {
+                    command: "app",
+                    os: "linux"
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(fake.steps.is_empty());
+        assert!(asked_of_cargo(&scratch).is_empty());
+        assert!(out.is_empty());
     }
 
     #[test]
@@ -1740,8 +1897,8 @@ mod catalog_gate_tests {
             Ok(Vec::new())
         }
 
-        fn status(&mut self, _: &Step) -> Result<Option<i32>, AppError> {
-            Ok(Some(0))
+        fn outcome(&mut self, _: &Step) -> Result<(Option<i32>, Vec<u8>), AppError> {
+            Ok((Some(0), Vec::new()))
         }
     }
 

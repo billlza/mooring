@@ -178,9 +178,11 @@ impl NodeUsageHistory {
                 .map_err(|_| corrupt("origin outside calendar"))?,
         );
         // A month from before the recorded origin was counted before it (a
-        // VPS adopted again with its old files, or a clock that ran ahead
-        // when the origin was recorded): a sum from the origin would leave
-        // it out.
+        // VPS adopted again with its old files, before adoption refused
+        // one, a clock that ran ahead when the origin was recorded, or a
+        // first apply whose first poll came before a month's end and the
+        // last unserved sighting after it): a sum from the origin would
+        // leave it out.
         if self
             .months
             .keys()

@@ -19,6 +19,7 @@ use mooring_model::own_network::{OwnNetwork, OwnNetworkKind};
 use mooring_model::time::UnixTime;
 use mooring_store::{
     ALLOWED_NETWORKS_FILE, Declaration, declare_allowed_network, read_allowed_networks,
+    revoke_allowed_network,
 };
 
 use super::support::{Harness, OTHER, PINNED};
@@ -501,6 +502,95 @@ fn allow_network_refuses_a_declaration_the_file_cannot_hold() {
         declared
             .get(&LocalLabel::parse("my phone").unwrap())
             .is_some()
+    );
+}
+
+/// Broadband behind another router, as another command declares it.
+fn elsewhere() -> OwnNetwork {
+    OwnNetwork {
+        kind: OwnNetworkKind::Broadband,
+        router: RouterIdentity::new(
+            Ipv4Addr::new(192, 168, 0, 1),
+            MacAddr::parse("02:00:5e:10:20:40").unwrap(),
+        )
+        .unwrap(),
+        declared_at: UnixTime::from_secs(1_793_300_000),
+    }
+}
+
+/// The answer may have waited. A name that another `exit allow-network`
+/// declared meanwhile, for another network, is refused under the store's
+/// lock as it is before the question: nothing is said to be declared, and
+/// the other declaration stands.
+#[test]
+fn a_name_declared_while_the_question_waits_is_refused() {
+    let mut harness = joined(hotspot());
+    let dir = harness.support_dir();
+    let name = LocalLabel::parse("my phone").unwrap();
+    let taken = name.clone();
+    harness.console.meanwhile = Some(Box::new(move || {
+        assert_eq!(
+            declare_allowed_network(&dir, taken, elsewhere()).unwrap(),
+            Declaration::Recorded
+        );
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&ALLOW);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: a network named \"my phone\" is declared already; `exit disallow-network --name` withdraws it\n"
+    );
+    assert_eq!(harness.console.asked, ["Allow this network for the exit?"]);
+    assert!(harness.console.meanwhile.is_none());
+    assert!(outcome.stdout.ends_with(POLICY), "{}", outcome.stdout);
+    let declared = read_allowed_networks(&harness.support_dir()).unwrap();
+    assert_eq!(declared.len(), 1);
+    assert_eq!(declared.get(&name), Some(&elsewhere()));
+}
+
+/// A file that another command filled while the question waited holds no
+/// further declaration: the store refuses it under its lock, the command
+/// says how to make room, and the file is as the other command left it.
+#[test]
+fn a_file_filled_while_the_question_waits_is_refused() {
+    let mut harness = joined(hotspot());
+    let dir = harness.support_dir();
+    let filler = |count: usize| LocalLabel::parse(&format!("filler {count:03}")).unwrap();
+    let mut count = 0;
+    loop {
+        match declare_allowed_network(&dir, filler(count), elsewhere()).unwrap() {
+            Declaration::Recorded => count += 1,
+            Declaration::Full { .. } => break,
+            Declaration::AlreadyDeclared => unreachable!("fillers are distinct"),
+        }
+    }
+    // Room for this one: it fits when the question is asked.
+    assert!(revoke_allowed_network(&dir, &filler(0)).unwrap().is_some());
+    let theirs = dir.clone();
+    harness.console.meanwhile = Some(Box::new(move || {
+        assert_eq!(
+            declare_allowed_network(&theirs, filler(0), elsewhere()).unwrap(),
+            Declaration::Recorded
+        );
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let outcome = harness.run(&ALLOW);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: the allowed-networks file is full: {count} networks are declared and another does not fit within its 16 KiB; `exit disallow-network --name` withdraws one first\n"
+        )
+    );
+    assert_eq!(harness.console.asked, ["Allow this network for the exit?"]);
+    assert!(harness.console.meanwhile.is_none());
+    let declared = read_allowed_networks(&dir).unwrap();
+    assert_eq!(declared.len(), count);
+    assert!(
+        declared
+            .get(&LocalLabel::parse("my phone").unwrap())
+            .is_none()
     );
 }
 

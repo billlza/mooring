@@ -18,6 +18,7 @@ pub(crate) enum Command {
     Mooringctl,
     Fieldkit,
     App,
+    Install,
     EnginesPins,
     EnginesPrepare,
     EnginesBuild,
@@ -34,7 +35,7 @@ pub(crate) struct Invocation {
 }
 
 impl Command {
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 17] = [
         Self::Ci,
         Self::GraphCheck,
         Self::KindsCoverage,
@@ -45,6 +46,7 @@ impl Command {
         Self::Mooringctl,
         Self::Fieldkit,
         Self::App,
+        Self::Install,
         Self::EnginesPins,
         Self::EnginesPrepare,
         Self::EnginesBuild,
@@ -65,6 +67,7 @@ impl Command {
             Self::Mooringctl => "mooringctl",
             Self::Fieldkit => "fieldkit",
             Self::App => "app",
+            Self::Install => "install",
             Self::EnginesPins => "engines-pins",
             Self::EnginesPrepare => "engines-prepare",
             Self::EnginesBuild => "engines-build",
@@ -92,7 +95,8 @@ impl Command {
             | Self::Clean
             | Self::Mooringctl
             | Self::Fieldkit
-            | Self::App => None,
+            | Self::App
+            | Self::Install => None,
         }
     }
 
@@ -118,7 +122,10 @@ impl Command {
                 "build fieldkit and sign a copy, <target>/signed/fieldkit, with its reverse-DNS identifier (macOS only)"
             }
             Self::App => {
-                "build Mooring.app at <target>/app with the signed mooringctl, the power helper and the daemon's plist inside, Swift tests and warnings gated; refused while the daemon is registered (stop it from the app's menu first) (macOS only)"
+                "build Mooring.app at <target>/app with the signed mooringctl, the power helper and the daemon's plist inside, Swift tests and warnings gated; refused while the daemon runs from that build (macOS only)"
+            }
+            Self::Install => {
+                "move the built Mooring.app to ~/Applications, where the daemon is started from, after checking its signatures; refused while the daemon is registered or the app is in use (macOS only)"
             }
             Self::EnginesPins => {
                 "print engines.lock.toml's pins as KEY=value lines for the hosted build"

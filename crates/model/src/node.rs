@@ -98,7 +98,12 @@ pub struct AppliedConfig {
     pub digest: Sha256Digest,
 }
 
-/// A node's lifecycle (design §7, §13).
+/// A node's lifecycle (design §7, §13). It only moves forward, and from
+/// `Planned` only to `Adopted` ([`LifecycleStage::may_change_to`]): the
+/// store refuses a configuration change that moves a node otherwise, or
+/// removes it. Only the record
+/// [`crate::deployment::Bookkeeping::PlanCancelled`] removes a node, and
+/// only a planned one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum NodeLifecycle {
@@ -147,6 +152,43 @@ kinds! {
         RetiredPendingProviderDeletion,
         /// See [`NodeLifecycle::Retired`].
         Retired,
+    }
+}
+
+impl LifecycleStage {
+    /// Whether a node's lifecycle may move from this stage to `next`: to
+    /// the same stage or a later one, never back, and from `Planned` only
+    /// to `Adopted` (design §7).
+    /// Which later stage a command moves an adopted node to is the
+    /// command's decision. It may be retired without an apply, for
+    /// example, and only a `Bookkeeping::Applied` record moves a node into
+    /// `Applied`. A planned node is adopted or given up, never retired:
+    /// the usage figures need records from every node past `Planned`
+    /// (`MissingLedger`), and a node that was never adopted has none, so
+    /// `Bookkeeping::PlanCancelled` removes it instead. A move back would
+    /// make a node that has served look as if it never had: the usage
+    /// collector takes a node it sees planned or adopted to have counted
+    /// no client's bytes yet.
+    #[must_use]
+    pub const fn may_change_to(self, next: Self) -> bool {
+        match self {
+            Self::Planned => matches!(next, Self::Planned | Self::Adopted),
+            _ => self.rank() <= next.rank(),
+        }
+    }
+
+    /// The stage's place along the lifecycle. The match names every stage,
+    /// so a new one must be placed here. The order the kind derives is a
+    /// key for sets, not this order.
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Planned => 0,
+            Self::Adopted => 1,
+            Self::Applied => 2,
+            Self::Retiring => 3,
+            Self::RetiredPendingProviderDeletion => 4,
+            Self::Retired => 5,
+        }
     }
 }
 
@@ -308,6 +350,41 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configuration change moves a node only to its own stage or a
+    /// later one, in the lifecycle's order (design §7); no stage leads
+    /// back, and `Planned` leads only to `Adopted`: a planned node is
+    /// never retired. The order is written out here, not read from the
+    /// code.
+    #[test]
+    fn a_stage_changes_only_to_itself_or_a_later_one() {
+        use LifecycleStage::{
+            Adopted, Applied, Planned, Retired, RetiredPendingProviderDeletion, Retiring,
+        };
+        let order = [
+            Planned,
+            Adopted,
+            Applied,
+            Retiring,
+            RetiredPendingProviderDeletion,
+            Retired,
+        ];
+        let mut placed = order.to_vec();
+        placed.sort();
+        let mut every = LifecycleStage::ALL.to_vec();
+        every.sort();
+        assert_eq!(placed, every, "each stage is placed once");
+        for (from_place, from) in order.iter().enumerate() {
+            for (to_place, to) in order.iter().enumerate() {
+                let allowed = if *from == Planned {
+                    [Planned, Adopted].contains(to)
+                } else {
+                    from_place <= to_place
+                };
+                assert_eq!(from.may_change_to(*to), allowed, "{from:?} -> {to:?}");
+            }
+        }
+    }
 
     #[test]
     fn lifecycle_queries() {

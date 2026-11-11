@@ -238,11 +238,9 @@ impl Collector {
             } if Instant::now() >= *retry_at => candidate.clone(),
             StoreState::Unreadable { .. } | StoreState::Unwritten { .. } => return,
         };
-        for (id, node) in deployment.nodes() {
-            if node.lifecycle == NodeLifecycle::Planned {
-                candidate.observe_unserved(id.clone(), now);
-            }
-        }
+        // A batch that began before this sighting keeps it when `tick`
+        // installs the batch (`set_node`), while the node held nothing.
+        candidate.observe_unserved_nodes(deployment, now);
         self.persist(candidate, deployment, now, interval);
         self.due
             .retain(|node, _| deployment.nodes().contains_key(node));

@@ -17,7 +17,10 @@
 //!   `Bookkeeping` records, which change no rendered bundle or export, so
 //!   every other change bumps it (design §7). Only a `Bookkeeping::Applied`
 //!   record sets a node's confirmed generation: a configuration change
-//!   that edits one is refused (`AppliedEdited`);
+//!   that edits one is refused (`AppliedEdited`), and so is one that
+//!   moves a node back to an earlier lifecycle stage or removes it
+//!   (`NodeLifecycleEdited`): only a `Bookkeeping::PlanCancelled` record
+//!   removes a node, a planned one;
 //! - each write goes temp file → fsync → rename → directory fsync, with
 //!   mode 0600, so `state.json` is never partially written;
 //! - the CLI is the only writer.

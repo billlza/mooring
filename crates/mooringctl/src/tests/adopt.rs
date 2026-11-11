@@ -2,20 +2,35 @@
 
 //! `node adopt`'s refusals and failures (design §13.2 step 3) beyond the
 //! upload: an unknown node, an agent binary that cannot be read or is
-//! empty, and a failure or a reply to another request at each step after
-//! the upload. Each is reported with its step and leaves the node planned.
+//! empty, a failure or a reply to another request at each step after the
+//! upload, and a host that ran Mooring before. Each is reported with its
+//! step and leaves the node planned. A key `Bootstrap` made that cannot
+//! be recorded as the pin is reported with the key.
 
+use std::convert::Infallible;
 use std::fs;
 
-use mooring_agent_proto::{AgentError, RequestKind, Response};
+use mooring_agent_proto::{AgentError, PriorState, RequestKind, Response};
+use mooring_keys::SshPublicKey;
 use mooring_model::NodeId;
+use mooring_model::deployment::Bookkeeping;
 use mooring_model::node::NodeLifecycle;
+use mooring_model::secret::SecretRef;
+use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_with_secrets};
 
-use super::node::{ADDRESS, adopt_args, agent_file, hello, planned, root_key};
-use super::support::{Answered, Expected, ExpectedRemote, Harness};
+use super::cancel::{
+    adopt as adopt_with_the_root_key, lon1_dir, new_host_key, partially_adopted, script_bootstrap,
+};
+use super::node::{
+    ADDRESS, adopt_args, agent_file, hello, planned, root_key, script_after_bootstrap,
+};
+use super::support::{
+    Answered, COMMITTED, Expected, ExpectedRemote, FailingLog, Harness, MOVED, Refusals,
+};
 use super::user::store;
 use crate::error::EXIT_LOCAL;
 use crate::node::NodeError;
+use crate::prompt::Answer;
 
 fn lon1_lifecycle(harness: &Harness) -> NodeLifecycle {
     store(harness).load().unwrap().deployment.nodes()[&NodeId::parse("lon1").unwrap()]
@@ -140,6 +155,61 @@ fn a_failed_bootstrap_stops_the_adoption_at_its_step() {
     assert_eq!(lon1_lifecycle(&harness), NodeLifecycle::Planned);
 }
 
+/// A `Bootstrap` that finds the host ran Mooring before stops the adoption
+/// at that step, naming what it found and what to do. The agent changed
+/// nothing on the VPS, so the node stays planned with its pin, and its
+/// bootstrap key stays for the next attempt.
+#[test]
+fn a_host_that_ran_mooring_before_stops_the_adoption_at_bootstrap() {
+    let (mut harness, pinned) = planned();
+    let generation = store(&harness)
+        .load()
+        .unwrap()
+        .deployment
+        .config_generation();
+    let agent = agent_file(&harness);
+    let root = root_key(&harness);
+    harness.nodes.expect(
+        Expected::Run {
+            identity: "root_ed25519",
+            command_prefix: "umask 077",
+        },
+        Answered::Ran(Ok(())),
+    );
+    harness.nodes.expect(
+        Expected::Request {
+            identity: "root_ed25519",
+            remote: ExpectedRemote::Command("/root/.mooring-agent-"),
+            kind: RequestKind::Bootstrap,
+        },
+        Answered::Replied(Err(NodeError::Agent(AgentError::HostRanMooring {
+            found: PriorState::Usage,
+        }))),
+    );
+    let outcome = harness.run(&adopt_args(
+        agent.to_str().unwrap(),
+        Some(root.to_str().unwrap()),
+    ));
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: adoption stopped at Bootstrap\n  caused by: the agent refused the request\n  caused by: the host ran Mooring before (Usage at /var/lib/mooring/usage); Bootstrap changed nothing: reinstall the VPS, check its new host key's fingerprint on the provider's console, pin that key (node repin), and adopt it again\n"
+    );
+    assert!(harness.nodes.script.borrow().is_empty());
+    let lon1 = NodeId::parse("lon1").unwrap();
+    let state = store(&harness).load().unwrap();
+    let node = &state.deployment.nodes()[&lon1];
+    assert_eq!(node.lifecycle, NodeLifecycle::Planned);
+    assert_eq!(node.ssh.host_ed25519, pinned);
+    assert_eq!(state.deployment.config_generation(), generation);
+    assert!(
+        harness
+            .secrets
+            .get(&SecretRef::NodeSshBootstrapPrivate(lon1))
+            .is_ok()
+    );
+}
+
 /// An unknown node, and an agent binary that cannot be read or is empty,
 /// are refused before any session.
 #[test]
@@ -186,4 +256,356 @@ fn an_unknown_node_or_an_unusable_agent_is_refused_before_any_session() {
     );
     assert!(harness.nodes.seen.borrow().is_empty());
     assert_eq!(lon1_lifecycle(&harness), NodeLifecycle::Planned);
+}
+
+/// The final record of an adoption drops the bootstrap key's keychain item;
+/// when that deletion fails, the node is adopted all the same: the key's
+/// file goes, the adoption is reported, and the failure says the change is
+/// committed rather than that nothing changed.
+#[test]
+fn an_adoption_whose_bootstrap_key_cannot_be_deleted_is_adopted_and_says_so() {
+    let (mut harness, _) = partially_adopted();
+    let bootstrap = SecretRef::NodeSshBootstrapPrivate(NodeId::parse("lon1").unwrap());
+    script_after_bootstrap(&harness, 13);
+    *harness.keychain.lock().unwrap() = Refusals {
+        delete: Some(-25_308),
+        ..Refusals::default()
+    };
+    let agent = agent_file(&harness);
+    let outcome = harness.run(&adopt_args(agent.to_str().unwrap(), None));
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome.stdout.contains("adopted lon1: Debian 13"),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(outcome.stderr.lines().next().unwrap(), COMMITTED);
+    assert!(matches!(
+        lon1_lifecycle(&harness),
+        NodeLifecycle::Adopted { .. }
+    ));
+    assert!(!lon1_dir(&harness).join("bootstrap_ed25519").exists());
+    assert!(
+        harness.secrets.get(&bootstrap).is_ok(),
+        "the refused deletion left it"
+    );
+    assert!(harness.nodes.script.borrow().is_empty());
+}
+
+/// What stops the key `Bootstrap` made from being recorded as the pin.
+#[derive(Debug, Clone, Copy)]
+enum Unrecorded {
+    /// Another command changes the configuration while `Bootstrap` runs.
+    ConfigurationChanged,
+    /// `known_hosts` cannot be replaced.
+    KnownHostsBlocked,
+}
+
+/// `Bootstrap` ran, so the VPS holds its new host key and lets in only
+/// Mooring's keys, but the Mac cannot record that key as the pin. The
+/// adoption stops with the key in its error and the node planned on its
+/// old pin; pinning the key the error names lets `--resume` finish.
+#[test]
+fn an_adoption_that_cannot_record_bootstraps_key_names_it_and_resumes_after_a_repin() {
+    for case in [
+        Unrecorded::ConfigurationChanged,
+        Unrecorded::KnownHostsBlocked,
+    ] {
+        let (mut harness, old_host) = planned();
+        let lon1 = NodeId::parse("lon1").unwrap();
+        let support = harness.support_dir();
+        let dir = lon1_dir(&harness);
+        let partial = dir.join("known_hosts.partial");
+        let blocked = partial.clone();
+        *harness.nodes.meanwhile.borrow_mut() = Some((
+            1,
+            Box::new(move || match case {
+                Unrecorded::ConfigurationChanged => {
+                    let store = Store::new(support);
+                    let generation = store.load().unwrap().deployment.config_generation();
+                    store
+                        .update_config(generation, Ok::<_, Infallible>)
+                        .unwrap();
+                }
+                Unrecorded::KnownHostsBlocked => fs::create_dir(&blocked).unwrap(),
+            }),
+        ));
+        let bootstrapped = SshPublicKey::from(new_host_key());
+        script_bootstrap(&harness, &bootstrapped.key());
+        let outcome = adopt_with_the_root_key(&mut harness);
+        assert_eq!(outcome.code, EXIT_LOCAL, "{case:?}");
+        assert!(harness.nodes.script.borrow().is_empty(), "{case:?}");
+        let mut lines = outcome.stderr.lines();
+        let first = lines.next().unwrap();
+        assert_eq!(
+            first,
+            format!(
+                "mooringctl: Bootstrap ran, so node lon1's VPS now holds host key {} and lets in only Mooring's keys, but that key was not recorded as the node's pin: if the node is still planned, save `{}` to a file, pin it with `node repin lon1 --host-key <file>`, then run `node adopt lon1 --resume`; if it was cancelled, reinstall the VPS or delete it from the provider's console",
+                bootstrapped.fingerprint(),
+                bootstrapped.authorized_key()
+            ),
+            "{case:?}"
+        );
+        let causes: Vec<&str> = lines.collect();
+        let (generation, known_hosts) = match case {
+            Unrecorded::ConfigurationChanged => {
+                assert_eq!(
+                    causes,
+                    [
+                        "  caused by: the state was not changed",
+                        "  caused by: config generation is 3, expected 2; re-read the state and retry"
+                    ]
+                );
+                (3, bootstrapped)
+            }
+            Unrecorded::KnownHostsBlocked => {
+                assert_eq!(
+                    causes[0],
+                    format!("  caused by: cannot use {}", partial.display())
+                );
+                assert_eq!(causes.len(), 2, "{causes:?}");
+                (2, SshPublicKey::from(old_host))
+            }
+        };
+        assert!(
+            !outcome.stdout.contains("bootstrapped lon1"),
+            "{case:?}: {}",
+            outcome.stdout
+        );
+        let deployment = store(&harness).load().unwrap().deployment;
+        assert_eq!(deployment.config_generation().get(), generation, "{case:?}");
+        assert_eq!(deployment.nodes()[&lon1].lifecycle, NodeLifecycle::Planned);
+        assert_eq!(deployment.nodes()[&lon1].ssh.host_ed25519, old_host);
+        assert_eq!(
+            fs::read_to_string(dir.join("known_hosts")).unwrap(),
+            format!(
+                "{}\n",
+                known_hosts.known_hosts_line(ADDRESS.parse().unwrap())
+            ),
+            "{case:?}"
+        );
+
+        if matches!(case, Unrecorded::KnownHostsBlocked) {
+            fs::remove_dir(&partial).unwrap();
+        }
+        // The key is taken from the error, as the operator takes it.
+        let named = first.split('`').nth(1).unwrap();
+        let file = harness.home.path().join("bootstrapped.pub");
+        fs::write(&file, format!("{named}\n")).unwrap();
+        let outcome = harness.run(&[
+            "node",
+            "repin",
+            "lon1",
+            "--host-key",
+            file.to_str().unwrap(),
+            "--yes",
+        ]);
+        assert_eq!(outcome.code, 0, "{case:?}: {}", outcome.stderr);
+        script_after_bootstrap(&harness, 13);
+        let agent = agent_file(&harness);
+        let outcome = harness.run(&adopt_args(agent.to_str().unwrap(), None));
+        assert_eq!(outcome.code, 0, "{case:?}: {}", outcome.stderr);
+        assert!(harness.nodes.script.borrow().is_empty(), "{case:?}");
+        let deployment = store(&harness).load().unwrap().deployment;
+        assert!(
+            matches!(
+                deployment.nodes()[&lon1].lifecycle,
+                NodeLifecycle::Adopted { .. }
+            ),
+            "{case:?}"
+        );
+        assert_eq!(
+            deployment.nodes()[&lon1].ssh.host_ed25519,
+            bootstrapped.key()
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("known_hosts")).unwrap(),
+            format!(
+                "{}\n",
+                bootstrapped.known_hosts_line(ADDRESS.parse().unwrap())
+            ),
+            "{case:?}"
+        );
+    }
+}
+
+/// The failed deletion is the failure reported even when the line that
+/// says the node is adopted cannot be written.
+#[test]
+fn an_adoption_whose_closing_line_cannot_be_written_still_reports_the_item_left() {
+    let (mut harness, _) = partially_adopted();
+    script_after_bootstrap(&harness, 13);
+    *harness.keychain.lock().unwrap() = Refusals {
+        delete: Some(-25_308),
+        ..Refusals::default()
+    };
+    let agent = agent_file(&harness);
+    let mut out = FailingLog::at("adopted ");
+    let mut err = Vec::new();
+    let code = harness.run_to(
+        &adopt_args(agent.to_str().unwrap(), None),
+        &mut out,
+        &mut err,
+    );
+    assert_eq!(code, EXIT_LOCAL);
+    assert!(out.failed());
+    let report = String::from_utf8(err).unwrap();
+    assert_eq!(report.lines().next().unwrap(), COMMITTED, "{report}");
+    assert!(matches!(
+        lon1_lifecycle(&harness),
+        NodeLifecycle::Adopted { .. }
+    ));
+    assert!(harness.nodes.script.borrow().is_empty());
+}
+
+/// Replaces lon1's bootstrap key file with a directory once two more node
+/// steps are answered, so that the adoption cannot remove it at its end.
+fn bootstrap_key_file_cannot_be_removed(harness: &Harness) {
+    let key = lon1_dir(harness).join("bootstrap_ed25519");
+    *harness.nodes.meanwhile.borrow_mut() = Some((
+        2,
+        Box::new(move || {
+            fs::remove_file(&key).unwrap();
+            fs::create_dir(&key).unwrap();
+        }),
+    ));
+}
+
+/// The node is adopted once the final record is committed. A bootstrap
+/// key file that cannot be removed then is reported as what was left: the
+/// line that says the node is adopted is written all the same, and the
+/// file is still the failure when that line cannot be written.
+#[test]
+fn an_adoption_whose_key_file_stays_is_adopted_and_says_so() {
+    for output_fails in [false, true] {
+        let (mut harness, _) = partially_adopted();
+        script_after_bootstrap(&harness, 13);
+        bootstrap_key_file_cannot_be_removed(&harness);
+        let agent = agent_file(&harness);
+        let mut out = if output_fails {
+            FailingLog::at("adopted ")
+        } else {
+            FailingLog::at("no line holds this")
+        };
+        let mut err = Vec::new();
+        let code = harness.run_to(
+            &adopt_args(agent.to_str().unwrap(), None),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, EXIT_LOCAL);
+        assert_eq!(out.failed(), output_fails);
+        assert_eq!(
+            String::from_utf8_lossy(&out.kept).contains("adopted lon1: Debian 13"),
+            !output_fails
+        );
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            format!(
+                "mooringctl: node lon1 is adopted, but its one-time bootstrap key could not be removed from {}: the VPS no longer accepts that key, so remove the file by hand\n  caused by: Operation not permitted (os error 1)\n",
+                lon1_dir(&harness).join("bootstrap_ed25519").display()
+            )
+        );
+        assert!(matches!(
+            lon1_lifecycle(&harness),
+            NodeLifecycle::Adopted { .. }
+        ));
+        assert!(harness.nodes.script.borrow().is_empty());
+    }
+}
+
+/// When the keychain item and the file of the bootstrap key both stay,
+/// both are reported, in one failure, whether or not the line that says
+/// the node is adopted can be written.
+#[test]
+fn an_adoption_whose_key_file_and_keychain_item_both_stay_names_both() {
+    for output_fails in [false, true] {
+        let (mut harness, _) = partially_adopted();
+        script_after_bootstrap(&harness, 13);
+        bootstrap_key_file_cannot_be_removed(&harness);
+        *harness.keychain.lock().unwrap() = Refusals {
+            delete: Some(-25_308),
+            ..Refusals::default()
+        };
+        let agent = agent_file(&harness);
+        let mut out = if output_fails {
+            FailingLog::at("adopted ")
+        } else {
+            FailingLog::at("no line holds this")
+        };
+        let mut err = Vec::new();
+        let code = harness.run_to(
+            &adopt_args(agent.to_str().unwrap(), None),
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, EXIT_LOCAL);
+        assert_eq!(out.failed(), output_fails);
+        let report = String::from_utf8(err).unwrap();
+        let mut lines = report.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            format!(
+                "mooringctl: node lon1 is adopted, but its one-time bootstrap key could not be removed from {} (Operation not permitted (os error 1)): the VPS no longer accepts that key, so remove the file by hand; deleting the keychain items the state no longer references failed too, for those named below; nothing uses them, and any that is still there can be deleted by hand",
+                lon1_dir(&harness).join("bootstrap_ed25519").display()
+            )
+        );
+        assert!(
+            lines.next().unwrap().starts_with(
+                "  caused by: state committed at config generation 4, but deleting secrets failed: "
+            ),
+            "{report}"
+        );
+        assert!(matches!(
+            lon1_lifecycle(&harness),
+            NodeLifecycle::Adopted { .. }
+        ));
+    }
+}
+
+/// `Bootstrap` cannot be undone, so the answer to adoption's question is
+/// acted on only if the state is still the one read: a node cancelled
+/// while the question waited is not bootstrapped, and no session is opened.
+#[test]
+fn an_adoption_answered_after_the_node_was_cancelled_opens_no_session() {
+    let (mut harness, _) = planned();
+    let support = harness.support_dir();
+    harness.console.meanwhile = Some(Box::new(move || {
+        let store = Store::new(support);
+        let generation = store.load().unwrap().deployment.config_generation();
+        let cancelled = record_with_secrets(
+            &store,
+            &mut InMemorySecretStore::new(),
+            generation,
+            Bookkeeping::PlanCancelled {
+                node: NodeId::parse("lon1").unwrap(),
+            },
+        );
+        // Its keychain is not the harness's: the commit stands.
+        assert!(
+            matches!(cancelled, Err(StoreError::SecretCleanup { .. })),
+            "{cancelled:?}"
+        );
+    }));
+    harness.console.answers.push_back(Answer::Yes);
+    let agent = agent_file(&harness);
+    let root = root_key(&harness);
+    let args: Vec<&str> = adopt_args(agent.to_str().unwrap(), Some(root.to_str().unwrap()))
+        .into_iter()
+        .filter(|arg| *arg != "--yes")
+        .collect();
+    let outcome = harness.run(&args);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stderr, MOVED);
+    assert_eq!(harness.console.asked, ["Hand this VPS to Mooring?"]);
+    assert!(harness.console.meanwhile.is_none());
+    assert!(harness.nodes.seen.borrow().is_empty());
+    assert!(
+        store(&harness)
+            .load()
+            .unwrap()
+            .deployment
+            .nodes()
+            .is_empty()
+    );
 }

@@ -6,10 +6,13 @@
 
 pub(crate) mod adopt;
 pub(crate) mod apply;
+pub(crate) mod cancel;
 pub(crate) mod dial;
 pub(crate) mod engines;
 pub(crate) mod files;
 pub(crate) mod new;
+pub(crate) mod planned;
+pub(crate) mod repin;
 pub(crate) mod runtime;
 pub(crate) mod session;
 pub(crate) mod ssh;

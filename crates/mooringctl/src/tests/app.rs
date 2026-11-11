@@ -165,6 +165,7 @@ fn a_password_the_keychain_refuses_is_not_stored() {
     *harness.keychain.lock().unwrap() = Refusals {
         get: None,
         put: Some(-25_293),
+        delete: None,
     };
     let outcome = harness.run(&["router", "set-password", "--stdin"]);
     assert_eq!(outcome.code, EXIT_LOCAL);
