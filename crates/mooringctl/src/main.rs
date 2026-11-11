@@ -111,6 +111,8 @@ mod node;
 #[cfg(target_os = "macos")]
 mod paths;
 #[cfg(target_os = "macos")]
+mod payments;
+#[cfg(target_os = "macos")]
 mod portal;
 #[cfg(target_os = "macos")]
 mod prompt;
@@ -157,6 +159,7 @@ fn main() -> ExitCode {
     let mut console = TtyConsole;
     let mut stdin = io::stdin().lock();
     let backups = Tmutil;
+    let curl = payments::Curl::system();
     let mut env = Env {
         router: RouterEnv {
             link: &link,
@@ -178,6 +181,7 @@ fn main() -> ExitCode {
         probe: &runtime::probe::direct,
         redirect_stderr: &mooring_macsys::redirect_stderr,
         portal_agreement: mooring_model::PortalAgreement::SHIPPED,
+        portal: &curl,
     };
     let code = run(
         cli.command,

@@ -11,6 +11,7 @@ use std::fs;
 use mooring_agent_proto::{
     Inbound, OpaqueUserId, Principal, StatsEmail, Traffic, UsageMonth, UsageV1,
 };
+use mooring_daemon_core::payments::Entitlements;
 use mooring_daemon_core::portal::snapshot;
 use mooring_daemon_core::usage::{CollectedUsage, NodeUsageHistory};
 use mooring_model::{AgreementVersion, Deployment, NodeId, PortalAgreement, UnixTime, UserId};
@@ -109,7 +110,15 @@ fn portal_export_writes_the_snapshot_of_the_users_named() {
     assert_eq!(outcome.stderr, "");
     let now = UnixTime::from_secs(NOW);
     let report = usage.aggregate(&deployment, now).unwrap();
-    let expected = snapshot(&deployment, Some(&report), &named, now, open()).unwrap();
+    let expected = snapshot(
+        &deployment,
+        Some(&report),
+        &Entitlements::none(),
+        &named,
+        now,
+        open(),
+    )
+    .unwrap();
     assert_eq!(fs::read(&out).unwrap(), expected.bytes());
     assert_eq!(mode(&out), 0o600);
     let cycle = expected.cycle();
@@ -173,8 +182,15 @@ fn without_usage_the_snapshot_holds_no_figures_and_says_why() {
             "{}",
             outcome.stdout
         );
-        let expected =
-            snapshot(&deployment, None, &named, UnixTime::from_secs(NOW), open()).unwrap();
+        let expected = snapshot(
+            &deployment,
+            None,
+            &Entitlements::none(),
+            &named,
+            UnixTime::from_secs(NOW),
+            open(),
+        )
+        .unwrap();
         assert_eq!(fs::read(&out).unwrap(), expected.bytes());
     }
 }

@@ -704,3 +704,44 @@ fn a_stored_origin_moves_while_the_node_is_unserved_and_stays_once_it_is_applied
         assert_eq!(stored("ams1", &json), ams1);
     }
 }
+
+/// A tick says whether it asked a node anything, a request that failed or
+/// one without a `Status` reply included, so that the payment pull asks
+/// nothing on the same tick.
+#[test]
+fn a_tick_says_whether_it_asked_a_node() {
+    use crate::daemon::usage::Pulled;
+
+    let (mut harness, deployment, mut collector) = ready();
+    let asked = |harness: &mut Harness, collector: &mut Collector| {
+        harness.with_env(|env| {
+            collector.tick(
+                env,
+                &deployment,
+                &lo0_name(),
+                now(),
+                Duration::from_secs(2),
+                Duration::from_secs(3_600),
+            )
+        })
+    };
+    expect(&harness, RequestKind::Status, Ok(status_reply()));
+    let first = asked(&mut harness, &mut collector);
+    assert!(
+        matches!(&first, Pulled::Asked(Some(polled)) if polled.0.as_str() == "ams1" || polled.0.as_str() == "lon1"),
+        "{first:?}"
+    );
+    // The batch goes on with a request that is no `Status`; it fails.
+    expect(
+        &harness,
+        RequestKind::UsageSeries,
+        Err(NodeError::PastDeadline),
+    );
+    assert_eq!(asked(&mut harness, &mut collector), Pulled::Asked(None));
+    // The failed node waits for its next interval, an hour on; the other
+    // node's batch starts with its `Status`, which fails too.
+    expect(&harness, RequestKind::Status, Err(NodeError::PastDeadline));
+    assert_eq!(asked(&mut harness, &mut collector), Pulled::Asked(None));
+    // With both nodes waiting, nothing is asked.
+    assert_eq!(asked(&mut harness, &mut collector), Pulled::Nothing);
+}

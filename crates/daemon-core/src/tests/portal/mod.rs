@@ -21,6 +21,7 @@ use mooring_model::{
 use serde_json::{Value, json};
 
 use super::support::{date, edited, email, node, traffic, wire};
+use crate::payments::Entitlements;
 use crate::period::{BillingCycle, UsagePeriods};
 use crate::policy::automatic_quota;
 use crate::portal::{PortalSnapshot, snapshot};
@@ -246,7 +247,15 @@ const ALL: [&str; 7] = [
 fn the_pilot_snapshot_is_the_contracts_golden() {
     let deployment = pilots(|_| {});
     let report = pilot_report(&deployment);
-    let made = snapshot(&deployment, Some(&report), &ids(&ALL), GENERATED_AT, open()).unwrap();
+    let made = snapshot(
+        &deployment,
+        Some(&report),
+        &Entitlements::none(),
+        &ids(&ALL),
+        GENERATED_AT,
+        open(),
+    )
+    .unwrap();
     assert_eq!(text(&made), PILOT_GOLDEN);
     assert_eq!(made.users(), 7);
     // Its debug form gives the size, not the document.
@@ -274,6 +283,7 @@ fn without_a_report_every_figure_is_null() {
     let made = snapshot(
         &deployment,
         None,
+        &Entitlements::none(),
         &ids(&["pilotusera", "pilotusere"]),
         GENERATED_AT,
         open(),
@@ -293,6 +303,7 @@ fn only_the_named_users_appear_in_id_order() {
     let made = snapshot(
         &deployment,
         Some(&report),
+        &Entitlements::none(),
         &ids(&["pilotuserg", "pilotuserb"]),
         GENERATED_AT,
         open(),
@@ -328,6 +339,7 @@ fn every_status_has_its_contract_form() {
     let made = snapshot(
         &deployment,
         None,
+        &Entitlements::none(),
         &ids(&["pilotusera", "pilotuserb", "pilotusere"]),
         GENERATED_AT,
         open(),
@@ -374,6 +386,7 @@ fn the_automatic_quota_applies_to_users_without_their_own() {
     let made = snapshot(
         &deployment,
         None,
+        &Entitlements::none(),
         &ids(&["pilotusera", "pilotusere"]),
         GENERATED_AT,
         open(),
@@ -433,6 +446,7 @@ fn collected_usage_gives_each_user_the_cycles_bytes() {
     let made = snapshot(
         &deployment,
         Some(&report),
+        &Entitlements::none(),
         &ids(&["pilotusera", "pilotuserb"]),
         GENERATED_AT,
         open(),

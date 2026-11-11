@@ -19,6 +19,7 @@ use super::{
     ALL, COUNTED_THROUGH, GENERATED_AT, id, ids, open, pilot, pilot_report, pilot_users, pilots,
 };
 use crate::error::PolicyError;
+use crate::payments::Entitlements;
 use crate::portal::{MAX_SNAPSHOT_BYTES, PortalError, PortalErrorKind, snapshot};
 
 /// Nothing is made while the gate is closed, whatever the users accepted.
@@ -26,7 +27,15 @@ use crate::portal::{MAX_SNAPSHOT_BYTES, PortalError, PortalErrorKind, snapshot};
 fn nothing_is_made_while_the_agreement_does_not_cover_the_portal() {
     let deployment = pilots(|_| {});
     let closed = PortalAgreement::since(None);
-    let error = snapshot(&deployment, None, &ids(&ALL), GENERATED_AT, closed).unwrap_err();
+    let error = snapshot(
+        &deployment,
+        None,
+        &Entitlements::none(),
+        &ids(&ALL),
+        GENERATED_AT,
+        closed,
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), PortalErrorKind::NotCovered);
     assert_eq!(
         error.to_string(),
@@ -49,6 +58,7 @@ fn a_user_without_the_required_acceptance_is_refused() {
     let error = snapshot(
         &deployment,
         None,
+        &Entitlements::none(),
         &ids(&["pilotuserd", "pilotuserb"]),
         GENERATED_AT,
         open(),
@@ -74,6 +84,7 @@ fn a_user_without_the_required_acceptance_is_refused() {
         let error = snapshot(
             &deployment,
             None,
+            &Entitlements::none(),
             &ids(&["pilotusera", "pilotuserb"]),
             GENERATED_AT,
             open(),
@@ -115,7 +126,15 @@ fn users_are_named_at_least_once_each_and_known() {
             },
         ),
     ] {
-        let error = snapshot(&deployment, None, &ids(users), GENERATED_AT, open()).unwrap_err();
+        let error = snapshot(
+            &deployment,
+            None,
+            &Entitlements::none(),
+            &ids(users),
+            GENERATED_AT,
+            open(),
+        )
+        .unwrap_err();
         assert!(
             matches!(&error, PortalError::Named(found) if *found == named),
             "{error:?}"
@@ -124,9 +143,16 @@ fn users_are_named_at_least_once_each_and_known() {
         assert_eq!(error.to_string(), named.to_string());
     }
     assert_eq!(
-        snapshot(&deployment, None, &ids(&[]), GENERATED_AT, open())
-            .unwrap_err()
-            .to_string(),
+        snapshot(
+            &deployment,
+            None,
+            &Entitlements::none(),
+            &ids(&[]),
+            GENERATED_AT,
+            open()
+        )
+        .unwrap_err()
+        .to_string(),
         "no user was named; a portal export holds only the users named"
     );
     // The list comes before the snapshot's time, too.
@@ -137,7 +163,15 @@ fn users_are_named_at_least_once_each_and_known() {
             .as_secs()
             + 86_400,
     );
-    let error = snapshot(&deployment, None, &ids(&[]), past, open()).unwrap_err();
+    let error = snapshot(
+        &deployment,
+        None,
+        &Entitlements::none(),
+        &ids(&[]),
+        past,
+        open(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), PortalErrorKind::Named, "{error:?}");
 }
 
@@ -150,7 +184,15 @@ fn a_report_or_suspension_after_the_snapshots_time_is_refused() {
     let named = ids(&["pilotuserc"]);
     let early = UnixTime::from_secs(COUNTED_THROUGH.as_secs() - 1);
     let report = pilot_report(&deployment);
-    let error = snapshot(&deployment, Some(&report), &named, early, open()).unwrap_err();
+    let error = snapshot(
+        &deployment,
+        Some(&report),
+        &Entitlements::none(),
+        &named,
+        early,
+        open(),
+    )
+    .unwrap_err();
     assert!(
         matches!(error, PortalError::ReportAfterGeneration { through, generated_at }
             if through == COUNTED_THROUGH && generated_at == early),
@@ -172,7 +214,14 @@ fn a_report_or_suspension_after_the_snapshots_time_is_refused() {
         let mut moved = pilot_report(&deployment);
         moved.periods.through = through;
         let late = UnixTime::from_secs(cycle.ends_at().as_secs() + 1);
-        let result = snapshot(&deployment, Some(&moved), &named, late, open());
+        let result = snapshot(
+            &deployment,
+            Some(&moved),
+            &Entitlements::none(),
+            &named,
+            late,
+            open(),
+        );
         match result {
             Ok(made) => {
                 assert!(accepted, "{through}");
@@ -196,7 +245,15 @@ fn a_report_or_suspension_after_the_snapshots_time_is_refused() {
     }
     // pilotuserc was suspended at 1793784600.
     let before = UnixTime::from_secs(1_793_784_599);
-    let error = snapshot(&deployment, None, &named, before, open()).unwrap_err();
+    let error = snapshot(
+        &deployment,
+        None,
+        &Entitlements::none(),
+        &named,
+        before,
+        open(),
+    )
+    .unwrap_err();
     assert!(
         matches!(&error, PortalError::SuspendedAfterGeneration { user, since, generated_at }
             if *user == id("pilotuserc") && since.as_secs() == 1_793_784_600 && *generated_at == before),
@@ -208,7 +265,7 @@ fn a_report_or_suspension_after_the_snapshots_time_is_refused() {
     );
     // At the same instant it is accepted.
     let at = UnixTime::from_secs(1_793_784_600);
-    assert!(snapshot(&deployment, None, &named, at, open()).is_ok());
+    assert!(snapshot(&deployment, None, &Entitlements::none(), &named, at, open()).is_ok());
 }
 
 /// The contract's instants end at 9999-12-31; a snapshot's time or an
@@ -219,7 +276,15 @@ fn instants_past_9999_are_refused() {
     let last_day = CalendarDate::parse("9999-12-31").unwrap();
     let past = UnixTime::from_secs(last_day.utc_start().as_secs() + 86_400);
     let deployment = pilots(|users| users[0].policy.expires_at = Some(past));
-    let error = snapshot(&deployment, None, &ids(&["pilotuserb"]), past, open()).unwrap_err();
+    let error = snapshot(
+        &deployment,
+        None,
+        &Entitlements::none(),
+        &ids(&["pilotuserb"]),
+        past,
+        open(),
+    )
+    .unwrap_err();
     assert!(
         matches!(error, PortalError::GeneratedOutOfRange { at } if at == past),
         "{error:?}"
@@ -231,6 +296,7 @@ fn instants_past_9999_are_refused() {
     let error = snapshot(
         &deployment,
         None,
+        &Entitlements::none(),
         &ids(&["pilotusera"]),
         GENERATED_AT,
         open(),
@@ -250,6 +316,7 @@ fn instants_past_9999_are_refused() {
         snapshot(
             &deployment,
             None,
+            &Entitlements::none(),
             &ids(&["pilotusera"]),
             GENERATED_AT,
             open()
@@ -258,7 +325,15 @@ fn instants_past_9999_are_refused() {
     );
     // In December 9999 the next cycle would start in 10000.
     let december = CalendarDate::parse("9999-12-15").unwrap().utc_start();
-    let error = snapshot(&deployment, None, &ids(&["pilotuserb"]), december, open()).unwrap_err();
+    let error = snapshot(
+        &deployment,
+        None,
+        &Entitlements::none(),
+        &ids(&["pilotuserb"]),
+        december,
+        open(),
+    )
+    .unwrap_err();
     assert_eq!(error.kind(), PortalErrorKind::Cycle);
     assert_eq!(error.to_string(), "the billing cycle could not be computed");
 }
@@ -273,6 +348,7 @@ fn a_named_user_missing_from_the_report_is_refused() {
     let error = snapshot(
         &deployment,
         Some(&report),
+        &Entitlements::none(),
         &ids(&["pilotusera", "pilotuserb"]),
         GENERATED_AT,
         open(),
@@ -298,7 +374,15 @@ fn a_failing_automatic_quota_is_refused() {
     });
     // pilotuserc's suspension for quota is dated after this time.
     let before = UnixTime::from_secs(1_793_784_599);
-    let error = snapshot(&deployment, None, &ids(&["pilotusera"]), before, open()).unwrap_err();
+    let error = snapshot(
+        &deployment,
+        None,
+        &Entitlements::none(),
+        &ids(&["pilotusera"]),
+        before,
+        open(),
+    )
+    .unwrap_err();
     assert!(
         matches!(
             &error,
@@ -334,13 +418,31 @@ fn a_snapshot_larger_than_the_portal_reads_is_refused() {
         .collect();
     let named: Vec<UserId> = many.iter().map(|user| user.id.clone()).collect();
     let deployment = edited(|parts| parts.users = many);
-    let error = snapshot(&deployment, None, &named, GENERATED_AT, open()).unwrap_err();
+    let error = snapshot(
+        &deployment,
+        None,
+        &Entitlements::none(),
+        &named,
+        GENERATED_AT,
+        open(),
+    )
+    .unwrap_err();
     assert!(
         matches!(error, PortalError::TooLarge { bytes, limit } if bytes > MAX_SNAPSHOT_BYTES && limit == MAX_SNAPSHOT_BYTES),
         "{error:?}"
     );
     // Fewer users fit.
-    assert!(snapshot(&deployment, None, &named[..1_000], GENERATED_AT, open()).is_ok());
+    assert!(
+        snapshot(
+            &deployment,
+            None,
+            &Entitlements::none(),
+            &named[..1_000],
+            GENERATED_AT,
+            open()
+        )
+        .is_ok()
+    );
 }
 
 /// Every kind names its variant.

@@ -14,6 +14,7 @@ mod lifetime_origin;
 mod meter;
 mod netgear;
 mod notify;
+mod payments;
 mod policy;
 mod portal;
 mod power;

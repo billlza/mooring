@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Quota and expiry evaluation (console spec P1-1): from each user's
-//! [`UserPolicy`], the deployment's automatic quotas, the cycle's usage and
-//! the time, the actions the daemon would apply in the next apply window.
+//! `UserPolicy` and what their paid orders gave, the deployment's automatic
+//! quotas, the cycle's usage and the time, the actions the daemon would
+//! apply in the next apply window.
 //! Nothing here applies anything: suspending a user is an explicit state
 //! change made elsewhere, and the model's renderers and export look only at
 //! `UserStatus`.
@@ -12,7 +13,7 @@
 //! A user's quota is their own `UserPolicy::quota` when the operator set
 //! one (an override), and otherwise the deployment's automatic quota
 //! ([`automatic_quota`]) when it applies, and otherwise none
-//! ([`effective_quota`]). The automatic quota applies while at least
+//! ([`effective_policy`]). The automatic quota applies while at least
 //! `AutoQuotaPolicy::from_active_users` users (F4: 6) share the cycle's
 //! budget: the users `Active` now and those suspended for quota during the
 //! current cycle, so a suspension for quota never switches the quota off
@@ -26,17 +27,28 @@
 //! applies only once users suspended for their own quota this cycle bring
 //! the users sharing the budget to six. Expiries stay a per-user record;
 //! their default is a pending operator decision.
+//!
+//! # Payments (design §9.6)
+//!
+//! What a user may use is their own record combined with the service
+//! periods and traffic packs their paid orders gave ([`effective_policy`]):
+//! a period covering the instant gives its quota where the user has no
+//! quota of their own, the packs granted in the cycle add to the quota that
+//! applies, and the last period's end is the expiry, unless the user's own
+//! record is later. Every reader of a user's quota or expiry (the status
+//! line, the portal snapshot and [`evaluate`]) goes through it.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
-use mooring_model::quota::{BudgetPercent, SimFactor};
-use mooring_model::user::{QuotaAction, SuspendReason, UserPolicy, UserQuota, UserStatus};
+use mooring_model::quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
+use mooring_model::user::{QuotaAction, SuspendReason, UserQuota, UserStatus};
 use mooring_model::{Deployment, UnixTime, User, UserId};
 use serde::{Deserialize, Serialize};
 
 use crate::alert::AlertCondition;
 use crate::error::PolicyError;
+use crate::payments::{Entitlements, UserEntitlements};
 use crate::period::{BillingCycle, days_until};
 use crate::usage::CycleUsage;
 
@@ -79,7 +91,7 @@ pub enum QuotaState {
 }
 
 impl QuotaState {
-    /// The state of a user's quota ([`effective_quota`]) when the cycle's
+    /// The state of a user's quota ([`effective_policy`]) when the cycle's
     /// usage is unavailable: [`QuotaState::NoQuota`] or
     /// [`QuotaState::UsageUnavailable`].
     #[must_use]
@@ -92,7 +104,7 @@ impl QuotaState {
         }
     }
 
-    /// The state of a user's quota ([`effective_quota`]) with `used_bytes`
+    /// The state of a user's quota ([`effective_policy`]) with `used_bytes`
     /// served this cycle.
     #[must_use]
     pub fn of(quota: Option<UserQuota>, used_bytes: u64) -> Self {
@@ -142,10 +154,11 @@ pub enum ExpiryState {
 }
 
 impl ExpiryState {
-    /// The state of `policy`'s expiry at `now`.
+    /// The state at `now` of an expiry, a user's effective one
+    /// ([`EffectivePolicy::expires_at`]).
     #[must_use]
-    pub fn of(policy: &UserPolicy, now: UnixTime) -> Self {
-        match policy.expires_at {
+    pub fn of(expires_at: Option<UnixTime>, now: UnixTime) -> Self {
+        match expires_at {
             None => Self::NoExpiry,
             Some(at) if at <= now => Self::Expired { at },
             Some(at) => Self::Expires {
@@ -364,22 +377,77 @@ fn share(
     })
 }
 
-/// A user's quota: their own `UserPolicy::quota` (an override) wins,
-/// whether larger or smaller; otherwise the `automatic` one
-/// ([`automatic_quota`]), if any.
+/// What a user may use at an instant (design §9.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectivePolicy {
+    /// The user's quota for the billing cycle, if they have one.
+    pub quota: Option<UserQuota>,
+    /// When the user's access expires, if it does.
+    pub expires_at: Option<UnixTime>,
+}
+
+/// What `user` may use at `now`, in the billing cycle `cycle` (the one
+/// `now` is in), given the `automatic` quota ([`automatic_quota`]) and what
+/// the user's paid orders gave (`paid`, design §9.6):
+///
+/// - **Quota.** The user's own `UserPolicy::quota` (an override) wins,
+///   whether larger or smaller; otherwise the quota of the paid service
+///   period covering `now` ([`paid_quota`]); otherwise the automatic one,
+///   if any. The bytes of the traffic packs granted in `cycle` are added to
+///   whichever applies; a user with no quota at all keeps none.
+/// - **Expiry.** Without a paid period, the user's own
+///   `UserPolicy::expires_at`. With one, the later of the last period's end
+///   and the user's own expiry; an own expiry of `None` adds nothing, so a
+///   user who has paid expires when the paid time ends.
 #[must_use]
-pub const fn effective_quota(user: &User, automatic: Option<UserQuota>) -> Option<UserQuota> {
-    match user.policy.quota {
-        Some(own) => Some(own),
-        None => automatic,
+pub fn effective_policy(
+    user: &User,
+    automatic: Option<UserQuota>,
+    paid: &Entitlements,
+    cycle: BillingCycle,
+    now: UnixTime,
+) -> EffectivePolicy {
+    let own = paid.user(&user.id);
+    let base = match (user.policy.quota, own.and_then(|own| own.period_at(now))) {
+        (Some(quota), _) => Some(quota),
+        (None, Some(period)) => Some(paid_quota(period.quota_bytes)),
+        (None, None) => automatic,
+    };
+    let packs = own.map_or(0, |own| own.pack_bytes_in(cycle));
+    let quota = base.map(|quota| UserQuota {
+        cycle_served_bytes: quota.cycle_served_bytes.saturating_add(packs),
+        ..quota
+    });
+    let expires_at = match own.and_then(UserEntitlements::paid_until) {
+        None => user.policy.expires_at,
+        Some(until) => Some(
+            user.policy
+                .expires_at
+                .map_or(until, |record| record.max(until)),
+        ),
+    };
+    EffectivePolicy { quota, expires_at }
+}
+
+/// The quota a paid service period gives for each billing cycle it covers:
+/// its order's bytes, with the warning share and action of the pilot's
+/// automatic quota (F4: a warning at 80 % and a suspension at all of it),
+/// so that running out pauses the user until the next billing cycle (the
+/// operator's rule of 2026-11-06).
+#[must_use]
+pub const fn paid_quota(bytes: NonZeroU64) -> UserQuota {
+    UserQuota {
+        cycle_served_bytes: bytes,
+        warn_percent: AutoQuotaPolicy::PILOT.warn_percent,
+        action: AutoQuotaPolicy::PILOT.action,
     }
 }
 
 /// The actions due for `deployment`'s users at `now`, given the cycle's
-/// `usage`.
+/// `usage` and what their paid orders gave (`paid`).
 ///
 /// Only active users are evaluated, each against their
-/// [`effective_quota`] (the automatic quota of the cycle `now` is in is
+/// [`effective_policy`] (the automatic quota of the cycle `now` is in is
 /// computed once, before any action). A suspended user gets no action,
 /// including one whose suspension for quota has lapsed: resuming it at the
 /// cycle boundary is the apply's step (M5), never this evaluation's.
@@ -398,6 +466,7 @@ pub const fn effective_quota(user: &User, automatic: Option<UserQuota>) -> Optio
 /// `QuotaSuspensionAfterNow` ([`automatic_quota`]).
 pub fn evaluate(
     deployment: &Deployment,
+    paid: &Entitlements,
     usage: &CycleUsage,
     now: UnixTime,
 ) -> Result<Vec<UserAction>, PolicyError> {
@@ -420,7 +489,8 @@ pub fn evaluate(
         if user.status != UserStatus::Active {
             continue;
         }
-        let effective = effective_quota(user, automatic);
+        let policy = effective_policy(user, automatic, paid, moment.cycle, now);
+        let effective = policy.quota;
         let quota = match effective {
             None => QuotaState::NoQuota,
             Some(_) => {
@@ -432,7 +502,7 @@ pub fn evaluate(
             }
         };
         let suspend_on_quota = effective.is_some_and(|quota| quota.action == QuotaAction::Suspend);
-        let expiry = ExpiryState::of(&user.policy, now);
+        let expiry = ExpiryState::of(policy.expires_at, now);
         let suspension = match (expiry, quota) {
             (ExpiryState::Expired { .. }, _) => Some(SuspendReason::Expired),
             (_, QuotaState::Over { .. }) if suspend_on_quota => {

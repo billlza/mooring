@@ -35,6 +35,7 @@ mod node_files;
 mod output;
 mod own_network;
 mod password;
+mod payments;
 mod pin;
 mod portal;
 mod ports;
