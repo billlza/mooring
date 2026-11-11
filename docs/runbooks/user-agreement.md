@@ -149,11 +149,14 @@
       of cron, systemd and mail (delivery.md, section 0).
     - The portal keeps client addresses only in memory; its reverse proxy
       keeps no access log, and TLS ends on that host.
-    - The Mac's new records are the payments it pulls, under the 13-month
-      rule, built with the payment pull, and the operator's ban records
-      (clause 3). The ban records are kept until the service ends, outside
-      Mooring's state, so neither the 13-month rule nor `user forget`
-      reaches them.
+    - The Mac's new records are the payments it pulls (design §9.6), which
+      clause 4 puts under the 13-month rule, and the operator's ban records
+      (clause 3). The pull keeps every order for now: deleting a revoked
+      user's payments 13 months on, or at once for a user who leaves and
+      asks, is to be built with the other deletion rules (below; design
+      §9.6, the ledger's retention). The ban records are kept until the
+      service ends, outside Mooring's state, so neither the 13-month rule
+      nor `user forget` reaches them.
     - The operator's phone and Mac keep FaceTime's call history with each
       user: the number or Apple ID, and the call times. The operator
       deletes it at the user's revocation (the operator's decision of

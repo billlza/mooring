@@ -1511,7 +1511,7 @@ One write holds the cursor and everything one page did, so a grant is never reco
 - the traffic pack across billing cycles: counted in the cycle it is granted only (now), or carried into the next cycle for what the user did not use (exact, and needs the earlier cycle's served bytes), or counted in full in every cycle its days reach (simple, and generous: a pack of a year would count twelve times);
 - the apply job (M5, §13.6), which suspends users whose effective policy says so, and should resume a user suspended at expiry once a payment has given them time again;
 - the check against Stripe before granting (contract §5.7): it needs a restricted, read-only Stripe key on the Mac, which only the operator can make, and a lookup by the order id, which Stripe's checkout sessions carry as `client_reference_id`, or by the subscription's invoices for a renewal. It is off: with it off, a compromised portal can write grants;
-- the agreement: its clause 4 lists where users' data is kept, and the ledger is a new record on the Mac of user ids with their orders, plans and amounts. A revision of the text is the operator's (§9.5);
+- the agreement: revision 2 (`docs/runbooks/user-agreement.md`, not yet accepted by users) lists the pulled payments among the Mac's records in clause 4 (the order number, what was bought, the amount and currency, the time paid, and what was granted and when), and promises to delete them 13 months after the user's revocation, or at once for a user who leaves and asks. The ledger's retention (next item) must keep that promise;
 - the ledger's retention: it keeps every order, which the duplicate rule needs only while an entry can come again.
 
 ---
