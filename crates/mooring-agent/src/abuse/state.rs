@@ -116,6 +116,7 @@ impl AbuseState {
     }
 
     /// The records kept, oldest first.
+    #[cfg(test)]
     pub(crate) fn records(&self) -> &[AbuseRecord] {
         &self.records
     }

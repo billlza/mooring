@@ -14,7 +14,7 @@ use mooring_agent_proto::{
     METER_SETTLED_SECS, OpaqueUserId, PORT_BUCKETS, UnixTime,
 };
 
-use super::sets::{Element, Measured, Proto};
+use super::sets::{Measured, Proto};
 
 /// One user's figures at one reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,22 +250,4 @@ pub(crate) fn judge(
         }
     }
     Verdict { cut, alert }
-}
-
-/// One element of a test reading: the user's address, the protocol, the
-/// age and the counter's packets and bytes.
-#[cfg(test)]
-pub(crate) type ElementRow = (Ipv4Addr, Option<Proto>, Option<u64>, Option<(u64, u64)>);
-
-/// Elements of `set` for one test reading.
-#[cfg(test)]
-pub(crate) fn elements(list: &[ElementRow]) -> Vec<Element> {
-    list.iter()
-        .map(|(source, proto, age, counter)| Element {
-            source: *source,
-            proto: *proto,
-            age: *age,
-            counter: counter.map(|(packets, bytes)| super::sets::Counter { packets, bytes }),
-        })
-        .collect()
 }

@@ -12,10 +12,8 @@ use mooring_agent_proto::{
     UnixTime, user_source,
 };
 
-use crate::abuse::detect::{
-    ElementRow, FloodMinutes, SettledMinute, UserReading, Verdict, elements, judge, readings,
-};
-use crate::abuse::sets::{Measured, Proto};
+use crate::abuse::detect::{FloodMinutes, SettledMinute, UserReading, Verdict, judge, readings};
+use crate::abuse::sets::{Counter, Element, Measured, Proto};
 
 const NOW: u64 = 1_791_500_000;
 
@@ -29,7 +27,21 @@ fn served(ids: &[&str]) -> BTreeMap<Ipv4Addr, OpaqueUserId> {
         .collect()
 }
 
-type Row = ElementRow;
+/// One element of a test reading: the user's address, the protocol, the
+/// age and the counter's packets and bytes.
+type Row = (Ipv4Addr, Option<Proto>, Option<u64>, Option<(u64, u64)>);
+
+/// The elements of one set of a test reading.
+fn elements(rows: &[Row]) -> Vec<Element> {
+    rows.iter()
+        .map(|&(source, proto, age, counter)| Element {
+            source,
+            proto,
+            age,
+            counter: counter.map(|(packets, bytes)| Counter { packets, bytes }),
+        })
+        .collect()
+}
 
 /// The sets of a reading where a finding's measure is the given value.
 type SetsAt = Box<dyn Fn(u32) -> Vec<(AbuseSet, Vec<Row>)>>;
