@@ -7,6 +7,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use mooring_daemon_core::payments::PortalOrigin;
 use mooring_export::ExportFormat;
 use mooring_model::dns::DnsName;
 use mooring_model::exit::{FlowCap, Pairing};
@@ -168,6 +169,41 @@ pub(crate) enum UserCommand {
 /// A portal command.
 #[derive(Debug, Subcommand)]
 pub(crate) enum PortalCommand {
+    /// Point the daemon's payment pull at the portal and store its token,
+    /// typed (pasted) at the terminal without echo or read from stdin:
+    /// the 64 hexadecimal characters `mooring-portal pull-token` printed
+    /// once on the portal's host. The daemon then asks the portal for the
+    /// orders to grant every five minutes, while the Mac is on no foreign
+    /// network, and keeps what it grants in payments/ledger.json.
+    Connect {
+        /// The portal's address: https:// and its DNS name, with an
+        /// optional port, and nothing after it.
+        #[arg(long, value_name = "URL", value_parser = parse_origin)]
+        origin: PortalOrigin,
+        /// Read the token from stdin (whitespace around it is ignored).
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Turn the rehearsal on or off. While it is on, payments made in
+    /// Stripe's test mode are granted and count; turning it off takes
+    /// them out at once. Turn it off before real payments are taken.
+    Rehearsal {
+        /// On or off.
+        #[arg(value_enum)]
+        state: OnOff,
+    },
+    /// Stop the payment pull and delete its token. The payment ledger
+    /// stays, and what it granted still counts.
+    Disconnect,
+    /// Print the payment pull's settings, the ledger's cursor, its last
+    /// pull and any stop, and every order the portal listed with what
+    /// Mooring did about it.
+    Payments {
+        /// Print the settings and the ledger as one JSON line instead of
+        /// a summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Write the portal snapshot of the users named, for `mooring-portal
     /// import`: their status, usage this billing cycle, quota and expiry,
     /// by user id and without credentials, to a new file with mode 0600
@@ -183,6 +219,20 @@ pub(crate) enum PortalCommand {
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
     },
+}
+
+/// A switch, as typed on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum OnOff {
+    /// On.
+    On,
+    /// Off.
+    Off,
+}
+
+/// The portal's origin, as `PortalOrigin` accepts it.
+fn parse_origin(text: &str) -> Result<PortalOrigin, String> {
+    PortalOrigin::parse(text).map_err(|error| error.to_string())
 }
 
 /// A CFM line, as typed on the command line.

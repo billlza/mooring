@@ -21,12 +21,26 @@ use proptest::prelude::*;
 use super::support::{at, date, edited, user_ids, users};
 use crate::alert::AlertCondition;
 use crate::error::{PolicyError, PolicyErrorKind};
+use crate::payments::Entitlements;
 use crate::period::BillingCycle;
 use crate::policy::{
     EXPIRY_WARNING_SECS, ExpiryState, PolicyAction, PolicyWarning, QuotaState, UserAction,
-    automatic_quota, effective_quota, evaluate, user_alerts,
+    automatic_quota, effective_policy, evaluate, user_alerts,
 };
 use crate::usage::CycleUsage;
+
+/// A user's quota without a paid order: their own, or else `automatic`.
+fn effective_quota(user: &User, automatic: Option<UserQuota>) -> Option<UserQuota> {
+    let now = at("2026-10-08", 0);
+    let cycle = BillingCycle::of_instant(
+        CycleRule::Monthly {
+            bill_day: BillDay::new(1).unwrap(),
+        },
+        now,
+    )
+    .unwrap();
+    effective_policy(user, automatic, &Entitlements::none(), cycle, now).quota
+}
 
 const GB: u64 = 1_000_000_000;
 
@@ -137,32 +151,32 @@ fn expiry_counts_whole_days_up_and_expires_at_its_instant() {
     let now = at("2026-10-08", 0);
     let expiring = |secs| policy(Some(UnixTime::from_secs(now.as_secs() + secs)), None);
     assert_eq!(
-        ExpiryState::of(&UserPolicy::NONE, now),
+        ExpiryState::of(UserPolicy::NONE.expires_at, now),
         ExpiryState::NoExpiry
     );
     assert_eq!(
-        ExpiryState::of(&expiring(1), now),
+        ExpiryState::of(expiring(1).expires_at, now),
         ExpiryState::Expires {
             at: UnixTime::from_secs(now.as_secs() + 1),
             days_left: 1
         }
     );
     assert_eq!(
-        ExpiryState::of(&expiring(86_400), now),
+        ExpiryState::of(expiring(86_400).expires_at, now),
         ExpiryState::Expires {
             at: at("2026-10-09", 0),
             days_left: 1
         }
     );
     assert_eq!(
-        ExpiryState::of(&expiring(86_401), now),
+        ExpiryState::of(expiring(86_401).expires_at, now),
         ExpiryState::Expires {
             at: at("2026-10-09", 1),
             days_left: 2
         }
     );
     assert_eq!(
-        ExpiryState::of(&policy(Some(now), None), now),
+        ExpiryState::of(policy(Some(now), None).expires_at, now),
         ExpiryState::Expired { at: now }
     );
 }
@@ -202,7 +216,13 @@ fn evaluation_proposes_suspensions_and_warnings_by_precedence() {
         (ids[1].clone(), 10 * GB),
         (ids[2].clone(), 11 * GB),
     ];
-    let actions = evaluate(&holding(&users), &usage(now, &served), now).unwrap();
+    let actions = evaluate(
+        &holding(&users),
+        &Entitlements::none(),
+        &usage(now, &served),
+        now,
+    )
+    .unwrap();
     assert_eq!(
         actions,
         vec![
@@ -253,7 +273,13 @@ fn evaluation_proposes_suspensions_and_warnings_by_precedence() {
         (ids[1].clone(), 0),
         (ids[2].clone(), 8 * GB),
     ];
-    let actions = evaluate(&holding(&users), &usage(now, &served), now).unwrap();
+    let actions = evaluate(
+        &holding(&users),
+        &Entitlements::none(),
+        &usage(now, &served),
+        now,
+    )
+    .unwrap();
     assert_eq!(
         actions.last(),
         Some(&UserAction {
@@ -277,7 +303,12 @@ fn only_active_users_are_evaluated_and_no_policy_proposes_nothing() {
     let now = at("2026-10-08", 0);
     let mut users = users();
     assert_eq!(
-        evaluate(&holding(&users), &usage(now, &[]), now),
+        evaluate(
+            &holding(&users),
+            &Entitlements::none(),
+            &usage(now, &[]),
+            now
+        ),
         Ok(Vec::new())
     );
     for user in users.values_mut() {
@@ -296,7 +327,12 @@ fn only_active_users_are_evaluated_and_no_policy_proposes_nothing() {
     users.get_mut(&ids[2]).unwrap().per_node.clear();
     // Inactive users need no usage either.
     assert_eq!(
-        evaluate(&holding(&users), &usage(now, &[]), now),
+        evaluate(
+            &holding(&users),
+            &Entitlements::none(),
+            &usage(now, &[]),
+            now
+        ),
         Ok(Vec::new())
     );
     assert_eq!(
@@ -314,7 +350,7 @@ fn evaluation_refuses_usage_it_cannot_rely_on() {
     users.get_mut(&ids[1]).unwrap().policy = policy(None, Some(quota(GB, 80, QuotaAction::Warn)));
     let last_cycle = usage(at("2026-09-30", 0), &[(ids[1].clone(), 1)]);
     assert_eq!(
-        evaluate(&holding(&users), &last_cycle, now),
+        evaluate(&holding(&users), &Entitlements::none(), &last_cycle, now),
         Err(PolicyError::UsageForOtherCycle {
             usage_cycle: date("2026-09-01"),
             current_cycle: date("2026-10-01")
@@ -322,21 +358,31 @@ fn evaluation_refuses_usage_it_cannot_rely_on() {
     );
     let ahead = usage(at("2026-10-08", 1), &[(ids[1].clone(), 1)]);
     assert_eq!(
-        evaluate(&holding(&users), &ahead, now),
+        evaluate(&holding(&users), &Entitlements::none(), &ahead, now),
         Err(PolicyError::UsageAfterNow {
             through: at("2026-10-08", 1),
             now
         })
     );
     assert_eq!(
-        evaluate(&holding(&users), &usage(now, &[(ids[0].clone(), 1)]), now),
+        evaluate(
+            &holding(&users),
+            &Entitlements::none(),
+            &usage(now, &[(ids[0].clone(), 1)]),
+            now
+        ),
         Err(PolicyError::UsageMissing {
             user: ids[1].clone()
         })
     );
     let billed_on_20 = with_bill_day(holding(&users), 20);
     assert_eq!(
-        evaluate(&billed_on_20, &usage(now, &[]), UnixTime::from_secs(86_400)),
+        evaluate(
+            &billed_on_20,
+            &Entitlements::none(),
+            &usage(now, &[]),
+            UnixTime::from_secs(86_400)
+        ),
         Err(PolicyError::Model(ModelError::InvalidDate))
     );
 }
@@ -443,7 +489,7 @@ proptest! {
             }
         }
         let usage = usage(now, &ids.iter().cloned().zip(served.iter().copied()).collect::<Vec<_>>());
-        let actions = evaluate(&holding(&users), &usage, now).unwrap();
+        let actions = evaluate(&holding(&users), &Entitlements::none(), &usage, now).unwrap();
         for (index, id) in ids.iter().enumerate() {
             let mine: Vec<PolicyAction> = actions.iter().filter(|action| &action.user == id).map(|action| action.action).collect();
             if suspended[index].is_some() {
@@ -662,7 +708,7 @@ fn a_quota_suspension_keeps_every_share_for_the_cycle() {
     served[0].1 = PILOT_QUOTA_AT_SIX;
     served[1].1 = PILOT_QUOTA_AT_SIX - 1;
     assert_eq!(
-        evaluate(&after, &usage(now, &served), now),
+        evaluate(&after, &Entitlements::none(), &usage(now, &served), now),
         Ok(vec![
             UserAction {
                 user: ids[0].clone(),
@@ -708,7 +754,12 @@ fn a_quota_suspension_from_an_earlier_cycle_does_not_count() {
         .collect();
     served.push((september_user, u64::MAX));
     assert_eq!(
-        evaluate(&six_and_september, &usage(now, &served), now),
+        evaluate(
+            &six_and_september,
+            &Entitlements::none(),
+            &usage(now, &served),
+            now
+        ),
         Ok(Vec::new())
     );
     parts.users[1]
@@ -804,7 +855,12 @@ fn a_forward_edit_of_the_bill_day_keeps_the_share_enforced() {
     // 80 % of the N = 6 share, rounded up.
     served[1].1 = 15_238_095_238;
     assert_eq!(
-        evaluate(&billed_on_1, &usage(now, &served), now),
+        evaluate(
+            &billed_on_1,
+            &Entitlements::none(),
+            &usage(now, &served),
+            now
+        ),
         Ok(vec![
             UserAction {
                 user: ids[0].clone(),
@@ -855,7 +911,12 @@ fn a_quota_suspension_after_now_is_an_error() {
             "{since:?}"
         );
         assert_eq!(
-            evaluate(&deployment, &usage(now, &served), now),
+            evaluate(
+                &deployment,
+                &Entitlements::none(),
+                &usage(now, &served),
+                now
+            ),
             Err(error),
             "{since:?}"
         );
@@ -863,7 +924,7 @@ fn a_quota_suspension_after_now_is_an_error() {
         let off = Deployment::try_from(parts).unwrap();
         assert_eq!(automatic_quota(&off, now), Ok(None), "{since:?}");
         assert_eq!(
-            evaluate(&off, &usage(now, &served), now),
+            evaluate(&off, &Entitlements::none(), &usage(now, &served), now),
             Ok(Vec::new()),
             "{since:?}"
         );
@@ -979,7 +1040,12 @@ fn an_override_wins() {
     served[1].1 = 2 * GB;
     served[2].1 = PILOT_QUOTA_AT_SIX;
     assert_eq!(
-        evaluate(&deployment, &usage(now, &served), now),
+        evaluate(
+            &deployment,
+            &Entitlements::none(),
+            &usage(now, &served),
+            now
+        ),
         Ok(vec![
             UserAction {
                 user: ids[1].clone(),
@@ -1012,7 +1078,13 @@ fn evaluate_suspends_and_warns_on_the_automatic_quota() {
     served[1].1 = 15_238_095_238;
     served[2].1 = 15_238_095_237;
     served[3].1 = PILOT_QUOTA_AT_SIX - 1;
-    let actions = evaluate(&deployment, &usage(now, &served), now).unwrap();
+    let actions = evaluate(
+        &deployment,
+        &Entitlements::none(),
+        &usage(now, &served),
+        now,
+    )
+    .unwrap();
     assert_eq!(
         actions,
         vec![
@@ -1048,14 +1120,25 @@ fn evaluate_suspends_and_warns_on_the_automatic_quota() {
     );
     let missing: Vec<(UserId, u64)> = served[..5].to_vec();
     assert_eq!(
-        evaluate(&deployment, &usage(now, &missing), now),
+        evaluate(
+            &deployment,
+            &Entitlements::none(),
+            &usage(now, &missing),
+            now
+        ),
         Err(PolicyError::UsageMissing {
             user: ids[5].clone()
         })
     );
     let off = twenty(6, None);
-    assert_eq!(evaluate(&off, &usage(now, &served), now), Ok(Vec::new()));
-    assert_eq!(evaluate(&off, &usage(now, &missing), now), Ok(Vec::new()));
+    assert_eq!(
+        evaluate(&off, &Entitlements::none(), &usage(now, &served), now),
+        Ok(Vec::new())
+    );
+    assert_eq!(
+        evaluate(&off, &Entitlements::none(), &usage(now, &missing), now),
+        Ok(Vec::new())
+    );
 }
 
 /// A share that rounds down to zero is an error, from the quota and from
@@ -1077,7 +1160,10 @@ fn a_zero_quota_is_an_error() {
     };
     let now = october();
     assert_eq!(automatic_quota(&tiny(15), now), Err(zero.clone()));
-    assert_eq!(evaluate(&tiny(15), &usage(now, &[]), now), Err(zero));
+    assert_eq!(
+        evaluate(&tiny(15), &Entitlements::none(), &usage(now, &[]), now),
+        Err(zero)
+    );
     // 16 bytes is the smallest budget that leaves six users a byte each.
     assert_eq!(automatic_quota(&tiny(16), now), Ok(pilot_quota(1)));
 }

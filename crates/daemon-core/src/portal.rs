@@ -13,8 +13,9 @@
 //! quota and its expiry. The figures come from the same functions the
 //! status line uses ([`crate::snapshot::assemble`]): the usage report's
 //! [`UserUsage::cycle_served_bytes`](crate::usage::UserUsage::cycle_served_bytes),
-//! [`UsageAccuracy::of`], [`effective_quota`] with the automatic quota of
-//! the snapshot's time, and the user's `UserPolicy::expires_at`.
+//! [`UsageAccuracy::of`], and [`effective_policy`] with the automatic
+//! quota of the snapshot's time and what the user's paid orders gave
+//! (design §9.6): the effective quota and expiry.
 //!
 //! # What it leaves out
 //!
@@ -41,8 +42,9 @@ use mooring_model::{
     UserId, UserStatus, named_users,
 };
 
+use crate::payments::Entitlements;
 use crate::period::BillingCycle;
-use crate::policy::{automatic_quota, effective_quota};
+use crate::policy::{automatic_quota, effective_policy};
 use crate::usage::{UsageAccuracy, UsageReport};
 
 use self::document::{CycleV1, FORMAT, QuotaV1, SnapshotV1, StatusV1, UserV1, VERSION};
@@ -111,14 +113,16 @@ impl PortalSnapshot {
 /// The users appear in id order.
 ///
 /// `report` is the deployment's usage report, `None` when Mooring has none
-/// (every figure is then `null`). The cycle is the report's, or else the
-/// one `generated_at` is in. `counted_through` is the report's
+/// (every figure is then `null`); `paid` is what the users' paid orders
+/// gave, from the payment ledger ([`Entitlements::none`] without one). The
+/// cycle is the report's, or else the one `generated_at` is in. `counted_through` is the report's
 /// `UsagePeriods::through`, the instant its figures are reported as of;
 /// each node's figures come from its latest accounting sample, which may
 /// be up to the report's freshness bound older.
 pub fn snapshot(
     deployment: &Deployment,
     report: Option<&UsageReport>,
+    paid: &Entitlements,
     users: &[UserId],
     generated_at: UnixTime,
     agreement: PortalAgreement,
@@ -126,6 +130,7 @@ pub fn snapshot(
     bounded(
         deployment,
         report,
+        paid,
         users,
         generated_at,
         agreement,
@@ -138,6 +143,7 @@ pub fn snapshot(
 fn bounded(
     deployment: &Deployment,
     report: Option<&UsageReport>,
+    paid: &Entitlements,
     users: &[UserId],
     generated_at: UnixTime,
     agreement: PortalAgreement,
@@ -184,7 +190,8 @@ fn bounded(
                 generated_at,
             });
         }
-        if let Some(at) = user.policy.expires_at
+        let policy = effective_policy(user, automatic, paid, cycle, generated_at);
+        if let Some(at) = policy.expires_at
             && CalendarDate::utc_of(at).is_err()
         {
             return Err(PortalError::ExpiryOutOfRange {
@@ -206,8 +213,8 @@ fn bounded(
             cycle_served_bytes,
             reality_downlink_counted_at_close: UsageAccuracy::of(user)
                 .reality_downlink_counted_at_close,
-            quota: effective_quota(user, automatic).map(QuotaV1::of),
-            expires_at: user.policy.expires_at,
+            quota: policy.quota.map(QuotaV1::of),
+            expires_at: policy.expires_at,
         });
     }
     let count = records.len();
@@ -265,7 +272,7 @@ mod tests {
     use mooring_fixtures::{FIXTURE_NOW, two_nodes_three_users};
     use mooring_model::{AgreementVersion, PortalAgreement, UserId};
 
-    use super::{MAX_SNAPSHOT_BYTES, PortalError, bounded};
+    use super::{Entitlements, MAX_SNAPSHOT_BYTES, PortalError, bounded};
 
     /// The bound counts every byte written, the last newline included, and
     /// refuses only what is past it.
@@ -274,7 +281,17 @@ mod tests {
         let fixture = two_nodes_three_users().unwrap();
         let users: Vec<UserId> = fixture.deployment.users().keys().cloned().collect();
         let open = PortalAgreement::since(Some(AgreementVersion::CURRENT));
-        let make = |limit| bounded(&fixture.deployment, None, &users, FIXTURE_NOW, open, limit);
+        let make = |limit| {
+            bounded(
+                &fixture.deployment,
+                None,
+                &Entitlements::none(),
+                &users,
+                FIXTURE_NOW,
+                open,
+                limit,
+            )
+        };
         let len = make(MAX_SNAPSHOT_BYTES).unwrap().bytes().len();
         assert!(make(len).is_ok());
         assert!(

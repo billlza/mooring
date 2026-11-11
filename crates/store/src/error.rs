@@ -98,6 +98,13 @@ io_ops! {
     ListRadioDays => "list the radio history's day files",
     /// Removing a radio history day file.
     RemoveRadioDay => "remove a radio history day file",
+    /// Opening or reading the payment ledger, or inspecting its directory
+    /// to read it.
+    ReadPaymentLedger => "read the payment ledger",
+    /// Creating or inspecting the payments directory, to write the ledger.
+    CreatePaymentsDir => "create the payments directory",
+    /// Opening or reading the payment pull's settings.
+    ReadPaymentPull => "read the payment pull's settings",
 }
 
 /// What is wrong with a radio history day file. `Copy`: no fault holds a

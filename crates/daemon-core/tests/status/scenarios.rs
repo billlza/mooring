@@ -23,6 +23,7 @@ use mooring_daemon_core::forecast::{Crossing, DailySimBytes, SimForecast, SimThr
 use mooring_daemon_core::network::{
     Exemptions, InterfaceObservation, IpFamily, NetworkCheck, NetworkSnapshot, network_check,
 };
+use mooring_daemon_core::payments::Entitlements;
 use mooring_daemon_core::policy::{evaluate, user_alerts};
 use mooring_daemon_core::router::{
     Band, BandNumber, Battery, BatteryPercent, BatteryState, CarrierName, Celsius, ChargeSource,
@@ -115,6 +116,7 @@ fn assemble(inputs: Inputs) -> MacStatusV2 {
         verdicts: &inputs.verdicts,
         pending_apply: &inputs.pending_apply,
         alerts: inputs.alerts,
+        entitlements: &Entitlements::none(),
     })
     .unwrap()
 }
@@ -837,7 +839,13 @@ fn degraded() -> MacStatusV2 {
     };
     // The policy actions the next apply window would take, and the alerts.
     let report = aggregate(&deployment, &ledgers, through).unwrap();
-    let actions = evaluate(&deployment, &report.cycle_usage().unwrap(), now).unwrap();
+    let actions = evaluate(
+        &deployment,
+        &Entitlements::none(),
+        &report.cycle_usage().unwrap(),
+        now,
+    )
+    .unwrap();
     let sim_daily = daily(
         "2026-10-01",
         &[

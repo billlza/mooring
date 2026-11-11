@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# The user portal's two files
+# The user portal's two files, and the payments Mooring pulls
 
-The user portal is a separate web application. It shows each user who has an account there the state of their service, and hands them their CFM file by download or by subscription link. It never reads Mooring's state, usage files or keychain. Mooring writes two files for it, and the operator imports them on the portal's host:
+The user portal is a separate web application. It shows each user who has an account there the state of their service, and hands them their CFM file by download or by subscription link. It never reads Mooring's state, usage files or keychain. Mooring writes two files for it, and the operator imports them on the portal's host; and Mooring's daemon pulls from it what users paid for (§5):
 
 | File | Command | Holds credentials | Portal import |
 |---|---|---|---|
@@ -141,3 +141,85 @@ Both commands write as `user export` does (`crates/mooringctl/src/export_file.rs
 - a warning when its folder is in iCloud Drive, a cloud folder, the Desktop or Documents, or is backed up by Time Machine.
 
 The bundle holds every delivered user's credentials. Carry it to the portal's host as an export file is carried (`delivery.md`, section 0), import it, and delete it on both machines. The snapshot holds no credentials, but it ties user ids to their status and usage, so it is handled the same way.
+
+## 5. The entitlements Mooring pulls
+
+Since 2026-11-11 the portal sells Mooring's service through Stripe (design §9.6). It never connects to Mooring: Mooring's daemon asks it, on a schedule, for the orders to grant. This section is Mooring's statement of that interface, `mooring-portal-entitlements` version 1, complete without the portal's repository. The portal defines it, in its `docs/contract/entitlements-v1.md`, which this section follows at the portal's commit `8b7c170` (branch `feature/payments`). Changing a key, a value or a rule is a new version there, and then here.
+
+### 5.1 Request
+
+```
+GET <origin>/api/mooring/entitlements?after=<cursor>
+Authorization: Bearer <token>
+```
+
+- `<origin>` is the portal's `https://` address (`mooringctl portal connect --origin`).
+- `after` is the number of the last entry Mooring acted on, 0 at first.
+- The token is the 64 lower-case hexadecimal characters `mooring-portal pull-token` prints once on the portal's host; the portal keeps only its digest. Mooring keeps it in the keychain (`portal/pull-token`) and sends it in the header only, never in the address.
+- The portal limits each source to 600 requests an hour; Mooring asks every five minutes, at once while a page says `more`.
+
+| Status | Meaning | What Mooring does |
+|---|---|---|
+| 200 | the document (§5.2) | applies it, keeps `next` |
+| 400 | the request is malformed | stops until the pull's settings change |
+| 401 | no token, a wrong one, or none set at the portal | stops until the pull's settings change |
+| 404 | the portal sells nothing (no catalogue) | asks again later |
+| 409 | the cursor is past the last entry the portal ever wrote: not the journal pulled before | stops until the pull's settings change; never lowers the cursor |
+| 429 | too many requests; `Retry-After` in seconds | waits that long, at most a day |
+| 5xx | the portal failed | asks again later, the cursor unchanged |
+
+Failures carry a line or two of plain text. Every answer carries `Cache-Control: no-store`.
+
+### 5.2 Document
+
+One UTF-8 JSON object, at most 200 entries (about 100 KB; Mooring reads at most 1 MiB). Every key is always present, `null` where it does not apply; Mooring refuses a document with a key missing, added, repeated or of another type.
+
+| Key | Value |
+|---|---|
+| `format` | `"mooring-portal-entitlements"` |
+| `version` | `1` |
+| `generated_at` | Unix seconds |
+| `livemode` | `false` for Stripe's test mode, `true` for real payments: the mode of the portal's database, so one value for every entry |
+| `after` | the cursor asked with |
+| `entries` | the entries numbered above `after`, in order |
+| `next` | the last entry's number, or `after` when there is none: the next cursor |
+| `more` | whether the journal holds entries after `next` |
+
+Each entry:
+
+| Key | Value |
+|---|---|
+| `seq` | its number: only grows, never reused; numbers may be missing (an account deleted after Mooring had its entries) |
+| `kind` | `"grant"`, `"refund"` or `"dispute"` |
+| `order` | the order: 20 characters of Crockford's lower-case base 32; the `client_reference_id` of its Stripe checkout |
+| `user` | the Mooring `UserId` the order's account was bound to when it was placed and when it was granted |
+| `plan` | the catalogue's id: 1 to 32 of `a-z`, `0-9` and `-`, not at either end |
+| `plan_kind` | `"month"`, `"month_auto"` or `"traffic"` |
+| `days` | 1 or more: days of service, or the days a pack is meant to last |
+| `traffic_bytes` | 1 or more decimal bytes: the quota of each billing cycle of the service, or the pack's traffic |
+| `amount`, `currency` | the plan's price in the currency's hundredths, and three lower-case letters |
+| `paid_at` | Unix seconds: when Stripe told of the payment |
+| `renewal_of` | for a `month_auto` renewal, the order that began the subscription; otherwise `null` |
+| `amount_refunded` | a refund's cumulative amount; otherwise `null` |
+| `refunded_in_full` | a refund's flag, Stripe's word on whether that is all of the payment; otherwise `null` |
+| `amount_disputed` | a dispute's amount; otherwise `null` |
+| `recorded_at` | Unix seconds: when the portal wrote the entry |
+
+Every instant lies between 1970-01-01 and 9999-12-31. Every entry carries its order whole and the portal never changes an order. There is one grant per order; a refund or dispute only follows its order's grant; a refund is added when the cumulative amount grows, or when Stripe first calls it full; a dispute is one per order.
+
+Mooring checks besides: `after` is the cursor it asked with, every number is above `after` and the one before it, `next` is as above, `more` comes only with an entry, each kind has exactly its own amounts, `renewal_of` names another order and only on a `month_auto` plan. Any failure refuses the whole document and keeps the cursor.
+
+### 5.3 What Mooring does with an entry
+
+Design §9.6 has the rules; in short:
+
+- **grant** of a `month` or `month_auto`: a service period from the later of now and the user's paid expiry, for `days` days; while it lasts, the user's quota per billing cycle is `traffic_bytes`. Of a `traffic` plan: `traffic_bytes` added to the user's quota of the billing cycle it is granted in (an interim rule; design §9.6). A grant for a user id Mooring does not hold, or a user being revoked or revoked, is held and reported.
+- **refund**: recorded and reported; it changes nothing until the operator decides what a refund in full takes back.
+- **dispute**: recorded and reported; it changes nothing, and never suspends the user (the operator's decision, 2026-11-11).
+- **Once per order**: a grant again is skipped, a refund again (same order, cumulative amount and flag) and a dispute again (same order and amount) too; an entry that contradicts a recorded order stops the pull.
+- **Test mode**: a document with `livemode: false` grants nothing unless the operator rehearses (`mooringctl portal rehearsal on`); a rehearsal's grants count only while it lasts.
+- The cursor and everything a page did are written in one durable write of `payments/ledger.json`.
+
+### 5.4 Goldens
+
+`contract/portal-fixtures/entitlements-v1/pilot.json` (six entries of the three kinds, in test mode, with more to come) and `empty.json` (the answer after entry 6 when nothing newer exists, in live mode) are byte-for-byte copies of the portal's `contract/fixtures/entitlements-v1/` at `8b7c170`, synthetic data only. The portal sends the same documents without their whitespace. `crates/daemon-core/src/tests/payments/feed.rs` decodes both, every field compared, and `ledger.rs` grants `pilot.json` in a rehearsal.

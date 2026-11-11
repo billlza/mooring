@@ -90,6 +90,15 @@
 //! §15.7). The daemon writes, the CLI reads: both through this crate, which
 //! alone knows the directory, the names and the framing.
 //!
+//! # The payment pull
+//!
+//! [`write_payment_ledger`] replaces `payments/ledger.json`, the daemon's
+//! record of what the portal listed for payment and what Mooring did about
+//! it, and [`read_payment_ledger`] reads it back with a bound;
+//! [`update_payment_pull`] changes `payment-pull.json`, the pull's
+//! settings, under the exclusive lock, and [`read_payment_pull`] reads them
+//! without it. `daemon-core` encodes and decodes both (design §9.6).
+//!
 //! # Secrets
 //!
 //! The state holds no secrets. They live in a [`SecretStore`]; the
@@ -110,6 +119,7 @@ mod error;
 mod latch;
 mod migrate;
 mod ordered;
+mod payments;
 mod radio_history;
 mod router_pin;
 mod secrets;
@@ -131,6 +141,10 @@ pub use error::{
 pub use latch::{LATCH_FILE, clear_latch, read_latch, write_latch};
 pub use migrate::migrate;
 pub use ordered::{record_with_secrets, update_config_with_secrets};
+pub use payments::{
+    PAYMENT_LEDGER_FILE, PAYMENT_PULL_FILE, PAYMENTS_DIRECTORY, read_payment_ledger,
+    read_payment_pull, update_payment_pull, write_payment_ledger,
+};
 pub use radio_history::{
     MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
     prune_radio_days, radio_day_path, read_radio_day,
