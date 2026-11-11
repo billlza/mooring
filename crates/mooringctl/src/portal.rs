@@ -17,6 +17,7 @@ use crate::app::{Env, support_dir};
 use crate::collected_usage::{UsageFault, read_collected};
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
+use crate::payments::command::entitlements;
 use crate::state::{load, output};
 
 /// `portal export --user <uid>... --out <path>`: writes the snapshot of
@@ -24,7 +25,11 @@ use crate::state::{load, output};
 ///
 /// Refused first while the agreement this build ships does not cover the
 /// portal; then when the daemon's collected usage cannot be read or is
-/// inconsistent (`PortalUsage`); then for anything `mooring-daemon-core`
+/// inconsistent (`PortalUsage`); then when the payment ledger or the
+/// pull's settings cannot be read (`PaymentFiles`): each user's quota and
+/// expiry include what their paid orders gave (design §9.6), and a ledger
+/// that cannot be read is never read as no payment; then for anything
+/// `mooring-daemon-core`
 /// refuses (an unknown user, one without an acceptance of the required
 /// revision, a user named twice, a record dated after now). Only then are
 /// the file and its folder checked, as for `user export`.
@@ -54,8 +59,16 @@ pub(crate) fn export(
         Usage::Report(report) => Some(report),
         Usage::Behind(_) => None,
     };
-    let made = snapshot(&state.deployment, report, users, now, env.portal_agreement)
-        .map_err(|error| LocalError::PortalSnapshotRefused(Box::new(error)))?;
+    let paid = entitlements(&support).map_err(|error| LocalError::PaymentFiles(Box::new(error)))?;
+    let made = snapshot(
+        &state.deployment,
+        report,
+        &paid,
+        users,
+        now,
+        env.portal_agreement,
+    )
+    .map_err(|error| LocalError::PortalSnapshotRefused(Box::new(error)))?;
     export_file::prepare(env, err, path)?;
     if let Usage::Behind(reason) = &usage {
         err.write_all(

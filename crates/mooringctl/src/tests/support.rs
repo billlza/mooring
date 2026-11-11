@@ -41,6 +41,8 @@ use crate::cli::Cli;
 use crate::error::LocalError;
 use crate::node::ssh::{Remote, SshTarget};
 use crate::node::{AgentLink, NodeError, NodeLinks, NodeSession};
+use crate::payments::PortalLink;
+use crate::payments::curl::{FetchFailure, PortalAnswer, PullRequest};
 use crate::prompt::{Answer, Console, Line};
 use crate::router::RouterEnv;
 use crate::router::http::Timeouts;
@@ -983,6 +985,61 @@ pub(crate) struct Harness {
     /// The portal's gate on the agreement: the binary's, closed, unless a
     /// test opens it.
     pub(crate) portal_agreement: PortalAgreement,
+    /// The portal the payment pull reaches: its answers in order, and the
+    /// requests made.
+    pub(crate) portal: FakePortal,
+}
+
+/// One request the payment pull made, as the portal saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PortalRequest {
+    /// The address.
+    pub(crate) url: String,
+    /// The bearer token.
+    pub(crate) token: String,
+    /// The request's limit.
+    pub(crate) within: Duration,
+}
+
+/// A scripted portal: each request takes the next answer; with none left,
+/// the request fails as a refused connection would.
+#[derive(Debug, Default)]
+pub(crate) struct FakePortal {
+    pub(crate) answers: RefCell<VecDeque<Result<PortalAnswer, FetchFailure>>>,
+    pub(crate) requests: RefCell<Vec<PortalRequest>>,
+}
+
+impl FakePortal {
+    /// Queues `answer` for the next request.
+    pub(crate) fn answer(&self, answer: Result<PortalAnswer, FetchFailure>) {
+        self.answers.borrow_mut().push_back(answer);
+    }
+
+    /// Queues a 200 with `body`.
+    pub(crate) fn ok(&self, body: &[u8]) {
+        self.answer(Ok(PortalAnswer {
+            status: 200,
+            retry_after: None,
+            body: body.to_vec(),
+        }));
+    }
+}
+
+impl PortalLink for FakePortal {
+    fn fetch(&self, request: &PullRequest<'_>) -> Result<PortalAnswer, FetchFailure> {
+        self.requests.borrow_mut().push(PortalRequest {
+            url: request.url.clone(),
+            token: request.token.expose_str().to_owned(),
+            within: request.within,
+        });
+        self.answers
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or(Err(FetchFailure::Curl {
+                code: Some(7),
+                message: "nothing scripted".to_owned(),
+            }))
+    }
 }
 
 impl Harness {
@@ -1012,6 +1069,7 @@ impl Harness {
             probed: RefCell::new(Vec::new()),
             redirected: Cell::new(0),
             portal_agreement: PortalAgreement::SHIPPED,
+            portal: FakePortal::default(),
         }
     }
 
@@ -1145,6 +1203,7 @@ impl Harness {
             probe: &probe,
             redirect_stderr: &redirect,
             portal_agreement: self.portal_agreement,
+            portal: &self.portal,
         };
         work(&mut env)
     }

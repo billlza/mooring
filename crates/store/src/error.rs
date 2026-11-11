@@ -98,6 +98,13 @@ io_ops! {
     ListRadioDays => "list the radio history's day files",
     /// Removing a radio history day file.
     RemoveRadioDay => "remove a radio history day file",
+    /// Opening or reading the payment ledger, or inspecting its directory
+    /// to read it.
+    ReadPaymentLedger => "read the payment ledger",
+    /// Creating or inspecting the payments directory, to write the ledger.
+    CreatePaymentsDir => "create the payments directory",
+    /// Opening or reading the payment pull's settings.
+    ReadPaymentPull => "read the payment pull's settings",
     /// Opening or reading the Mac's copy of the nodes' abuse records, or
     /// inspecting the abuse directory to read it.
     ReadAbuseRecords => "read the abuse records",

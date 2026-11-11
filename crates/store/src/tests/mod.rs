@@ -26,6 +26,7 @@ mod durability;
 mod latch;
 mod migration;
 mod ordering;
+mod payments;
 mod properties;
 mod radio_history;
 mod regular_files;

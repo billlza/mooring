@@ -40,7 +40,7 @@ use mooring_daemon_core::status::{
 use mooring_model::iface::{BsdName, ResolvedUplink};
 use mooring_model::own_network::OwnNetworks;
 use mooring_model::time::UnixTime;
-use mooring_model::{Deployment, NodeId};
+use mooring_model::{Deployment, ExitSite, NodeId};
 use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
 use super::{
@@ -48,10 +48,13 @@ use super::{
     radio::RadioHistoryWriter, router_after_poll, say, unavailable_reason, wait_for_next_poll,
 };
 use crate::app::Env;
+use crate::daemon::usage::Pulled;
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::node::session::ops_session;
+use crate::payments::pull::{Gate, Puller};
 use crate::router::error::{RouterError, UnreachableCause};
+use crate::router::link::LinkLayer;
 use crate::runtime::meter::{MeterThread, Watched};
 use crate::runtime::network;
 use crate::runtime::ports::{
@@ -91,6 +94,41 @@ pub(crate) const ROUTER_SLOT: Duration = Duration::from_secs(20);
 /// `out/` (or at least its `darwin-arm64/`), whose engine is checked
 /// against its pin at every start.
 pub(crate) const ENGINES_DIRECTORY: &str = "engines";
+
+/// Whether the Mac is on no foreign network at this moment (F15): the
+/// egress resolves, and a fresh snapshot of the interfaces, the default
+/// routes, configd's services and the own-network declarations, checked as
+/// the tick checks it, finds none. The payment pull, which goes the Mac's
+/// own way, asks it right before its request. Every read that fails is a
+/// no; the tick's own check logs those failures.
+pub(crate) fn network_clear_now(link: &dyn LinkLayer, support: &Path, exit: &ExitSite) -> bool {
+    let Ok(Ok(egress)) = exit_interfaces(link, exit) else {
+        return false;
+    };
+    let (Ok(routes), Ok(interfaces), Ok(services), Ok(own)) = (
+        link.default_routes(),
+        link.interfaces(),
+        link.ipv4_services(),
+        read_allowed_networks(support),
+    ) else {
+        return false;
+    };
+    let Ok(snapshot) = network::snapshot(&interfaces, &routes, Some(&services)) else {
+        return false;
+    };
+    let uplink = match egress.interfaces.uplink() {
+        ResolvedUplink::Separate(uplink) => Some(&uplink.bsd_name),
+        ResolvedUplink::SameAsExit => None,
+    };
+    network::check(
+        &snapshot,
+        &egress.interfaces.egress().bsd_name,
+        uplink,
+        &own,
+    )
+    .foreign
+    .is_empty()
+}
 
 /// Why the loop stopped without a failure of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +179,8 @@ pub(crate) struct Deployed<'e, 'a> {
     declared: Option<OwnNetworks>,
     usage: super::usage::Collector,
     usage_failure: Option<String>,
+    /// The payment pull (design §9.6).
+    payments: Puller,
     nodes_polled: Option<Instant>,
     polls: BTreeMap<NodeId, NodePoll>,
     unreachable: BTreeMap<NodeId, NodeAgentState>,
@@ -225,6 +265,10 @@ impl<'e, 'a> Deployed<'e, 'a> {
             .load()
             .map_err(|error| LocalError::StateRead(Box::new(error)))?;
         let egress = exit_interfaces(env.router.link, state.deployment.exit())?;
+        let payments = Puller::open(support_dir);
+        if let Some(fault) = payments.fault() {
+            say(log, now, &fault)?;
+        }
         let mut router_failure = None;
         let router = poll_m7(
             env,
@@ -268,6 +312,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             declared: None,
             usage: super::usage::Collector::open(support_dir, intervals.usage_pull),
             usage_failure: None,
+            payments,
             nodes_polled: None,
             polls: BTreeMap::new(),
             unreachable: BTreeMap::new(),
@@ -305,6 +350,9 @@ impl<'e, 'a> Deployed<'e, 'a> {
             Ok(egress) => self.network(log, now, egress)?,
             Err(_) => (NetworkCheck::default(), BTreeSet::new()),
         };
+        // The payment pull goes the Mac's own way, so only while the check
+        // ran and found no foreign network (F15, design §9.6).
+        let network_clear = egress.is_ok() && network.foreign.is_empty();
         let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), now)
             .map_err(LocalError::Cycle)?;
         let counted = self.meter.meter()?;
@@ -366,23 +414,52 @@ impl<'e, 'a> Deployed<'e, 'a> {
             || self.published_power != Some(section.power);
         self.usage
             .maintain(deployment, now, self.intervals.usage_pull);
-        if self.allow_sleep.is_none()
-            && !matches!(&section.state, ExitState::Paused)
+        let awake = self.allow_sleep.is_none() && !matches!(&section.state, ExitState::Paused);
+        let mut asked_a_node = false;
+        if awake
             && let Ok(egress) = egress_name.as_ref()
             && let Some(room) = super::usage::pull_budget(
                 self.machine.next_probe_in(self.begun.elapsed(), deployment),
             )
-            && let Some((node, poll)) = self.usage.tick(
+        {
+            match self.usage.tick(
                 self.env,
                 deployment,
                 egress,
                 now,
                 room,
                 self.intervals.usage_pull,
-            )
-        {
-            self.unreachable.remove(&node);
-            self.polls.insert(node, poll);
+            ) {
+                Pulled::Nothing => {}
+                Pulled::Asked(polled) => {
+                    asked_a_node = true;
+                    if let Some(polled) = polled {
+                        let (node, poll) = *polled;
+                        self.unreachable.remove(&node);
+                        self.polls.insert(node, poll);
+                    }
+                }
+            }
+        }
+        // One request per tick: the payment pull waits for a tick on which
+        // the usage collection asked no node. It goes the Mac's own way, so
+        // it asks only while the network is clear, checked again right
+        // before its request (F15, design §9.6): this tick's check is
+        // seconds old by then.
+        if awake && !asked_a_node {
+            let link = env.router.link;
+            let support = self.support_dir.clone();
+            let exit = deployment.exit();
+            let mut clear_now = || network_clear && network_clear_now(link, &support, exit);
+            let gate = Gate {
+                room: super::usage::pull_budget(
+                    self.machine.next_probe_in(self.begun.elapsed(), deployment),
+                ),
+                network_clear: &mut clear_now,
+            };
+            for note in self.payments.tick(env, deployment.users(), now, gate) {
+                say(log, now, &note)?;
+            }
         }
         note_failure(
             log,
@@ -430,6 +507,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 verdicts: &self.machine.verdicts(),
                 pending_apply: &BTreeMap::new(),
                 alerts: Vec::new(),
+                entitlements: &self.payments.entitlements(),
             })
             .map_err(|error| LocalError::Snapshot(Box::new(error)))?;
             publish(

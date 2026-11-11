@@ -83,6 +83,8 @@ kinds! {
         Ed25519Seed,
         /// The M7's admin password.
         RouterAdminPassword,
+        /// The token Mooring bears when it pulls the portal's payments.
+        PortalPullToken,
     }
 }
 
@@ -241,6 +243,40 @@ impl RouterAdminPassword {
     }
 }
 
+/// The length of the portal's pull token, in hexadecimal characters.
+pub const PORTAL_PULL_TOKEN_CHARS: usize = 64;
+
+/// The token Mooring bears when it pulls the entitlements the portal lists
+/// (design §9.6): exactly [`PORTAL_PULL_TOKEN_CHARS`] lower-case
+/// hexadecimal characters, its own canonical text, as `mooring-portal
+/// pull-token` prints it once on the portal's host. The portal keeps only
+/// its digest; whoever holds it reads every user's payments there.
+///
+/// A refusal never echoes the text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortalPullToken(Secret<String>);
+
+impl PortalPullToken {
+    /// Accepts exactly 64 characters of `0-9` and `a-f`.
+    pub fn parse(text: &str) -> Result<Self, ModelError> {
+        let valid = text.len() == PORTAL_PULL_TOKEN_CHARS
+            && text
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        if valid {
+            Ok(Self(Secret::new(text.to_owned())))
+        } else {
+            Err(invalid(SecretKind::PortalPullToken))
+        }
+    }
+
+    /// Borrows the token, for the pull's `Authorization` header only.
+    #[must_use]
+    pub fn expose_str(&self) -> &str {
+        self.0.expose_secret()
+    }
+}
+
 /// One piece of secret material of any kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretMaterial {
@@ -258,6 +294,8 @@ pub enum SecretMaterial {
     Ed25519Seed(Ed25519Seed),
     /// See [`RouterAdminPassword`].
     RouterAdminPassword(RouterAdminPassword),
+    /// See [`PortalPullToken`].
+    PortalPullToken(PortalPullToken),
 }
 
 impl SecretMaterial {
@@ -272,6 +310,7 @@ impl SecretMaterial {
             Self::Uuid(_) => SecretKind::Uuid,
             Self::Ed25519Seed(_) => SecretKind::Ed25519Seed,
             Self::RouterAdminPassword(_) => SecretKind::RouterAdminPassword,
+            Self::PortalPullToken(_) => SecretKind::PortalPullToken,
         }
     }
 
@@ -291,6 +330,7 @@ impl SecretMaterial {
             SecretKind::RouterAdminPassword => {
                 Self::RouterAdminPassword(RouterAdminPassword::parse(text)?)
             }
+            SecretKind::PortalPullToken => Self::PortalPullToken(PortalPullToken::parse(text)?),
         })
     }
 
@@ -305,6 +345,7 @@ impl SecretMaterial {
             Self::Uuid(uuid) => uuid.expose_secret().to_hyphenated(),
             Self::Ed25519Seed(seed) => seed.expose_text(),
             Self::RouterAdminPassword(password) => Zeroizing::new(password.expose_str().to_owned()),
+            Self::PortalPullToken(token) => Zeroizing::new(token.expose_str().to_owned()),
         }
     }
 
@@ -319,14 +360,15 @@ impl SecretMaterial {
             | Self::Password(_)
             | Self::Uuid(_)
             | Self::Ed25519Seed(_)
-            | Self::RouterAdminPassword(_) => vec![self.encode()],
+            | Self::RouterAdminPassword(_)
+            | Self::PortalPullToken(_) => vec![self.encode()],
         }
     }
 }
 
-/// Names one keychain item (design §7). Every reference but two belongs
-/// to a node ([`SecretRef::node`]); the deployment's ntfy topic and the
-/// M7's admin password belong to no node.
+/// Names one keychain item (design §7). Every reference but three belongs
+/// to a node ([`SecretRef::node`]); the deployment's ntfy topic, the M7's
+/// admin password and the portal's pull token belong to no node.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SecretRef {
     /// The deployment's one ntfy topic (design §15.8, decision F6): the
@@ -346,6 +388,11 @@ pub enum SecretRef {
     /// never write or delete it, and an unreferenced item under this
     /// account is not an orphan.
     RouterAdmin,
+    /// The token the daemon bears when it pulls the portal's payments
+    /// (design §9.6), account `portal/pull-token`. Like the M7's password,
+    /// no deployment references it: `mooringctl portal connect` stores it,
+    /// `portal disconnect` deletes it, and the daemon's pull reads it.
+    PortalPullToken,
     /// The node's REALITY private key.
     NodeRealityPrivate(NodeId),
     /// The VPS side of the node's WireGuard tunnel.
@@ -394,6 +441,7 @@ impl SecretRef {
             | Self::ProbeHy2Password(_) => SecretKind::Password,
             Self::NodeSshBootstrapPrivate(_) => SecretKind::Ed25519Seed,
             Self::RouterAdmin => SecretKind::RouterAdminPassword,
+            Self::PortalPullToken => SecretKind::PortalPullToken,
             Self::NodeDeadManCheck(_)
             | Self::NodeMacAliveCheck(_)
             | Self::UserVlessUuid(..)
@@ -403,13 +451,15 @@ impl SecretRef {
         }
     }
 
-    /// The node this secret belongs to, or `None` for the two that belong
-    /// to no node: the deployment's ntfy topic ([`SecretRef::AlertTopic`])
-    /// and the M7's admin password ([`SecretRef::RouterAdmin`]).
+    /// The node this secret belongs to, or `None` for the three that
+    /// belong to no node: the deployment's ntfy topic
+    /// ([`SecretRef::AlertTopic`]), the M7's admin password
+    /// ([`SecretRef::RouterAdmin`]) and the portal's pull token
+    /// ([`SecretRef::PortalPullToken`]).
     #[must_use]
     pub const fn node(&self) -> Option<&NodeId> {
         match self {
-            Self::AlertTopic | Self::RouterAdmin => None,
+            Self::AlertTopic | Self::RouterAdmin | Self::PortalPullToken => None,
             Self::NodeRealityPrivate(node)
             | Self::NodeWgVpsPrivate(node)
             | Self::NodeWgMacPrivate(node)
@@ -430,7 +480,8 @@ impl SecretRef {
 
 /// The stable text form, used as the keychain account name:
 /// `alert/topic` for the deployment's ntfy topic, `router/admin` for the
-/// M7's admin password, `node/<node>/<item>`
+/// M7's admin password, `portal/pull-token` for the portal's pull token,
+/// `node/<node>/<item>`
 /// (a channel node's checks included: `node/<node>/dead-man-check`,
 /// `node/<node>/mac-alive-check`), `node/<node>/hy2-obfs/<listener>`,
 /// `user/<user>/<node>/<item>` or `probe/<node>/<item>`.
@@ -439,6 +490,7 @@ impl fmt::Display for SecretRef {
         match self {
             Self::AlertTopic => f.write_str("alert/topic"),
             Self::RouterAdmin => f.write_str("router/admin"),
+            Self::PortalPullToken => f.write_str("portal/pull-token"),
             Self::NodeRealityPrivate(node) => write!(f, "node/{node}/reality-private"),
             Self::NodeWgVpsPrivate(node) => write!(f, "node/{node}/wg-vps-private"),
             Self::NodeWgMacPrivate(node) => write!(f, "node/{node}/wg-mac-private"),
@@ -467,6 +519,7 @@ impl FromStr for SecretRef {
         match parts.as_slice() {
             ["alert", "topic"] => Ok(Self::AlertTopic),
             ["router", "admin"] => Ok(Self::RouterAdmin),
+            ["portal", "pull-token"] => Ok(Self::PortalPullToken),
             ["node", n, "reality-private"] => Ok(Self::NodeRealityPrivate(node(n)?)),
             ["node", n, "wg-vps-private"] => Ok(Self::NodeWgVpsPrivate(node(n)?)),
             ["node", n, "wg-mac-private"] => Ok(Self::NodeWgMacPrivate(node(n)?)),
@@ -513,6 +566,8 @@ pub enum SecretEntry {
     AlertTopic(Password),
     /// See [`SecretRef::RouterAdmin`].
     RouterAdmin(RouterAdminPassword),
+    /// See [`SecretRef::PortalPullToken`].
+    PortalPullToken(PortalPullToken),
     /// See [`SecretRef::NodeRealityPrivate`].
     NodeRealityPrivate(NodeId, RealityPrivateKey),
     /// See [`SecretRef::NodeWgVpsPrivate`].
@@ -557,6 +612,7 @@ impl SecretEntry {
         Ok(match (secret_ref, material) {
             (R::AlertTopic, M::Password(topic)) => Self::AlertTopic(topic),
             (R::RouterAdmin, M::RouterAdminPassword(password)) => Self::RouterAdmin(password),
+            (R::PortalPullToken, M::PortalPullToken(token)) => Self::PortalPullToken(token),
             (R::NodeRealityPrivate(node), M::RealityPrivateKey(key)) => {
                 Self::NodeRealityPrivate(node, key)
             }
@@ -597,6 +653,7 @@ impl SecretEntry {
         match self {
             Self::AlertTopic(_) => SecretRef::AlertTopic,
             Self::RouterAdmin(_) => SecretRef::RouterAdmin,
+            Self::PortalPullToken(_) => SecretRef::PortalPullToken,
             Self::NodeRealityPrivate(node, _) => SecretRef::NodeRealityPrivate(node.clone()),
             Self::NodeWgVpsPrivate(node, _) => SecretRef::NodeWgVpsPrivate(node.clone()),
             Self::NodeWgMacPrivate(node, _) => SecretRef::NodeWgMacPrivate(node.clone()),
@@ -638,6 +695,7 @@ impl SecretEntry {
             | Self::ProbeHy2Password(_, password) => SecretMaterial::Password(password),
             Self::NodeSshBootstrapPrivate(_, seed) => SecretMaterial::Ed25519Seed(seed),
             Self::RouterAdmin(password) => SecretMaterial::RouterAdminPassword(password),
+            Self::PortalPullToken(token) => SecretMaterial::PortalPullToken(token),
             Self::NodeDeadManCheck(_, uuid)
             | Self::NodeMacAliveCheck(_, uuid)
             | Self::UserVlessUuid(_, _, uuid)
@@ -750,6 +808,7 @@ fn lookup<'a, K: Ord, V>(
 pub struct SecretSnapshot {
     alert_topic: Option<Password>,
     router_admin: Option<RouterAdminPassword>,
+    portal_pull_token: Option<PortalPullToken>,
     reality: BTreeMap<NodeId, RealityPrivateKey>,
     wg_vps: BTreeMap<NodeId, WgPrivateKey>,
     wg_mac: BTreeMap<NodeId, WgPrivateKey>,
@@ -780,6 +839,7 @@ impl SecretSnapshot {
         match entry {
             E::AlertTopic(topic) => insert_once(&mut self.alert_topic, topic, reference),
             E::RouterAdmin(password) => insert_once(&mut self.router_admin, password, reference),
+            E::PortalPullToken(token) => insert_once(&mut self.portal_pull_token, token, reference),
             E::NodeRealityPrivate(node, key) => insert_new(&mut self.reality, node, key, reference),
             E::NodeWgVpsPrivate(node, key) => insert_new(&mut self.wg_vps, node, key, reference),
             E::NodeWgMacPrivate(node, key) => insert_new(&mut self.wg_mac, node, key, reference),
@@ -880,6 +940,15 @@ impl SecretSnapshot {
             })
     }
 
+    /// The portal's pull token.
+    pub fn portal_pull_token(&self) -> Result<&PortalPullToken, SecretSnapshotError> {
+        self.portal_pull_token
+            .as_ref()
+            .ok_or(SecretSnapshotError::Missing {
+                secret_ref: SecretRef::PortalPullToken,
+            })
+    }
+
     /// The UUID of the node's own Healthchecks check.
     pub fn dead_man_check(&self, node: &NodeId) -> Result<&Secret<Uuid>, SecretSnapshotError> {
         lookup(&self.dead_man_check, node, || {
@@ -956,6 +1025,7 @@ impl SecretSnapshot {
         Ok(match secret_ref {
             R::AlertTopic => M::Password(self.alert_topic()?.clone()),
             R::RouterAdmin => M::RouterAdminPassword(self.router_admin()?.clone()),
+            R::PortalPullToken => M::PortalPullToken(self.portal_pull_token()?.clone()),
             R::NodeRealityPrivate(node) => {
                 M::RealityPrivateKey(self.reality_private(node)?.clone())
             }
@@ -983,6 +1053,11 @@ impl SecretSnapshot {
         let mut refs: Vec<SecretRef> = Vec::with_capacity(self.len());
         refs.extend(self.alert_topic.iter().map(|_| SecretRef::AlertTopic));
         refs.extend(self.router_admin.iter().map(|_| SecretRef::RouterAdmin));
+        refs.extend(
+            self.portal_pull_token
+                .iter()
+                .map(|_| SecretRef::PortalPullToken),
+        );
         refs.extend(
             self.reality
                 .keys()
@@ -1057,6 +1132,7 @@ impl SecretSnapshot {
     pub fn len(&self) -> usize {
         usize::from(self.alert_topic.is_some())
             + usize::from(self.router_admin.is_some())
+            + usize::from(self.portal_pull_token.is_some())
             + self.reality.len()
             + self.wg_vps.len()
             + self.wg_mac.len()
@@ -1098,6 +1174,11 @@ impl SecretSnapshot {
                 self.router_admin
                     .iter()
                     .map(|password| Zeroizing::new(password.expose_str().to_owned())),
+            )
+            .chain(
+                self.portal_pull_token
+                    .iter()
+                    .map(|token| Zeroizing::new(token.expose_str().to_owned())),
             )
             .chain(self.user_hy2.values().map(Password::expose_text))
             .chain(self.probe_hy2.values().map(Password::expose_text))
@@ -1164,6 +1245,7 @@ mod tests {
             SecretRef::NodeDeadManCheck(n.clone()),
             SecretRef::NodeMacAliveCheck(n),
             SecretRef::RouterAdmin,
+            SecretRef::PortalPullToken,
         ]
     }
 
@@ -1185,6 +1267,9 @@ mod tests {
             }
             SecretKind::RouterAdminPassword => SecretMaterial::RouterAdminPassword(
                 RouterAdminPassword::parse(&format!("router admin {byte}")).unwrap(),
+            ),
+            SecretKind::PortalPullToken => SecretMaterial::PortalPullToken(
+                PortalPullToken::parse(&format!("{byte:02x}").repeat(32)).unwrap(),
             ),
         }
     }
@@ -1210,6 +1295,57 @@ mod tests {
         );
         assert!(!shown.contains("hunter2"), "{shown}");
         assert!(shown.contains("<redacted>"));
+        let token = PortalPullToken::parse(&"ab".repeat(32)).unwrap();
+        let shown = format!(
+            "{token:?} {:?}",
+            SecretMaterial::PortalPullToken(token.clone())
+        );
+        assert!(!shown.contains("abab"), "{shown}");
+        assert!(shown.contains("<redacted>"));
+    }
+
+    /// The portal's pull token is exactly 64 lower-case hexadecimal
+    /// characters, as `mooring-portal pull-token` prints it; a refusal is
+    /// `InvalidSecret` naming the kind and never the text.
+    #[test]
+    fn portal_pull_tokens_are_64_lower_case_hex_characters() {
+        let digits = "0123456789abcdef".repeat(4);
+        for good in [digits.as_str(), &"0".repeat(64), &"f".repeat(64)] {
+            let token = PortalPullToken::parse(good).unwrap();
+            assert_eq!(token.expose_str(), good);
+            let material = SecretMaterial::decode(SecretKind::PortalPullToken, good).unwrap();
+            assert_eq!(material.encode().as_str(), good);
+            assert_eq!(material.needles(), vec![Zeroizing::new(good.to_owned())]);
+        }
+        assert_eq!(PORTAL_PULL_TOKEN_CHARS, 64);
+        let upper = digits.to_ascii_uppercase();
+        let short = &digits[..63];
+        let long = format!("{digits}0");
+        let spaced = format!(" {}", &digits[1..]);
+        let newline = format!("{short}\n");
+        let letter = format!("{short}g");
+        for bad in [
+            "",
+            short,
+            long.as_str(),
+            upper.as_str(),
+            spaced.as_str(),
+            newline.as_str(),
+            letter.as_str(),
+        ] {
+            let refused = PortalPullToken::parse(bad).unwrap_err();
+            assert_eq!(
+                refused,
+                ModelError::InvalidSecret {
+                    kind: SecretKind::PortalPullToken
+                },
+                "{bad:?}"
+            );
+            if !bad.is_empty() {
+                assert!(!refused.to_string().contains(bad), "{refused}");
+                assert!(!format!("{refused:?}").contains(bad));
+            }
+        }
     }
 
     /// The M7's admin password is 1 to 128 bytes of printable ASCII; a
@@ -1272,6 +1408,11 @@ mod tests {
                 SecretKind::RouterAdminPassword,
             ),
             (
+                SecretRef::PortalPullToken,
+                "portal/pull-token",
+                SecretKind::PortalPullToken,
+            ),
+            (
                 SecretRef::NodeDeadManCheck(node("lon1")),
                 "node/lon1/dead-man-check",
                 SecretKind::Uuid,
@@ -1316,6 +1457,14 @@ mod tests {
             "router/admin/lon1",
             "router/lon1/admin",
             "node/lon1/router-admin",
+            "portal",
+            "portal/",
+            "portal/pull-token/",
+            "portal/Pull-token",
+            "Portal/pull-token",
+            "portal/pull_token",
+            "portal/pull-token/lon1",
+            "node/lon1/pull-token",
         ] {
             assert_eq!(
                 bad.parse::<SecretRef>(),
@@ -1350,12 +1499,17 @@ mod tests {
             .collect()
     }
 
-    /// The ntfy topic and the M7's admin password are the deployment's,
-    /// not a node's: they are the only references without a node, and
-    /// every other names the node it belongs to in its text.
+    /// The ntfy topic, the M7's admin password and the portal's pull
+    /// token are the deployment's, not a node's: they are the only
+    /// references without a node, and every other names the node it
+    /// belongs to in its text.
     #[test]
     fn only_deployment_wide_references_belong_to_no_node() {
-        let deployment_wide = [SecretRef::AlertTopic, SecretRef::RouterAdmin];
+        let deployment_wide = [
+            SecretRef::AlertTopic,
+            SecretRef::RouterAdmin,
+            SecretRef::PortalPullToken,
+        ];
         for reference in every_ref() {
             match reference.node() {
                 None => assert!(deployment_wide.contains(&reference), "{reference}"),
@@ -1394,7 +1548,7 @@ mod tests {
     #[test]
     fn insert_and_typed_lookup() {
         let snapshot = full_snapshot();
-        assert_eq!(snapshot.len(), 16);
+        assert_eq!(snapshot.len(), 17);
         assert_eq!(snapshot.refs(), {
             let mut all = every_ref();
             all.sort();
@@ -1448,6 +1602,10 @@ mod tests {
             snapshot.router_admin().unwrap().expose_str(),
             "router admin 16"
         );
+        assert_eq!(
+            snapshot.portal_pull_token().unwrap().expose_str(),
+            "11".repeat(32)
+        );
         // Same id, different slot: the VLESS and loopback UUIDs are distinct.
         assert_ne!(
             snapshot.user_vless_uuid(&u, &n).unwrap(),
@@ -1471,6 +1629,10 @@ mod tests {
         for (err, reference) in [
             (snapshot.alert_topic().unwrap_err(), SecretRef::AlertTopic),
             (snapshot.router_admin().unwrap_err(), SecretRef::RouterAdmin),
+            (
+                snapshot.portal_pull_token().unwrap_err(),
+                SecretRef::PortalPullToken,
+            ),
             (
                 snapshot.dead_man_check(&n).unwrap_err(),
                 SecretRef::NodeDeadManCheck(n.clone()),

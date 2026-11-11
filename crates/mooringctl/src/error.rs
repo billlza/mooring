@@ -290,6 +290,17 @@ pub(crate) enum LocalError {
     /// The two passwords typed differ.
     #[error("the two passwords differ")]
     PasswordsDiffer,
+    /// The pull token is not the portal's token.
+    #[error(
+        "the pull token is not the 64 lower-case hexadecimal characters `mooring-portal pull-token` printed"
+    )]
+    PullToken(#[source] ModelError),
+    /// The payment pull's files could not be read or written.
+    #[error("the payment pull's files failed")]
+    PaymentFiles(#[source] Box<crate::payments::PaymentFileError>),
+    /// `portal rehearsal` before `portal connect`.
+    #[error("the payment pull is not connected: `mooringctl portal connect` first")]
+    PaymentPullNotConnected,
     /// Reading the password from stdin failed.
     #[error("reading the password from stdin failed")]
     Stdin(#[source] io::Error),

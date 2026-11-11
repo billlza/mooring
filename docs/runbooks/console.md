@@ -185,7 +185,34 @@ mooringctl exit disallow-network --name "my phone"
 
 With the network declared the exit stays `Serving` while the Mac is joined to it, even when it holds the default route (every exit connection is bound to the M7, design §10.4), and the console's Exit screen lists it under **Allowed networks**. The declaration is Mac-local (`allowed-networks.json` beside `state.json`); if it cannot be read the daemon treats it as none, the network becomes foreign again and the exit shows `Degraded` with `own networks unreadable` while it serves: `exit allowed-networks` names the fault. The store never writes a file it would refuse to read, so that fault is a hand edit (or a file past its 16 KiB bound): mend or remove `~/Library/Application Support/Mooring/allowed-networks.json` by hand and declare the networks again.
 
-## Abuse cases (2026-11-11)
+## 6. Payments from the portal (2026-11-11)
+
+Once the portal sells plans through Stripe, the daemon asks it every five minutes for the orders to grant and records what it grants in `payments/ledger.json` (design §9.6, `docs/portal-contract.md` §5). Nothing in `state.json` changes: a user's expiry and quota as the console and the portal snapshot show them include what they paid for.
+
+On the portal's host, make the token; it is printed once:
+
+```
+mooring-portal --db <file> pull-token
+```
+
+On this Mac, point the pull at the portal and paste the token at the prompt (it is not echoed), or pipe it in with `--stdin`:
+
+```
+mooringctl portal connect --origin https://<the portal's name>
+mooringctl portal payments
+```
+
+`portal payments` prints the pull's settings, the cursor, the last pull and any stop, and every order with what Mooring did: a service period, a traffic pack for that billing cycle, or why a grant was held. Refunds and disputes are listed and change nothing. A dispute never suspends the user, as you decided on 2026-11-11; answer it at Stripe. What a refund in full should take back is still yours to decide (design §9.6).
+
+- **Rehearse first.** In Stripe's test mode the portal's journal says so, and Mooring grants nothing from it unless you rehearse: `mooringctl portal rehearsal on`, pay with Stripe's test cards, check `portal payments` and the console, then `mooringctl portal rehearsal off`, which takes the rehearsal's grants out at once, and `mooring-portal discard-test-payments` on the portal's host before real payments are taken. The cursor carries on.
+- **It pulls only while the Mac is on no foreign network** (the pull goes the Mac's own way, so never over campus Wi-Fi or eduroam). The daemon's log says when it waits.
+- **A stop** (the portal answered 409, 401 or 400, or a page contradicted the ledger) holds until you change the pull's settings: `portal connect` again (with a new token after a 401), or `portal rehearsal`. The log line names the reason. After a 409 the portal's journal is not the one pulled before (a database restored from a backup, say): find out which journal is right before connecting again; Mooring never lowers its cursor.
+- **A held grant** (`unknown_user`, `user_revoked`) names a payment Mooring did not grant: refund it at Stripe.
+- `mooringctl portal disconnect` stops the pull and deletes the token; the ledger stays, and what it granted still counts.
+
+The daemon's log has a line for each grant, hold, refund, dispute, failure and stop, by order id and user id.
+
+## 7. Abuse cases (2026-11-11)
 
 The abuse guard (design §11.8) runs on each node by itself. A user whose connections look like a scan, a flood, password guessing or bulk mail is cut on that node at once: every flow of theirs is refused, and nobody else is touched. The console's node row then shows `Users cut off for abuse: 1`, and `Users with abuse findings below the cut level` for a user only alerted on. No content is read and no destination is kept: the records hold an opaque user id and counts.
 

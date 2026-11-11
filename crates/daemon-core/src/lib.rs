@@ -31,6 +31,9 @@
 //! - [`report`]: the remote viewer's report projected from it.
 //! - [`portal`]: the user portal's snapshot of the users the operator
 //!   names, from the deployment and the usage report.
+//! - [`payments`]: the entitlements the portal lists for Mooring to pull,
+//!   the payment ledger the daemon keeps of them, and the service periods
+//!   and traffic packs they give users.
 //!
 //! # Purity
 //!
@@ -69,6 +72,7 @@ pub mod forecast;
 pub mod meter;
 pub mod network;
 pub mod notify;
+pub mod payments;
 pub mod period;
 pub mod policy;
 pub mod portal;
