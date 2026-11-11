@@ -7,7 +7,9 @@
 //! the cut and its record are written to the abuse state, then the user's
 //! address is added to the cut set. A finding at its alert level is
 //! recorded, once an hour per user and finding. Records past their
-//! retention are pruned at the same reading.
+//! retention are pruned at the same reading, and the state is written only
+//! when the reading changed it. A user whose cut was lifted is judged only
+//! on what followed the lift ([`readings`]).
 //!
 //! A reading that fails, or that the parser cannot read, finds nothing and
 //! is reported (`AbuseGuardUnavailable{ReadFailed}`) until one succeeds; it
@@ -20,9 +22,13 @@
 //! take is reported as a state write that failed (`StateWrite`) and tried
 //! again at the next reading, without touching the gate.
 
+use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
+
 use mooring_agent_proto::{
-    ABUSE_READ_EVERY_TICKS, ABUSE_SUSPECTED_SECS, AbuseAction, AbuseCutEntry, AbuseFindings,
-    AbuseGuardFault, InstalledWatchConfig, OpaqueUserId, UnixTime, WatchError, user_source,
+    ABUSE_READ_EVERY_TICKS, ABUSE_SUSPECTED_SECS, AbuseAction, AbuseCutEntry, AbuseFigures,
+    AbuseFindings, AbuseGuardFault, InstalledWatchConfig, OpaqueUserId, UnixTime, WatchError,
+    user_source,
 };
 
 use super::nft::nft;
@@ -96,8 +102,9 @@ impl Watch {
                 Some(measured) => {
                     self.abuse.read_failed = false;
                     let served = served_sources(config);
-                    let readings = readings(&measured, &served, now);
-                    self.abuse.floods.retain(&readings, now);
+                    let cleared = state.cleared();
+                    let readings = readings(&measured, &served, &cleared, now);
+                    self.abuse.floods.retain(&readings, &cleared, now);
                     let verdicts: Vec<_> = readings
                         .iter()
                         .map(|(user, reading)| {
@@ -110,12 +117,14 @@ impl Watch {
                         state = AbuseState::read(paths)?;
                         let held = state.clone();
                         state.prune(now);
-                        let cut = act(&mut state, now, &verdicts);
-                        if let Err(error) = state.write(paths) {
+                        let cut = act(&mut state, &cleared, now, &verdicts);
+                        if state != held
+                            && let Err(error) = state.write(paths)
+                        {
                             // A cut the state cannot keep ends the watch,
                             // and its unit closes the gate. An alert or a
-                            // prune is retried at the next reading, and the
-                            // failure reported as the watch's own are.
+                            // prune is tried again at the next reading, and
+                            // the failure reported as the watch's own are.
                             if !cut.is_empty() {
                                 return Err(error.into());
                             }
@@ -141,21 +150,27 @@ impl Watch {
     }
 }
 
-/// Records the verdicts in `state`: a user not cut yet whose findings reach
-/// a cut level is cut, with a `Cut` record; an alert is recorded for the
-/// findings not recorded for that user within the last
-/// [`ABUSE_SUSPECTED_SECS`], and for a user not cut. Returns the addresses
-/// newly cut. A user who cannot be cut because the node holds the most cut
-/// users already gets an alert record instead, so the finding is kept.
+/// Records the verdicts in `state`, the abuse state as it is under
+/// `gate.lock`. `judged` holds the lifts the readings were taken with
+/// ([`AbuseState::cleared`]): a user whose cut was lifted since is left to
+/// the next reading, which leaves out what they did before the lift.
+/// Otherwise, for a user not cut: findings at a cut level cut the user,
+/// with a `Cut` record, and findings at an alert level are recorded as an
+/// alert, leaving out those recorded for the user within the last
+/// [`ABUSE_SUSPECTED_SECS`]. A user the node cannot cut, since it holds the
+/// most cut users already, has the cut-level findings recorded as an alert
+/// under the same rule. Returns the addresses newly cut.
 fn act(
     state: &mut AbuseState,
+    judged: &BTreeMap<OpaqueUserId, UnixTime>,
     now: UnixTime,
     verdicts: &[(&OpaqueUserId, &UserReading, Verdict)],
-) -> Vec<std::net::Ipv4Addr> {
+) -> Vec<Ipv4Addr> {
     let since = UnixTime::from_secs(now.as_secs().saturating_sub(ABUSE_SUSPECTED_SECS));
+    let lifted = state.cleared();
     let mut cut = Vec::new();
     for (user, reading, verdict) in verdicts {
-        if state.cuts().get(user).is_some() {
+        if lifted.get(*user) != judged.get(*user) || state.cuts().get(user).is_some() {
             continue;
         }
         let figures = Some(reading.figures);
@@ -170,25 +185,33 @@ fn act(
             if trial.cut(entry).is_ok() {
                 *state = trial;
                 cut.push(user_source(user));
-                continue;
+            } else {
+                alert(state, user, findings, figures, now, since);
             }
-            // The node holds the most cut users already: the findings are
-            // kept as an alert, which the operator sees.
-            state.record(now, user, AbuseAction::Alerted { findings }, figures);
-            continue;
-        }
-        let Some(findings) = verdict.alert else {
-            continue;
-        };
-        let fresh = findings
-            .iter()
-            .filter(|finding| !state.found_since(user, *finding, since))
-            .fold(None, |set: Option<AbuseFindings>, finding| {
-                Some(set.map_or(AbuseFindings::of(finding), |set| set.with(finding)))
-            });
-        if let Some(findings) = fresh {
-            state.record(now, user, AbuseAction::Alerted { findings }, figures);
+        } else if let Some(findings) = verdict.alert {
+            alert(state, user, findings, figures, now, since);
         }
     }
     cut
+}
+
+/// Records `findings` for `user` as an alert at `now`, leaving out those
+/// recorded for the user at or after `since`; nothing when none is left.
+fn alert(
+    state: &mut AbuseState,
+    user: &OpaqueUserId,
+    findings: AbuseFindings,
+    figures: Option<AbuseFigures>,
+    now: UnixTime,
+    since: UnixTime,
+) {
+    let fresh = findings
+        .iter()
+        .filter(|finding| !state.found_since(user, *finding, since))
+        .fold(None, |set: Option<AbuseFindings>, finding| {
+            Some(set.map_or(AbuseFindings::of(finding), |set| set.with(finding)))
+        });
+    if let Some(findings) = fresh {
+        state.record(now, user, AbuseAction::Alerted { findings }, figures);
+    }
 }

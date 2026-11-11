@@ -5,8 +5,8 @@
 //! changed after, every refusal changing nothing.
 
 use mooring_agent_proto::{
-    AbuseAction, AbuseSeq, AgentError, LineRequest, OpaqueUserId, Reply, Response, Role, TxnState,
-    user_source,
+    AbuseAction, AbuseCutEntry, AbuseSeq, AgentError, LineRequest, OpaqueUserId, Reply, Response,
+    Role, TxnState, UnixTime, user_source,
 };
 
 use crate::abuse::state::AbuseState;
@@ -225,4 +225,39 @@ fn the_ops_and_viewer_roles_read_the_records() {
         ),
         Err(AgentError::Io { .. })
     ));
+}
+
+/// Lifting one of two cut users who share an address keeps the address cut
+/// for the other: the cut set is set from the state, not cleared of the
+/// lifted user's address. Such a pair needs a user no longer served, since
+/// the renderer refuses two served users with one address.
+#[test]
+fn a_lift_keeps_an_address_another_cut_user_has() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(NOW);
+    cut(&world, &node, "u01").unwrap();
+    let address = user_source(&user("u01"));
+    let twin = (0_u32..)
+        .map(|n| format!("t{n}"))
+        .find(|id| user_source(&user(id)) == address)
+        .unwrap();
+    // The twin was cut while it was served, and is not served now.
+    let mut state = AbuseState::read(&world.paths).unwrap();
+    let since = UnixTime::from_secs(NOW);
+    let record = state.record(since, &user(&twin), AbuseAction::OperatorCut, None);
+    state
+        .cut(AbuseCutEntry {
+            user: user(&twin),
+            since,
+            record,
+        })
+        .unwrap();
+    state.write(&world.paths).unwrap();
+    let Ok(Response::AbuseCleared { record, cuts }) = clear(&world, &node, &twin) else {
+        panic!("not lifted");
+    };
+    assert!(record.is_some());
+    assert!(cuts.get(&user("u01")).is_some());
+    assert!(in_kernel(&world, "u01"), "u01's cut still holds");
 }

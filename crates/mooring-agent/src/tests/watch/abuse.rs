@@ -5,17 +5,20 @@
 //! hour, the gate never opens with a cut missing, and a guard that cannot
 //! measure is reported without touching the gate.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use mooring_agent_proto::{
     ABUSE_RECORD_KEEP_SECS, ABUSE_SUSPECTED_SECS, AbuseAction, AbuseCutEntry, AbuseFinding,
-    AbuseFindings, AbuseGuardFault, AgentError, AgentEventKind, IoOp, OpaqueUserId, TxnState,
-    UnixTime, WatchError, WatchErrorKind, user_source,
+    AbuseFindings, AbuseGuardFault, AbuseSet, AgentError, AgentEventKind, IoOp, MAX_ABUSE_CUTS,
+    MAX_ABUSE_RECORDS_KEPT, OpaqueUserId, TxnState, UnixTime, WatchError, WatchErrorKind,
+    user_source,
 };
 
 use super::world::{World, listing, tick};
 use crate::abuse::state::AbuseState;
-use crate::host::Node;
+use crate::host::{Node, Tool};
 use crate::tests::{FakeNode, occupy_temporary};
 use crate::watch::{Fatal, Watch};
 
@@ -504,4 +507,210 @@ fn two_minutes_of_datagram_flood_cut_the_user() {
             .datagrams_per_sec,
         Some(1_000)
     );
+}
+
+/// `count` destination buckets of `user`, each last refreshed `age`
+/// seconds ago (`user_dst` keeps an element 5 minutes after its last use).
+fn aged_buckets(user: &OpaqueUserId, count: u32, age: u64) -> Vec<String> {
+    let source = user_source(user);
+    let expires = AbuseSet::Dst.timeout_secs().unwrap() - age;
+    (0..count)
+        .map(|bucket| {
+            format!(
+                r#"{{"elem":{{"val":{{"concat":["{source}",{bucket}]}},"expires":{expires}}}}}"#
+            )
+        })
+        .collect()
+}
+
+/// A lift is not undone by what led to the cut. A cut refuses the user's
+/// packets before they are measured, so the sets still hold the scan; the
+/// readings after the lift leave out what was last refreshed before it.
+/// What the user does after the lift is judged as before.
+#[test]
+fn a_lift_is_not_undone_by_what_led_to_the_cut() {
+    let world = World::new();
+    let (mut watch, node) = opened(&world, 1_791_800_000);
+    let cut_at = AbuseFinding::MassContact.cut_at();
+    set_listing(&world, "user_dst", &aged_buckets(&u01(), cut_at, 290));
+    until_read(&mut watch, &world, &node);
+    assert!(in_kernel(&world, &u01()));
+    let (lift, _) = crate::abuse::requests::clear(&world.paths, &node, &u01()).unwrap();
+    assert!(lift.is_some());
+    assert!(!in_kernel(&world, &u01()));
+    for _ in 0..3 {
+        until_read(&mut watch, &world, &node);
+    }
+    assert!(
+        !in_kernel(&world, &u01()),
+        "not cut again for the same scan"
+    );
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert!(state.cuts().is_empty());
+    assert_eq!(state.records().len(), 2, "the cut and its lift");
+    set_listing(&world, "user_dst", &aged_buckets(&u01(), cut_at, 5));
+    until_read(&mut watch, &world, &node);
+    assert!(
+        in_kernel(&world, &u01()),
+        "a scan after the lift cuts again"
+    );
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert_eq!(state.records().len(), 3);
+    assert!(matches!(state.records()[2].action, AbuseAction::Cut { .. }));
+}
+
+/// A lift that lands while a reading is taken (after the sets are listed,
+/// before the watch takes `gate.lock`) leaves the user to the next
+/// reading, which leaves out what led to the cut: the reading judged the
+/// user without the lift.
+#[test]
+fn a_lift_during_a_reading_leaves_the_user_to_the_next() {
+    let world = World::new();
+    let start = 1_791_805_000;
+    world.install(1, TxnState::Committed);
+    let armed = Rc::new(Cell::new(false));
+    let node = {
+        let armed = Rc::clone(&armed);
+        let paths = world.paths.clone();
+        world.node_answering(start, move |tool, args| {
+            let listing_dst = matches!(args, ["-j", "list", "set", "inet", "mooring", "user_dst"]);
+            if tool == Tool::Nft && listing_dst && armed.replace(false) {
+                let mut state = AbuseState::read(&paths).unwrap();
+                state.record(
+                    UnixTime::from_secs(start + 20),
+                    &u01(),
+                    AbuseAction::Cleared,
+                    None,
+                );
+                state.clear(&u01());
+                state.write(&paths).unwrap();
+            }
+            None
+        })
+    };
+    let mut watch = Watch::start(&world.paths).unwrap();
+    for _ in 0..2 {
+        world.traffic(&node, 1);
+        tick(&mut watch, &world, &node);
+    }
+    let cut_at = AbuseFinding::MassContact.cut_at();
+    set_listing(&world, "user_dst", &aged_buckets(&u01(), cut_at, 290));
+    until_read(&mut watch, &world, &node);
+    assert!(in_kernel(&world, &u01()));
+    armed.set(true);
+    for _ in 0..2 {
+        until_read(&mut watch, &world, &node);
+    }
+    assert!(!armed.get(), "the lift landed");
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert!(state.cuts().is_empty(), "not cut again");
+    assert_eq!(state.records().len(), 2, "the cut and its lift");
+}
+
+/// A node holding the most cut users records a further user's cut-level
+/// findings as an alert, once an hour as any alert, not at every reading.
+#[test]
+fn a_node_at_its_bound_of_cuts_alerts_once_an_hour() {
+    let world = World::new();
+    let start = 1_791_810_000;
+    let (mut watch, node) = opened(&world, start);
+    let mut state = AbuseState::read(&world.paths).unwrap();
+    let since = UnixTime::from_secs(start);
+    for index in 0..MAX_ABUSE_CUTS {
+        let other = OpaqueUserId::new(format!("x{index:04}")).unwrap();
+        let record = state.record(since, &other, AbuseAction::OperatorCut, None);
+        state
+            .cut(AbuseCutEntry {
+                user: other,
+                since,
+                record,
+            })
+            .unwrap();
+    }
+    state.write(&world.paths).unwrap();
+    set_listing(
+        &world,
+        "user_dst",
+        &buckets(&u01(), AbuseFinding::MassContact.cut_at()),
+    );
+    for _ in 0..4 {
+        until_read(&mut watch, &world, &node);
+    }
+    let alerts = |state: &AbuseState| {
+        state
+            .records()
+            .iter()
+            .filter(|record| record.user == u01())
+            .map(|record| record.action)
+            .collect::<Vec<_>>()
+    };
+    let mass_contact = AbuseAction::Alerted {
+        findings: AbuseFindings::of(AbuseFinding::MassContact),
+    };
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert!(state.cuts().get(&u01()).is_none());
+    assert_eq!(alerts(&state), vec![mass_contact]);
+    node.sleep(Duration::from_secs(ABUSE_SUSPECTED_SECS));
+    until_read(&mut watch, &world, &node);
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert_eq!(alerts(&state), vec![mass_contact, mass_contact]);
+}
+
+/// A record log at its bound takes the next record and stays readable:
+/// the oldest go as the record is added. A state written past the bound
+/// would be refused at every later tick, and the watch with it.
+#[test]
+fn a_full_record_log_takes_the_next_record_and_stays_readable() {
+    let world = World::new();
+    let start = 1_791_815_000;
+    let (mut watch, node) = opened(&world, start);
+    let mut state = AbuseState::read(&world.paths).unwrap();
+    let other = OpaqueUserId::new("x0001").unwrap();
+    for _ in 0..MAX_ABUSE_RECORDS_KEPT {
+        state.record(
+            UnixTime::from_secs(start),
+            &other,
+            AbuseAction::OperatorCut,
+            None,
+        );
+    }
+    state.write(&world.paths).unwrap();
+    set_listing(
+        &world,
+        "user_dst",
+        &buckets(&u01(), AbuseFinding::MassContact.alert_at()),
+    );
+    until_read(&mut watch, &world, &node);
+    for _ in 0..3 {
+        world.traffic(&node, 1);
+        tick(&mut watch, &world, &node);
+    }
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert_eq!(state.records().len(), MAX_ABUSE_RECORDS_KEPT / 4 * 3);
+    assert_eq!(state.records().last().unwrap().user, u01());
+    assert!(!world.net.closed.get());
+}
+
+/// A reading that changes nothing writes nothing: with its alert recorded
+/// within the hour, the same finding again leaves the state as it is, so
+/// a state the watch could not write raises no failure.
+#[test]
+fn a_reading_that_changes_nothing_writes_nothing() {
+    let world = World::new();
+    let (mut watch, node) = opened(&world, 1_791_820_000);
+    set_listing(
+        &world,
+        "user_dst",
+        &buckets(&u01(), AbuseFinding::MassContact.alert_at()),
+    );
+    until_read(&mut watch, &world, &node);
+    assert_eq!(AbuseState::read(&world.paths).unwrap().records().len(), 1);
+    let blocker = occupy_temporary(&world.paths.abuse_state());
+    for _ in 0..3 {
+        until_read(&mut watch, &world, &node);
+    }
+    world.traffic(&node, 1);
+    tick(&mut watch, &world, &node);
+    assert_eq!(world.conditions(), vec![WatchErrorKind::AbuseSuspected]);
+    std::fs::remove_dir(&blocker).unwrap();
 }

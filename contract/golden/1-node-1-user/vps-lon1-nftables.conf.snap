@@ -101,14 +101,14 @@ table inet mooring {
 
 	set user_login {
 		type ipv4_addr . mark
-		size 8192
+		size 32768
 		flags dynamic,timeout
 		timeout 10m
 	}
 
 	set user_mail {
 		type ipv4_addr . mark
-		size 4096
+		size 32768
 		flags dynamic,timeout
 		timeout 60m
 	}

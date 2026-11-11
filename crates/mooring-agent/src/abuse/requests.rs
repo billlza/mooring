@@ -17,7 +17,7 @@ use mooring_agent_proto::{
 };
 
 use super::state::AbuseState;
-use super::{add_words, as_args, destroy_words, served_sources};
+use super::{add_words, as_args, cut_addresses, served_sources, sync_words};
 use crate::gate;
 use crate::host::{Node, Tool, run_ok};
 use crate::paths::Paths;
@@ -57,9 +57,11 @@ pub(crate) fn cut(
 }
 
 /// `AbuseClear{user}`: lifts a user's cut, with a `Cleared` record. A user
-/// who is not cut is answered with nothing recorded. The cut set is
-/// changed only when the installed generation carries the guard; one
-/// rendered before it has no cut set.
+/// who is not cut is answered with nothing recorded. The cut set is then
+/// set from the state, as the watch's re-read sets it, so an address that
+/// another cut user also has stays in it. It is changed only when the
+/// installed generation carries the guard; one rendered before it has no
+/// cut set.
 pub(crate) fn clear(
     paths: &Paths,
     node: &dyn Node,
@@ -75,8 +77,9 @@ pub(crate) fn clear(
     let record = state.record(now, user, AbuseAction::Cleared, None);
     state.clear(user);
     state.write(paths)?;
-    if installed_config(paths)?.is_some_and(|config| config.abuse_guard().is_some()) {
-        set(node, &destroy_words(user_source(user)))?;
+    if let Some(config) = installed_config(paths)?.filter(|config| config.abuse_guard().is_some()) {
+        let addresses = cut_addresses(state.cuts(), &served_sources(&config));
+        set(node, &sync_words(&addresses))?;
     }
     Ok((Some(record), state.cuts().clone()))
 }

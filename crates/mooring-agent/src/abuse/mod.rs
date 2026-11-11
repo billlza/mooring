@@ -106,22 +106,6 @@ pub(crate) fn add_words(addresses: &[Ipv4Addr]) -> Vec<String> {
     words
 }
 
-/// The nft words that take `address` out of the cut set, whether or not it
-/// is there (`destroy`, nftables 1.0.7 and later).
-pub(crate) fn destroy_words(address: Ipv4Addr) -> Vec<String> {
-    let mut words: Vec<String> = [
-        "destroy",
-        "element",
-        "inet",
-        NFT_TABLE,
-        AbuseSet::Cut.name(),
-    ]
-    .map(str::to_owned)
-    .to_vec();
-    words.push(element_list(&[address]));
-    words
-}
-
 /// Borrows owned words as the `&str` arguments a tool takes.
 pub(crate) fn as_args(words: &[String]) -> Vec<&str> {
     words.iter().map(String::as_str).collect()

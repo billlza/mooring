@@ -13,7 +13,7 @@
 //! [`MAX_ABUSE_RECORDS_KEPT`] of them; a cut stays until it is lifted. A
 //! record names an opaque user and aggregate figures only.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mooring_agent_proto::{
     ABUSE_RECORD_KEEP_SECS, ABUSE_SUSPECTED_SECS, AbuseAction, AbuseCutEntry, AbuseCuts,
@@ -121,7 +121,10 @@ impl AbuseState {
         &self.records
     }
 
-    /// Appends a record, numbered next, and returns its number.
+    /// Appends a record, numbered next, and returns its number. A record
+    /// past [`MAX_ABUSE_RECORDS_KEPT`] drops the oldest, down to three
+    /// quarters of it, so the state never holds more records than
+    /// [`AbuseState::read`] accepts: this is the only way a record is added.
     pub(crate) fn record(
         &mut self,
         at: UnixTime,
@@ -139,6 +142,10 @@ impl AbuseState {
             figures,
         });
         self.next = AbuseSeq::new(seq.get().saturating_add(1));
+        if self.records.len() > MAX_ABUSE_RECORDS_KEPT {
+            let excess = self.records.len() - MAX_ABUSE_RECORDS_KEPT / 4 * 3;
+            self.records.drain(..excess);
+        }
         seq
     }
 
@@ -160,20 +167,17 @@ impl AbuseState {
         Some(entry)
     }
 
-    /// Whether a record is due to be pruned at `now`: older than
-    /// [`ABUSE_RECORD_KEEP_SECS`], or beyond [`MAX_ABUSE_RECORDS_KEPT`].
+    /// Whether a record is older than [`ABUSE_RECORD_KEEP_SECS`] at `now`,
+    /// so due to be pruned.
     pub(crate) fn prune_due(&self, now: UnixTime) -> bool {
-        self.records.len() > MAX_ABUSE_RECORDS_KEPT
-            || self
-                .records
-                .first()
-                .is_some_and(|first| expired(now, first.at))
+        self.records
+            .first()
+            .is_some_and(|first| expired(now, first.at))
     }
 
     /// Drops the records older than [`ABUSE_RECORD_KEEP_SECS`] at `now`,
-    /// then the oldest beyond [`MAX_ABUSE_RECORDS_KEPT`] (down to three
-    /// quarters of it), from the oldest end only, so the rest stay
-    /// numbered consecutively. The next number never goes back.
+    /// from the oldest end only, so the rest stay numbered consecutively.
+    /// The next number never goes back.
     pub(crate) fn prune(&mut self, now: UnixTime) {
         let first = self
             .records
@@ -181,10 +185,16 @@ impl AbuseState {
             .position(|record| !expired(now, record.at))
             .unwrap_or(self.records.len());
         self.records.drain(..first);
-        if self.records.len() > MAX_ABUSE_RECORDS_KEPT {
-            let excess = self.records.len() - MAX_ABUSE_RECORDS_KEPT / 4 * 3;
-            self.records.drain(..excess);
-        }
+    }
+
+    /// Each user's latest `Cleared` record's time: a user whose cut was
+    /// lifted is judged afresh from then on (design §11.8).
+    pub(crate) fn cleared(&self) -> BTreeMap<OpaqueUserId, UnixTime> {
+        self.records
+            .iter()
+            .filter(|record| matches!(record.action, AbuseAction::Cleared))
+            .map(|record| (record.user.clone(), record.at))
+            .collect()
     }
 
     /// `AbuseRecords{since}`: the cuts, and the records numbered `since`

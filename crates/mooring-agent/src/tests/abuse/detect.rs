@@ -60,7 +60,12 @@ fn measured(sets: Vec<(AbuseSet, Vec<Row>)>) -> Measured {
 }
 
 fn reading_of(id: &str, sets: Vec<(AbuseSet, Vec<Row>)>) -> UserReading {
-    readings(&measured(sets), &served(&[id]), UnixTime::from_secs(NOW))[&user(id)]
+    readings(
+        &measured(sets),
+        &served(&[id]),
+        &BTreeMap::new(),
+        UnixTime::from_secs(NOW),
+    )[&user(id)]
 }
 
 fn verdict(reading: &UserReading) -> Verdict {
@@ -153,6 +158,7 @@ fn figures_count_one_users_elements_and_ignore_the_rest() {
     let quiet = readings(
         &Measured::default(),
         &served(&["u01"]),
+        &BTreeMap::new(),
         UnixTime::from_secs(NOW),
     );
     let quiet = quiet[&user("u01")].figures;
@@ -417,16 +423,101 @@ fn flood_minutes_forget_unserved_users_and_old_minutes() {
     let mut floods = FloodMinutes::default();
     judge(&me, &flood_minute(NOW, flood.cut_at()), &mut floods);
     let none: BTreeMap<OpaqueUserId, UserReading> = BTreeMap::new();
-    floods.retain(&none, UnixTime::from_secs(NOW + 60));
+    floods.retain(&none, &BTreeMap::new(), UnixTime::from_secs(NOW + 60));
     assert_eq!(floods, FloodMinutes::default());
     judge(&me, &flood_minute(NOW, flood.cut_at()), &mut floods);
     let served = BTreeMap::from([(me.clone(), flood_minute(NOW, 0))]);
-    floods.retain(&served, UnixTime::from_secs(NOW + 60));
+    floods.retain(&served, &BTreeMap::new(), UnixTime::from_secs(NOW + 60));
     assert_ne!(
         floods,
         FloodMinutes::default(),
         "kept while it can be followed"
     );
-    floods.retain(&served, UnixTime::from_secs(NOW + 191));
+    floods.retain(&served, &BTreeMap::new(), UnixTime::from_secs(NOW + 191));
     assert_eq!(floods, FloodMinutes::default());
+}
+
+/// After a user's cut is lifted, only what the user did after the lift
+/// counts: an element made or refreshed at or before it (an age at least
+/// the time since the lift) is left out, and so is one of unknown age.
+/// Another user is judged on everything, and so is this one without the
+/// lift, which the same elements would cut.
+#[test]
+fn a_lifted_user_is_judged_on_what_followed_the_lift() {
+    let me = user_source(&user("u01"));
+    let other = user_source(&user("u02"));
+    let aged = |source: Ipv4Addr, count: usize, age: Option<u64>| -> Vec<Row> {
+        (0..count).map(|_| (source, None, age, None)).collect()
+    };
+    let sets = || {
+        measured(vec![
+            (
+                AbuseSet::Dst,
+                [
+                    aged(me, 1_600, Some(100)),
+                    aged(me, 7, Some(99)),
+                    aged(me, 5, None),
+                    aged(other, 900, Some(100)),
+                ]
+                .concat(),
+            ),
+            (
+                AbuseSet::Burst,
+                vec![
+                    (me, None, Some(110), Some((2_400, 0))),
+                    (me, None, Some(30), Some((40, 0))),
+                    (other, None, Some(110), Some((2_400, 0))),
+                ],
+            ),
+            (
+                AbuseSet::MeterOut,
+                vec![(me, Some(Proto::Udp), Some(101), Some((60_600, 0)))],
+            ),
+        ])
+    };
+    let now = UnixTime::from_secs(NOW);
+    let lifted = BTreeMap::from([(user("u01"), UnixTime::from_secs(NOW - 100))]);
+    let all = readings(&sets(), &served(&["u01", "u02"]), &lifted, now);
+    let mine = all[&user("u01")];
+    assert_eq!(mine.figures.destination_buckets, 7);
+    assert_eq!(mine.figures.busiest_destination_flows, 40);
+    assert_eq!(mine.figures.datagrams_per_sec, None);
+    assert_eq!(mine.settled_datagrams, None);
+    assert_eq!(verdict(&mine), Verdict::default());
+    let theirs = all[&user("u02")];
+    assert_eq!(theirs.figures.destination_buckets, 900);
+    assert_eq!(theirs.figures.busiest_destination_flows, 2_400);
+    let unlifted = readings(&sets(), &served(&["u01"]), &BTreeMap::new(), now)[&user("u01")];
+    assert_eq!(unlifted.figures.destination_buckets, 1_612);
+    assert_eq!(unlifted.figures.datagrams_per_sec, Some(600));
+    assert_eq!(
+        verdict(&unlifted),
+        Verdict {
+            cut: of(&[AbuseFinding::MassContact, AbuseFinding::ConnectionFlood]),
+            alert: of(&[AbuseFinding::DatagramFlood]),
+        }
+    );
+}
+
+/// A flood minute that began at or before the user's lift is forgotten,
+/// so a minute before a cut never pairs with one after its lift.
+#[test]
+fn flood_minutes_forget_what_preceded_a_lift() {
+    let flood = AbuseFinding::DatagramFlood;
+    let me = user("u01");
+    let served = BTreeMap::from([(me.clone(), flood_minute(NOW, 0))]);
+    let lifted_at = |at: u64| BTreeMap::from([(me.clone(), UnixTime::from_secs(at))]);
+    let mut floods = FloodMinutes::default();
+    judge(&me, &flood_minute(NOW, flood.cut_at()), &mut floods);
+    floods.retain(&served, &lifted_at(NOW - 1), UnixTime::from_secs(NOW + 30));
+    assert_ne!(
+        floods,
+        FloodMinutes::default(),
+        "a minute after the lift is kept"
+    );
+    floods.retain(&served, &lifted_at(NOW), UnixTime::from_secs(NOW + 30));
+    assert_eq!(floods, FloodMinutes::default());
+    let next = judge(&me, &flood_minute(NOW + 60, flood.cut_at()), &mut floods);
+    assert_eq!(next.cut, None);
+    assert_eq!(next.alert, of(&[flood]));
 }

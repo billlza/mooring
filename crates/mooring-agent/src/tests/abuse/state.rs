@@ -16,7 +16,7 @@ use mooring_agent_proto::{
 };
 
 use crate::abuse::state::AbuseState;
-use crate::abuse::{add_words, cut_addresses, destroy_words, open_words, sync_words};
+use crate::abuse::{add_words, cut_addresses, open_words, sync_words};
 use crate::tests::scratch;
 
 const NOW: u64 = 1_791_500_000;
@@ -180,25 +180,53 @@ fn records_are_kept_thirty_days_and_their_numbers_never_reused() {
     assert_eq!(future.records().len(), 1);
 }
 
-/// Beyond the bound, the oldest go, down to three quarters of it.
+/// A record past the bound drops the oldest as it is added, down to three
+/// quarters of the bound, so no state the agent writes holds more records
+/// than it reads back: a state written one past the bound would be refused
+/// at every later reading, and the watch with it.
 #[test]
-fn records_beyond_the_bound_are_pruned_to_three_quarters() {
+fn a_record_past_the_bound_drops_the_oldest_to_three_quarters() {
+    let (_dir, paths) = scratch();
     let mut state = AbuseState::empty();
-    for index in 0..=MAX_ABUSE_RECORDS_KEPT as u64 {
+    for index in 0..MAX_ABUSE_RECORDS_KEPT as u64 {
         state.record(at(NOW + index), &user("u01"), AbuseAction::Cleared, None);
     }
-    assert!(state.prune_due(at(NOW)));
-    state.prune(at(NOW + MAX_ABUSE_RECORDS_KEPT as u64));
-    assert_eq!(state.records().len(), MAX_ABUSE_RECORDS_KEPT / 4 * 3);
-    assert_eq!(
-        state.records().last().unwrap().seq,
-        AbuseSeq::new(MAX_ABUSE_RECORDS_KEPT as u64)
+    assert_eq!(state.records().len(), MAX_ABUSE_RECORDS_KEPT);
+    state.write(&paths).unwrap();
+    assert_eq!(AbuseState::read(&paths).unwrap(), state);
+    let past = AbuseSeq::new(MAX_ABUSE_RECORDS_KEPT as u64);
+    let added = state.record(
+        at(NOW + MAX_ABUSE_RECORDS_KEPT as u64),
+        &user("u01"),
+        AbuseAction::Cleared,
+        None,
     );
+    assert_eq!(added, past);
+    assert_eq!(state.records().len(), MAX_ABUSE_RECORDS_KEPT / 4 * 3);
+    assert_eq!(state.records().last().unwrap().seq, past);
+    assert!(!state.prune_due(at(NOW + MAX_ABUSE_RECORDS_KEPT as u64)));
+    state.write(&paths).unwrap();
+    assert_eq!(AbuseState::read(&paths).unwrap(), state);
     // A page carries at most MAX_ABUSE_RECORDS.
     assert_eq!(
         state.page(AbuseSeq::FIRST).unwrap().records().len(),
         MAX_ABUSE_RECORDS
     );
+}
+
+/// Each user's latest lift, by user, from the records kept.
+#[test]
+fn the_lifts_are_each_users_latest() {
+    let mut state = AbuseState::empty();
+    state.record(at(NOW), &user("u01"), AbuseAction::Cleared, None);
+    state.record(at(NOW + 5), &user("u02"), AbuseAction::OperatorCut, None);
+    state.record(at(NOW + 9), &user("u01"), AbuseAction::Cleared, None);
+    state.record(at(NOW + 12), &user("u01"), AbuseAction::OperatorCut, None);
+    assert_eq!(
+        state.cleared(),
+        BTreeMap::from([(user("u01"), at(NOW + 9))])
+    );
+    assert!(AbuseState::empty().cleared().is_empty());
 }
 
 #[test]
@@ -352,9 +380,5 @@ fn the_cut_set_commands_are_one_line_each() {
     assert_eq!(
         add_words(&[a]).join(" "),
         "add element inet mooring abuse_cut { 198.18.0.5 }"
-    );
-    assert_eq!(
-        destroy_words(b).join(" "),
-        "destroy element inet mooring abuse_cut { 198.19.3.4 }"
     );
 }

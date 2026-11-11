@@ -45,23 +45,43 @@ const NEXT_MINUTE_SECS: std::ops::RangeInclusive<u64> = 50..=90;
 /// `served` maps each served user's source address to the user; an element
 /// whose address no served user has (a user removed since it was made)
 /// counts for no one.
+///
+/// A user whose cut was lifted (`cleared`, the latest lift's time) is
+/// judged only on what they did after it: an element made or refreshed at
+/// or before the lift is left out, and so is one whose age nft did not
+/// give. A cut refuses the user's packets before they are measured, so the
+/// sets still hold what led to the cut, which the operator has reviewed;
+/// judged again, it would cut the user at the next reading.
 pub(crate) fn readings(
     measured: &Measured,
     served: &BTreeMap<Ipv4Addr, OpaqueUserId>,
+    cleared: &BTreeMap<OpaqueUserId, UnixTime>,
     now: UnixTime,
 ) -> BTreeMap<OpaqueUserId, UserReading> {
     served
         .iter()
-        .map(|(source, user)| (user.clone(), reading(measured, *source, now)))
+        .map(|(source, user)| {
+            let since_lift = cleared
+                .get(user)
+                .map(|lifted| now.as_secs().saturating_sub(lifted.as_secs()));
+            (user.clone(), reading(measured, *source, since_lift, now))
+        })
         .collect()
 }
 
-fn reading(measured: &Measured, source: Ipv4Addr, now: UnixTime) -> UserReading {
+/// One user's reading; `since_lift` is how long ago the user's cut was
+/// lifted, if it was.
+fn reading(
+    measured: &Measured,
+    source: Ipv4Addr,
+    since_lift: Option<u64>,
+    now: UnixTime,
+) -> UserReading {
     let of = |set: AbuseSet| {
-        measured
-            .elements(set)
-            .iter()
-            .filter(move |element| element.source == source)
+        measured.elements(set).iter().filter(move |element| {
+            element.source == source
+                && since_lift.is_none_or(|since| element.age.is_some_and(|age| age < since))
+        })
     };
     let count = |set: AbuseSet, bound: u16| saturate_u16(of(set).count()).min(bound);
     let busiest = |set: AbuseSet| {
@@ -172,11 +192,18 @@ pub(crate) struct Verdict {
 pub(crate) struct FloodMinutes(BTreeMap<OpaqueUserId, UnixTime>);
 
 impl FloodMinutes {
-    /// Forgets the users not in `served`, and minutes too old to be
-    /// followed by the next.
-    pub(crate) fn retain(&mut self, served: &BTreeMap<OpaqueUserId, UserReading>, now: UnixTime) {
+    /// Forgets the users not in `served`, minutes too old to be followed by
+    /// the next, and minutes that began at or before the user's cut was
+    /// lifted (`cleared`, as for [`readings`]).
+    pub(crate) fn retain(
+        &mut self,
+        served: &BTreeMap<OpaqueUserId, UserReading>,
+        cleared: &BTreeMap<OpaqueUserId, UnixTime>,
+        now: UnixTime,
+    ) {
         self.0.retain(|user, began| {
             served.contains_key(user)
+                && cleared.get(user).is_none_or(|lifted| *began > *lifted)
                 && now
                     .secs_since(*began)
                     .is_some_and(|age| age <= *NEXT_MINUTE_SECS.end() + 60)

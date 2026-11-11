@@ -241,21 +241,22 @@ impl AbuseSet {
     }
 
     /// The most elements the set holds. A full set adds none, so a
-    /// measurement under-counts rather than grows without bound; each
-    /// user's share is bounded by the buckets.
+    /// measurement under-counts rather than grows without bound. A set
+    /// keyed by user and bucket holds every bucket of eight users, since a
+    /// user's elements are bounded by the buckets; one keyed by user and
+    /// protocol, or by user alone, holds 4,096 users.
     pub const fn size(self) -> u32 {
         match self {
             Self::Cut => 256,
             Self::Conns
             | Self::Rate
             | Self::Datagrams
-            | Self::Mail
             | Self::MeterNew
             | Self::MeterOut
             | Self::MeterIn
             | Self::Capped => 4096,
-            Self::Port | Self::Login => 8192,
-            Self::Dst | Self::Burst => 32_768,
+            Self::Port => 8192,
+            Self::Dst | Self::Burst | Self::Login | Self::Mail => 32_768,
         }
     }
 
@@ -836,6 +837,16 @@ mod tests {
             );
             assert!(set.size() >= 256 && set.size() <= 32_768);
         }
+        // Every bucket of eight users fits in each set keyed by bucket.
+        for set in [
+            AbuseSet::Dst,
+            AbuseSet::Burst,
+            AbuseSet::Login,
+            AbuseSet::Mail,
+        ] {
+            assert_eq!(set.size(), 8 * u32::from(DESTINATION_BUCKETS), "{set:?}");
+        }
+        assert_eq!(AbuseSet::Port.size(), 8 * u32::from(PORT_BUCKETS));
         assert!(AbuseSet::Cut.size() as usize >= MAX_ABUSE_CUTS);
         let measured: Vec<_> = AbuseSet::ALL
             .iter()
