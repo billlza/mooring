@@ -81,7 +81,9 @@ fn unknown_fields_are_rejected_at_every_level() {
         "/outbounds/0",
         "/outbounds/1",
         "/outbounds/1/streamSettings/sockopt",
-        "/outbounds/2/settings",
+        "/outbounds/2",
+        "/outbounds/2/streamSettings/sockopt",
+        "/outbounds/3/settings",
         "/routing",
         "/routing/rules/0",
     ] {
@@ -209,6 +211,7 @@ fn parse_wgexit(text: &str) -> WgExitRead {
         "PostUp = sysctl -qw net.ipv4.conf.%i.accept_local=1",
         "PostUp = ip -4 rule list | grep '^10000:[[:space:]]*from all oif %i lookup 77$' >/dev/null || ip -4 rule add pref 10000 oif %i lookup 77",
         "PostUp = ip -4 route replace default dev %i table 77",
+        "PostUp = ip -4 route replace local 198.18.0.0/15 dev %i table local",
         "PreDown = ! ip -4 rule list | grep '^10000:[[:space:]]*from all oif %i lookup 77$' >/dev/null || ip -4 rule del pref 10000 oif %i lookup 77",
         "PreDown = ip -4 route flush table 77",
         "",

@@ -9,18 +9,20 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroU16;
 
 use mooring_agent_proto::{
-    AcceptLocal, AgentError, AgentErrorKind, AgentEvent, AgentEventKind, AppliedGeneration,
-    ApplyStep, Arch, BlobLen, BootstrapStep, BundleFiles, BundleHeader, ClearableHold,
-    EgressViolationHold, EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq,
-    EventsV1, ExitPhase, GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds,
-    HostAccount, HostFact, HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus,
-    HttpVersion, IfName, Inbound, InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest,
-    MacAlertKind, MacDrainHold, MacReportParts, MacReportV1, NodeName, OperatorHold, PROTOCOL,
-    PortRange, PriorState, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber,
-    ReportCapacity, ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal,
-    ReportPlanLine, ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity,
-    ReportSim, ReportUsage, ReportUser, ReportUserId, ReportUserStatus, Request, RequestKind,
-    Resolution, Response, ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex,
+    AbuseAction, AbuseCutEntry, AbuseCuts, AbuseFigures, AbuseFinding, AbuseFindings,
+    AbuseGuardFault, AbuseGuardVersion, AbuseRecord, AbuseRecordsV1, AbuseSeq, AcceptLocal,
+    AgentError, AgentErrorKind, AgentEvent, AgentEventKind, AppliedGeneration, ApplyStep, Arch,
+    BlobLen, BootstrapStep, BundleFiles, BundleHeader, ClearableHold, EgressViolationHold,
+    EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq, EventsV1, ExitPhase,
+    GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostAccount, HostFact,
+    HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion, IfName, Inbound,
+    InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MacAlertKind, MacDrainHold,
+    MacReportParts, MacReportV1, NodeName, OpaqueUserId, OperatorHold, PROTOCOL, PortRange,
+    PriorState, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber, ReportCapacity,
+    ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine,
+    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim,
+    ReportUsage, ReportUser, ReportUserId, ReportUserStatus, Request, RequestKind, Resolution,
+    Response, ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex,
     ShutdownReason, SshEd25519Key, SshdDirective, StatusV1, StderrTail, StoredMacReport, SystemdOp,
     TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic,
     TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1,
@@ -299,6 +301,11 @@ pub(crate) fn watch_error(kind: WatchErrorKind) -> WatchError {
         WatchErrorKind::AccountingCanaryMissing => WatchError::AccountingCanaryMissing {
             inbounds: InboundSet::of(Inbound::Reality),
         },
+        WatchErrorKind::AbuseCut => WatchError::AbuseCut { users: 1 },
+        WatchErrorKind::AbuseSuspected => WatchError::AbuseSuspected { users: 2 },
+        WatchErrorKind::AbuseGuardUnavailable => WatchError::AbuseGuardUnavailable {
+            cause: AbuseGuardFault::NotInstalled,
+        },
     }
 }
 
@@ -479,7 +486,69 @@ pub(crate) fn watch_config() -> WatchConfig {
             .into_iter()
             .map(|email| email.parse().unwrap())
             .collect(),
+        abuse_guard: AbuseGuardVersion::V1,
     }
+}
+
+pub(crate) fn abuse_user(id: &str) -> OpaqueUserId {
+    OpaqueUserId::new(id).unwrap()
+}
+
+/// A page holding one user cut by the guard and the records of an alert,
+/// that cut, an operator's cut and its lift.
+pub(crate) fn abuse_records() -> AbuseRecordsV1 {
+    let figures = AbuseFigures {
+        destination_buckets: 1650,
+        port_buckets: 4,
+        busiest_destination_flows: 3,
+        busiest_login_flows: 0,
+        submission_buckets: 0,
+        new_flows_per_min: Some(1_480),
+        datagrams_per_sec: Some(2),
+        udp_share_permille: Some(9),
+        received_per_sent_permille: Some(410),
+        received_bytes_per_flow: Some(132),
+        refused_packets: 212,
+    };
+    let record = |seq: u64, user: &str, action, figures| AbuseRecord {
+        seq: AbuseSeq::new(seq),
+        at: UnixTime::from_secs(1_790_000_000 + 15 * seq),
+        user: abuse_user(user),
+        guard: AbuseGuardVersion::V1,
+        action,
+        figures,
+    };
+    let records = vec![
+        record(
+            20,
+            "u01",
+            AbuseAction::Alerted {
+                findings: AbuseFindings::of(AbuseFinding::MassContact),
+            },
+            Some(AbuseFigures {
+                destination_buckets: 600,
+                ..figures
+            }),
+        ),
+        record(
+            21,
+            "u01",
+            AbuseAction::Cut {
+                findings: AbuseFindings::of(AbuseFinding::MassContact)
+                    .with(AbuseFinding::PortSweep),
+            },
+            Some(figures),
+        ),
+        record(22, "u02", AbuseAction::OperatorCut, None),
+        record(23, "u02", AbuseAction::Cleared, None),
+    ];
+    let cuts = AbuseCuts::new(vec![AbuseCutEntry {
+        user: abuse_user("u01"),
+        since: UnixTime::from_secs(1_790_000_315),
+        record: AbuseSeq::new(21),
+    }])
+    .unwrap();
+    AbuseRecordsV1::new(cuts, records, AbuseSeq::new(24)).unwrap()
 }
 
 /// The fixture request of `kind`.
@@ -546,6 +615,15 @@ pub(crate) fn line_request(kind: RequestKind) -> LineRequest {
         },
         RequestKind::PutMacReport => LineRequest::PutMacReport(Box::new(mac_report())),
         RequestKind::MacReport => LineRequest::MacReport,
+        RequestKind::AbuseRecords => LineRequest::AbuseRecords {
+            since: AbuseSeq::new(20),
+        },
+        RequestKind::AbuseCut => LineRequest::AbuseCut {
+            user: abuse_user("u02"),
+        },
+        RequestKind::AbuseClear => LineRequest::AbuseClear {
+            user: abuse_user("u02"),
+        },
     }
 }
 
@@ -601,6 +679,15 @@ pub(crate) fn response(kind: ResponseKind) -> Response {
             at: UnixTime::from_secs(1_790_000_200),
         },
         ResponseKind::MacReport => Response::MacReport(Box::new(stored_mac_report())),
+        ResponseKind::AbuseRecords => Response::AbuseRecords(Box::new(abuse_records())),
+        ResponseKind::AbuseCutDone => Response::AbuseCutDone {
+            record: AbuseSeq::new(22),
+            cuts: abuse_records().cuts().clone(),
+        },
+        ResponseKind::AbuseCleared => Response::AbuseCleared {
+            record: Some(AbuseSeq::new(23)),
+            cuts: abuse_records().cuts().clone(),
+        },
     }
 }
 
@@ -728,6 +815,14 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
             ),
         },
         AgentErrorKind::MacReportMissing => AgentError::MacReportMissing,
+        AgentErrorKind::AbuseGuardNotInstalled => AgentError::AbuseGuardNotInstalled,
+        AgentErrorKind::AbuseUserNotServed => AgentError::AbuseUserNotServed {
+            user: abuse_user("u09"),
+        },
+        AgentErrorKind::AbuseCutsFull => AgentError::AbuseCutsFull,
+        AgentErrorKind::AbuseSetFailed => AgentError::AbuseSetFailed {
+            stderr_tail: tail("Error: No such file or directory"),
+        },
         AgentErrorKind::GateCloseFailed => AgentError::GateCloseFailed {
             stderr_tail: tail("Error: No such file or directory"),
         },

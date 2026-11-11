@@ -48,6 +48,10 @@ pub(crate) enum Command {
     /// The user portal: the files Mooring exports for it.
     #[command(subcommand)]
     Portal(PortalCommand),
+    /// The abuse guard on the nodes (design §11.8): their cuts and records,
+    /// and the operator's own cut and lift.
+    #[command(subcommand)]
+    Abuse(AbuseCommand),
     /// The console's status, from the daemon.
     Status {
         /// Keep printing each new status while it is fresh, until the
@@ -92,6 +96,25 @@ pub(crate) enum UserCommand {
         /// (CFM 0.5 only).
         #[arg(long)]
         mlkem: bool,
+    },
+    /// Suspend an active user: no node serves the user after its next
+    /// `node apply`, and the user keeps the credentials, so a resume
+    /// delivers nothing new. For an abuse case, the node's cut holds the
+    /// user until then (design §11.8).
+    Suspend {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// Why.
+        #[arg(long, value_enum)]
+        reason: SuspendArg,
+    },
+    /// Resume a suspended user, within the active-user cap. Every node then
+    /// needs `node apply`.
+    Resume {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
     },
     /// Give a user without one a random public alias (xxxx-xxxx), to quote
     /// instead of a name. Every node then needs `node apply`.
@@ -163,6 +186,58 @@ pub(crate) enum UserCommand {
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
     },
+}
+
+/// An abuse guard command (design §11.8). Each asks one node over the
+/// operations key, bound to the interface facing the M7.
+#[derive(Debug, Subcommand)]
+pub(crate) enum AbuseCommand {
+    /// Print the users cut on a node and its abuse records, and keep the
+    /// records it has not kept yet in this Mac's copy (abuse/records.json,
+    /// kept 13 months; the node keeps them 30 days).
+    Records {
+        /// The node.
+        node: NodeId,
+        /// The interface facing the M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+        /// Print the node's reply as one JSON line instead of a summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cut a user on a node at once, as the guard does, recorded as the
+    /// operator's: every flow of the user's is refused until `abuse clear`.
+    /// It changes no state on this Mac; `user suspend` does.
+    Cut {
+        /// The node.
+        node: NodeId,
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// The interface facing the M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+    },
+    /// Lift a user's cut on a node at once, recorded.
+    Clear {
+        /// The node.
+        node: NodeId,
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// The interface facing the M7.
+        #[arg(long, value_name = "BSD_NAME")]
+        interface: BsdName,
+    },
+}
+
+/// Why the operator suspends a user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum SuspendArg {
+    /// An abuse case under review (design §11.8).
+    AbuseReview,
+    /// Any other reason of the operator's.
+    Operator,
 }
 
 /// A portal command.

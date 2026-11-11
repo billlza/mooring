@@ -8,8 +8,9 @@
 //!   reply on stdout. `Hello`, `Bootstrap`, `RevokeBootstrap`, the blobs,
 //!   the gate's requests, `Shutdown`, the transactions (`Apply`,
 //!   `TxnStatus`, `Confirm`, `Rollback`), `ActivateAgent`, `Resume`,
-//!   `Status`, `Usage`, `UsageSeries`, `Events`, `TargetCheck` and the Mac
-//!   report are served;
+//!   `Status`, `Usage`, `UsageSeries`, `Events`, `TargetCheck`, the Mac
+//!   report and the abuse guard's records, cut and lift (design §11.8) are
+//!   served;
 //! - `reflect [--port 27900]`, the reflector unit, on the uplink's address;
 //! - `halted-check`, the engines' `ExecCondition`: exit 0 when they may
 //!   start, 1 while the node is halted (or its marker cannot be read);
@@ -25,6 +26,8 @@
 //! tested on any host with a stand-in node.
 
 // The agent's logic is built for Linux and, on any host, for its tests.
+#[cfg(any(target_os = "linux", test))]
+mod abuse;
 #[cfg(any(target_os = "linux", test))]
 mod accounting;
 #[cfg(any(target_os = "linux", test))]

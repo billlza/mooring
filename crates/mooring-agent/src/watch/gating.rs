@@ -7,14 +7,26 @@
 //! unrecorded. The gate set is re-read, with the flow-cap counter the
 //! conditions report, when it is unknown, when [`GATE_SET_REREAD_SECS`]
 //! have passed, or when the clock has stepped back.
+//!
+//! With a generation that carries the abuse guard (design §11.8), the gate
+//! opens in the same nft transaction that sets the cut set to the cut
+//! users' addresses, read from the abuse state under the same lock: a
+//! ruleset load empties the cut set and closes the gate together, so the
+//! gate is never open with a cut missing. At every re-read the cut set is
+//! set again from the state, which undoes any change made to it by hand.
+
+use std::net::Ipv4Addr;
 
 use mooring_agent_proto::{
-    AgentError, GATE_SET_REREAD_SECS, GateState, HANDSHAKE_MAX_AGE_SECS, Halt, Holds, MacDrainHold,
-    NFT_GATE_SET, NFT_TABLE, NftCounter, OperatorHold, UnixTime, WG_INTERFACE, WatchConfig,
+    AgentError, GATE_SET_REREAD_SECS, GateState, HANDSHAKE_MAX_AGE_SECS, Halt, Holds,
+    InstalledWatchConfig, MacDrainHold, NFT_GATE_SET, NFT_TABLE, NftCounter, OperatorHold,
+    UnixTime, WG_INTERFACE,
 };
 
 use super::nft::{counter, nft};
 use super::{Fatal, Watch};
+use crate::abuse::state::AbuseState;
+use crate::abuse::{as_args, cut_addresses, open_words, served_sources, sync_words};
 use crate::gate::{self, StopRequest};
 use crate::host::Node;
 use crate::paths::Paths;
@@ -52,7 +64,7 @@ impl Watch {
         paths: &Paths,
         node: &dyn Node,
         now: UnixTime,
-        config: Option<&WatchConfig>,
+        config: Option<&InstalledWatchConfig>,
         peer: Option<&Result<Peer, AgentError>>,
     ) -> Result<GateTick, Fatal> {
         let _lock = Lock::exclusive(&paths.gate_lock())?;
@@ -114,7 +126,14 @@ impl Watch {
         } else {
             GateState::Closed
         };
-        let before = self.set_gate(node, now, wanted)?;
+        let cut = match config.abuse_guard() {
+            Some(_) => Some(cut_addresses(
+                AbuseState::read(paths)?.cuts(),
+                &served_sources(config),
+            )),
+            None => None,
+        };
+        let before = self.set_gate(node, now, wanted, cut.as_deref())?;
         Ok(GateTick {
             holds,
             halted,
@@ -142,8 +161,8 @@ impl Watch {
 
     /// Whether the peer lets the gate open: a handshake at most
     /// [`HANDSHAKE_MAX_AGE_SECS`] old and rx grown within
-    /// [`WatchConfig::rx_growth_window_secs`].
-    fn peer_live(&self, now: UnixTime, peer: &Peer, config: &WatchConfig) -> bool {
+    /// [`InstalledWatchConfig::rx_growth_window_secs`].
+    fn peer_live(&self, now: UnixTime, peer: &Peer, config: &InstalledWatchConfig) -> bool {
         let fresh = peer
             .latest_handshake
             .and_then(|handshake| now.secs_since(handshake))
@@ -180,12 +199,15 @@ impl Watch {
 
     /// Sets the gate to `wanted`, re-reading the set (and the flow-cap
     /// counter) when it is unknown or [`GATE_SET_REREAD_SECS`] have passed;
-    /// returns the gate as it was before.
+    /// returns the gate as it was before. With the abuse guard, `cut` is
+    /// what the cut set must hold: the gate opens in the transaction that
+    /// sets it, and every re-read sets it again.
     fn set_gate(
         &mut self,
         node: &dyn Node,
         now: UnixTime,
         wanted: GateState,
+        cut: Option<&[Ipv4Addr]>,
     ) -> Result<GateState, Fatal> {
         let due = self.set_read_at.is_none_or(|read| {
             now.secs_since(read)
@@ -204,18 +226,32 @@ impl Watch {
                 read
             }
         };
-        if known != wanted {
-            let element = format!("{{ \"{WG_INTERFACE}\" }}");
+        match (known != wanted, wanted, cut) {
             // Only the watch removes the element, which opens the gate
-            // (design §11.3); adding it closes the gate.
-            let verb = match wanted {
-                GateState::Open => "delete",
-                GateState::Closed => "add",
-            };
-            nft(
-                node,
-                &[verb, "element", "inet", NFT_TABLE, NFT_GATE_SET, &element],
-            )?;
+            // (design §11.3), and with the guard it sets the cut set in the
+            // same transaction.
+            (true, GateState::Open, Some(cut)) => {
+                nft(node, &as_args(&open_words(cut)))?;
+            }
+            (true, _, _) => {
+                let element = format!("{{ \"{WG_INTERFACE}\" }}");
+                // Adding the element closes the gate.
+                let verb = match wanted {
+                    GateState::Open => "delete",
+                    GateState::Closed => "add",
+                };
+                nft(
+                    node,
+                    &[verb, "element", "inet", NFT_TABLE, NFT_GATE_SET, &element],
+                )?;
+                if let (true, Some(cut)) = (due, cut) {
+                    nft(node, &as_args(&sync_words(cut)))?;
+                }
+            }
+            (false, _, Some(cut)) if due => {
+                nft(node, &as_args(&sync_words(cut)))?;
+            }
+            (false, _, _) => {}
         }
         self.gate = Some(wanted);
         Ok(known)

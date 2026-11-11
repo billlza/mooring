@@ -5,7 +5,7 @@
 //! which a test sets, and what the watch left in its view and journal.
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::num::NonZeroU16;
@@ -13,9 +13,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use mooring_agent_proto::{
-    AgentEventKind, BundleFiles, BundleHeader, EngineSet, EventSeq, Generation, Halt, HostProfile,
-    Sha256Hex, ShutdownReason, StatsEmail, TargetHost, Traffic, TxnState, UnixTime, UsageMonth,
-    WATCH_TICK_SECS, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
+    AbuseGuardVersion, AbuseSet, AgentEventKind, BundleFiles, BundleHeader, EngineSet, EventSeq,
+    Generation, Halt, HostProfile, Sha256Hex, ShutdownReason, StatsEmail, TargetHost, Traffic,
+    TxnState, UnixTime, UsageMonth, WATCH_TICK_SECS, WatchConfig, WatchConfigBeforeGuard,
+    WatchError, WatchErrorKind, WatchTarget,
 };
 
 use crate::accounting;
@@ -31,9 +32,9 @@ use crate::watch::{self, HOST_READING_SECS, Watch};
 pub(super) const BOOT: &str = "4f1b0d5e-7c39-4a8e-9a51-1c0e2b6d3f70";
 
 /// What the stand-in node reports.
-pub(super) struct Net {
+pub(crate) struct Net {
     /// The gate set holds `wgexit`.
-    pub(super) closed: Cell<bool>,
+    pub(crate) closed: Cell<bool>,
     /// The peer's latest handshake (0: none).
     pub(super) handshake: Cell<u64>,
     pub(super) rx: Cell<u64>,
@@ -50,6 +51,80 @@ pub(super) struct Net {
     pub(super) xray: RefCell<Xray>,
     /// `mooring-hy2.service`'s `NRestarts`.
     pub(super) hy2_restarts: Cell<u32>,
+    /// The abuse guard's cut set (design §11.8).
+    pub(crate) cut: RefCell<BTreeSet<String>>,
+    /// What `nft -j list set` prints of each measured set, by name; an
+    /// empty set when none is given.
+    pub(crate) listings: RefCell<BTreeMap<&'static str, String>>,
+    /// Listing a measured set fails while set.
+    pub(crate) listing_fails: Cell<bool>,
+    /// Changing the cut set fails while set (the gate's own changes don't).
+    pub(crate) cut_fails: Cell<bool>,
+}
+
+/// What nft prints of the measured set `name` holding `elements`, each a
+/// JSON element as nft prints it.
+pub(crate) fn listing(name: &str, elements: &[String]) -> String {
+    let set = AbuseSet::ALL.iter().find(|set| set.name() == name).unwrap();
+    let elem = if elements.is_empty() {
+        String::new()
+    } else {
+        format!(r#","elem":[{}]"#, elements.join(","))
+    };
+    let timeout = set
+        .timeout_secs()
+        .map_or(String::new(), |secs| format!(r#","timeout":{secs}"#));
+    format!(
+        r#"{{"nftables":[{{"metainfo":{{"version":"1.1.3","release_name":"Commodore Bullmoose #4","json_schema_version":1}}}},{{"set":{{"family":"inet","name":"{name}","table":"mooring","type":"ipv4_addr","handle":9,"size":{size},"flags":["timeout","dynamic"]{timeout}{elem}}}}}]}}"#,
+        size = set.size(),
+    )
+}
+
+/// Applies one nft command line, as the stand-in kernel: its commands,
+/// split at `;`, change the gate set and the cut set, all or nothing.
+fn apply_commands(net: &Net, args: &[&str]) -> ToolOutput {
+    let line = args.join(" ");
+    let mut closed = net.closed.get();
+    let mut cut = net.cut.borrow().clone();
+    for command in line.split(';').map(str::trim) {
+        let words: Vec<&str> = command.split_whitespace().collect();
+        let elements = || -> Vec<String> {
+            command
+                .split_once('{')
+                .and_then(|(_, rest)| rest.split_once('}'))
+                .map(|(inside, _)| {
+                    inside
+                        .split(',')
+                        .map(|element| element.trim().trim_matches('"').to_owned())
+                        .filter(|element| !element.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        match words.as_slice() {
+            ["add", "element", "inet", "mooring", "exit_closed", ..] => closed = true,
+            ["delete", "element", "inet", "mooring", "exit_closed", ..] => {
+                if !closed {
+                    return failed(b"Error: Could not process rule: No such file or directory\n");
+                }
+                closed = false;
+            }
+            [_, _, "inet", "mooring", "abuse_cut", ..] if net.cut_fails.get() => {
+                return failed(b"Error: Could not process rule: Operation not permitted\n");
+            }
+            ["flush", "set", "inet", "mooring", "abuse_cut"] => cut.clear(),
+            ["add", "element", "inet", "mooring", "abuse_cut", ..] => cut.extend(elements()),
+            ["destroy", "element", "inet", "mooring", "abuse_cut", ..] => {
+                for element in elements() {
+                    cut.remove(&element);
+                }
+            }
+            _ => return failed(b"Error: syntax error\n"),
+        }
+    }
+    net.closed.set(closed);
+    *net.cut.borrow_mut() = cut;
+    ok(b"")
 }
 
 /// Xray as the stand-in node runs it.
@@ -77,14 +152,14 @@ pub(super) type XrayCounters = BTreeMap<&'static str, (u64, u64)>;
 /// The seconds since boot that `/proc/uptime` says.
 pub(super) const BOOT_SECS: u64 = 350_735;
 
-pub(super) struct World {
+pub(crate) struct World {
     _dir: tempfile::TempDir,
-    pub(super) paths: Paths,
-    pub(super) net: Rc<Net>,
+    pub(crate) paths: Paths,
+    pub(crate) net: Rc<Net>,
 }
 
 impl World {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (dir, paths) = scratch();
         let world = Self {
             _dir: dir,
@@ -113,6 +188,10 @@ impl World {
                     restart_after_query: None,
                 }),
                 hy2_restarts: Cell::new(0),
+                cut: RefCell::new(BTreeSet::new()),
+                listings: RefCell::new(BTreeMap::new()),
+                listing_fails: Cell::new(false),
+                cut_fails: Cell::new(false),
             }),
         };
         world.write(
@@ -137,11 +216,9 @@ impl World {
         fs::write(path, text).unwrap();
     }
 
-    /// Installs generation `generation` with a 10 s keepalive, its record
-    /// in `state`, as the current one.
-    pub(super) fn install(&self, generation: u64, state: TxnState) {
-        let dir = self.paths.generation(Generation::new(generation));
-        fs::create_dir_all(&dir).unwrap();
+    /// Installs generation `generation` with a 10 s keepalive and the
+    /// abuse guard, its record in `state`, as the current one.
+    pub(crate) fn install(&self, generation: u64, state: TxnState) {
         let config = WatchConfig {
             keepalive_secs: NonZeroU16::new(10).unwrap(),
             target: WatchTarget {
@@ -152,8 +229,32 @@ impl World {
                 .into_iter()
                 .map(|email| email.parse().unwrap())
                 .collect(),
+            abuse_guard: AbuseGuardVersion::V1,
         };
-        write_json(&dir.join("watch.json"), &config, 0o640).unwrap();
+        self.install_config(generation, state, &config);
+    }
+
+    /// Installs generation `generation` as [`World::install`] does, but in
+    /// the shape a Mac rendered before the abuse guard.
+    pub(crate) fn install_before_guard(&self, generation: u64, state: TxnState) {
+        let config = WatchConfigBeforeGuard {
+            keepalive_secs: NonZeroU16::new(10).unwrap(),
+            target: WatchTarget {
+                host: TargetHost::new("www.example.com").unwrap(),
+                ipv4: "198.51.100.7".parse().unwrap(),
+            },
+            emails: ["u01@reality", "u01@hy2", "probe@reality", "probe@hy2"]
+                .into_iter()
+                .map(|email| email.parse().unwrap())
+                .collect(),
+        };
+        self.install_config(generation, state, &config);
+    }
+
+    fn install_config(&self, generation: u64, state: TxnState, config: &impl serde::Serialize) {
+        let dir = self.paths.generation(Generation::new(generation));
+        fs::create_dir_all(&dir).unwrap();
+        write_json(&dir.join("watch.json"), config, 0o640).unwrap();
         let _replaced = fs::remove_file(self.paths.current());
         std::os::unix::fs::symlink(format!("gen-{generation}"), self.paths.current()).unwrap();
         self.record(generation, state);
@@ -217,7 +318,7 @@ impl World {
         );
     }
 
-    pub(super) fn node(&self, now: u64) -> FakeNode {
+    pub(crate) fn node(&self, now: u64) -> FakeNode {
         self.node_answering(now, |_, _| None)
     }
 
@@ -238,7 +339,16 @@ impl World {
                 }
                 Ok(match (tool, args) {
                     (Tool::Nft, _) if net.nft_fails.get() => failed(b"netlink: Error: Operation not permitted\n"),
-                    (Tool::Nft, ["-j", "list", "set", ..]) => ok(&nft_set(net.closed.get())),
+                    (Tool::Nft, ["-j", "list", "set", "inet", "mooring", "exit_closed"]) => ok(&nft_set(net.closed.get())),
+                    (Tool::Nft, ["-j", "list", "set", "inet", "mooring", name]) => {
+                        if net.listing_fails.get() {
+                            return Ok(failed(b"Error: No such file or directory\n"));
+                        }
+                        match net.listings.borrow().get(name) {
+                            Some(listing) => ok(listing.as_bytes()),
+                            None => ok(listing(name, &[]).as_bytes()),
+                        }
+                    }
                     (Tool::Nft, ["-j", "list", "counter", "inet", "mooring", name]) => {
                         let packets = match *name {
                             "flow_cap" => net.flow_cap.get(),
@@ -249,14 +359,7 @@ impl World {
                             r#"{{"nftables":[{{"metainfo":{{"version":"1.1.3"}}}},{{"counter":{{"family":"inet","name":"{name}","table":"mooring","handle":4,"packets":{packets},"bytes":0}}}}]}}"#,
                         ).as_bytes())
                     }
-                    (Tool::Nft, ["add", "element", ..]) => {
-                        net.closed.set(true);
-                        ok(b"")
-                    }
-                    (Tool::Nft, ["delete", "element", ..]) => {
-                        net.closed.set(false);
-                        ok(b"")
-                    }
+                    (Tool::Nft, ["add" | "delete" | "flush" | "destroy", ..]) => apply_commands(&net, args),
                     (Tool::Wg, _) if net.wg_fails.get() => failed(b"Unable to access interface: No such device\n"),
                     (Tool::Wg, ["show", "wgexit", "dump"]) => ok(format!(
                         "SECRETPRIVATEKEY=\tPUBLICKEY=\t27820\toff\nMACKEY=\t(none)\t198.51.100.7:4500\t10.66.0.2/32\t{}\t{}\t900\t10\n",

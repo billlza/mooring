@@ -19,16 +19,17 @@ use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::SecretEntry;
 use mooring_model::{
     AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Capability, ClientLine,
-    ClientProfile, LocalLabel, ModelError, NodeId, User, UserId, UserNodePublic, UserPolicy,
-    UserStatus,
+    ClientProfile, Deployment, LocalLabel, ModelError, NodeId, StateV2, SuspendReason, User,
+    UserId, UserNodePublic, UserPolicy, UserStatus,
 };
 use mooring_store::{Store, read_snapshot, update_config_with_secrets};
 
 use crate::app::{Env, support_dir};
+use crate::cli::SuspendArg;
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
 use crate::prompt::{Console, Line};
-use crate::state::{load, output, state_change, store_failure};
+use crate::state::{load, output, refused_change, state_change, store_failure};
 
 /// The most bytes read for a label: [`MAX_LABEL_CHARS`] characters of at
 /// most four UTF-8 bytes each.
@@ -81,7 +82,7 @@ pub(crate) fn add(
     load(&store)?;
     let label = read_label(env.console)?;
     let state = load(&store)?;
-    let id = credentials::user_id().map_err(LocalError::Keys)?;
+    let id = fresh_user_id(&state.deployment)?;
     let mut per_node = BTreeMap::new();
     let mut secrets = Vec::new();
     for node in state.deployment.nodes().values().filter(|node| {
@@ -206,6 +207,115 @@ pub(crate) fn alias(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result
         .as_bytes(),
     )
     .map_err(output)
+}
+
+/// The most ids `user add` draws for a user whose source address inside
+/// the nodes no user has (design §11.8): with 131,070 addresses and a few
+/// users, a working random source needs a second draw about once in tens
+/// of thousands of users.
+const USER_ID_DRAWS: usize = 16;
+
+/// A random user id whose source address inside the nodes
+/// ([`mooring_agent_proto::user_source`]) no user of `deployment` has,
+/// whatever their status, so the renderer never meets two served users
+/// sharing one (`UserSourceCollision`).
+fn fresh_user_id(deployment: &Deployment) -> Result<UserId, LocalError> {
+    fresh_user_id_from(deployment, || {
+        credentials::user_id().map_err(LocalError::Keys)
+    })
+}
+
+/// [`fresh_user_id`] with the ids drawn by `draw`.
+pub(crate) fn fresh_user_id_from(
+    deployment: &Deployment,
+    mut draw: impl FnMut() -> Result<UserId, LocalError>,
+) -> Result<UserId, LocalError> {
+    let source = |user: &UserId| {
+        mooring_agent_proto::OpaqueUserId::new(user.as_str())
+            .map(|opaque| mooring_agent_proto::user_source(&opaque))
+            .ok()
+    };
+    let taken: BTreeSet<_> = deployment.users().keys().filter_map(source).collect();
+    for _ in 0..USER_ID_DRAWS {
+        let id = draw()?;
+        if source(&id).is_some_and(|address| !taken.contains(&address)) {
+            return Ok(id);
+        }
+    }
+    Err(LocalError::NoFreeUserSource)
+}
+
+/// `user suspend <uid> --reason …`: suspends an active user, as of now, for
+/// an abuse review or another reason of the operator's (design §7, §11.8).
+/// A configuration change: every node the user holds needs `node apply`.
+pub(crate) fn suspend(
+    env: &Env<'_>,
+    out: &mut dyn Write,
+    user: &UserId,
+    reason: SuspendArg,
+) -> Result<(), CommandError> {
+    let store = Store::new(support_dir(env)?);
+    let state = load(&store)?;
+    let now = (env.clock)()?;
+    let reason = match reason {
+        SuspendArg::AbuseReview => SuspendReason::AbuseReview,
+        SuspendArg::Operator => SuspendReason::Operator,
+    };
+    change_status(&store, &state, user, |found| found.suspend(reason, now))?;
+    writeln!(
+        out,
+        "user {user} is suspended ({}); every node it holds needs `node apply` before it is served no more",
+        match reason {
+            SuspendReason::AbuseReview => "abuse review",
+            _ => "operator",
+        }
+    )
+    .map_err(output)
+}
+
+/// `user resume <uid>`: resumes a suspended user, within the cap. A
+/// configuration change: every node the user holds needs `node apply`.
+pub(crate) fn resume(
+    env: &Env<'_>,
+    out: &mut dyn Write,
+    user: &UserId,
+) -> Result<(), CommandError> {
+    let store = Store::new(support_dir(env)?);
+    let state = load(&store)?;
+    change_status(&store, &state, user, User::resume)?;
+    writeln!(
+        out,
+        "user {user} is active; every node it holds needs `node apply` before it is served again"
+    )
+    .map_err(output)
+}
+
+/// Applies a status transition of the model's to `user`, as one
+/// configuration change; the model's refusal is
+/// [`LocalError::UserTransition`], and the cap's is the store's.
+fn change_status(
+    store: &Store,
+    state: &StateV2,
+    user: &UserId,
+    transition: impl Fn(&mut User) -> Result<(), ModelError>,
+) -> Result<(), CommandError> {
+    if !state.deployment.users().contains_key(user) {
+        return Err(LocalError::UnknownUser { user: user.clone() }.into());
+    }
+    store
+        .update_config(state.deployment.config_generation(), |mut parts| {
+            for candidate in &mut parts.users {
+                if candidate.id == *user {
+                    transition(candidate).map_err(|source| LocalError::UserTransition {
+                        user: user.clone(),
+                        source,
+                    })?;
+                }
+            }
+            Ok(parts)
+        })
+        .map_err(refused_change)?;
+    Ok(())
 }
 
 /// `user agree <uid>`: records that `user` accepted

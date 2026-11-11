@@ -120,6 +120,25 @@ pub(crate) enum LocalError {
         /// The id given.
         user: UserId,
     },
+    /// A user's status cannot change this way: suspending a user who is not
+    /// active, or resuming one who is not suspended (the model's refusal).
+    #[error("user {user}'s status cannot change this way")]
+    UserTransition {
+        /// The user.
+        user: UserId,
+        /// The model's refusal.
+        #[source]
+        source: ModelError,
+    },
+    /// Every user id drawn for a new user shared its source address inside
+    /// the nodes with an existing user (design §11.8); a working random
+    /// source never comes close.
+    #[error("no user id drawn has a source address of its own; the random source is failing")]
+    NoFreeUserSource,
+    /// The Mac's copy of the abuse records cannot be read, merged or
+    /// written.
+    #[error("the abuse records on this Mac cannot be kept")]
+    AbuseRecords(#[source] mooring_daemon_core::abuse::AbuseRecordsError),
     /// The export's file already exists; an export never overwrites one.
     #[error("{} already exists; an export never overwrites a file", path.display())]
     ExportExists {

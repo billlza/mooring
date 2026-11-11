@@ -104,6 +104,7 @@
 
 #![deny(missing_docs)]
 
+mod abuse_records;
 mod allowed_networks;
 mod durable;
 mod error;
@@ -120,6 +121,9 @@ mod store;
 mod tests;
 mod user_usage;
 
+pub use abuse_records::{
+    ABUSE_DIRECTORY, ABUSE_RECORDS_FILE, read_abuse_records, update_abuse_records,
+};
 pub use allowed_networks::{
     ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
     allowed_networks_fit, declare_allowed_network, read_allowed_networks, revoke_allowed_network,

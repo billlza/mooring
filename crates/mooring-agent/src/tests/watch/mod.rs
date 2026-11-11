@@ -6,6 +6,7 @@
 //! §15.7). Each part of a tick has a file of its own, as do what ends the
 //! watch and the readers it reads with.
 
+mod abuse;
 mod accounting;
 mod conditions;
 mod ending;
@@ -14,4 +15,4 @@ mod holds;
 mod journaling;
 mod readers;
 mod status;
-mod world;
+pub(crate) mod world;

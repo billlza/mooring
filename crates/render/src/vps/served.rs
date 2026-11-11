@@ -10,9 +10,12 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::fmt;
+use std::net::Ipv4Addr;
 use std::str::FromStr;
 
-use mooring_agent_proto::{Inbound, OpaqueUserId, Principal, StatsEmail};
+use mooring_agent_proto::{
+    Inbound, OpaqueUserId, Principal, StatsEmail, is_user_source, user_source,
+};
 use mooring_model::ids::{NodeId, ShortId, UserId, Uuid};
 use mooring_model::secret::{Password, Secret, SecretSnapshot};
 use mooring_model::{Deployment, Node};
@@ -47,6 +50,65 @@ impl Identity {
         };
         Ok(StatsEmail { principal, inbound })
     }
+}
+
+/// A user's source address inside the node (design §11.8): always inside
+/// `198.18.0.0/15` and off its ends (`mooring_agent_proto::is_user_source`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct UserSource(Ipv4Addr);
+
+impl UserSource {
+    /// The address, when it is one a user can be given.
+    pub(crate) fn new(address: Ipv4Addr) -> Option<Self> {
+        is_user_source(address).then_some(Self(address))
+    }
+
+    /// The address.
+    pub(crate) const fn address(self) -> Ipv4Addr {
+        self.0
+    }
+}
+
+/// One served user's way out of the node: the accounting emails of both
+/// inbounds, which its routing rule names, and its source address, which
+/// its outbound binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UserExit {
+    pub(crate) emails: [StatsEmail; 2],
+    pub(crate) source: UserSource,
+}
+
+/// The way out of every user `served` holds, in served order, refusing two
+/// users with one source address (`UserSourceCollision`, naming both).
+/// The probe has none: it leaves from the tunnel's own address.
+pub(crate) fn user_exits(node: &NodeId, served: &[Served]) -> Result<Vec<UserExit>, RenderError> {
+    let mut seen: BTreeMap<UserSource, &UserId> = BTreeMap::new();
+    let mut exits = Vec::new();
+    for served in served {
+        let Identity::User(user) = &served.identity else {
+            continue;
+        };
+        let emails = [
+            served.identity.email(Inbound::Reality)?,
+            served.identity.email(Inbound::Hy2)?,
+        ];
+        let Principal::User(opaque) = &emails[0].principal else {
+            continue;
+        };
+        let source =
+            UserSource::new(user_source(opaque)).ok_or_else(|| RenderError::WireValue {
+                field: WireField::AccountingName(user.clone()),
+            })?;
+        if let Some(first) = seen.insert(source, user) {
+            return Err(RenderError::UserSourceCollision {
+                node: node.clone(),
+                first: first.clone(),
+                second: user.clone(),
+            });
+        }
+        exits.push(UserExit { emails, source });
+    }
+    Ok(exits)
 }
 
 /// The name `hy2.json` gives the identity: the user id, or `probe`. A user

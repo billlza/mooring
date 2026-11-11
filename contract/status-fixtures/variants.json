@@ -1045,6 +1045,21 @@
           "Hy2"
         ]
       }
+    },
+    {
+      "AbuseCut": {
+        "users": 1
+      }
+    },
+    {
+      "AbuseSuspected": {
+        "users": 2
+      }
+    },
+    {
+      "AbuseGuardUnavailable": {
+        "cause": "ReadFailed"
+      }
     }
   ],
   "engine_run": [

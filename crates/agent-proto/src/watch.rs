@@ -11,7 +11,9 @@ use std::num::NonZeroU16;
 use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
-use crate::{InboundSet, StatsEmail, TargetHost, UnixTime, ValueError};
+use crate::{
+    AbuseGuardFault, AbuseGuardVersion, InboundSet, StatsEmail, TargetHost, UnixTime, ValueError,
+};
 
 /// Seconds between watch ticks (§11.3).
 pub const WATCH_TICK_SECS: u64 = 5;
@@ -45,6 +47,8 @@ pub const DISK_LOW_FREE_PERCENT: u8 = 10;
 
 /// `watch.json`: the per-generation settings of `mooring-watch`. Constants
 /// that never vary between generations are the `const`s of this module.
+/// This is the shape the renderer writes; a node may still hold the shape
+/// from before the abuse guard ([`InstalledWatchConfig`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WatchConfig {
@@ -56,7 +60,11 @@ pub struct WatchConfig {
     /// clients: every identity it serves, on each inbound. The watch keeps
     /// `StatusV1::last_active` for these only (design §11.5), and reads
     /// them here so that it never needs `xray.json`, which holds secrets.
+    /// The users among them are the users the generation serves, whose
+    /// source addresses ([`crate::user_source`]) the abuse guard measures.
     pub emails: BTreeSet<StatsEmail>,
+    /// The abuse guard the generation's rules carry (design §11.8).
+    pub abuse_guard: AbuseGuardVersion,
 }
 
 impl WatchConfig {
@@ -64,6 +72,82 @@ impl WatchConfig {
     /// to open: [`RX_GROWTH_KEEPALIVES`] keepalive intervals.
     pub fn rx_growth_window_secs(&self) -> u64 {
         RX_GROWTH_KEEPALIVES * u64::from(self.keepalive_secs.get())
+    }
+}
+
+/// `watch.json` as a generation rendered before the abuse guard holds it:
+/// [`WatchConfig`] without `abuse_guard`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WatchConfigBeforeGuard {
+    /// As [`WatchConfig::keepalive_secs`].
+    pub keepalive_secs: NonZeroU16,
+    /// As [`WatchConfig::target`].
+    pub target: WatchTarget,
+    /// As [`WatchConfig::emails`].
+    pub emails: BTreeSet<StatsEmail>,
+}
+
+/// `watch.json` as an installed generation holds it: the current shape, or
+/// the shape from before the abuse guard. An agent that knows the guard
+/// keeps watching a generation rendered before it, so upgrading the agent
+/// before the next apply, or rolling back to such a generation, never stops
+/// the watch; the guard is then reported not installed
+/// ([`crate::AbuseGuardFault::NotInstalled`]). Each shape refuses unknown
+/// keys, so a document is read as exactly one of them.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum InstalledWatchConfig {
+    /// Rendered with the abuse guard.
+    Guarded(WatchConfig),
+    /// Rendered before the abuse guard.
+    BeforeGuard(WatchConfigBeforeGuard),
+}
+
+impl InstalledWatchConfig {
+    /// The Mac peer's persistent keepalive, in seconds.
+    pub fn keepalive_secs(&self) -> NonZeroU16 {
+        match self {
+            Self::Guarded(config) => config.keepalive_secs,
+            Self::BeforeGuard(config) => config.keepalive_secs,
+        }
+    }
+
+    /// The REALITY target the hourly check re-verifies.
+    pub fn target(&self) -> &WatchTarget {
+        match self {
+            Self::Guarded(config) => &config.target,
+            Self::BeforeGuard(config) => &config.target,
+        }
+    }
+
+    /// The accounting emails of the generation's served identities.
+    pub fn emails(&self) -> &BTreeSet<StatsEmail> {
+        match self {
+            Self::Guarded(config) => &config.emails,
+            Self::BeforeGuard(config) => &config.emails,
+        }
+    }
+
+    /// The abuse guard the generation's rules carry; `None` for a
+    /// generation rendered before it.
+    pub fn abuse_guard(&self) -> Option<AbuseGuardVersion> {
+        match self {
+            Self::Guarded(config) => Some(config.abuse_guard),
+            Self::BeforeGuard(_) => None,
+        }
+    }
+
+    /// The window, in seconds, within which rx must have grown for the gate
+    /// to open: [`RX_GROWTH_KEEPALIVES`] keepalive intervals.
+    pub fn rx_growth_window_secs(&self) -> u64 {
+        RX_GROWTH_KEEPALIVES * u64::from(self.keepalive_secs().get())
+    }
+}
+
+impl From<WatchConfig> for InstalledWatchConfig {
+    fn from(config: WatchConfig) -> Self {
+        Self::Guarded(config)
     }
 }
 
@@ -176,6 +260,30 @@ pub enum WatchError {
         /// The inbounds whose probe counters are missing.
         inbounds: InboundSet,
     },
+    /// The abuse guard holds `users` users cut on this node (design §11.8):
+    /// every flow of theirs is refused until the operator lifts the cut.
+    /// It names no user (§15.5); `AbuseRecords` does, to the operator.
+    #[error("{users} users are cut off on this node for abuse")]
+    AbuseCut {
+        /// How many users are cut.
+        users: u16,
+    },
+    /// `users` users who are not cut have a finding at its alert level
+    /// from the last [`crate::ABUSE_SUSPECTED_SECS`] (design §11.8).
+    #[error("{users} users have abuse findings below their cut levels")]
+    AbuseSuspected {
+        /// How many users.
+        users: u16,
+    },
+    /// The abuse guard cannot measure on this node, so it finds nothing:
+    /// the generation carries no guard, or its sets could not be read.
+    /// The per-user limits and the cuts stay in force, and the gate is
+    /// untouched (design §11.8).
+    #[error("the abuse guard cannot measure: {}", .cause.describe())]
+    AbuseGuardUnavailable {
+        /// Why.
+        cause: AbuseGuardFault,
+    },
 }
 
 closed_enum! {
@@ -206,6 +314,12 @@ closed_enum! {
         RebootPending,
         /// [`WatchError::AccountingCanaryMissing`].
         AccountingCanaryMissing,
+        /// [`WatchError::AbuseCut`].
+        AbuseCut,
+        /// [`WatchError::AbuseSuspected`].
+        AbuseSuspected,
+        /// [`WatchError::AbuseGuardUnavailable`].
+        AbuseGuardUnavailable,
     }
 }
 
@@ -225,6 +339,9 @@ impl WatchError {
             Self::ClockUnsynced => WatchErrorKind::ClockUnsynced,
             Self::RebootPending { .. } => WatchErrorKind::RebootPending,
             Self::AccountingCanaryMissing { .. } => WatchErrorKind::AccountingCanaryMissing,
+            Self::AbuseCut { .. } => WatchErrorKind::AbuseCut,
+            Self::AbuseSuspected { .. } => WatchErrorKind::AbuseSuspected,
+            Self::AbuseGuardUnavailable { .. } => WatchErrorKind::AbuseGuardUnavailable,
         }
     }
 }
@@ -375,14 +492,78 @@ mod tests {
                 .into_iter()
                 .map(|email| email.parse().unwrap())
                 .collect(),
+            abuse_guard: AbuseGuardVersion::V1,
         };
         assert_eq!(config.rx_growth_window_secs(), 30);
         let json = serde_json::to_string(&config).unwrap();
         assert_eq!(
             json,
-            r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"]}"#
+            r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"],"abuse_guard":1}"#
         );
         assert_eq!(serde_json::from_str::<WatchConfig>(&json).unwrap(), config);
         assert!(serde_json::from_str::<WatchConfig>(&json.replace(":10,", ":0,")).is_err());
+    }
+
+    /// A node holds either shape: the current one, which names its guard,
+    /// or the one from before the guard. Each refuses the other's keys and
+    /// any other, so a document reads as exactly one shape, and an unknown
+    /// guard version as neither.
+    #[test]
+    fn an_installed_config_reads_as_exactly_one_shape() {
+        let guarded = r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"],"abuse_guard":1}"#;
+        let before = r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"]}"#;
+        let installed: InstalledWatchConfig = serde_json::from_str(guarded).unwrap();
+        assert!(matches!(installed, InstalledWatchConfig::Guarded(_)));
+        assert_eq!(installed.abuse_guard(), Some(AbuseGuardVersion::V1));
+        let old: InstalledWatchConfig = serde_json::from_str(before).unwrap();
+        assert!(matches!(old, InstalledWatchConfig::BeforeGuard(_)));
+        assert_eq!(old.abuse_guard(), None);
+        for config in [&installed, &old] {
+            assert_eq!(config.keepalive_secs().get(), 10);
+            assert_eq!(config.target().host.as_str(), "www.example.com");
+            assert_eq!(config.emails().len(), 2);
+            assert_eq!(config.rx_growth_window_secs(), 30);
+        }
+        assert!(serde_json::from_str::<WatchConfigBeforeGuard>(guarded).is_err());
+        assert!(serde_json::from_str::<WatchConfig>(before).is_err());
+        for bad in [
+            guarded.replace(r#""abuse_guard":1"#, r#""abuse_guard":2"#),
+            guarded.replace(r#""abuse_guard":1"#, r#""abuse_guard":1,"x":1"#),
+            before.replace(r#""emails""#, r#""mails""#),
+        ] {
+            assert!(
+                serde_json::from_str::<InstalledWatchConfig>(&bad).is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(serde_json::to_string(&installed).unwrap(), guarded);
+        assert_eq!(serde_json::to_string(&old).unwrap(), before);
+    }
+
+    #[test]
+    fn the_abuse_conditions_name_counts_and_causes_only() {
+        let conditions = WatchConditions::new([
+            WatchError::AbuseGuardUnavailable {
+                cause: AbuseGuardFault::ReadFailed,
+            },
+            WatchError::AbuseSuspected { users: 2 },
+            WatchError::AbuseCut { users: 1 },
+        ])
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&conditions).unwrap(),
+            r#"[{"AbuseCut":{"users":1}},{"AbuseSuspected":{"users":2}},{"AbuseGuardUnavailable":{"cause":"ReadFailed"}}]"#
+        );
+        assert_eq!(
+            WatchError::AbuseCut { users: 1 }.to_string(),
+            "1 users are cut off on this node for abuse"
+        );
+        assert_eq!(
+            WatchError::AbuseGuardUnavailable {
+                cause: AbuseGuardFault::NotInstalled
+            }
+            .to_string(),
+            "the abuse guard cannot measure: the configuration carries no abuse guard"
+        );
     }
 }
