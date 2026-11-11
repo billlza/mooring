@@ -16,7 +16,7 @@ use mooring_agent_proto::{
 use super::world::{World, listing, tick};
 use crate::abuse::state::AbuseState;
 use crate::host::Node;
-use crate::tests::FakeNode;
+use crate::tests::{FakeNode, occupy_temporary};
 use crate::watch::{Fatal, Watch};
 
 fn u01() -> OpaqueUserId {
@@ -286,6 +286,101 @@ fn an_abuse_state_the_watch_cannot_read_ends_it() {
         }))
     );
     assert!(world.net.closed.get());
+}
+
+/// An alert the abuse state cannot take (a directory where its temporary
+/// file goes) is a state write that failed, as the watch's own are: it is
+/// reported at the next tick and recorded at the first reading after the
+/// state can take it, and neither the watch nor the gate depends on it.
+#[test]
+fn an_alert_the_state_cannot_take_is_retried_and_leaves_the_gate() {
+    let world = World::new();
+    let (mut watch, node) = opened(&world, 1_791_790_000);
+    set_listing(
+        &world,
+        "user_dst",
+        &buckets(&u01(), AbuseFinding::MassContact.alert_at()),
+    );
+    let blocker = occupy_temporary(&world.paths.abuse_state());
+    until_read(&mut watch, &world, &node);
+    assert!(!world.net.closed.get(), "every user is still served");
+    assert!(
+        world.conditions().is_empty(),
+        "the reading's conditions are the state's, without the alert it could not write"
+    );
+    world.traffic(&node, 1);
+    tick(&mut watch, &world, &node);
+    assert_eq!(
+        world.conditions(),
+        vec![WatchErrorKind::StateWrite],
+        "no user is suspected on a record the state does not hold"
+    );
+    assert!(AbuseState::read(&world.paths).unwrap().records().is_empty());
+    std::fs::remove_dir(&blocker).unwrap();
+    until_read(&mut watch, &world, &node);
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert_eq!(state.records().len(), 1);
+    assert_eq!(
+        state.records()[0].action,
+        AbuseAction::Alerted {
+            findings: AbuseFindings::of(AbuseFinding::MassContact)
+        }
+    );
+    world.traffic(&node, 1);
+    tick(&mut watch, &world, &node);
+    assert_eq!(world.conditions(), vec![WatchErrorKind::AbuseSuspected]);
+    assert!(!world.net.closed.get());
+}
+
+/// A cut the abuse state cannot take ends the watch, as nft refusing one
+/// does: its unit closes the gate for everyone and restarts it, rather
+/// than serve a user it cannot keep cut. Once the state can take it, the
+/// restarted watch cuts the user at its first reading.
+#[test]
+fn a_cut_the_state_cannot_take_ends_the_watch() {
+    let world = World::new();
+    let (mut watch, node) = opened(&world, 1_791_795_000);
+    set_listing(
+        &world,
+        "user_dst",
+        &buckets(&u01(), AbuseFinding::MassContact.cut_at()),
+    );
+    let blocker = occupy_temporary(&world.paths.abuse_state());
+    let fatal = (0..3)
+        .find_map(|_| {
+            world.traffic(&node, 1);
+            let result = watch.tick(&world.paths, &node);
+            node.sleep(Duration::from_secs(5));
+            result.err()
+        })
+        .unwrap();
+    assert_eq!(
+        fatal,
+        Fatal::Reading(AgentError::Io {
+            op: IoOp::WriteState,
+            errno: Some(17)
+        })
+    );
+    assert!(!in_kernel(&world, &u01()));
+    assert!(AbuseState::read(&world.paths).unwrap().cuts().is_empty());
+    // The unit's `ExecStopPost` closes the gate; the restarted watch cuts
+    // the user at its first reading.
+    world.net.closed.set(true);
+    std::fs::remove_dir(&blocker).unwrap();
+    let mut restarted = Watch::start(&world.paths).unwrap();
+    for _ in 0..2 {
+        world.traffic(&node, 1);
+        tick(&mut restarted, &world, &node);
+    }
+    assert!(in_kernel(&world, &u01()));
+    assert!(!world.net.closed.get());
+    assert!(
+        AbuseState::read(&world.paths)
+            .unwrap()
+            .cuts()
+            .get(&u01())
+            .is_some()
+    );
 }
 
 /// nft refusing the cut ends the watch (its unit restarts it with the gate

@@ -201,7 +201,8 @@ pub(crate) enum AbuseCommand {
         /// The interface facing the M7.
         #[arg(long, value_name = "BSD_NAME")]
         interface: BsdName,
-        /// Print the node's reply as one JSON line instead of a summary.
+        /// Print the node's replies, one JSON line per page of records,
+        /// instead of a summary.
         #[arg(long)]
         json: bool,
     },

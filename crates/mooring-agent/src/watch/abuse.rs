@@ -15,7 +15,10 @@
 //! user served and the cuts in force. An abuse state the watch cannot read
 //! is a reading it needs, as the holds are: it ends the watch, and the
 //! gate stays closed until the state can be read, since a gate opened
-//! without the cuts could serve a cut user.
+//! without the cuts could serve a cut user. A cut the state cannot take
+//! ends the watch too, for the same reason; an alert or a prune it cannot
+//! take is reported as a state write that failed (`StateWrite`) and tried
+//! again at the next reading, without touching the gate.
 
 use mooring_agent_proto::{
     ABUSE_READ_EVERY_TICKS, ABUSE_SUSPECTED_SECS, AbuseAction, AbuseCutEntry, AbuseFindings,
@@ -29,7 +32,7 @@ use crate::abuse::state::AbuseState;
 use crate::abuse::{add_words, as_args, served_sources, sets};
 use crate::host::Node;
 use crate::paths::Paths;
-use crate::store::Lock;
+use crate::store::{Lock, errno};
 
 /// The conditions the guard raises at a tick, at most one of each kind.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -105,9 +108,20 @@ impl Watch {
                     if !verdicts.is_empty() || state.prune_due(now) {
                         let _lock = Lock::exclusive(&paths.gate_lock())?;
                         state = AbuseState::read(paths)?;
+                        let held = state.clone();
                         state.prune(now);
                         let cut = act(&mut state, now, &verdicts);
-                        state.write(paths)?;
+                        if let Err(error) = state.write(paths) {
+                            // A cut the state cannot keep ends the watch,
+                            // and its unit closes the gate. An alert or a
+                            // prune is retried at the next reading, and the
+                            // failure reported as the watch's own are.
+                            if !cut.is_empty() {
+                                return Err(error.into());
+                            }
+                            self.write_failed = Some(errno(&error));
+                            state = held;
+                        }
                         if !cut.is_empty() {
                             nft(node, &as_args(&add_words(&cut)))?;
                         }
