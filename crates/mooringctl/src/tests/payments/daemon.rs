@@ -11,7 +11,7 @@ use super::super::deployed::{
     CARRIER, deployed, joined_to_the_declared_hotspot, published, shared, statuses, with_exit_on,
 };
 use super::super::support::NOW;
-use super::{FIRST, connect, grant, ledger_on_disk, page};
+use super::{FIRST, SECOND, connect, grant, ledger_on_disk, page};
 use crate::daemon::Intervals;
 
 /// The deployed daemon asks the portal on a tick that leaves it room,
@@ -136,4 +136,80 @@ fn the_fresh_network_check_reads_the_network_again() {
         &m7_support,
         m7_deployment.exit()
     ));
+}
+
+/// The fixture with `SECOND` revoked a day before the clock.
+fn second_revoked() -> mooring_model::Deployment {
+    super::super::user::fixture(|parts| {
+        for user in &mut parts.users {
+            if user.id.as_str() == SECOND {
+                user.per_node.clear();
+                user.status = mooring_model::UserStatus::Revoked {
+                    since: UnixTime::from_secs(NOW - 86_400),
+                };
+            }
+        }
+    })
+}
+
+/// Once a user is removed (here at its request, as `user forget` does),
+/// the daemon's next tick deletes its orders from the ledger, whatever the
+/// pull is doing, and its log counts them without naming the user; the
+/// other users' orders stay.
+#[test]
+fn the_daemon_deletes_a_removed_users_orders_from_the_ledger() {
+    use mooring_model::Bookkeeping;
+    use mooring_store::Store;
+
+    let mut harness = super::super::deployed::deployed_with(second_revoked());
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
+    connect(&mut harness, 1, false, 1);
+    harness.portal.ok(&page(
+        true,
+        0,
+        vec![
+            grant(1, "aaaaaaaaaaaaaaaaaaaa", FIRST),
+            grant(2, "bbbbbbbbbbbbbbbbbbbb", SECOND),
+        ],
+        false,
+    ));
+    let store = Store::new(harness.support_dir());
+    let (control, _retries) = shared();
+    let log = with_exit_on(&mut harness, Intervals::DAEMON, |exit, log| {
+        for _ in 0..4 {
+            exit.tick(&control, log, false).unwrap();
+        }
+        let generation = store.load().unwrap().deployment.config_generation();
+        store
+            .record(
+                generation,
+                Bookkeeping::RevokedUserRemoved {
+                    user: UserId::parse(SECOND).unwrap(),
+                    at: UnixTime::from_secs(NOW),
+                },
+            )
+            .unwrap();
+        exit.tick(&control, log, false).unwrap();
+        exit.tick(&control, log, false).unwrap();
+        String::from_utf8(log.clone()).unwrap()
+    });
+    let ledger = ledger_on_disk(&harness).unwrap();
+    let orders: Vec<String> = ledger.orders().keys().map(ToString::to_string).collect();
+    assert_eq!(orders, ["aaaaaaaaaaaaaaaaaaaa"], "{log}");
+    assert_eq!(ledger.cursor(), 2);
+    let raw = std::fs::read_to_string(
+        harness
+            .support_dir()
+            .join(mooring_store::PAYMENTS_DIRECTORY)
+            .join(mooring_store::PAYMENT_LEDGER_FILE),
+    )
+    .unwrap();
+    assert!(!raw.contains(SECOND), "{raw}");
+    assert_eq!(
+        log.matches("mooringctl daemon: payment ledger: deleted 1 order(s) of 1 removed user(s)")
+            .count(),
+        1,
+        "{log}"
+    );
 }

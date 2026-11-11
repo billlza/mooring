@@ -99,6 +99,13 @@
 //! settings, under the exclusive lock, and [`read_payment_pull`] reads them
 //! without it. `daemon-core` encodes and decodes both (design §9.6).
 //!
+//! # Pending applies
+//!
+//! [`write_pending_applies`] replaces `run/pending-applies.json`, since when
+//! each node has been behind the deployment's configuration generation, as
+//! the daemon first saw it, and [`read_pending_applies`] reads it back with
+//! a bound; the daemon encodes and decodes it (design §13.6, §15.3).
+//!
 //! # Secrets
 //!
 //! The state holds no secrets. They live in a [`SecretStore`]; the
@@ -120,6 +127,7 @@ mod latch;
 mod migrate;
 mod ordered;
 mod payments;
+mod pending_applies;
 mod radio_history;
 mod router_pin;
 mod secrets;
@@ -145,6 +153,7 @@ pub use payments::{
     PAYMENT_LEDGER_FILE, PAYMENT_PULL_FILE, PAYMENTS_DIRECTORY, read_payment_ledger,
     read_payment_pull, update_payment_pull, write_payment_ledger,
 };
+pub use pending_applies::{PENDING_APPLIES_FILE, read_pending_applies, write_pending_applies};
 pub use radio_history::{
     MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
     prune_radio_days, radio_day_path, read_radio_day,

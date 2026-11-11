@@ -73,6 +73,7 @@ pub mod meter;
 pub mod network;
 pub mod notify;
 pub mod payments;
+pub mod pending_applies;
 pub mod period;
 pub mod policy;
 pub mod portal;

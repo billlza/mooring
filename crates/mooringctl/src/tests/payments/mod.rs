@@ -20,6 +20,7 @@ mod command;
 mod curl;
 mod daemon;
 mod listing;
+mod prune;
 mod pull;
 
 /// The first fixture user, `fxuseraaab`.

@@ -105,6 +105,8 @@ io_ops! {
     CreatePaymentsDir => "create the payments directory",
     /// Opening or reading the payment pull's settings.
     ReadPaymentPull => "read the payment pull's settings",
+    /// Opening or reading the daemon's record of pending applies.
+    ReadPendingApplies => "read the record of pending applies",
 }
 
 /// What is wrong with a radio history day file. `Copy`: no fault holds a

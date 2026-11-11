@@ -17,6 +17,7 @@ mod meter;
 mod netgear;
 mod notify;
 mod payments;
+mod pending_applies;
 mod policy;
 mod portal;
 mod power;

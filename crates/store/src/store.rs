@@ -174,8 +174,9 @@ impl Store {
     /// (`UserStatusEdited`): a revocation settles only through
     /// `Bookkeeping`, and a user leaves only by the record
     /// `RevokedUserRemoved`. It may not edit the ids of removed users kept
-    /// while a node may still name them (`ForgottenEdited`). It may edit the exit's SIM policy only to one whose
-    /// plan is recorded (`InvalidChange{PlanNotRecorded}`, P0-1). And it
+    /// while a node may still name them (`ForgottenEdited`). It may edit
+    /// the exit's SIM policy only to one whose plan is recorded
+    /// (`InvalidChange{PlanNotRecorded}`, P0-1). And it
     /// must not change which secrets the state references: such changes go
     /// through [`crate::update_config_with_secrets`], which orders the
     /// secret writes.

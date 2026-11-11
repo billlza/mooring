@@ -36,6 +36,7 @@ mod output;
 mod own_network;
 mod password;
 mod payments;
+mod pending_applies;
 mod pin;
 mod portal;
 mod ports;

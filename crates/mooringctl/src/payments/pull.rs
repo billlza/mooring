@@ -34,7 +34,7 @@ use mooring_daemon_core::payments::{
     PullSettings, Stop, StopReason,
 };
 use mooring_model::secret::{SecretMaterial, SecretRef};
-use mooring_model::{PortalPullToken, UnixTime, User, UserId};
+use mooring_model::{Deployment, PortalPullToken, UnixTime, User, UserId};
 use mooring_store::{read_payment_ledger, read_payment_pull, write_payment_ledger};
 
 use super::curl::PullRequest;
@@ -93,6 +93,8 @@ pub(crate) struct Puller {
     token: Option<(u64, PortalPullToken)>,
     /// The last state logged, so that each is logged once.
     state: Option<String>,
+    /// When a prune whose write failed is tried again.
+    prune_retry: Option<Instant>,
 }
 
 /// Names the cursor and the schedule, never the token.
@@ -135,6 +137,7 @@ impl Puller {
             retry: RETRY_FIRST,
             token: None,
             state: None,
+            prune_retry: None,
         }
     }
 
@@ -154,6 +157,39 @@ impl Puller {
         }
         let rehearsal = self.settings.as_ref().is_some_and(PullSettings::rehearsal);
         self.ledger.entitlements(rehearsal)
+    }
+
+    /// Deletes the orders of users removed from `deployment` (design §9.6;
+    /// the agreement's clause 4): the pruned ledger is written before it is
+    /// kept; a write that fails is said and tried again [`RETRY_FIRST`]
+    /// later. A ledger that could not be read is held as an empty one, so
+    /// nothing is pruned, and its file is left as it is. Returns the lines
+    /// to log, which count users and orders and name none.
+    pub(crate) fn prune(&mut self, deployment: &Deployment) -> Vec<String> {
+        if self.prune_retry.is_some_and(|at| Instant::now() < at) {
+            return Vec::new();
+        }
+        let Some((pruned, counts)) = self.ledger.without_removed_users(deployment) else {
+            return Vec::new();
+        };
+        match self.write(&pruned) {
+            Ok(()) => {
+                self.ledger = pruned;
+                self.prune_retry = None;
+                vec![format!(
+                    "payment ledger: deleted {} order(s) of {} removed user(s)",
+                    counts.orders, counts.users
+                )]
+            }
+            Err(error) => {
+                self.prune_retry = Some(Instant::now() + RETRY_FIRST);
+                vec![format!(
+                    "payment ledger: the orders of {} removed user(s) could not be deleted ({error}); trying again in {} s",
+                    counts.users,
+                    RETRY_FIRST.as_secs()
+                )]
+            }
+        }
     }
 
     /// One tick of the pull: reads the settings, and when the pull is set
