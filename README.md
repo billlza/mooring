@@ -9,7 +9,7 @@ Mooring 让少数受信任的大陆用户经运营者在英国的移动网络出
 
 ## 当前状态
 
-2026-11-11：守护进程开始向泊光门户拉取付款清单（设计 §9.6，`docs/portal-contract.md` 第 5 节）。`mooringctl portal connect --origin https://<门户>` 保存门户的拉取令牌（钥匙串 `portal/pull-token`，只从终端或 stdin 读入）；守护进程每 5 分钟在 Mac 不在任何外部网络上时用 `/usr/bin/curl` 取一次，按订单开通或续期，并把游标和开通结果在同一次落盘里写进 `payments/ledger.json`。按月套餐给用户一段服务期和这段期间每个计费周期的配额，流量包加在开通时所在计费周期的配额上（暂行规则）；控制台和门户快照显示的到期与配额都已包含付款。退款和争议只记录、只报告，具体怎么处理等运营者决定；Stripe 测试模式的付款只在 `portal rehearsal on` 时开通。`portal payments` 列出拉取状态和每张订单。
+2026-11-11：守护进程开始向泊光门户拉取付款清单（设计 §9.6，`docs/portal-contract.md` 第 5 节）。`mooringctl portal connect --origin https://<门户>` 保存门户的拉取令牌（钥匙串 `portal/pull-token`，只从终端或 stdin 读入）；守护进程每 5 分钟在 Mac 不在任何外部网络上时用 `/usr/bin/curl` 取一次，按订单开通或续期，并把游标和开通结果在同一次落盘里写进 `payments/ledger.json`。按月套餐给用户一段服务期和这段期间每个计费周期的配额，流量包加在开通时所在计费周期的配额上（暂行规则）；控制台和门户快照显示的到期与配额都已包含付款。退款和争议只记录、只报告：争议不暂停用户（运营者 2026-11-11 的决定），全额退款收回什么仍待运营者决定；Stripe 测试模式的付款只在 `portal rehearsal on` 时开通。`portal payments` 列出拉取状态和每张订单。
 
 2026-11-05：用户用量开始由守护进程定期采集并原子保存到私有的 `usage/users.json`。明细缺口以节点月累计核对；无法恢复的周期分段和既有节点的未知历史累计显示“无法获取”，不记作零。状态升级为 `MacStatusV2`，每个节点标明明细截止与月累计采样时间，App 与守护进程须一起更新。`node upgrade-agent` 现在还核验并收敛实际运行的 watch；`node runtime <id> --interface <bsd> --json` 可读取控制端摘要、watch PID、启动时刻和实际执行文件摘要。
 

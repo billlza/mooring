@@ -19,8 +19,9 @@
 //!
 //! Nothing here reads a clock or does I/O: the daemon passes `now`, the
 //! deployment's users and the bytes it read, and writes what comes back.
-//! Refunds and disputes are recorded and change nothing: what they should
-//! change is the operator's to decide (design §9.6).
+//! Refunds and disputes are recorded and change nothing. A dispute never
+//! suspends the user (the operator's decision of 2026-11-11); what a refund
+//! in full takes back is the operator's to decide (design §9.6).
 
 mod entitlement;
 mod error;

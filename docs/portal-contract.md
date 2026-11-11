@@ -214,7 +214,8 @@ Mooring checks besides: `after` is the cursor it asked with, every number is abo
 Design §9.6 has the rules; in short:
 
 - **grant** of a `month` or `month_auto`: a service period from the later of now and the user's paid expiry, for `days` days; while it lasts, the user's quota per billing cycle is `traffic_bytes`. Of a `traffic` plan: `traffic_bytes` added to the user's quota of the billing cycle it is granted in (an interim rule; design §9.6). A grant for a user id Mooring does not hold, or a user being revoked or revoked, is held and reported.
-- **refund** and **dispute**: recorded and reported; they change nothing until the operator decides what they should.
+- **refund**: recorded and reported; it changes nothing until the operator decides what a refund in full takes back.
+- **dispute**: recorded and reported; it changes nothing, and never suspends the user (the operator's decision, 2026-11-11).
 - **Once per order**: a grant again is skipped, a refund again (same order, cumulative amount and flag) and a dispute again (same order and amount) too; an entry that contradicts a recorded order stops the pull.
 - **Test mode**: a document with `livemode: false` grants nothing unless the operator rehearses (`mooringctl portal rehearsal on`); a rehearsal's grants count only while it lasts.
 - The cursor and everything a page did are written in one durable write of `payments/ledger.json`.

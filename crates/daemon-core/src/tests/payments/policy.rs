@@ -12,8 +12,8 @@ use mooring_model::{
 };
 use serde_json::Value;
 
-use super::{DAY, NOW, Terms, by_id, id, live, secs, user};
-use crate::payments::{Entitlements, PaymentLedger};
+use super::{DAY, NOW, Terms, by_id, id, live, order, secs, user};
+use crate::payments::{Entitlements, LedgerEvent, PaymentLedger};
 use crate::period::BillingCycle;
 use crate::policy::{
     EffectivePolicy, ExpiryState, PolicyAction, PolicyWarning, UserAction, effective_policy,
@@ -308,6 +308,52 @@ fn evaluate_reads_the_paid_policy() {
             at: secs(now - DAY + 30 * DAY)
         }),
     }));
+}
+
+/// A dispute never suspends the user, nor takes back their paid time or
+/// quota (the operator's decision of 2026-11-11, design §9.6): two days
+/// after their month is disputed, the user has what the month gave and is
+/// due no action.
+#[test]
+fn a_dispute_never_suspends_the_user() {
+    let deployment = super::super::support::deployment();
+    let ids: Vec<UserId> = deployment.users().keys().cloned().collect();
+    let users = deployment.users().clone();
+    let mut terms = Terms::month("aaaaaaaaaaaaaaaaaaaa", "pilotusera");
+    terms.user = Box::leak(ids[0].as_str().to_owned().into_boxed_str());
+    let paid = granted(&users, vec![terms.grant(1)], NOW);
+    let disputed = paid
+        .apply(&live(1, vec![terms.dispute(2, 800)]), &users, NOW, false)
+        .unwrap();
+    assert_eq!(
+        disputed.events,
+        [LedgerEvent::Disputed {
+            order: order("aaaaaaaaaaaaaaaaaaaa"),
+            user: ids[0].clone(),
+            amount_disputed: 800,
+            granted: true,
+        }]
+    );
+    let after = disputed.ledger.entitlements(false);
+    assert_eq!(after, paid.entitlements(false));
+    let two_days_on = secs(NOW.as_secs() + 2 * DAY);
+    assert_eq!(
+        policy_of(&users[&ids[0]], None, &after, two_days_on),
+        EffectivePolicy {
+            quota: Some(paid_quota(NonZeroU64::new(100 * GB).unwrap())),
+            expires_at: Some(secs(NOW.as_secs() + 30 * DAY)),
+        }
+    );
+    let usage = CycleUsage {
+        cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), two_days_on).unwrap(),
+        through: two_days_on,
+        served: ids.iter().map(|id| (id.clone(), 0)).collect(),
+    };
+    let actions = evaluate(&deployment, &after, &usage, two_days_on).unwrap();
+    assert!(
+        !actions.iter().any(|action| action.user == ids[0]),
+        "{actions:?}"
+    );
 }
 
 /// The portal snapshot shows a paid user their paid quota and the end of

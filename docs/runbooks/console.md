@@ -202,7 +202,7 @@ mooringctl portal connect --origin https://<the portal's name>
 mooringctl portal payments
 ```
 
-`portal payments` prints the pull's settings, the cursor, the last pull and any stop, and every order with what Mooring did: a service period, a traffic pack for that billing cycle, or why a grant was held. Refunds and disputes are listed and change nothing yet; what they should change is yours to decide (design §9.6).
+`portal payments` prints the pull's settings, the cursor, the last pull and any stop, and every order with what Mooring did: a service period, a traffic pack for that billing cycle, or why a grant was held. Refunds and disputes are listed and change nothing. A dispute never suspends the user, as you decided on 2026-11-11; answer it at Stripe. What a refund in full should take back is still yours to decide (design §9.6).
 
 - **Rehearse first.** In Stripe's test mode the portal's journal says so, and Mooring grants nothing from it unless you rehearse: `mooringctl portal rehearsal on`, pay with Stripe's test cards, check `portal payments` and the console, then `mooringctl portal rehearsal off`, which takes the rehearsal's grants out at once, and `mooring-portal discard-test-payments` on the portal's host before real payments are taken. The cursor carries on.
 - **It pulls only while the Mac is on no foreign network** (the pull goes the Mac's own way, so never over campus Wi-Fi or eduroam). The daemon's log says when it waits.
