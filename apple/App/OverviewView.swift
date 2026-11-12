@@ -52,7 +52,14 @@ struct OverviewView: View {
                     ForEach(deployed.exit.state.details, id: \.self) { detail in
                         Text(detail)
                     }
-                    Text("Since \(deployed.exit.since.text).")
+                    if let remedy = deployed.exit.state.remedy {
+                        Text(remedy)
+                    }
+                    ForEach(deployed.exit.latchesBehindTheState, id: \.self) { latch in
+                        Label(latch.behindLine, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    Text(deployed.exit.sinceLine)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 case nil:

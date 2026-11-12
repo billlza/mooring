@@ -190,7 +190,8 @@ fn bounded(
                 generated_at,
             });
         }
-        let policy = effective_policy(user, automatic, paid, cycle, generated_at);
+        let downlink = report.and_then(|report| report.cycle_reality_downlink.get(id));
+        let policy = effective_policy(user, automatic, paid, cycle, generated_at, downlink);
         if let Some(at) = policy.expires_at
             && CalendarDate::utc_of(at).is_err()
         {

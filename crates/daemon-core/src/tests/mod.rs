@@ -24,6 +24,7 @@ mod portal;
 mod power;
 mod radio_history;
 mod router;
+mod served_before;
 mod snapshot;
 mod support;
 mod usage;

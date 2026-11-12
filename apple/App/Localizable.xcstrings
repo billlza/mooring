@@ -480,12 +480,12 @@
         }
       }
     },
-    "A latch survives daemon restarts; the exit stays down until it is cleared.": {
+    "A latch survives daemon restarts. `mooringctl exit retry` clears it, and so does a configuration change such as `exit record-carrier --replace`; the exit then probes afresh.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "锁存的违规在守护进程重启后仍然保留；清除之前出口一直停止。"
+            "value": "锁存在守护进程重启后仍然保留。`mooringctl exit retry` 会解除它，配置变更（例如 `exit record-carrier --replace`）也会；解除后出口会重新探测。"
           }
         }
       }
@@ -530,12 +530,12 @@
         }
       }
     },
-    "A violation is latched: %@": {
+    "A violation found %@ is latched as well: %@ It will keep the exit down once the reason above is gone; the Exit screen says what to do about it.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已锁存一次违规：%@"
+            "value": "另外还锁存着一次出口异常（发现于 %1$@）：%2$@ 上面的原因消除后，出口仍会因为它而停止；处理办法见「出口」页。"
           }
         }
       }
@@ -650,12 +650,22 @@
         }
       }
     },
+    "An egress check failed, so the exit stopped itself: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口检查没有通过，出口已自动停止：%@"
+          }
+        }
+      }
+    },
     "An egress violation is latched: %@": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已锁存出口违规：%@"
+            "value": "已锁存出口异常：%@"
           }
         }
       }
@@ -1220,6 +1230,16 @@
         }
       }
     },
+    "Found %@. The exit stays down until the latch is cleared.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发现于 %@。解除锁存之前，出口一直停止。"
+          }
+        }
+      }
+    },
     "Gate": {
       "localizations": {
         "zh-Hans": {
@@ -1313,12 +1333,22 @@
         }
       }
     },
-    "In the carrier's prefixes": {
+    "If the SIM or the carrier's address pool changed, record the new prefixes (`mooringctl exit record-carrier --replace`, then `mooringctl node apply` for each node). If the M7 left the mobile line for its Wi-Fi or Ethernet offload, turn the offload off. Then run `mooringctl exit retry`: the exit probes afresh and starts if the address passes.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "在运营商地址段内"
+            "value": "如果换了 SIM 卡，或者运营商换了地址段：登记新的地址段（`mooringctl exit record-carrier --replace`，再对每个节点运行 `mooringctl node apply`）。如果是 M7 改走了 Wi-Fi 或以太网卸载，把卸载关掉。然后运行 `mooringctl exit retry`：出口会重新探测，地址通过就恢复服务。"
+          }
+        }
+      }
+    },
+    "In the recorded carrier prefixes": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在登记的运营商地址段内"
           }
         }
       }
@@ -1478,7 +1508,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已锁存的违规"
+            "value": "已锁存的出口异常"
           }
         }
       }
@@ -3262,6 +3292,16 @@
         }
       }
     },
+    "The exit's traffic left by the separate uplink, not by the M7: check the routes on both interfaces, then clear the latch with `mooringctl exit retry`.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口流量走的是独立上行链路，没有走 M7：检查两个接口上的路由，然后用 `mooringctl exit retry` 解除锁存。"
+          }
+        }
+      }
+    },
     "The exit, its nodes, users and SIM meter appear once `mooringctl exit init` has created a deployment. Until then the daemon reads the M7 only.": {
       "localizations": {
         "zh-Hans": {
@@ -3452,6 +3492,16 @@
         }
       }
     },
+    "This cycle began on %@; the next begins on %@ (UTC). The meter counts this Mac's traffic through the M7, whichever SIM is in it. After a SIM change, or when the plan starts on another day, move the cycle with `mooringctl sim set-anchor`.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周期从 %1$@ 开始，下个周期从 %2$@ 开始（UTC）。SIM 流量表计的是这台 Mac 经过 M7 的流量，不区分 M7 里是哪张 SIM 卡。换卡后，或者套餐改在另一天起算时，用 `mooringctl sim set-anchor` 调整周期。"
+          }
+        }
+      }
+    },
     "This month": {
       "localizations": {
         "zh-Hans": {
@@ -3498,6 +3548,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "流量"
+          }
+        }
+      }
+    },
+    "Traffic left by %@'s own address, not by this line. %@ was told to halt and stays halted after the latch is cleared: find the cause before `mooringctl exit retry`.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "流量是从 %1$@ 自己的地址出去的，没有走这条线路。已要求 %2$@ 停机，解除锁存后它仍然停机：先查明原因，再运行 `mooringctl exit retry`。"
           }
         }
       }
@@ -3712,12 +3772,22 @@
         }
       }
     },
+    "Violation found": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "异常发现时间"
+          }
+        }
+      }
+    },
     "Violation: %@": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "违规：%@"
+            "value": "出口异常：%@"
           }
         }
       }
@@ -3818,6 +3888,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Wi-Fi 射频"
+          }
+        }
+      }
+    },
+    "With paired probes, users' traffic must leave by the address the direct probes around it see. If the carrier hands this line changing addresses, record the check again with `--pairing unpaired` (`mooringctl exit record-carrier --replace`, then `mooringctl node apply` for each node). Then run `mooringctl exit retry`: the exit probes afresh and starts if the address passes.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配对方式下，用户流量的出口地址必须和前后两次直连探测看到的一致。如果运营商给这条线路的地址会变，用 `--pairing unpaired` 重新登记检查（`mooringctl exit record-carrier --replace`，再对每个节点运行 `mooringctl node apply`）。然后运行 `mooringctl exit retry`：出口会重新探测，地址通过就恢复服务。"
           }
         }
       }
@@ -4100,7 +4180,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "出口违规（%@）"
+            "value": "出口异常（%@）"
           }
         }
       }
@@ -4705,12 +4785,12 @@
         }
       }
     },
-    "outside the carrier's prefixes": {
+    "outside the recorded carrier prefixes": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "不在运营商地址段内"
+            "value": "不在登记的运营商地址段内"
           }
         }
       }
@@ -4945,12 +5025,12 @@
         }
       }
     },
-    "the egress address %@ is outside the carrier's prefixes.": {
+    "the egress address %@ is outside the carrier prefixes recorded for this line.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "出口地址 %@ 不在运营商地址段内。"
+            "value": "出口地址 %@ 不在为这条线路登记的运营商地址段内。"
           }
         }
       }

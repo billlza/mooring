@@ -3,13 +3,15 @@
 //! The lines the payment pull and `portal payments` write: instants in UTC
 //! and each event of an applied page, by order id and user id (both
 //! opaque), never with the token or a label. A refund's line names the
-//! order only, with what it took back.
+//! order only, with what it took back or that it waits for the usage; so
+//! do the line that ends such a wait and the lines that say which nodes
+//! no longer hold a download that was open at the refund.
 
 use mooring_daemon_core::payments::{
-    GrantOutcome, LedgerEvent, OrderId, PackUse, RefundEffect, TimeTakenBack,
+    Closed, GrantOutcome, LedgerEvent, OrderId, PackUse, RefundEffect, TimeTakenBack,
 };
-use mooring_model::UnixTime;
 use mooring_model::user::SuspendReason;
+use mooring_model::{NodeId, UnixTime};
 
 use crate::router::output::utc_stamp;
 
@@ -87,7 +89,44 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
         LedgerEvent::Repeated { seq, order } => {
             format!("payment: entry {seq} of order {order} is in the ledger already; skipped")
         }
+        LedgerEvent::Settled { order, used } => format!(
+            "payment: order {order}'s refund in full no longer waits for the usage; {}",
+            taken_back(&RefundEffect::Pack(used.clone()))
+        ),
+        LedgerEvent::DownloadsClosed {
+            order,
+            why: Closed::XrayBegan,
+            nodes,
+            added,
+            bytes,
+            open,
+        } => format!(
+            "payment: order {order}'s refunded pack: Xray on {} has started again since the refund, so no download that was open at it is left there; the {added} bytes of REALITY downloads counted there since the use was learned are part of it for good, {bytes} bytes now; {}",
+            names(nodes),
+            if *open == 0 {
+                "no node may still count such a download".to_owned()
+            } else {
+                format!("{open} node(s) may still count such a download")
+            }
+        ),
+        LedgerEvent::DownloadsClosed {
+            order,
+            why: Closed::CycleEnded,
+            bytes,
+            ..
+        } => format!(
+            "payment: order {order}'s refunded pack: its billing cycle has ended, so its use at the refund's time takes in nothing more ({bytes} bytes)"
+        ),
     }
+}
+
+/// `nodes` by id, as a list.
+fn names<'a>(nodes: impl IntoIterator<Item = &'a NodeId>) -> String {
+    nodes
+        .into_iter()
+        .map(NodeId::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What a refund took back (design §9.6), as the log and `portal payments`
@@ -104,14 +143,27 @@ pub(crate) fn taken_back(effect: &RefundEffect) -> String {
             stamp(*until),
             followers(moved)
         ),
-        RefundEffect::Pack(PackUse::Served { bytes }) => format!(
-            "its pack now counts only what the user had used of it beyond the rest of their quota: {bytes} bytes served this cycle when Mooring applied the refund"
+        RefundEffect::Pack(PackUse::Served {
+            bytes,
+            learned_at,
+            open_downloads,
+        }) => format!(
+            "its pack counts from {} on only what the user had used of it beyond the rest of their quota: {bytes} bytes served this cycle by the refund's time{}",
+            stamp(*learned_at),
+            if open_downloads.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; a REALITY download that was open then is counted only when it ends, so what {} count(s) of the user's REALITY downloads beyond that counts as used then too, until that node's Xray has started again or the billing cycle ends",
+                    names(open_downloads.keys())
+                )
+            }
         ),
-        RefundEffect::Pack(PackUse::Unknown) => {
-            "its pack is taken back whole: the user's use this cycle was not known when Mooring applied the refund".to_owned()
+        RefundEffect::Pack(PackUse::Awaiting) => {
+            "it waits for the usage: its pack counts in full until the usage collected covers the refund's time, or the pack's billing cycle ends".to_owned()
         }
         RefundEffect::Pack(PackUse::CycleEnded) => {
-            "its pack's billing cycle had ended, so nothing is taken back".to_owned()
+            "its pack's billing cycle has ended, so nothing is taken back".to_owned()
         }
     }
 }

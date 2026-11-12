@@ -265,6 +265,11 @@ pub(crate) fn status_reply() -> Response {
 
 /// Scripts a `Status` answer from every node (ams1, lon1).
 pub(crate) fn statuses(harness: &Harness) {
+    statuses_as(harness, &status_reply());
+}
+
+/// Scripts `reply` as the `Status` answer of every node (ams1, lon1).
+pub(crate) fn statuses_as(harness: &Harness, reply: &Response) {
     for _ in 0..2 {
         harness.nodes.expect(
             Expected::Request {
@@ -272,7 +277,7 @@ pub(crate) fn statuses(harness: &Harness) {
                 remote: ExpectedRemote::Forced,
                 kind: RequestKind::Status,
             },
-            Answered::Replied(Ok(status_reply())),
+            Answered::Replied(Ok(reply.clone())),
         );
     }
 }

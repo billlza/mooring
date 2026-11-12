@@ -58,6 +58,18 @@ extension ExitState {
     }
 }
 
+extension ExitState {
+    /// What to do about the violation the exit is down for; `nil` for
+    /// every other state.
+    var remedy: String? {
+        if case .down(.violation(let violation)) = self {
+            violation.remedy
+        } else {
+            nil
+        }
+    }
+}
+
 extension ProbeStage {
     var text: String {
         switch self {
@@ -145,7 +157,7 @@ extension DownReason {
         case .engineCrashLoop(let engine):
             String(localized: "\(engine.program) crashed five times within 10 minutes.")
         case .violation(let violation):
-            String(localized: "A violation is latched: \(violation.text)")
+            String(localized: "An egress check failed, so the exit stopped itself: \(violation.text)")
         case .simCapReached(let cycleStart):
             String(
                 localized:
@@ -166,7 +178,7 @@ extension Violation {
         case .egressIsNodeAddress(let node, let ip):
             String(localized: "the egress address \(ip) is \(node.text)'s own.")
         case .outsideCarrierPrefixes(let ip):
-            String(localized: "the egress address \(ip) is outside the carrier's prefixes.")
+            String(localized: "the egress address \(ip) is outside the carrier prefixes recorded for this line.")
         case .egressEqualsUplink(let ip):
             String(localized: "the egress address \(ip) is the separate uplink's.")
         case .egressMismatch(let d1, let d2, let observed):
@@ -177,11 +189,68 @@ extension Violation {
     }
 }
 
+extension Violation {
+    /// What to do about the latch, by what the check found (design §10.2;
+    /// the runbook `swap-day.md`, section 3). `exit retry` ends each: the
+    /// daemon clears the latch, probes afresh, and latches again if the
+    /// cause is still there. Recording the carrier check again is a
+    /// configuration change, which clears the latch by itself.
+    var remedy: String {
+        switch self {
+        case .egressIsNodeAddress(let node, _):
+            String(
+                localized:
+                    "Traffic left by \(node.text)'s own address, not by this line. \(node.text) was told to halt and stays halted after the latch is cleared: find the cause before `mooringctl exit retry`."
+            )
+        case .outsideCarrierPrefixes:
+            String(
+                localized:
+                    "If the SIM or the carrier's address pool changed, record the new prefixes (`mooringctl exit record-carrier --replace`, then `mooringctl node apply` for each node). If the M7 left the mobile line for its Wi-Fi or Ethernet offload, turn the offload off. Then run `mooringctl exit retry`: the exit probes afresh and starts if the address passes."
+            )
+        case .egressEqualsUplink:
+            String(
+                localized:
+                    "The exit's traffic left by the separate uplink, not by the M7: check the routes on both interfaces, then clear the latch with `mooringctl exit retry`."
+            )
+        case .egressMismatch:
+            String(
+                localized:
+                    "With paired probes, users' traffic must leave by the address the direct probes around it see. If the carrier hands this line changing addresses, record the check again with `--pairing unpaired` (`mooringctl exit record-carrier --replace`, then `mooringctl node apply` for each node). Then run `mooringctl exit retry`: the exit probes afresh and starts if the address passes."
+            )
+        }
+    }
+}
+
+extension Latch {
+    /// A latch the state does not show, as the overview says it under the
+    /// reason that stands in front of it.
+    var behindLine: String {
+        String(
+            localized:
+                "A violation found \(at.text) is latched as well: \(violation.text) It will keep the exit down once the reason above is gone; the Exit screen says what to do about it."
+        )
+    }
+}
+
+extension ExitSection {
+    /// The time under the state's summary: when a latched violation was
+    /// found, which the state's `since` is not after a daemon restart or
+    /// another reason in front of the latch; otherwise since when the
+    /// state holds.
+    var sinceLine: String {
+        if let found = violationLatchedAt {
+            String(localized: "Found \(found.text). The exit stays down until the latch is cleared.")
+        } else {
+            String(localized: "Since \(since.text).")
+        }
+    }
+}
+
 extension ViolationKind {
     var text: String {
         switch self {
         case .egressIsNodeAddress: String(localized: "egress is a node's address")
-        case .outsideCarrierPrefixes: String(localized: "outside the carrier's prefixes")
+        case .outsideCarrierPrefixes: String(localized: "outside the recorded carrier prefixes")
         case .egressEqualsUplink: String(localized: "egress is the uplink")
         case .egressMismatch: String(localized: "egress mismatch")
         }

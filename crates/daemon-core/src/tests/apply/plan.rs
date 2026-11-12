@@ -332,7 +332,6 @@ fn a_suspension_at_expiry_resumes_once_the_expiry_runs_past_now() {
             deployment.users(),
             UnixTime::from_secs(now().as_secs() - 3600),
             false,
-            None,
         )
         .unwrap()
         .ledger;

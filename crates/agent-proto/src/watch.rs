@@ -34,6 +34,21 @@ pub const VIEWER_STOP_WAIT_SECS: u64 = 3 * WATCH_TICK_SECS;
 pub const GATE_SET_REREAD_SECS: u64 = 60;
 /// Seconds between accounting polls (§11.5).
 pub const ACCOUNTING_INTERVAL_SECS: u64 = 60;
+/// Seconds between the watch's readings of the host and the engine units
+/// (§11.3 step 4): the accounting interval. A status carries the latest
+/// reading, which is dated by the tick that took it, so its `host` and
+/// `engines` are of a tick less than this long before its `watch_at`. The
+/// Mac relies on that to tell when a run of Xray began (design §9.6).
+pub const HOST_READING_SECS: u64 = ACCOUNTING_INTERVAL_SECS;
+/// The longest gap, in seconds, between two accounting polls that the usage
+/// series still places in its bins (§11.5): three accounting intervals, so
+/// a missed poll or a quick restart of the watch or of Xray (the nightly
+/// reboot included) keeps the series whole. A bin holds the polls that end
+/// inside it, and a poll holds what Xray counted since the poll before, so
+/// a bin's bytes were counted no earlier than this long before it begins.
+/// The Mac relies on that (design §9.6). Counted is not always served: the
+/// downlink of a REALITY connection is counted when the connection closes.
+pub const MAX_POLL_GAP_SECS: u64 = 3 * ACCOUNTING_INTERVAL_SECS;
 /// Seconds between target checks.
 pub const TARGET_CHECK_INTERVAL_SECS: u64 = 3600;
 /// The handshake age, in seconds, beyond which the watch reports
