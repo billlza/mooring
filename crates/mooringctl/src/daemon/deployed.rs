@@ -471,7 +471,12 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 ),
                 network_clear: &mut clear_now,
             };
-            for note in self.payments.tick(env, deployment.users(), now, gate) {
+            let collector = &self.usage;
+            let report = || collector.cycle_usage(deployment, now);
+            for note in self
+                .payments
+                .tick(env, deployment.users(), now, gate, &report)
+            {
                 say(log, now, &note)?;
             }
         }

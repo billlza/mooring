@@ -5,13 +5,15 @@
 //! what was granted; on a foreign network it waits.
 
 use mooring_daemon_core::ExpiryState;
+use mooring_daemon_core::payments::{OrderId, PackUse};
 use mooring_model::{UnixTime, UserId};
 
 use super::super::deployed::{
     CARRIER, deployed, joined_to_the_declared_hotspot, published, shared, statuses, with_exit_on,
 };
+use super::super::portal::{collected, with_usage};
 use super::super::support::NOW;
-use super::{FIRST, SECOND, connect, grant, ledger_on_disk, page};
+use super::{FIRST, SECOND, connect, grant, ledger_on_disk, pack, page, refund_in_full};
 use crate::daemon::Intervals;
 
 /// The deployed daemon asks the portal on a tick that leaves it room,
@@ -210,6 +212,47 @@ fn the_daemon_deletes_a_removed_users_orders_from_the_ledger() {
         log.matches("mooringctl daemon: payment ledger: deleted 1 order(s) of 1 removed user(s)")
             .count(),
         1,
+        "{log}"
+    );
+}
+
+/// The daemon gives the pull its usage report: the refund in full of a
+/// pack records the user's bytes served this cycle as the daemon collected
+/// them (design §9.6).
+#[test]
+fn the_daemon_records_what_the_user_had_used_of_a_refunded_pack() {
+    let mut harness = deployed();
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
+    statuses(&harness);
+    with_usage(
+        &harness,
+        &collected(NOW, &UserId::parse(FIRST).unwrap(), 70_000_000_000),
+    );
+    connect(&mut harness, 1, false, 1);
+    let granted = pack(1, "aaaaaaaaaaaaaaaaaaaa", FIRST);
+    harness.portal.ok(&page(
+        true,
+        0,
+        vec![granted.clone(), refund_in_full(&granted, 2, NOW)],
+        false,
+    ));
+    let (control, _retries) = shared();
+    let log = with_exit_on(&mut harness, Intervals::DAEMON, |exit, log| {
+        for _ in 0..4 {
+            exit.tick(&control, log, false).unwrap();
+        }
+        String::from_utf8(log.clone()).unwrap()
+    });
+    let ledger = ledger_on_disk(&harness).unwrap();
+    assert_eq!(
+        ledger.orders()[&OrderId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap()].refunds[0].pack_use,
+        Some(PackUse::Served {
+            bytes: 70_000_000_000
+        }),
+        "{log}"
+    );
+    assert!(
+        log.contains("payment: order aaaaaaaaaaaaaaaaaaaa refunded 800 so far, in full; its pack now counts only what the user had used of it"),
         "{log}"
     );
 }

@@ -446,6 +446,7 @@ fn only_a_lapsed_suspension_at_expiry_is_resumed_once_paid() {
                 room: Some(std::time::Duration::from_secs(10)),
                 network_clear: &mut clear,
             },
+            &|| None,
         )
     });
     let outcome = harness.run(&["apply", "--now"]);
@@ -472,6 +473,55 @@ fn only_a_lapsed_suspension_at_expiry_is_resumed_once_paid() {
         "{}",
         outcome.stdout
     );
+}
+
+/// A paid month refunded in full counts until the time the portal recorded
+/// the refund (design §9.6): the user's paid time ends there, and the job,
+/// reading what the user may use as it always does, suspends them at
+/// expiry. A user with nothing refunded stays.
+#[test]
+fn a_month_refunded_in_full_ends_at_the_refund() {
+    use super::payments::{connect, grant, page, refund_in_full};
+    use crate::payments::pull::{Gate, Puller};
+
+    let mut harness = job(unapplied(|_| {}));
+    connect(&mut harness, 1, false, 1);
+    let first = grant(1, "aaaaaaaaaaaaaaaaaaaa", FIRST);
+    harness.portal.ok(&page(
+        true,
+        0,
+        vec![
+            first.clone(),
+            grant(2, "bbbbbbbbbbbbbbbbbbbb", SECOND),
+            refund_in_full(&first, 3, NOW - 86_400),
+        ],
+        false,
+    ));
+    let mut puller = Puller::open(&harness.support_dir());
+    let users = deployment(&harness).users().clone();
+    let mut clear = || true;
+    harness.with_env(|env| {
+        puller.tick(
+            env,
+            &users,
+            at(NOW - 2 * 86_400),
+            Gate {
+                room: Some(std::time::Duration::from_secs(10)),
+                network_clear: &mut clear,
+            },
+            &|| None,
+        )
+    });
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        status(&harness, FIRST),
+        UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: at(NOW),
+        }
+    );
+    assert_eq!(status(&harness, SECOND), UserStatus::Active);
 }
 
 /// The `--json` outcome: the run's time, each part, and the users by id.
@@ -798,6 +848,7 @@ fn a_pack_lifts_nothing_while_the_usage_is_behind() {
                 room: Some(std::time::Duration::from_secs(10)),
                 network_clear: &mut clear,
             },
+            &|| None,
         )
     });
     assert_eq!(

@@ -20,6 +20,7 @@ use crate::payments::{FeedError, FeedPage, OrderId};
 mod feed;
 mod ledger;
 mod policy;
+mod refunds;
 mod retention;
 mod settings;
 

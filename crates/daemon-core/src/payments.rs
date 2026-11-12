@@ -20,19 +20,22 @@
 //! Nothing here reads a clock or does I/O: the daemon passes `now`, the
 //! deployment's users and the bytes it read, and writes what comes back.
 //! A traffic pack counts in the billing cycle it is granted in only (the
-//! operator's decision of 2026-11-12). Refunds and disputes are recorded
-//! and change nothing. A dispute never suspends the user (the operator's
-//! decision of 2026-11-11); what a refund in full takes back is the
-//! operator's to decide (design §9.6).
+//! operator's decision of 2026-11-12). Refunds and disputes are recorded.
+//! A refund in full takes back what its order gave that the user had not
+//! used yet ([`RefundEffect`], [`TakeBacks`]; the operator's decision of
+//! 2026-11-12); a partial refund changes nothing. A dispute changes
+//! nothing, and never suspends the user (the operator's decision of
+//! 2026-11-11).
 
 mod entitlement;
 mod error;
 mod feed;
 mod ids;
 mod ledger;
+mod refund;
 mod settings;
 
-pub use entitlement::{Entitlements, PaidPack, PaidPeriod, UserEntitlements};
+pub use entitlement::{Entitlements, PackRefund, PaidPack, PaidPeriod, UserEntitlements};
 pub use error::{
     ApplyRefusal, Contradiction, EntryFault, FeedError, LedgerError, MAX_DETAIL_CHARS, printable,
 };
@@ -45,6 +48,7 @@ pub use ledger::{
     Applied, DisputeRecord, GrantOutcome, GrantRecord, HeldReason, LEDGER_VERSION, LedgerEvent,
     MAX_LEDGER_BYTES, OrderRecord, PaymentLedger, Pruned, RefundRecord, Stop, StopReason,
 };
+pub use refund::{PackUse, RefundEffect, TakeBacks, TimeTakenBack};
 pub use settings::{
     ENTITLEMENTS_PATH, MAX_SETTINGS_BYTES, OriginError, PortalOrigin, PullSettings,
     SETTINGS_VERSION, SettingsError,

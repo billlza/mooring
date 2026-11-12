@@ -86,6 +86,7 @@ fn packs(deployment: &Deployment, buyers: &[&'static str]) -> Entitlements {
             deployment.users(),
             UnixTime::from_secs(now().as_secs() - 3600),
             false,
+            None,
         )
         .unwrap()
         .ledger
@@ -151,6 +152,38 @@ fn a_pack_that_covers_the_cycles_use_resumes_the_user() {
     // Without the pack, nothing is lifted, and nothing is reported.
     let plan = plan_policy(&deployment, &Entitlements::none(), Some(&usage), now()).unwrap();
     assert!(plan.resumes.is_empty() && plan.kept.is_empty() && plan.held_back.is_empty());
+}
+
+/// A pack refunded in full is taken back: with the user's use not known
+/// when Mooring applied the refund, all of it. The user, still over quota,
+/// stays suspended, and the run does not report a pack bought since, as it
+/// would for one not refunded that falls short.
+#[test]
+fn a_pack_refunded_in_full_lifts_nothing_and_is_not_reported() {
+    let deployment = holding(vec![over("packbuyera", 100)], None);
+    let pack = Terms::pack("aaaaaaaaaaaaaaaaaaaa", "packbuyera");
+    let mut refund = pack.refund(2, 800, true);
+    refund["recorded_at"] = serde_json::json!(now().as_secs() - 1800);
+    let paid = PaymentLedger::new()
+        .apply(
+            &live(0, vec![pack.grant(1), refund]),
+            deployment.users(),
+            UnixTime::from_secs(now().as_secs() - 3600),
+            false,
+            None,
+        )
+        .unwrap()
+        .ledger
+        .entitlements(false);
+    // 120 GB used: the pack would have lifted the suspension, and at 160 GB
+    // it would have been reported as falling short.
+    for gigabytes in [120, 160] {
+        let usage = used(&deployment, &[("packbuyera", gigabytes)]);
+        let plan = plan_policy(&deployment, &paid, Some(&usage), now()).unwrap();
+        assert!(plan.resumes.is_empty(), "{gigabytes}");
+        assert!(plan.kept.is_empty(), "{gigabytes}");
+        assert!(plan.held_back.is_empty(), "{gigabytes}");
+    }
 }
 
 /// A quota the operator raised above what the user used lifts the
@@ -303,6 +336,7 @@ fn a_month_bought_since_lifts_or_is_reported_as_a_pack_is() {
             deployment.users(),
             UnixTime::from_secs(now().as_secs() - 3600),
             false,
+            None,
         )
         .unwrap()
         .ledger

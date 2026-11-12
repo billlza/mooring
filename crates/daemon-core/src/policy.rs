@@ -35,7 +35,9 @@
 //! a period covering the instant gives its quota where the user has no
 //! quota of their own, the packs granted in the cycle add to the quota that
 //! applies, and the last period's end is the expiry, unless the user's own
-//! record is later. Every reader of a user's quota or expiry (the status
+//! record is later. A refund in full takes back what the order gave that
+//! the user had not used: the rest of its period, and of its pack what the
+//! user had not used. Every reader of a user's quota or expiry (the status
 //! line, the portal snapshot and [`evaluate`]) goes through it.
 
 use std::collections::BTreeMap;
@@ -418,11 +420,14 @@ pub struct EffectivePolicy {
 ///   whether larger or smaller; otherwise the quota of the paid service
 ///   period covering `now` ([`paid_quota`]); otherwise the automatic one,
 ///   if any. The bytes of the traffic packs granted in `cycle` are added to
-///   whichever applies; a user with no quota at all keeps none.
+///   whichever applies, of a pack refunded in full only what the user had
+///   used of it ([`UserEntitlements::pack_bytes_in`]); a user with no quota
+///   at all keeps none.
 /// - **Expiry.** Without a paid period, the user's own
 ///   `UserPolicy::expires_at`. With one, the later of the last period's end
-///   and the user's own expiry; an own expiry of `None` adds nothing, so a
-///   user who has paid expires when the paid time ends.
+///   (as the refunds in full leave it) and the user's own expiry; an own
+///   expiry of `None` adds nothing, so a user who has paid expires when the
+///   paid time ends, a refund in full of all of it included.
 #[must_use]
 pub fn effective_policy(
     user: &User,
@@ -437,10 +442,14 @@ pub fn effective_policy(
         (None, Some(period)) => Some(paid_quota(period.quota_bytes)),
         (None, None) => automatic,
     };
-    let packs = own.map_or(0, |own| own.pack_bytes_in(cycle));
-    let quota = base.map(|quota| UserQuota {
-        cycle_served_bytes: quota.cycle_served_bytes.saturating_add(packs),
-        ..quota
+    let quota = base.map(|quota| {
+        let packs = own.map_or(0, |own| {
+            own.pack_bytes_in(cycle, now, quota.cycle_served_bytes.get())
+        });
+        UserQuota {
+            cycle_served_bytes: quota.cycle_served_bytes.saturating_add(packs),
+            ..quota
+        }
     });
     let expires_at = match own.and_then(UserEntitlements::paid_until) {
         None => user.policy.expires_at,

@@ -46,7 +46,7 @@ fn quota(bytes: u64, warn: u8, action: QuotaAction) -> UserQuota {
 /// The ledger after applying `entries` live at `at` for `users`.
 fn granted(users: &BTreeMap<UserId, User>, entries: Vec<Value>, at: UnixTime) -> PaymentLedger {
     PaymentLedger::new()
-        .apply(&live(0, entries), users, at, false)
+        .apply(&live(0, entries), users, at, false, None)
         .unwrap()
         .ledger
 }
@@ -197,9 +197,12 @@ fn a_pack_raises_the_quota_of_its_cycle_only() {
     assert_eq!(policy_of(a, None, &paid, NOW).quota, Some(with_packs));
     let entitlements = paid.user(&id("pilotusera")).unwrap();
     assert_eq!(entitlements.packs().len(), 2);
-    assert_eq!(entitlements.pack_bytes_in(cycle(NOW)), 100 * GB);
+    assert_eq!(entitlements.pack_bytes_in(cycle(NOW), NOW, 0), 100 * GB);
     let next_cycle = cycle(NOW).ends_at();
-    assert_eq!(entitlements.pack_bytes_in(cycle(next_cycle)), 0);
+    assert_eq!(
+        entitlements.pack_bytes_in(cycle(next_cycle), next_cycle, 0),
+        0
+    );
     assert_eq!(
         policy_of(a, None, &paid, next_cycle).quota,
         Some(paid_quota(NonZeroU64::new(100 * GB).unwrap()))
@@ -256,6 +259,7 @@ fn evaluate_reads_the_paid_policy() {
             &users,
             secs(now - DAY),
             false,
+            None,
         )
         .unwrap()
         .ledger;
@@ -323,7 +327,13 @@ fn a_dispute_never_suspends_the_user() {
     terms.user = Box::leak(ids[0].as_str().to_owned().into_boxed_str());
     let paid = granted(&users, vec![terms.grant(1)], NOW);
     let disputed = paid
-        .apply(&live(1, vec![terms.dispute(2, 800)]), &users, NOW, false)
+        .apply(
+            &live(1, vec![terms.dispute(2, 800)]),
+            &users,
+            NOW,
+            false,
+            None,
+        )
         .unwrap();
     assert_eq!(
         disputed.events,

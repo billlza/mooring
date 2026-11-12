@@ -34,6 +34,7 @@ fn ledger(deployment: &Deployment) -> PaymentLedger {
             deployment.users(),
             NOW,
             false,
+            None,
         )
         .unwrap()
         .ledger
@@ -86,6 +87,7 @@ fn a_forgotten_users_every_order_goes() {
             deployment.users(),
             NOW,
             false,
+            None,
         )
         .unwrap()
         .ledger;
@@ -141,6 +143,7 @@ fn a_removed_users_granted_and_held_orders_go_and_strangers_orders_stay() {
             deployment.users(),
             NOW,
             false,
+            None,
         )
         .unwrap()
         .ledger;

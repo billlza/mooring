@@ -296,7 +296,7 @@ fn usage_reported(usage: Option<&CycleUsage>, user: &UserId) -> bool {
 }
 
 /// Whether `user`'s paid orders gave, after `since`, a pack counted in
-/// `cycle` or a period covering `now`.
+/// `cycle` and not refunded in full by `now`, or a period covering `now`.
 fn granted_since(
     paid: &Entitlements,
     user: &UserId,
@@ -305,13 +305,13 @@ fn granted_since(
     now: UnixTime,
 ) -> bool {
     paid.user(user).is_some_and(|orders| {
-        orders
-            .packs()
-            .iter()
-            .any(|pack| pack.granted_at > since && cycle.contains(pack.granted_at))
-            || orders
-                .period_at(now)
-                .is_some_and(|period| period.from > since)
+        orders.packs().iter().any(|pack| {
+            pack.granted_at > since
+                && cycle.contains(pack.granted_at)
+                && pack.refund.is_none_or(|refund| refund.at > now)
+        }) || orders
+            .period_at(now)
+            .is_some_and(|period| period.from > since)
     })
 }
 

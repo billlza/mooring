@@ -2,9 +2,12 @@
 
 //! The lines the payment pull and `portal payments` write: instants in UTC
 //! and each event of an applied page, by order id and user id (both
-//! opaque), never with the token or a label.
+//! opaque), never with the token or a label. A refund's line names the
+//! order only, with what it took back.
 
-use mooring_daemon_core::payments::{GrantOutcome, LedgerEvent};
+use mooring_daemon_core::payments::{
+    GrantOutcome, LedgerEvent, OrderId, PackUse, RefundEffect, TimeTakenBack,
+};
 use mooring_model::UnixTime;
 use mooring_model::user::SuspendReason;
 
@@ -62,14 +65,15 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
         ),
         LedgerEvent::Refunded {
             order,
-            user,
             amount_refunded,
             in_full,
             granted,
+            effect,
         } => format!(
-            "payment: order {order} of user {user} refunded {amount_refunded} so far{}{}; recorded, nothing changed",
+            "payment: order {order} refunded {amount_refunded} so far{}{}; {}",
             if *in_full { ", in full" } else { "" },
-            never_granted(*granted)
+            never_granted(*granted),
+            taken_back(effect)
         ),
         LedgerEvent::Disputed {
             order,
@@ -83,6 +87,46 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
         LedgerEvent::Repeated { seq, order } => {
             format!("payment: entry {seq} of order {order} is in the ledger already; skipped")
         }
+    }
+}
+
+/// What a refund took back (design §9.6), as the log and `portal payments`
+/// say it.
+pub(crate) fn taken_back(effect: &RefundEffect) -> String {
+    match effect {
+        RefundEffect::Nothing => "nothing is taken back".to_owned(),
+        RefundEffect::Time(TimeTakenBack { from, until, .. }) if from == until => {
+            "its service had ended, so nothing is taken back".to_owned()
+        }
+        RefundEffect::Time(TimeTakenBack { from, until, moved }) => format!(
+            "its service from {} until {} is taken back{}",
+            stamp(*from),
+            stamp(*until),
+            followers(moved)
+        ),
+        RefundEffect::Pack(PackUse::Served { bytes }) => format!(
+            "its pack now counts only what the user had used of it beyond the rest of their quota: {bytes} bytes served this cycle when Mooring applied the refund"
+        ),
+        RefundEffect::Pack(PackUse::Unknown) => {
+            "its pack is taken back whole: the user's use this cycle was not known when Mooring applied the refund".to_owned()
+        }
+        RefundEffect::Pack(PackUse::CycleEnded) => {
+            "its pack's billing cycle had ended, so nothing is taken back".to_owned()
+        }
+    }
+}
+
+/// The periods a refund in full moved earlier, as a clause.
+fn followers(moved: &[OrderId]) -> String {
+    let orders = moved
+        .iter()
+        .map(OrderId::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    match moved.len() {
+        0 => String::new(),
+        1 => format!(", and the period of order {orders} that followed it moves as much earlier"),
+        _ => format!(", and the periods of orders {orders} that followed it move as much earlier"),
     }
 }
 

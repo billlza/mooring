@@ -79,6 +79,7 @@ fn a_prune_that_cannot_be_written_is_said_and_tried_again_later() {
                 room: Some(std::time::Duration::from_secs(10)),
                 network_clear: &mut clear,
             },
+            &|| None,
         )
     });
     assert_eq!(ledger_on_disk(&harness).unwrap().orders().len(), 2);

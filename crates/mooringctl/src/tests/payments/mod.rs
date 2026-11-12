@@ -74,6 +74,27 @@ pub(crate) fn grant(seq: u64, order: &str, user: &str) -> Value {
     })
 }
 
+/// A 50 GB traffic pack for `user` as entry `seq`, order `order`.
+pub(crate) fn pack(seq: u64, order: &str, user: &str) -> Value {
+    let mut entry = grant(seq, order, user);
+    entry["plan"] = json!("pack-50");
+    entry["plan_kind"] = json!("traffic");
+    entry["traffic_bytes"] = json!(50_000_000_000_u64);
+    entry
+}
+
+/// The refund in full of `granted`'s order as entry `seq`, recorded by the
+/// portal at `recorded_at`.
+pub(crate) fn refund_in_full(granted: &Value, seq: u64, recorded_at: u64) -> Value {
+    let mut entry = granted.clone();
+    entry["seq"] = json!(seq);
+    entry["kind"] = json!("refund");
+    entry["amount_refunded"] = json!(800);
+    entry["refunded_in_full"] = json!(true);
+    entry["recorded_at"] = json!(recorded_at);
+    entry
+}
+
 /// The document of `entries` after `after`.
 pub(crate) fn page(livemode: bool, after: u64, entries: Vec<Value>, more: bool) -> Vec<u8> {
     let next = entries

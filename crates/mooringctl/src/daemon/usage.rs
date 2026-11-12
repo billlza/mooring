@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use mooring_agent_proto::{AgentError, LineRequest, Resolution, Response, SeriesRange, UsageMonth};
 use mooring_daemon_core::error::{UsageError, UsageErrorKind};
 use mooring_daemon_core::snapshot::{Ledgers, NodePoll};
-use mooring_daemon_core::usage::{CollectedUsage, NodeUsageHistory};
+use mooring_daemon_core::usage::{CollectedUsage, CycleUsage, NodeUsageHistory};
 use mooring_model::iface::BsdName;
 use mooring_model::node::{Node, NodeLifecycle};
 use mooring_model::{Deployment, NodeId, UnixTime};
@@ -116,6 +116,22 @@ impl Collector {
             StoreState::Ready(history) => Ledgers::Collected(history),
             StoreState::Unreadable { kind } => Ledgers::Unavailable(*kind),
             StoreState::Unwritten { .. } => Ledgers::Unavailable(UsageErrorKind::StoreUnavailable),
+        }
+    }
+
+    /// The usage report of the billing cycle at `now`, as the status counts
+    /// it: `None` when the store cannot be read or the report cannot be
+    /// made (the collection behind, or its figures inconsistent, which the
+    /// status's usage view and [`Self::failure`] say). A refund in full of
+    /// a traffic pack then records the user's use as not known, and takes
+    /// the pack back whole (design §9.6).
+    pub(crate) fn cycle_usage(&self, deployment: &Deployment, now: UnixTime) -> Option<CycleUsage> {
+        match &self.store {
+            StoreState::Ready(history) => history
+                .aggregate(deployment, now)
+                .ok()
+                .map(|report| report.cycle_usage()),
+            StoreState::Unreadable { .. } | StoreState::Unwritten { .. } => None,
         }
     }
 
