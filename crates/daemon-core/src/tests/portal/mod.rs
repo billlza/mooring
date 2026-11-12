@@ -20,12 +20,13 @@ use mooring_model::{
 };
 use serde_json::{Value, json};
 
+use super::payments::{Terms, Told, live};
 use super::support::{date, edited, email, node, traffic, wire};
-use crate::payments::Entitlements;
+use crate::payments::{Entitlements, PaymentLedger};
 use crate::period::{BillingCycle, UsagePeriods};
 use crate::policy::automatic_quota;
 use crate::portal::{PortalSnapshot, snapshot};
-use crate::usage::{CollectedUsage, NodeUsageHistory, UsageReport, UserUsage};
+use crate::usage::{CollectedUsage, NodeUsageHistory, ServedBefore, UsageReport, UserUsage};
 
 mod refusals;
 
@@ -226,6 +227,7 @@ fn pilot_report(deployment: &Deployment) -> UsageReport {
             .collect(),
         sampled_at: BTreeMap::new(),
         probe_cycle: BTreeMap::new(),
+        cycle_reality_downlink: BTreeMap::new(),
     }
 }
 
@@ -464,4 +466,69 @@ fn collected_usage_gives_each_user_the_cycles_bytes() {
     assert_eq!(document["users"][0]["cycle_served_bytes"], json!(15_000));
     // A user with no traffic on any node has a real zero.
     assert_eq!(document["users"][1]["cycle_served_bytes"], json!(0));
+}
+
+/// The quota the snapshot gives counts a download that was open at the
+/// refund in full of a traffic pack (design §9.6), by the report the
+/// snapshot's use comes from. `pilotusera` has 40 GB of quota and a 50 GB
+/// pack refunded in full; the use learned was 45 GB, 10 GB of it REALITY
+/// downlink on lon1, so the pack kept 5 GB. The report has lon1 at 13 GB:
+/// the 3 GB more count as used of the pack, and the quota is 48 GB.
+/// Without a report it is the 45 GB that was learned.
+#[test]
+fn the_quota_counts_what_a_node_counted_since_a_refunded_packs_use_was_learned() {
+    const GB: u64 = 1_000_000_000;
+    let deployment = pilots(|_| {});
+    let hours_before = |hours: u64| UnixTime::from_secs(GENERATED_AT.as_secs() - hours * 3600);
+    let pack = Terms::pack("aaaaaaaaaaaaaaaaaaaa", "pilotusera");
+    let mut refund = pack.refund(2, 800, true);
+    refund["recorded_at"] = json!(hours_before(2).as_secs());
+    let ledger = PaymentLedger::new()
+        .apply(
+            &live(0, vec![pack.grant(1)]),
+            deployment.users(),
+            hours_before(3),
+            false,
+        )
+        .unwrap()
+        .ledger
+        .apply(
+            &live(1, vec![refund]),
+            deployment.users(),
+            hours_before(2),
+            false,
+        )
+        .unwrap()
+        .ledger;
+    let told = Told {
+        served: Some(ServedBefore {
+            bytes: 45 * GB,
+            reality_downlink: BTreeMap::from([(node("lon1"), 10 * GB), (node("ams1"), 0)]),
+        }),
+        ..Told::default()
+    };
+    let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), hours_before(1)).unwrap();
+    let paid = ledger
+        .settle(hours_before(1), cycle, &told)
+        .unwrap()
+        .ledger
+        .entitlements(false);
+    let mut report = pilot_report(&deployment);
+    report
+        .cycle_reality_downlink
+        .insert(id("pilotusera"), BTreeMap::from([(node("lon1"), 13 * GB)]));
+    let quota_of = |report: Option<&UsageReport>| {
+        let made = snapshot(
+            &deployment,
+            report,
+            &paid,
+            &ids(&["pilotusera"]),
+            GENERATED_AT,
+            open(),
+        )
+        .unwrap();
+        parsed(&made)["users"][0]["quota"]["cycle_served_bytes"].clone()
+    };
+    assert_eq!(quota_of(Some(&report)), json!(48 * GB));
+    assert_eq!(quota_of(None), json!(45 * GB));
 }

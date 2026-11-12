@@ -8,10 +8,15 @@
 
 use std::collections::BTreeMap;
 
-use mooring_model::{NodeId, UnixTime};
+use mooring_agent_proto::Inbound;
+use mooring_model::{Deployment, NodeId, UnixTime};
 
+use super::collected_usage::month;
+use super::payments::Told;
+use super::support::{deployment_billed_on, email, node, traffic, user_ids};
 use crate::error::UsageErrorKind;
 use crate::payments::Entitlements;
+use crate::period::BillingCycle;
 use crate::policy::QuotaState;
 use crate::router::{RouterReading, RouterUnavailableReason};
 use crate::snapshot::{Ledgers, SimTotals, StatusInputs, assemble};
@@ -19,7 +24,7 @@ use crate::status::{
     AgentUnreachable, ExitSection, ExitState, MacEngines, MacStatusV2, MeterAccuracy,
     NodeAgentState, PowerSource, PowerStatus, UsageView,
 };
-use crate::usage::ActiveNow;
+use crate::usage::{ActiveNow, CollectedUsage, NodeUsageHistory, ServedBefore};
 
 fn exit(at: UnixTime) -> ExitSection {
     ExitSection {
@@ -70,8 +75,18 @@ fn assembled_with(
     entitlements: &Entitlements,
 ) -> MacStatusV2 {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    assembled_for(&fixture.deployment, ledgers, unreachable, entitlements)
+}
+
+/// [`assembled_with`], for `deployment`.
+fn assembled_for(
+    deployment: &Deployment,
+    ledgers: Ledgers<'_>,
+    unreachable: &BTreeMap<NodeId, NodeAgentState>,
+    entitlements: &Entitlements,
+) -> MacStatusV2 {
     assemble(StatusInputs {
-        deployment: &fixture.deployment,
+        deployment,
         at: at(),
         exit: exit(at()),
         sim: SimTotals {
@@ -188,7 +203,7 @@ fn a_paid_users_row_shows_the_paid_policy() {
     });
     let page = FeedPage::decode(&serde_json::to_vec(&document).unwrap(), 0).unwrap();
     let ledger = PaymentLedger::new()
-        .apply(&page, fixture.deployment.users(), at(), false, None)
+        .apply(&page, fixture.deployment.users(), at(), false)
         .unwrap()
         .ledger;
     let paid = assembled_with(
@@ -213,4 +228,111 @@ fn a_paid_users_row_shows_the_paid_policy() {
     );
     assert_ne!(row, &plain.parts().users[&ids[0]]);
     assert_eq!(paid.parts().users[&ids[1]], plain.parts().users[&ids[1]]);
+}
+
+/// A user's row counts a download that was open at the refund in full of
+/// a traffic pack (design §9.6): the report that gives the user's use also
+/// gives what each node has counted of their REALITY downlink. The user
+/// has a paid month of 100 GB and a 50 GB pack refunded in full; the use
+/// learned was 120 GB, 30 GB of it REALITY downlink on lon1, so the pack
+/// kept 20 GB. lon1 has now counted 40 GB of it: the 10 GB more count as
+/// used of the pack, and the quota is 130 GB against 125 GB used.
+#[test]
+fn a_row_counts_what_a_node_counted_since_a_refunded_packs_use_was_learned() {
+    use crate::payments::{FeedPage, PaymentLedger};
+
+    const GB: u64 = 1_000_000_000;
+    let deployment = deployment_billed_on(1);
+    let user = &user_ids()[0];
+    let mut history = CollectedUsage::default();
+    let mut lon = NodeUsageHistory::default();
+    lon.record_month(
+        &node("lon1"),
+        month(
+            "2026-10",
+            at(),
+            vec![
+                (email(user, Inbound::Reality), traffic(0, 40 * GB)),
+                (email(user, Inbound::Hy2), traffic(0, 85 * GB)),
+            ],
+        ),
+        at(),
+    )
+    .unwrap();
+    history.set_node(node("lon1"), lon);
+    let mut ams = NodeUsageHistory::default();
+    ams.record_month(&node("ams1"), month("2026-10", at(), vec![]), at())
+        .unwrap();
+    history.set_node(node("ams1"), ams);
+
+    let granted = at().as_secs() - 3 * 3600;
+    let refunded = at().as_secs() - 2 * 3600;
+    let learned = UnixTime::from_secs(at().as_secs() - 3600);
+    let entry = |seq: u64, kind: &str, order: &str, plan_kind: &str, bytes: u64| {
+        let refund = kind == "refund";
+        serde_json::json!({
+            "seq": seq, "kind": kind, "order": order, "user": user.as_str(),
+            "plan": "plan", "plan_kind": plan_kind, "days": 30, "traffic_bytes": bytes,
+            "amount": 800, "currency": "gbp", "paid_at": granted, "renewal_of": null,
+            "amount_refunded": refund.then_some(800), "refunded_in_full": refund.then_some(true),
+            "amount_disputed": null,
+            "recorded_at": if refund { refunded } else { granted },
+        })
+    };
+    let page = |after: u64, entries: Vec<serde_json::Value>| {
+        let next = after + entries.len() as u64;
+        let document = serde_json::json!({
+            "format": "mooring-portal-entitlements", "version": 1,
+            "generated_at": at().as_secs(), "livemode": true,
+            "after": after, "entries": entries, "next": next, "more": false,
+        });
+        FeedPage::decode(&serde_json::to_vec(&document).unwrap(), after).unwrap()
+    };
+    let grants = page(
+        0,
+        vec![
+            entry(1, "grant", "aaaaaaaaaaaaaaaaaaaa", "month", 100 * GB),
+            entry(2, "grant", "bbbbbbbbbbbbbbbbbbbb", "traffic", 50 * GB),
+        ],
+    );
+    let refund = page(
+        2,
+        vec![entry(
+            3,
+            "refund",
+            "bbbbbbbbbbbbbbbbbbbb",
+            "traffic",
+            50 * GB,
+        )],
+    );
+    let users = deployment.users();
+    let ledger = PaymentLedger::new()
+        .apply(&grants, users, UnixTime::from_secs(granted), false)
+        .unwrap()
+        .ledger
+        .apply(&refund, users, UnixTime::from_secs(refunded), false)
+        .unwrap()
+        .ledger;
+    let told = Told {
+        served: Some(ServedBefore {
+            bytes: 120 * GB,
+            reality_downlink: BTreeMap::from([(node("lon1"), 30 * GB), (node("ams1"), 0)]),
+        }),
+        ..Told::default()
+    };
+    let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), learned).unwrap();
+    let ledger = ledger.settle(learned, cycle, &told).unwrap().ledger;
+    let status = assembled_for(
+        &deployment,
+        Ledgers::Collected(&history),
+        &BTreeMap::new(),
+        &ledger.entitlements(false),
+    );
+    assert_eq!(
+        status.parts().users[user].quota,
+        QuotaState::Warn {
+            used_bytes: 125 * GB,
+            quota_bytes: 130 * GB,
+        }
+    );
 }

@@ -293,7 +293,6 @@ fn payments_lists_the_pull_and_every_order() {
                 room: Some(std::time::Duration::from_secs(10)),
                 network_clear: &mut clear,
             },
-            &|| None,
         )
     });
     let listed = harness.run(&["portal", "payments"]);
@@ -347,7 +346,7 @@ fn the_portal_snapshot_carries_the_paid_policy() {
     )
     .unwrap();
     let ledger = PaymentLedger::new()
-        .apply(&page, &users, UnixTime::from_secs(NOW), false, None)
+        .apply(&page, &users, UnixTime::from_secs(NOW), false)
         .unwrap()
         .ledger;
     write_payment_ledger(&harness.support_dir(), &ledger.encode().unwrap()).unwrap();
