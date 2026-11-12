@@ -195,7 +195,7 @@ Each entry:
 | `user` | the Mooring `UserId` the order's account was bound to when it was placed and when it was granted |
 | `plan` | the catalogue's id: 1 to 32 of `a-z`, `0-9` and `-`, not at either end |
 | `plan_kind` | `"month"`, `"month_auto"` or `"traffic"` |
-| `days` | 1 or more: days of service, or the days a pack is meant to last |
+| `days` | 1 or more: days of service, or the days a pack is meant to last, which Mooring records and does not apply: a pack counts in the billing cycle it is granted in (the operator's decision of 2026-11-12) |
 | `traffic_bytes` | 1 or more decimal bytes: the quota of each billing cycle of the service, or the pack's traffic |
 | `amount`, `currency` | the plan's price in the currency's hundredths, and three lower-case letters |
 | `paid_at` | Unix seconds: when Stripe told of the payment |

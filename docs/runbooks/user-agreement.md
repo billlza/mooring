@@ -40,6 +40,14 @@
       early moves the expiry, not the quota. Cancelling auto-renewal is
       possible at the portal (to be built with payment) and through the
       operator.
+    - A traffic pack counts only in the billing cycle in which it is
+      granted, until that cycle ends: what is left unused does not carry
+      over, and the order's days are recorded and not applied (the
+      operator's decision of 2026-11-12). That is what the payment pull
+      already does (design §9.6). Clause 1 tells users where the cycle's
+      end shows: the portal's subscription page, 「下次重置：…」 (the
+      portal's crates/web/src/i18n/zh.rs at 8b7c170), shown while the
+      portal's figures are for the current cycle.
     - Compensation: an outage on the operator's side of 8 hours or more,
       blocking included, is made up in extra time or traffic, more than the
       outage, and refunded by the outage's time only if the user insists.
@@ -316,8 +324,8 @@
 - 付款从门户开始，在支付公司 Stripe 的付款页上完成，只接受银行卡。不要用转账或其他方式付钱给运营者。
 - 可以买两种服务：
   - 按月套餐：一个月的服务。服务期内，每个计费周期有一定的流量配额。可以每次预付一个月，也可以开通自动续费。预付的可以提前续费：续上的时间从原来的到期日接着算，但不增加本计费周期的流量。
-  - 流量包：额外的流量，在规定的天数内有效。
-- 每种套餐和流量包包含多少天、多少流量，以及价格和币种，以门户上公布的为准。付款前，Stripe 的付款页会显示这次要付的金额。
+  - 流量包：额外的流量，只在开通它的那个计费周期内有效，到这个周期结束为止；没用完的不带到下个周期。本计费周期什么时候结束，门户的订阅页上有写（「下次重置」）。
+- 每种套餐包含多少天、多少流量，每种流量包包含多少流量，以及它们的价格和币种，以门户上公布的为准。付款前，Stripe 的付款页会显示这次要付的金额。
 - 付款后，运营者的电脑会定时从门户取回付款记录，为你开通或续期，所以要等一段时间才生效。到期后，服务会暂停，续费后恢复。
 
 **自动续费：**
