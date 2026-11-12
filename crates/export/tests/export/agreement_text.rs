@@ -12,7 +12,7 @@ use sha2::{Digest as _, Sha256};
 const AGREEMENT: &str = include_str!("../../../../docs/runbooks/user-agreement.md");
 
 /// SHA-256 of the user-visible text of revision 2.
-const REVISION_2_SHA256: &str = "ca089d46f32c6acd04d62adeaf74369d19bc879d434f9946782da65636cc6ca7";
+const REVISION_2_SHA256: &str = "ad52c25520c971c62afbf8ef2c9639487cf66d322ee8c1bbcf6e67450312e244";
 
 /// The text the user reads: everything after the operator notes, a comment
 /// whose closing `-->` stands on its own line (the licence comment before it

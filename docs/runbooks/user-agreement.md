@@ -66,9 +66,13 @@
     links only for an account with a profile: of clause 2's
     「重新生成……或停用它」, a paused user has the second (the portal's test
     a_paused_link_fetches_nothing_and_works_again_once_delivered). A quota
-    suspension ends at the next billing cycle only once Mooring lifts it
-    there (planned with M5's apply), and the link works again after the
-    next bundle. CFM's wording
+    suspension ends at the next billing cycle, or once a traffic pack
+    covers what the user used over the quota in the current cycle, at the
+    next run of the nightly apply job (03:20 Beijing time, inside clause
+    5's window of 3 to 6; design §13.6 on the branch lza/apply-job-5c1c13,
+    not merged when these notes were written). The job resumes no one
+    while the cycle's usage is behind, for example while a node cannot be
+    reached. The link works again after the next bundle. CFM's wording
     (「导入链接」, 「更新」, 「编辑」, 「QRCode」, 「TUN 模式」, 「系统代理」,
     「规则」, the default mode (ui/src/state.js:111), the link shown in the
     profile's details) is CFM 0.5.1's: its zh-Hans catalogue and app.js at
@@ -273,6 +277,13 @@
     monthly cap from being reached. Their example was more SIMs, which
     design §18 leaves to a later decision. A pause from the cap is an
     outage on the operator's side under clause 1.
+  - On 2026-11-12, clause 5's two sentences on a traffic pack were made
+    to say what the nightly apply job does, so that revision 2 promises no
+    more than it delivers: a pack lifts a quota suspension only when it
+    covers what the user used over the quota in the current cycle, since
+    a smaller one would leave the user over quota and paused, and the
+    service resumes at the job's next run, not at the payment. Revision 2
+    was not published yet, so it stays revision 2.
   - Clause 6's three months: a user whose service expired three months
     before is revoked, by the operator until Mooring does it, and then
     deleted as clause 4 says (delivery.md, section 10).
@@ -436,7 +447,7 @@
 - 先在 CFM 里换用另一个节点：名称含 `-reality` 的和名称含 `-hy2` 的节点互为备用。
 - 服务器每天北京时间凌晨 3 点到 6 点之间可能更新配置或重启，会中断几分钟。
 - 所有用户共用运营者线路的月度流量上限，运营者会确保它不会用尽。万一用尽，服务会暂停到下一个计费周期，并按第 1 条补偿。
-- 你的流量配额用尽时，你的服务会暂停到下一个计费周期，买了流量包后也会恢复。服务到期后会暂停到你续费为止（见第 6 条）。
+- 你的流量配额用尽时，你的服务会暂停到下一个计费周期。如果你买了流量包，而且它够补上你本计费周期超出配额的部分，服务会在下一次北京时间凌晨 3 点到 6 点的更新时恢复。服务到期后会暂停到你续费为止（见第 6 条）。
 - CFM 不会自动更新配置。服务器被封、换了新服务器，或者你的凭据换了以后，运营者会更新你在门户上的配置。这时：
   - 用订阅链接导入的，在 CFM 里对这份配置选「更新」；
   - 用下载的文件导入的，到门户重新下载，导入新文件后，在 CFM 里删除旧的那份配置。
@@ -444,7 +455,7 @@
   连不上的时候，也可以先试一次「更新」。具体步骤见《使用指南》。
 - 门户打不开、又需要新配置时，运营者会按备用的方式给你一份新文件：一个加密磁盘映像，口令由运营者在 FaceTime 通话中念给你。导入新文件后，在 CFM 里删除旧的那份配置。
 - 账户被暂停时，订阅链接暂时取不到配置；恢复后，同一条链接照常可用：
-  - 配额用尽的，暂停到下一个计费周期；
+  - 配额用尽的，暂停到下一个计费周期，或者到你买了够补上超出部分的流量包；
   - 到期的，暂停到你续费；
   - 你还没确认本约定的新版本的，暂停到你确认；
   - 运营者收到关于你的投诉、正在核查的，暂停到核查结束。
