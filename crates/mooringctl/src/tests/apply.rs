@@ -687,3 +687,58 @@ fn replies_about_another_generation_are_refused() {
         assert_eq!(state_bytes(&harness), before);
     }
 }
+
+/// A node whose agent speaks an older protocol than this build's is
+/// refused right after its `Hello`: nothing is uploaded, nothing applied
+/// and nothing recorded. A bundle this build renders can hold what only an
+/// agent of its protocol reads, such as the abuse guard's `watch.json`
+/// (design §11.8), which an older watch refuses. The nightly apply job
+/// applies through the same path.
+#[test]
+fn an_agent_older_than_this_build_is_refused_before_anything_is_uploaded() {
+    let (mut harness, engines) = ready(fixture(|_| {}));
+    let before = state_bytes(&harness);
+    let older = mooring_agent_proto::PROTOCOL - 1;
+    let Response::Hello(mut hello) = super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) else {
+        panic!("hello_at answers a Hello");
+    };
+    hello.protocol = older;
+    harness.nodes.expect(
+        Expected::Request {
+            identity: "ops_ed25519",
+            remote: ExpectedRemote::Forced,
+            kind: RequestKind::Hello,
+        },
+        Answered::Replied(Ok(Response::Hello(hello))),
+    );
+    let outcome = run(&mut harness, &apply_args(&engines));
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: lon1's agent speaks protocol {older}, older than this build's {}: upgrade it first (`mooringctl node upgrade-agent lon1`)\n",
+            mooring_agent_proto::PROTOCOL
+        )
+    );
+    assert_eq!(harness.nodes.seen.borrow().len(), 1);
+    assert_eq!(state_bytes(&harness), before);
+}
+
+/// Only an older agent is refused: one of this build's protocol, or a
+/// newer one, which reads every older bundle, is applied to.
+#[test]
+fn only_an_older_agent_protocol_is_refused() {
+    let node = node_id("lon1");
+    let ours = mooring_agent_proto::PROTOCOL;
+    assert_eq!(
+        crate::node::apply::check_agent_protocol(&node, ours - 1)
+            .unwrap_err()
+            .to_string(),
+        format!(
+            "lon1's agent speaks protocol {}, older than this build's {ours}: upgrade it first (`mooringctl node upgrade-agent lon1`)",
+            ours - 1
+        )
+    );
+    assert!(crate::node::apply::check_agent_protocol(&node, ours).is_ok());
+    assert!(crate::node::apply::check_agent_protocol(&node, ours + 1).is_ok());
+}

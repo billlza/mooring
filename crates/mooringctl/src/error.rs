@@ -1042,6 +1042,21 @@ pub(crate) enum LocalError {
         /// The file.
         path: PathBuf,
     },
+    /// The node's agent speaks an older protocol than this build. A bundle
+    /// this build renders can hold what only an agent of its protocol
+    /// reads, such as the abuse guard's `watch.json` (design §11.8), so
+    /// `node apply` refuses before it uploads anything.
+    #[error(
+        "{node}'s agent speaks protocol {found}, older than this build's {needed}: upgrade it first (`mooringctl node upgrade-agent {node}`)"
+    )]
+    AgentOlderThanBuild {
+        /// The node.
+        node: NodeId,
+        /// The protocol the node's `Hello` names.
+        found: u32,
+        /// This build's protocol.
+        needed: u32,
+    },
     /// After a confirmed activation the node's `Hello` names another agent
     /// than the one activated.
     #[error("{node} runs agent {found} after the confirm, not {expected}")]

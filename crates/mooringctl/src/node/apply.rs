@@ -10,7 +10,9 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mooring_agent_proto::{Generation, LineRequest, RequestKind, Response, TxnStage, TxnState};
+use mooring_agent_proto::{
+    Generation, LineRequest, PROTOCOL, RequestKind, Response, TxnStage, TxnState,
+};
 use mooring_model::iface::BsdName;
 use mooring_model::node::AppliedConfig;
 use mooring_model::{Bookkeeping, NodeId};
@@ -26,6 +28,21 @@ use crate::state::{load, output, store_failure};
 
 /// How often the transaction's state is read.
 pub(crate) const POLL: Duration = Duration::from_secs(2);
+
+/// Refuses a node whose agent speaks an older protocol than this build
+/// (`found`, from its `Hello`): a bundle this build renders can hold what
+/// only an agent of its protocol reads. An agent of a newer protocol reads
+/// every older bundle.
+pub(crate) fn check_agent_protocol(node: &NodeId, found: u32) -> Result<(), LocalError> {
+    if found < PROTOCOL {
+        return Err(LocalError::AgentOlderThanBuild {
+            node: node.clone(),
+            found,
+            needed: PROTOCOL,
+        });
+    }
+    Ok(())
+}
 
 /// How long the transaction may take before the command gives up waiting:
 /// the agent's own confirm timer (120 s) after the health gate, which the
@@ -54,6 +71,7 @@ pub(crate) fn apply(
     let Response::Hello(hello) = reply else {
         return Err(unexpected(RequestKind::Hello, &reply));
     };
+    check_agent_protocol(node, hello.protocol)?;
     let header = bundle.header(&hello.host).map_err(LocalError::Render)?;
     let uploaded = upload_missing(session.as_mut(), header.blobs(), &mut |sha256| {
         if let Some((_, file)) = bundle.files().find(|(_, file)| file.sha256() == *sha256) {

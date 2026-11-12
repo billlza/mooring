@@ -251,7 +251,7 @@ To cut a user yourself, on a complaint for example: `mooringctl abuse cut lon1 <
 
 If a node's SSH cannot be reached, its guard still cuts by itself, and the console shows it once the node answers again. To stop a user the node has not detected meanwhile, stop the exit for everyone: `mooringctl exit disable` on this Mac, or the phone's emergency stop. This Mac cannot stop one user alone: every user's flows reach it from the node's single tunnel address.
 
-**Rolling the guard out:** the users must first have accepted the agreement's revision 2, which states it (design §11.8, decision F21). The guard must not run on a node with users before then. Then `node upgrade-agent` before `node apply` on each node: an older agent cannot read the new `watch.json`. The first apply restarts the tunnel once. Until it runs, the node shows `The abuse guard is not installed`.
+**Rolling the guard out:** the users must first have accepted the agreement's revision 2, which states it (design §11.8, decision F21). The guard must not run on a node with users before then. Then `node upgrade-agent` before `node apply` on each node: an older agent cannot read the new `watch.json`. `node apply`, the nightly job's included, refuses a node whose agent is older than this Mac's build, and says to upgrade it first. The first apply restarts the tunnel once. Until it runs, the node shows `The abuse guard is not installed`.
 
 ## Troubleshooting
 
