@@ -15,10 +15,11 @@ use mooring_daemon_core::error::UsageErrorKind;
 use mooring_daemon_core::snapshot::Ledgers;
 use mooring_daemon_core::usage::{CollectedUsage, NodeUsageHistory};
 use mooring_model::node::NodeLifecycle;
-use mooring_model::{Deployment, NodeId, UnixTime, UserStatus};
+use mooring_model::{Deployment, NodeId, UnixTime, UserId, UserStatus};
 use mooring_store::{USAGE_DIRECTORY, USER_USAGE_FILE, read_user_usage, write_user_usage};
 
 use super::deployed::status_reply;
+use super::portal::collected;
 use super::support::{Answered, Expected, ExpectedRemote, Harness, NOW, PINNED, Sent, lo0_name};
 use super::user::{fixture, harness_with};
 use crate::daemon::usage::{Collector, pull_budget};
@@ -394,6 +395,57 @@ fn unreadable_and_corrupt_ledgers_are_preserved_and_write_failure_retries_the_ca
     writable.maintain(&deployment, now(), INTERVAL);
     assert!(matches!(writable.ledgers(), Ledgers::Collected(_)));
     assert!(writable.failure().is_none());
+}
+
+/// The collector tells a user's use before an instant from the usage
+/// store it holds durably (design §9.6: a refund in full of a traffic pack
+/// waits for the usage). It says apart usage that cannot tell yet (the
+/// report does not reach the instant, or the collection is behind:
+/// nothing collected, or not lately) and a fault, by its kind: the latest
+/// write of the store failed, its figures name a user the deployment does
+/// not hold, or the store cannot be read.
+#[test]
+fn the_collector_says_a_fault_apart_from_usage_that_cannot_tell_yet() {
+    let (harness, deployment, nothing_collected) = ready();
+    let support = harness.support_dir();
+    let user = deployment.users().keys().next().unwrap().clone();
+    let an_hour_ago = UnixTime::from_secs(NOW - 3600);
+    let asked = |collector: &Collector, now: u64, at: UnixTime| {
+        collector.served_before(&deployment, UnixTime::from_secs(now), &user, at)
+    };
+    assert_eq!(asked(&nothing_collected, NOW, an_hour_ago), Ok(None));
+    write_user_usage(&support, &collected(NOW, &user, 7_000).encode().unwrap()).unwrap();
+    let mut held = Collector::open(&support, INTERVAL);
+    assert_eq!(asked(&held, NOW, an_hour_ago), Ok(Some(7_000)));
+    // The figures, sampled now, do not reach an instant a minute ago; and
+    // three minutes on they are too old for a report.
+    assert_eq!(asked(&held, NOW, UnixTime::from_secs(NOW - 60)), Ok(None));
+    assert_eq!(asked(&held, NOW + 181, an_hour_ago), Ok(None));
+    fs::remove_dir_all(support.join(USAGE_DIRECTORY)).unwrap();
+    fs::write(support.join(USAGE_DIRECTORY), b"blocked path").unwrap();
+    held.maintain(&deployment, now(), INTERVAL);
+    assert_eq!(
+        asked(&held, NOW, an_hour_ago),
+        Err(UsageErrorKind::StoreUnavailable)
+    );
+    fs::remove_file(support.join(USAGE_DIRECTORY)).unwrap();
+    held.maintain(&deployment, now(), INTERVAL);
+    assert_eq!(asked(&held, NOW, an_hour_ago), Ok(Some(7_000)));
+    let stranger = UserId::parse("strangerxx").unwrap();
+    write_user_usage(
+        &support,
+        &collected(NOW, &stranger, 7_000).encode().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        asked(&Collector::open(&support, INTERVAL), NOW, an_hour_ago),
+        Err(UsageErrorKind::UnknownUser)
+    );
+    write_user_usage(&support, b"broken ledger retained for diagnosis").unwrap();
+    assert_eq!(
+        asked(&Collector::open(&support, INTERVAL), NOW, an_hour_ago),
+        Err(UsageErrorKind::LedgerCorrupt)
+    );
 }
 
 #[test]

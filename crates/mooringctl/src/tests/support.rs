@@ -991,6 +991,9 @@ pub(crate) struct Harness {
     /// The clock, in seconds since the epoch: [`NOW`] unless a test moves
     /// it.
     pub(crate) now: Cell<u64>,
+    /// The seconds the clock advances at each reading: none unless a test
+    /// sets them.
+    pub(crate) clock_step: Cell<u64>,
 }
 
 /// One request the payment pull made, as the portal saw it.
@@ -1074,6 +1077,7 @@ impl Harness {
             portal_agreement: PortalAgreement::SHIPPED,
             portal: FakePortal::default(),
             now: Cell::new(NOW),
+            clock_step: Cell::new(0),
         }
     }
 
@@ -1135,7 +1139,12 @@ impl Harness {
     /// Runs `work` against the environment a command gets.
     pub(crate) fn with_env<T>(&mut self, work: impl FnOnce(&mut Env<'_>) -> T) -> T {
         let now = &self.now;
-        let clock = move || Ok(UnixTime::from_secs(now.get()));
+        let step = &self.clock_step;
+        let clock = move || {
+            let read = now.get();
+            now.set(read + step.get());
+            Ok(UnixTime::from_secs(read))
+        };
         let parent = || self.parent.id();
         let pins: Vec<(&str, &str)> = self
             .engine_pins

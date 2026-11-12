@@ -3,7 +3,8 @@
 //! The lines the payment pull and `portal payments` write: instants in UTC
 //! and each event of an applied page, by order id and user id (both
 //! opaque), never with the token or a label. A refund's line names the
-//! order only, with what it took back.
+//! order only, with what it took back or that it waits for the usage; so
+//! does the line that ends such a wait.
 
 use mooring_daemon_core::payments::{
     GrantOutcome, LedgerEvent, OrderId, PackUse, RefundEffect, TimeTakenBack,
@@ -87,6 +88,10 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
         LedgerEvent::Repeated { seq, order } => {
             format!("payment: entry {seq} of order {order} is in the ledger already; skipped")
         }
+        LedgerEvent::Settled { order, used } => format!(
+            "payment: order {order}'s refund in full no longer waits for the usage; {}",
+            taken_back(&RefundEffect::Pack(*used))
+        ),
     }
 }
 
@@ -104,14 +109,15 @@ pub(crate) fn taken_back(effect: &RefundEffect) -> String {
             stamp(*until),
             followers(moved)
         ),
-        RefundEffect::Pack(PackUse::Served { bytes }) => format!(
-            "its pack now counts only what the user had used of it beyond the rest of their quota: {bytes} bytes served this cycle when Mooring applied the refund"
+        RefundEffect::Pack(PackUse::Served { bytes, learned_at }) => format!(
+            "its pack counts from {} on only what the user had used of it beyond the rest of their quota: {bytes} bytes served this cycle by the refund's time",
+            stamp(*learned_at)
         ),
-        RefundEffect::Pack(PackUse::Unknown) => {
-            "its pack is taken back whole: the user's use this cycle was not known when Mooring applied the refund".to_owned()
+        RefundEffect::Pack(PackUse::Awaiting) => {
+            "it waits for the usage: its pack counts in full until the usage collected covers the refund's time, or the pack's billing cycle ends".to_owned()
         }
         RefundEffect::Pack(PackUse::CycleEnded) => {
-            "its pack's billing cycle had ended, so nothing is taken back".to_owned()
+            "its pack's billing cycle has ended, so nothing is taken back".to_owned()
         }
     }
 }

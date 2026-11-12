@@ -23,7 +23,9 @@
 //! operator's decision of 2026-11-12). Refunds and disputes are recorded.
 //! A refund in full takes back what its order gave that the user had not
 //! used yet ([`RefundEffect`], [`TakeBacks`]; the operator's decision of
-//! 2026-11-12); a partial refund changes nothing. A dispute changes
+//! 2026-11-12); a pack's waits until the usage tells what the user had
+//! used of it ([`PaymentLedger::settle`]), and what they had used is never
+//! taken back. A partial refund changes nothing. A dispute changes
 //! nothing, and never suspends the user (the operator's decision of
 //! 2026-11-11).
 
@@ -46,7 +48,8 @@ pub use feed::{
 pub use ids::{Currency, IdError, MAX_PLAN_ID_CHARS, ORDER_ID_CHARS, OrderId, PlanId};
 pub use ledger::{
     Applied, DisputeRecord, GrantOutcome, GrantRecord, HeldReason, LEDGER_VERSION, LedgerEvent,
-    MAX_LEDGER_BYTES, OrderRecord, PaymentLedger, Pruned, RefundRecord, Stop, StopReason,
+    MAX_LEDGER_BYTES, OrderRecord, PaymentLedger, Pruned, RefundRecord, Settlement, Stop,
+    StopReason,
 };
 pub use refund::{PackUse, RefundEffect, TakeBacks, TimeTakenBack};
 pub use settings::{

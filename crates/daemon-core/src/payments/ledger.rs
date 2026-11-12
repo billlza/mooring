@@ -25,11 +25,12 @@
 //!   cursor moves past it.
 //! - **Refunds and disputes** are recorded. The first refund in full of a
 //!   granted order takes back what the order gave that the user had not
-//!   used yet ([`super::refund`]; the operator's decision of 2026-11-12):
-//!   the ledger records what the daemon's usage report said of the user's
-//!   use of a pack it takes back, and the time taken back follows from the
-//!   grants and refunds ([`PaymentLedger::take_backs`]). Nothing else of
-//!   either changes anything.
+//!   used yet ([`super::refund`]; the operator's decision of 2026-11-12).
+//!   The time taken back follows from the grants and refunds
+//!   ([`PaymentLedger::take_backs`]). A pack's refund waits for the usage
+//!   ([`PackUse::Awaiting`]) until [`PaymentLedger::settle`] records the
+//!   user's use at its time, or that the pack's cycle ended first. Nothing
+//!   else of either changes anything.
 //! - **Test mode** (contract §5.3): a page of Stripe's test mode is applied
 //!   only while the operator rehearses ([`ApplyRefusal::TestMode`]), and its
 //!   grants count only while the rehearsal lasts ([`Entitlements`]).
@@ -46,13 +47,16 @@ use super::error::{ApplyRefusal, Contradiction, LedgerError};
 use super::feed::{EntryEvent, FeedEntry, FeedPage, OrderTerms};
 use super::ids::OrderId;
 use super::refund::{PackUse, RefundEffect, TakeBacks, pack_taken_back};
-use crate::usage::CycleUsage;
+use crate::period::BillingCycle;
 
 mod v1;
+mod v2;
 
-/// The ledger's version: 2 since refunds in full take back (2026-11-12),
-/// recording a pack's use. Version 1 is read and lifted.
-pub const LEDGER_VERSION: u32 = 2;
+/// The ledger's version: 3 since a refunded pack waits for the usage
+/// (2026-11-12): a pack's use carries when Mooring learned it, and one not
+/// learned yet is recorded as waited for. Versions 1 and 2 are read and
+/// lifted.
+pub const LEDGER_VERSION: u32 = 3;
 
 /// The largest ledger written or read, in bytes. An order takes about
 /// 700 bytes, so this holds thousands of orders.
@@ -172,8 +176,8 @@ pub struct RefundRecord {
     /// When Mooring recorded it.
     pub applied_at: UnixTime,
     /// On the refund that takes a granted traffic pack back (the order's
-    /// first in full), what Mooring knew of the user's use then; `None` on
-    /// every other refund. The key is required.
+    /// first in full), what Mooring knows of the user's use at its time;
+    /// `None` on every other refund. The key is required.
     #[serde(deserialize_with = "Option::deserialize")]
     pub pack_use: Option<PackUse>,
 }
@@ -355,6 +359,16 @@ pub enum LedgerEvent {
         /// The order.
         order: OrderId,
     },
+    /// A refund in full that waited for the usage waits no more
+    /// ([`PaymentLedger::settle`]). As a refund's, its line names the
+    /// order only.
+    Settled {
+        /// The order.
+        order: OrderId,
+        /// What was learned: the user's use at the refund's time, or that
+        /// the pack's billing cycle ended first.
+        used: PackUse,
+    },
 }
 
 /// A page applied to a copy of the ledger.
@@ -363,6 +377,16 @@ pub struct Applied {
     /// The ledger to write, with the page's cursor.
     pub ledger: PaymentLedger,
     /// What each entry did, in order.
+    pub events: Vec<LedgerEvent>,
+}
+
+/// What [`PaymentLedger::settle`] recorded on a copy of the ledger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settlement {
+    /// The ledger to write.
+    pub ledger: PaymentLedger,
+    /// What was learned of each refund that waited, in the order of their
+    /// orders' ids.
     pub events: Vec<LedgerEvent>,
 }
 
@@ -392,15 +416,18 @@ impl PaymentLedger {
         Self::default()
     }
 
-    /// Reads a ledger the daemon wrote, of this version or version 1,
-    /// which is lifted: its refund that takes a pack back gets a use not
-    /// known ([`PackUse::Unknown`]). Besides its shape and version, orders are
-    /// in id order and each once, every recorded entry is at or below the
-    /// cursor, a grant's number is below its refunds' and dispute's, a
-    /// period ends after it starts and within the calendar, a period or
-    /// pack is of an order of its kind, each refund's amount and flag are
-    /// recorded once, and a pack's use is recorded on the refund that takes
-    /// a granted pack back and on no other.
+    /// Reads a ledger the daemon wrote, of this version or an earlier one,
+    /// which is lifted: a refund that takes a pack back and whose use was
+    /// not recorded (version 1) or not known (version 2) waits for the
+    /// usage ([`PackUse::Awaiting`]), and a use version 2 recorded was
+    /// learned when its refund was applied. Besides its shape and version,
+    /// orders are in id order and each once, every recorded entry is at or
+    /// below the cursor, a grant's number is below its refunds' and
+    /// dispute's, a period ends after it starts and within the calendar, a
+    /// period or pack is of an order of its kind, each refund's amount and
+    /// flag are recorded once, a pack's use is recorded on the refund that
+    /// takes a granted pack back and on no other, and it was learned no
+    /// earlier than that refund was applied.
     pub fn decode(bytes: &[u8]) -> Result<Self, LedgerError> {
         if bytes.len() > MAX_LEDGER_BYTES {
             return Err(LedgerError::TooLarge);
@@ -410,8 +437,12 @@ impl PaymentLedger {
             LEDGER_VERSION => {
                 serde_json::from_slice::<LedgerFile>(bytes).map_err(LedgerError::Decode)?
             }
+            v2::VERSION => serde_json::from_slice::<v2::LedgerFile>(bytes)
+                .map_err(LedgerError::Decode)?
+                .lift(),
             v1::VERSION => serde_json::from_slice::<v1::LedgerFile>(bytes)
                 .map_err(LedgerError::Decode)?
+                .lift()
                 .lift(),
             found => return Err(LedgerError::UnknownVersion { found }),
         };
@@ -527,17 +558,15 @@ impl PaymentLedger {
 
     /// Applies `page`, which follows the ledger's cursor, to a copy at
     /// `now`, for the deployment's `users`; `rehearsal` when the operator
-    /// rehearses. `usage` is the daemon's report of the billing cycle at
-    /// `now`, `None` when it has none: a refund in full of a pack records
-    /// what it says of the user's use ([`PackUse`]). The copy has the
-    /// page's cursor, `now` as its last pull and no stop.
+    /// rehearses. A refund in full of a pack is recorded as waiting for the
+    /// usage ([`PackUse::Awaiting`]), which [`Self::settle`] ends. The copy
+    /// has the page's cursor, `now` as its last pull and no stop.
     pub fn apply(
         &self,
         page: &FeedPage,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         rehearsal: bool,
-        usage: Option<&CycleUsage>,
     ) -> Result<Applied, ApplyRefusal> {
         if !page.livemode() && !rehearsal {
             return Err(ApplyRefusal::TestMode);
@@ -552,7 +581,7 @@ impl PaymentLedger {
         let mut events = Vec::with_capacity(page.entries().len());
         for entry in page.entries() {
             let event = next
-                .apply_entry(entry, page.livemode(), users, now, usage)
+                .apply_entry(entry, page.livemode(), users, now)
                 .map_err(|contradiction| ApplyRefusal::Contradicted {
                     seq: entry.seq,
                     order: entry.order.clone(),
@@ -622,6 +651,80 @@ impl PaymentLedger {
         entitlements
     }
 
+    /// The orders whose refund in full waits for the usage
+    /// ([`PackUse::Awaiting`]), in id order.
+    pub fn awaiting_usage(&self) -> impl Iterator<Item = &OrderRecord> {
+        self.orders
+            .values()
+            .filter(|record| pack_taken_back(record) == Some(PackUse::Awaiting))
+    }
+
+    /// Records on a copy what can be told at `now` of the packs whose
+    /// refund in full waits for the usage (design §9.6); `None` when
+    /// nothing can. `cycle` is the billing cycle `now` is in, and
+    /// `served_before` tells the bytes the nodes had counted for a user
+    /// in it before an instant, at most (never fewer than they had
+    /// counted), or `None` while the usage cannot tell: it is behind, it
+    /// does not reach the instant, or it has no figure for the user.
+    ///
+    /// - A pack of `cycle` whose user's use at the refund's time
+    ///   `served_before` tells: the use is recorded as learned at `now`
+    ///   (or when the refund was applied, were that later: a clock that
+    ///   stepped back), and from then on the pack counts only what the
+    ///   user had used of it ([`PackUse::Served`]).
+    /// - A pack of an earlier cycle: its cycle has ended, and nothing of
+    ///   it is taken back ([`PackUse::CycleEnded`]). The usage is not
+    ///   asked.
+    /// - Every other one waits on, and its pack counts in full.
+    #[must_use]
+    pub fn settle(
+        &self,
+        now: UnixTime,
+        cycle: BillingCycle,
+        served_before: &dyn Fn(&UserId, UnixTime) -> Option<u64>,
+    ) -> Option<Settlement> {
+        let mut next = self.clone();
+        let mut events = Vec::new();
+        for record in next.orders.values_mut() {
+            let Some(grant) = record
+                .grant
+                .filter(|grant| grant.outcome == GrantOutcome::Pack)
+            else {
+                continue;
+            };
+            let Some(refund) = record
+                .refunds
+                .iter_mut()
+                .find(|refund| refund.refunded_in_full)
+                .filter(|refund| refund.pack_use == Some(PackUse::Awaiting))
+            else {
+                continue;
+            };
+            let used = if grant.applied_at < cycle.starts_at() {
+                PackUse::CycleEnded
+            } else if cycle.contains(grant.applied_at) {
+                match served_before(&record.terms.user, refund.recorded_at) {
+                    Some(bytes) => PackUse::Served {
+                        bytes,
+                        learned_at: now.max(refund.applied_at),
+                    },
+                    None => continue,
+                }
+            } else {
+                continue;
+            };
+            refund.pack_use = Some(used);
+            events.push(LedgerEvent::Settled {
+                order: record.order.clone(),
+                used,
+            });
+        }
+        (!events.is_empty()).then_some(Settlement {
+            ledger: next,
+            events,
+        })
+    }
+
     /// What the refunds in full took back: each period as it counts, and
     /// what each refund did (design §9.6).
     #[must_use]
@@ -645,7 +748,6 @@ impl PaymentLedger {
         livemode: bool,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
-        usage: Option<&CycleUsage>,
     ) -> Result<LedgerEvent, Contradiction> {
         if let Some(record) = self.orders.get(&entry.order) {
             if record.terms != entry.terms {
@@ -675,12 +777,11 @@ impl PaymentLedger {
                     });
                 }
                 let takes_back = in_full && record.first_refund_in_full().is_none();
-                let pack_use = match record.grant {
-                    Some(grant) if takes_back && grant.outcome == GrantOutcome::Pack => {
-                        Some(PackUse::of(usage, &record.terms.user, grant.applied_at))
-                    }
-                    _ => None,
-                };
+                let takes_pack_back = takes_back
+                    && record
+                        .grant
+                        .is_some_and(|grant| grant.outcome == GrantOutcome::Pack);
+                let pack_use = takes_pack_back.then_some(PackUse::Awaiting);
                 record.refunds.push(RefundRecord {
                     seq: entry.seq,
                     amount_refunded,
@@ -909,6 +1010,13 @@ fn check_record(record: &OrderRecord, cursor: u64) -> Result<(), LedgerError> {
             } else {
                 "a use is recorded on a refund that takes no pack back"
             }));
+        }
+        if let Some(PackUse::Served { learned_at, .. }) = refund.pack_use
+            && learned_at < refund.applied_at
+        {
+            return Err(inconsistent(
+                "a pack's use was learned before its refund was applied",
+            ));
         }
     }
     Ok(())

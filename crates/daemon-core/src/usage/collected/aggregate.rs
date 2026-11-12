@@ -8,14 +8,14 @@
 
 use std::collections::BTreeMap;
 
-use mooring_agent_proto::{Inbound, Principal, StatsEmail, Traffic, UsageMonth};
-use mooring_model::{Deployment, NodeId, UnixTime};
+use mooring_agent_proto::{Inbound, MAX_POLL_GAP_SECS, Principal, StatsEmail, Traffic, UsageMonth};
+use mooring_model::{Deployment, NodeId, UnixTime, UserId};
 
 use super::{CollectedUsage, Counters, NodeUsageHistory, add_counters, corrupt, principal_of};
 use crate::error::UsageError;
 use crate::period::UsagePeriods;
 use crate::usage::{
-    Counted, MissingPeriods, ProtocolTraffic, UsageReport, UserUsage, add, resolve,
+    Counted, MissingPeriods, ProtocolTraffic, UsageReport, UserUsage, add, both_ways, resolve,
 };
 
 /// The latest accounting sample may trail publication by at most three
@@ -428,5 +428,94 @@ impl CollectedUsage {
                 .map(|(id, counted)| Ok((id, UserUsage::derive(counted)?)))
                 .collect::<Result<_, UsageError>>()?,
         })
+    }
+}
+
+impl CollectedUsage {
+    /// The bytes the nodes had counted for `user` in the billing cycle `now`
+    /// is in before `at`, at most: never fewer than they had counted. A
+    /// traffic pack refunded in full keeps what the user had used of it by
+    /// the refund's time (design §9.6), so an error here may only leave the
+    /// user more.
+    ///
+    /// It is the cycle's figure by the report at `now` ([`Self::aggregate`]),
+    /// less the bytes of the closed bins that begin at or after a boundary:
+    /// the first five-minute boundary at least [`MAX_POLL_GAP_SECS`] after
+    /// `at`. A bin holds the accounting polls that end inside it, and a
+    /// poll holds what Xray counted since the poll before, at most that
+    /// long earlier. So the bins from the boundary on hold only bytes
+    /// counted after `at`, and the cycle's figure, once every node's
+    /// figures reach the boundary, holds every byte counted by `at`.
+    ///
+    /// - Where the detail from the boundary on is whole, that is the
+    ///   user's counted use at the boundary, three to eight minutes after
+    ///   `at`.
+    /// - Bytes the detail cannot place after the boundary count as used
+    ///   before `at`: those of a stretch of detail that was lost, of an
+    ///   hour that begins before the boundary once its five-minute bins
+    ///   have expired, and of the minutes since the last closed bin.
+    /// - **What the counters cannot tell.** Xray counts the downlink of a
+    ///   REALITY connection only when the connection closes (the accuracy
+    ///   note of [`crate::usage`]). A download open at `at` and still open
+    ///   at the boundary is counted after it, whole, so the bytes it had
+    ///   carried by `at` are not in this figure. Nothing a node records
+    ///   places them.
+    ///
+    /// `None` when it cannot be told: the report does not reach the
+    /// boundary (it is after `now`, or after the sample of a node's
+    /// figures), or it has no cycle figure for the user. What makes the
+    /// report itself fail, as a node not collected lately, is that error;
+    /// closed bins that hold more than the cycle's figure are
+    /// `MonthlyInconsistent`.
+    pub fn cycle_served_before(
+        &self,
+        deployment: &Deployment,
+        now: UnixTime,
+        user: &UserId,
+        at: UnixTime,
+    ) -> Result<Option<u64>, UsageError> {
+        let report = self.aggregate(deployment, now)?;
+        let boundary = at.as_secs().saturating_add(MAX_POLL_GAP_SECS + 299) / 300 * 300;
+        // The report reaches `now`, or the earliest of its nodes' samples.
+        let reached = report
+            .sampled_at
+            .values()
+            .map(|sample| sample.monthly_at)
+            .fold(now, UnixTime::min);
+        if boundary > reached.as_secs() {
+            return Ok(None);
+        }
+        let Some(by_node) = report.users.get(user).and_then(UserUsage::cycle_by_node) else {
+            return Ok(None);
+        };
+        let from = boundary.max(report.periods.cycle.starts_at().as_secs());
+        let principal = principal_of(user)?;
+        let mut before = 0_u64;
+        for (node, history) in &self.nodes {
+            // A node the report leaves out (one only planned, or no longer
+            // the deployment's) counted nothing in the cycle's figure.
+            let Some(sample) = report.sampled_at.get(node) else {
+                continue;
+            };
+            let later = history.known(from, sample.monthly_at.as_secs() / 300 * 300)?;
+            let mut since = 0_u64;
+            for &inbound in Inbound::ALL {
+                let email = StatsEmail {
+                    principal: principal.clone(),
+                    inbound,
+                };
+                since = since
+                    .checked_add(both_ways(later.get(&email).copied().unwrap_or_default())?)
+                    .ok_or(UsageError::CounterOverflow)?;
+            }
+            let counted = both_ways(by_node.get(node).copied().unwrap_or_default())?;
+            let Some(earlier) = counted.checked_sub(since) else {
+                return Err(UsageError::MonthlyInconsistent { node: node.clone() });
+            };
+            before = before
+                .checked_add(earlier)
+                .ok_or(UsageError::CounterOverflow)?;
+        }
+        Ok(Some(before))
     }
 }

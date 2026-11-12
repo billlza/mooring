@@ -23,7 +23,7 @@ pub(super) fn month(text: &str, updated: UnixTime, entries: Vec<(StatsEmail, Tra
     }
 }
 
-fn empty_other(history: &mut CollectedUsage, now: UnixTime) {
+pub(super) fn empty_other(history: &mut CollectedUsage, now: UnixTime) {
     let mut other = NodeUsageHistory::default();
     other
         .record_month(

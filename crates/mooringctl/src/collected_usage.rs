@@ -82,6 +82,17 @@ pub(crate) enum Usage {
     Behind(UsageError),
 }
 
+/// Whether `kind` says only that the collection is behind: the daemon has
+/// not collected a serving node's usage yet (`MissingLedger`), or not within
+/// the report's freshness bound (`NotCoveredThrough`), as when it is stopped
+/// or a node cannot be reached. Every other kind is a fault.
+pub(crate) const fn behind(kind: UsageErrorKind) -> bool {
+    matches!(
+        kind,
+        UsageErrorKind::MissingLedger | UsageErrorKind::NotCoveredThrough
+    )
+}
+
 /// The collected usage aggregated at `now`. A fault is never read as usage
 /// that is behind: that would replace every user's figures with "unknown"
 /// and hide it.
@@ -95,14 +106,7 @@ pub(crate) fn usage(
         .aggregate(deployment, now)
     {
         Ok(report) => Ok(Usage::Report(report)),
-        Err(error)
-            if matches!(
-                error.kind(),
-                UsageErrorKind::MissingLedger | UsageErrorKind::NotCoveredThrough
-            ) =>
-        {
-            Ok(Usage::Behind(error))
-        }
+        Err(error) if behind(error.kind()) => Ok(Usage::Behind(error)),
         Err(error) => Err(UsageFault::Inconsistent(error)),
     }
 }

@@ -12,14 +12,16 @@
 //!   granted before the refund, starting where it ended, a live period only
 //!   after a live one (as a grant builds on them). The order's quota per
 //!   billing cycle goes with its time.
-//! - **A traffic pack** counts, from the refund on, only what the user had
-//!   used of it: their bytes served in its billing cycle beyond the rest of
-//!   their quota, at most the pack's bytes
+//! - **A traffic pack** counts, once Mooring has learned the user's use at
+//!   the refund's time, only what the user had used of it: their bytes
+//!   served in its billing cycle by then beyond the rest of their quota, at
+//!   most the pack's bytes
 //!   ([`UserEntitlements::pack_bytes_in`](super::UserEntitlements::pack_bytes_in)).
-//!   The ledger records what the daemon's usage report said of the user's
-//!   use when it applied the refund ([`PackUse`]); when the report could
-//!   not tell, the pack is taken back whole, and nothing is taken back once
-//!   the pack's cycle had ended.
+//!   The first usage report that covers the refund's time tells the use
+//!   ([`PaymentLedger::settle`](super::PaymentLedger::settle)). Until one
+//!   does, the refund waits and the pack counts in full, so that nothing
+//!   the user used is taken back ([`PackUse::Awaiting`]); and nothing is
+//!   taken back once the pack's cycle has ended.
 //!
 //! The time taken back is not recorded: it follows from the grants and the
 //! refunds the ledger holds, replayed in the order of their entries
@@ -32,44 +34,32 @@ use serde::{Deserialize, Serialize};
 
 use super::ids::OrderId;
 use super::ledger::{GrantOutcome, OrderRecord};
-use crate::usage::CycleUsage;
 
-/// What Mooring knew of a user's use of a traffic pack's billing cycle when
-/// it applied the refund in full that takes the pack back.
+/// What Mooring knows of a user's use of a traffic pack at the time of the
+/// refund in full that takes the pack back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackUse {
-    /// The user's bytes served in the pack's billing cycle, by the daemon's
-    /// usage report then.
+    /// The user's bytes served in the pack's billing cycle by the refund's
+    /// time, as the nodes had counted them, at most: never fewer than they
+    /// had counted. The first usage report that covered the refund's time
+    /// told them, at `learned_at`; from then on the pack counts only what
+    /// the user had used of it.
     Served {
         /// The bytes.
         bytes: u64,
+        /// When Mooring learned them.
+        learned_at: UnixTime,
     },
-    /// The report could not tell: it was behind (a node not collected
-    /// lately, as while one cannot be reached), or it did not know the
-    /// user's figure. The pack is taken back whole.
-    Unknown,
-    /// The report was of a later billing cycle: the pack's had ended, and
-    /// nothing of it is taken back.
+    /// No usage report has covered the refund's time yet: a node cannot be
+    /// reached, the collection is behind, or it has no figure for the user.
+    /// The pack counts in full meanwhile, so that nothing the user used is
+    /// taken back.
+    Awaiting,
+    /// The pack's billing cycle ended before a report covered the refund's
+    /// time, or had ended when Mooring learned of the refund: nothing of
+    /// the pack is taken back.
     CycleEnded,
-}
-
-impl PackUse {
-    /// What `usage`, the daemon's report of the billing cycle when it
-    /// applies the refund (`None` when it has none), says of `user`'s use
-    /// of a pack granted at `granted_at`.
-    pub(super) fn of(usage: Option<&CycleUsage>, user: &UserId, granted_at: UnixTime) -> Self {
-        match usage {
-            Some(usage) if usage.cycle.contains(granted_at) => usage
-                .served
-                .get(user)
-                .copied()
-                .flatten()
-                .map_or(Self::Unknown, |bytes| Self::Served { bytes }),
-            Some(usage) if granted_at < usage.cycle.starts_at() => Self::CycleEnded,
-            _ => Self::Unknown,
-        }
-    }
 }
 
 /// What a refund in full took back of its order's service period.
@@ -94,8 +84,8 @@ pub enum RefundEffect {
     Nothing,
     /// The first refund in full of a service period.
     Time(TimeTakenBack),
-    /// The first refund in full of a traffic pack, with what Mooring knew
-    /// of the user's use.
+    /// The first refund in full of a traffic pack, with what Mooring knows
+    /// of the user's use at its time.
     Pack(PackUse),
 }
 
@@ -204,19 +194,14 @@ fn granted_period(record: &OrderRecord) -> Option<(UnixTime, UnixTime)> {
     }
 }
 
-/// What the first refund in full of `record` recorded of the use of the
-/// pack it takes back, if the order's grant gave a pack and a refund in
-/// full names it. The ledger records a use on every such refund
-/// ([`PaymentLedger::decode`](super::PaymentLedger::decode) refuses one
-/// without); none would be a use Mooring did not know.
+/// What `record`'s refund in full records of the use of the pack it takes
+/// back; `None` for an order that gave no pack, or has no refund in full.
+/// The ledger records a use on the first refund in full of a granted pack
+/// and on no other refund
+/// ([`PaymentLedger::decode`](super::PaymentLedger::decode) refuses a file
+/// that breaks either).
 pub(super) fn pack_taken_back(record: &OrderRecord) -> Option<PackUse> {
-    let grant = record.grant?;
-    if grant.outcome != GrantOutcome::Pack {
-        return None;
-    }
-    record
-        .first_refund_in_full()
-        .map(|refund| refund.pack_use.unwrap_or(PackUse::Unknown))
+    record.first_refund_in_full()?.pack_use
 }
 
 /// Takes back the time of `order`'s period, `span`, from `at` on, for the

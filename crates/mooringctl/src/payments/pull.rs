@@ -21,19 +21,26 @@
 //! - **A ledger that cannot be read** at the daemon's start stops the pull
 //!   until the daemon starts again: it is never read as an empty one, which
 //!   would grant every order again.
+//! - **Refunds that wait for the usage.** A refund in full of a traffic
+//!   pack waits until the usage tells the user's use at its time
+//!   ([`Puller::settle`]): asked at most every [`SETTLE_EVERY`] while one
+//!   waits, whatever the pull's state. A fault of the usage is logged once
+//!   while it lasts; usage that is only behind is not.
 //!
 //! The token is read from the keychain again whenever the settings change,
 //! and kept in memory in a zeroizing buffer; no note holds it.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use mooring_daemon_core::error::UsageErrorKind;
 use mooring_daemon_core::payments::{
-    ApplyRefusal, Entitlements, EntryEvent, FeedPage, MAX_LEDGER_BYTES, MAX_SETTINGS_BYTES,
-    PaymentLedger, PullSettings, Stop, StopReason,
+    ApplyRefusal, Entitlements, FeedPage, MAX_LEDGER_BYTES, MAX_SETTINGS_BYTES, PaymentLedger,
+    PullSettings, Stop, StopReason,
 };
-use mooring_daemon_core::usage::CycleUsage;
+use mooring_daemon_core::period::BillingCycle;
 use mooring_model::secret::{SecretMaterial, SecretRef};
 use mooring_model::{Deployment, PortalPullToken, UnixTime, User, UserId};
 use mooring_store::{read_payment_ledger, read_payment_pull, write_payment_ledger};
@@ -56,6 +63,15 @@ pub(crate) const MIN_ROOM: Duration = Duration::from_secs(1);
 
 /// How often a ledger that cannot be read is said again.
 pub(crate) const FAULT_EVERY: Duration = Duration::from_secs(3600);
+
+/// How often the usage is asked about the refunds that wait for it: as
+/// often as the usage is collected.
+pub(crate) const SETTLE_EVERY: Duration = Duration::from_secs(60);
+
+/// What the usage tells of the bytes the nodes had counted for a user
+/// before an instant: `Ok(None)` while it cannot tell yet, `Err` with the
+/// kind of a fault.
+pub(crate) type UseTold = Result<Option<u64>, UsageErrorKind>;
 
 /// Whether a request may be made on this tick.
 pub(crate) struct Gate<'g> {
@@ -96,6 +112,12 @@ pub(crate) struct Puller {
     state: Option<String>,
     /// When a prune whose write failed is tried again.
     prune_retry: Option<Instant>,
+    /// When the usage is next asked about the refunds that wait for it;
+    /// `None`: at once.
+    settle_next: Option<Instant>,
+    /// The fault that kept the usage from telling at the latest asking, if
+    /// one did: logged when it changes.
+    settle_fault: Option<UsageErrorKind>,
 }
 
 /// Names the cursor and the schedule, never the token.
@@ -139,6 +161,8 @@ impl Puller {
             token: None,
             state: None,
             prune_retry: None,
+            settle_next: None,
+            settle_fault: None,
         }
     }
 
@@ -193,20 +217,77 @@ impl Puller {
         }
     }
 
+    /// Ends the wait of the refunds in full of traffic packs whose use
+    /// the usage can tell now (design §9.6), on the tick at `tick`.
+    /// `served_before` tells the bytes the nodes had counted for a user in
+    /// `cycle`, the billing cycle `now` is in, before an instant:
+    /// `Ok(None)` while the usage cannot tell yet, `Err` with the kind of
+    /// a fault of the usage. A refund whose pack's cycle has ended takes
+    /// nothing back, unasked.
+    ///
+    /// - The usage is asked at most every [`SETTLE_EVERY`], and only while
+    ///   a refund waits.
+    /// - The settled ledger is written before it is kept; a write that
+    ///   fails is said and tried again.
+    /// - A fault leaves its refund waiting and is logged, by its kind, when
+    ///   it is not the fault of the asking before.
+    ///
+    /// Returns the lines to log, which name orders and no user.
+    pub(crate) fn settle(
+        &mut self,
+        tick: Instant,
+        now: UnixTime,
+        cycle: BillingCycle,
+        served_before: &dyn Fn(&UserId, UnixTime) -> UseTold,
+    ) -> Vec<String> {
+        if self.ledger.awaiting_usage().next().is_none()
+            || self.settle_next.is_some_and(|at| tick < at)
+        {
+            return Vec::new();
+        }
+        self.settle_next = Some(tick + SETTLE_EVERY);
+        // The first fault of this asking, if the usage had one.
+        let fault = Cell::new(None);
+        let settled = self.ledger.settle(now, cycle, &|user, at| {
+            served_before(user, at).unwrap_or_else(|kind| {
+                fault.set(fault.get().or(Some(kind)));
+                None
+            })
+        });
+        let mut notes = Vec::new();
+        let fault = fault.get();
+        if let Some(kind) = fault.filter(|_| fault != self.settle_fault) {
+            notes.push(format!(
+                "payment ledger: the usage collected cannot tell the use at the refund(s) of traffic packs that wait for it ({kind}); they wait on"
+            ));
+        }
+        self.settle_fault = fault;
+        let Some(settled) = settled else {
+            return notes;
+        };
+        match self.write(&settled.ledger) {
+            Ok(()) => {
+                self.ledger = settled.ledger;
+                notes.extend(settled.events.iter().map(describe));
+            }
+            Err(error) => notes.push(format!(
+                "payment ledger: the use at {} refund(s) of traffic packs could not be recorded ({error}); trying again in {} s",
+                settled.events.len(),
+                SETTLE_EVERY.as_secs()
+            )),
+        }
+        notes
+    }
+
     /// One tick of the pull: reads the settings, and when the pull is set
     /// up, not stopped, due and allowed by `gate`, makes one request at
-    /// `now` for `users`. `usage` makes the daemon's usage report of the
-    /// billing cycle at `now`, `None` when it has none; it is asked only
-    /// for a page that holds a refund in full, which records what the
-    /// report says of the use of a pack it takes back (design §9.6).
-    /// Returns the lines to log.
+    /// `now` for `users`. Returns the lines to log.
     pub(crate) fn tick(
         &mut self,
         env: &Env<'_>,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         gate: Gate<'_>,
-        usage: &dyn Fn() -> Option<CycleUsage>,
     ) -> Vec<String> {
         let mut notes = Vec::new();
         if self.fault.is_some() {
@@ -285,14 +366,7 @@ impl Puller {
                 self.state = None;
                 self.retry_later();
             }
-            Ok(answer) => self.answered(
-                judge(answer, cursor),
-                users,
-                now,
-                &settings,
-                usage,
-                &mut notes,
-            ),
+            Ok(answer) => self.answered(judge(answer, cursor), users, now, &settings, &mut notes),
         }
         notes
     }
@@ -303,11 +377,10 @@ impl Puller {
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         settings: &PullSettings,
-        usage: &dyn Fn() -> Option<CycleUsage>,
         notes: &mut Vec<String>,
     ) {
         match judged {
-            Judged::Page(page) => self.record(&page, users, now, settings, usage, notes),
+            Judged::Page(page) => self.record(&page, users, now, settings, notes),
             Judged::Refused(error) => {
                 self.failed(
                     notes,
@@ -347,30 +420,17 @@ impl Puller {
     }
 
     /// Applies `page` to a copy of the ledger, writes it, and only then
-    /// keeps it. The usage report is made only when the page holds a
-    /// refund in full.
+    /// keeps it. A refund in full of a traffic pack that the page holds
+    /// waits for the usage ([`Self::settle`]).
     fn record(
         &mut self,
         page: &FeedPage,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         settings: &PullSettings,
-        usage: &dyn Fn() -> Option<CycleUsage>,
         notes: &mut Vec<String>,
     ) {
-        let report = page
-            .entries()
-            .iter()
-            .any(|entry| matches!(entry.event, EntryEvent::Refund { in_full: true, .. }))
-            .then(usage)
-            .flatten();
-        let applied = match self.ledger.apply(
-            page,
-            users,
-            now,
-            settings.rehearsal(),
-            report.as_ref(),
-        ) {
+        let applied = match self.ledger.apply(page, users, now, settings.rehearsal()) {
             Ok(applied) => applied,
             Err(ApplyRefusal::TestMode) => {
                 self.say_state(

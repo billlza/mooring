@@ -11,14 +11,14 @@ use std::time::{Duration, Instant};
 use mooring_agent_proto::{AgentError, LineRequest, Resolution, Response, SeriesRange, UsageMonth};
 use mooring_daemon_core::error::{UsageError, UsageErrorKind};
 use mooring_daemon_core::snapshot::{Ledgers, NodePoll};
-use mooring_daemon_core::usage::{CollectedUsage, CycleUsage, NodeUsageHistory};
+use mooring_daemon_core::usage::{CollectedUsage, NodeUsageHistory};
 use mooring_model::iface::BsdName;
 use mooring_model::node::{Node, NodeLifecycle};
-use mooring_model::{Deployment, NodeId, UnixTime};
+use mooring_model::{Deployment, NodeId, UnixTime, UserId};
 use mooring_store::write_user_usage;
 
 use crate::app::Env;
-use crate::collected_usage::read_collected;
+use crate::collected_usage::{behind, read_collected};
 use crate::error::{CommandError, LocalError};
 use crate::node::{NodeError, session::ops_session};
 
@@ -119,19 +119,37 @@ impl Collector {
         }
     }
 
-    /// The usage report of the billing cycle at `now`, as the status counts
-    /// it: `None` when the store cannot be read or the report cannot be
-    /// made (the collection behind, or its figures inconsistent, which the
-    /// status's usage view and [`Self::failure`] say). A refund in full of
-    /// a traffic pack then records the user's use as not known, and takes
-    /// the pack back whole (design §9.6).
-    pub(crate) fn cycle_usage(&self, deployment: &Deployment, now: UnixTime) -> Option<CycleUsage> {
-        match &self.store {
-            StoreState::Ready(history) => history
-                .aggregate(deployment, now)
-                .ok()
-                .map(|report| report.cycle_usage()),
-            StoreState::Unreadable { .. } | StoreState::Unwritten { .. } => None,
+    /// The bytes the nodes had counted for `user` in the billing cycle
+    /// `now` is in before `at`, at most, by the usage collected
+    /// ([`CollectedUsage::cycle_served_before`]). A refund in full of a
+    /// traffic pack waits for it (design §9.6), and goes on waiting unless
+    /// this is `Ok(Some)`:
+    ///
+    /// - `Ok(None)` while the usage cannot tell yet: the report does not
+    ///   reach far enough past `at`, it has no cycle figure for the user,
+    ///   or the collection is behind ([`behind`]: a node not collected
+    ///   lately, as while it cannot be reached), which the status's usage
+    ///   view and [`Self::failure`] say.
+    /// - `Err` with the kind of a fault, as [`Self::ledgers`] gives it: the
+    ///   store cannot be read or its latest write failed, or the figures
+    ///   contradict each other. It is never read as usage that is behind:
+    ///   the caller logs it.
+    pub(crate) fn served_before(
+        &self,
+        deployment: &Deployment,
+        now: UnixTime,
+        user: &UserId,
+        at: UnixTime,
+    ) -> Result<Option<u64>, UsageErrorKind> {
+        let history = match &self.store {
+            StoreState::Ready(history) => history,
+            StoreState::Unreadable { kind } => return Err(*kind),
+            StoreState::Unwritten { .. } => return Err(UsageErrorKind::StoreUnavailable),
+        };
+        match history.cycle_served_before(deployment, now, user, at) {
+            Ok(told) => Ok(told),
+            Err(error) if behind(error.kind()) => Ok(None),
+            Err(error) => Err(error.kind()),
         }
     }
 

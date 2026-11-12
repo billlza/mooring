@@ -22,6 +22,7 @@ mod daemon;
 mod listing;
 mod prune;
 mod pull;
+mod settle;
 
 /// The first fixture user, `fxuseraaab`.
 pub(crate) const FIRST: &str = "fxuseraaab";

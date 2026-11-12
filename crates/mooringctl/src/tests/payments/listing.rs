@@ -10,7 +10,6 @@ use mooring_daemon_core::payments::{
     PullSettings, RefundEffect, Stop, StopReason, TimeTakenBack,
 };
 use mooring_daemon_core::period::BillingCycle;
-use mooring_daemon_core::usage::CycleUsage;
 use mooring_model::user::SuspendReason;
 use mooring_model::{BillDay, CalendarDate, CycleRule, UnixTime, UserId};
 use serde_json::{Value, json};
@@ -31,7 +30,7 @@ fn users() -> BTreeMap<UserId, mooring_model::User> {
 fn applied(ledger: &PaymentLedger, body: &[u8], rehearsal: bool) -> PaymentLedger {
     let page = FeedPage::decode(body, ledger.cursor()).unwrap();
     ledger
-        .apply(&page, &users(), UnixTime::from_secs(NOW), rehearsal, None)
+        .apply(&page, &users(), UnixTime::from_secs(NOW), rehearsal)
         .unwrap()
         .ledger
 }
@@ -363,23 +362,30 @@ fn every_event_has_its_line() {
             ),
         ),
         (
-            refunded(RefundEffect::Pack(PackUse::Served {
-                bytes: 70_000_000_000,
-            })),
+            refunded(RefundEffect::Pack(PackUse::Awaiting)),
             format!(
-                "payment: order {order} refunded 800 so far, in full; its pack now counts only what the user had used of it beyond the rest of their quota: 70000000000 bytes served this cycle when Mooring applied the refund"
+                "payment: order {order} refunded 800 so far, in full; it waits for the usage: its pack counts in full until the usage collected covers the refund's time, or the pack's billing cycle ends"
             ),
         ),
         (
-            refunded(RefundEffect::Pack(PackUse::Unknown)),
+            LedgerEvent::Settled {
+                order: order.clone(),
+                used: PackUse::Served {
+                    bytes: 70_000_000_000,
+                    learned_at: UnixTime::from_secs(NOW + 90),
+                },
+            },
             format!(
-                "payment: order {order} refunded 800 so far, in full; its pack is taken back whole: the user's use this cycle was not known when Mooring applied the refund"
+                "payment: order {order}'s refund in full no longer waits for the usage; its pack counts from 2026-10-13 19:21:30 UTC on only what the user had used of it beyond the rest of their quota: 70000000000 bytes served this cycle by the refund's time"
             ),
         ),
         (
-            refunded(RefundEffect::Pack(PackUse::CycleEnded)),
+            LedgerEvent::Settled {
+                order: order.clone(),
+                used: PackUse::CycleEnded,
+            },
             format!(
-                "payment: order {order} refunded 800 so far, in full; its pack's billing cycle had ended, so nothing is taken back"
+                "payment: order {order}'s refund in full no longer waits for the usage; its pack's billing cycle has ended, so nothing is taken back"
             ),
         ),
         (
@@ -421,8 +427,11 @@ fn every_event_has_its_line() {
 }
 
 /// What each refund in full took back is listed: the month cut at the
-/// refund's time, the month that followed it moved as much earlier, and the
-/// pack with the user's use when Mooring applied its refund.
+/// refund's time, the month that followed it moved as much earlier, and
+/// the pack's refund as it stands: waiting for the usage, which the
+/// summary counts and `--json` carries; then with the user's use at the
+/// refund's time and when Mooring learned it; or with nothing taken back,
+/// its cycle over.
 #[test]
 fn what_refunds_in_full_took_back_is_listed() {
     let month = grant(1, "aaaaaaaaaaaaaaaaaaaa", FIRST);
@@ -436,29 +445,62 @@ fn what_refunds_in_full_took_back_is_listed() {
         refund_in_full(&month, 4, NOW + 10 * day),
         refund_in_full(&traffic, 5, NOW + 3600),
     ];
-    let usage = CycleUsage {
-        cycle: BillingCycle::of_instant(
+    let cycle_at = |secs: u64| {
+        BillingCycle::of_instant(
             CycleRule::Monthly {
                 bill_day: BillDay::new(1).unwrap(),
             },
-            UnixTime::from_secs(NOW),
+            UnixTime::from_secs(secs),
         )
-        .unwrap(),
-        through: UnixTime::from_secs(NOW),
-        served: BTreeMap::from([(UserId::parse(FIRST).unwrap(), Some(120_000_000_000))]),
+        .unwrap()
     };
     let page = FeedPage::decode(&page(true, 0, entries, false), 0).unwrap();
-    let ledger = PaymentLedger::new()
-        .apply(
-            &page,
-            &users(),
-            UnixTime::from_secs(NOW),
-            false,
-            Some(&usage),
+    let waiting = PaymentLedger::new()
+        .apply(&page, &users(), UnixTime::from_secs(NOW), false)
+        .unwrap()
+        .ledger;
+    let summary = "  1 refund(s) in full of traffic packs wait for the usage: the daemon records the user's use at the refund once the usage collected covers its time\n";
+    let listed = text(None, Some(&waiting));
+    assert!(
+        listed.contains(&format!(
+            "orders: 3 (0 held, 2 refunded, 0 disputed)\n{summary}"
+        )),
+        "{listed}"
+    );
+    assert!(
+        listed.contains("    refund, entry 5: 800 gbp so far, in full; it waits for the usage: its pack counts in full until the usage collected covers the refund's time, or the pack's billing cycle ends\n"),
+        "{listed}"
+    );
+    assert!(
+        json_line(None, Some(&waiting))
+            .unwrap()
+            .contains("\"pack_use\":\"awaiting\""),
+    );
+    let next_cycle = NOW + 40 * day;
+    let ended = waiting
+        .settle(
+            UnixTime::from_secs(next_cycle),
+            cycle_at(next_cycle),
+            &|_, _| None,
+        )
+        .unwrap()
+        .ledger;
+    let listed = text(None, Some(&ended));
+    assert!(!listed.contains("wait for the usage"), "{listed}");
+    assert!(
+        listed.contains("    refund, entry 5: 800 gbp so far, in full; its pack's billing cycle has ended, so nothing is taken back\n"),
+        "{listed}"
+    );
+    let ledger = waiting
+        .settle(
+            UnixTime::from_secs(NOW + 2 * 3600),
+            cycle_at(NOW),
+            &|_, _| Some(120_000_000_000),
         )
         .unwrap()
         .ledger;
     let listed = text(None, Some(&ledger));
+    assert!(!listed.contains("wait for the usage"), "{listed}");
     let on = |days: u64| stamp(UnixTime::from_secs(NOW + days * day));
     for line in [
         format!(
@@ -482,7 +524,7 @@ fn what_refunds_in_full_took_back_is_listed() {
             on(10),
             on(40)
         ),
-        "    refund, entry 5: 800 gbp so far, in full; its pack now counts only what the user had used of it beyond the rest of their quota: 120000000000 bytes served this cycle when Mooring applied the refund".to_owned(),
+        "    refund, entry 5: 800 gbp so far, in full; its pack counts from 2026-10-13 21:20:00 UTC on only what the user had used of it beyond the rest of their quota: 120000000000 bytes served this cycle by the refund's time".to_owned(),
     ] {
         assert!(listed.contains(&format!("{line}\n")), "{line}\n{listed}");
     }
