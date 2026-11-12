@@ -278,7 +278,8 @@ fn lapsed_suspensions(
                 }
             }
             SuspendReason::Expired => {
-                let policy = effective_policy(user, automatic, paid, cycle, now);
+                // The expiry reads no usage.
+                let policy = effective_policy(user, automatic, paid, cycle, now, None);
                 (!matches!(
                     ExpiryState::of(policy.expires_at, now),
                     ExpiryState::Expired { .. }
@@ -307,7 +308,9 @@ fn usage_reported(usage: Option<&CycleUsage>, user: &UserId) -> bool {
 }
 
 /// Whether `user`'s paid orders gave, after `since`, a pack counted in
-/// `cycle` and not refunded in full by `now`, or a period covering `now`.
+/// `cycle` that no refund in full has taken back by `now`, or a period
+/// covering `now`. A pack whose refund in full waits for the usage counts
+/// in full, so it is one.
 fn granted_since(
     paid: &Entitlements,
     user: &UserId,
@@ -319,7 +322,7 @@ fn granted_since(
         orders.packs().iter().any(|pack| {
             pack.granted_at > since
                 && cycle.contains(pack.granted_at)
-                && pack.refund.is_none_or(|refund| refund.at > now)
+                && pack.taken_back_by(now, None).is_none()
         }) || orders
             .period_at(now)
             .is_some_and(|period| period.from > since)
@@ -464,8 +467,9 @@ pub fn unrenewed(
         else {
             continue;
         };
-        let Some(expired_at) = effective_policy(user, automatic, paid, cycle, now).expires_at
-        else {
+        // The expiry reads no usage.
+        let policy = effective_policy(user, automatic, paid, cycle, now, None);
+        let Some(expired_at) = policy.expires_at else {
             continue;
         };
         let falls_due = revocation_due(expired_at)?;

@@ -446,7 +446,6 @@ fn only_a_lapsed_suspension_at_expiry_is_resumed_once_paid() {
                 room: Some(std::time::Duration::from_secs(10)),
                 network_clear: &mut clear,
             },
-            &|| None,
         )
     });
     let outcome = harness.run(&["apply", "--now"]);
@@ -509,7 +508,6 @@ fn a_month_refunded_in_full_ends_at_the_refund() {
                 room: Some(std::time::Duration::from_secs(10)),
                 network_clear: &mut clear,
             },
-            &|| None,
         )
     });
     let outcome = harness.run(&["apply", "--now"]);
@@ -885,7 +883,6 @@ fn a_pack_lifts_nothing_while_the_usage_is_behind() {
                 room: Some(std::time::Duration::from_secs(10)),
                 network_clear: &mut clear,
             },
-            &|| None,
         )
     });
     assert_eq!(

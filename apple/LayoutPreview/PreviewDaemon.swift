@@ -12,6 +12,7 @@ enum DaemonRegistration { case enabled, requiresApproval, notRegistered }
 @Observable
 final class DaemonService {
     let daemon: DaemonRegistration = .enabled
+    let applyJob: DaemonRegistration = .enabled
     let openAtLogin = false
     private(set) var failure: String?
 

@@ -488,7 +488,6 @@ fn a_revocation_at_expiry_waits_for_a_payment_pull_since_it_fell_due() {
                     room: Some(std::time::Duration::from_secs(10)),
                     network_clear: &mut clear,
                 },
-                &|| None,
             );
         });
         let ledger = super::payments::ledger_on_disk(harness).unwrap();

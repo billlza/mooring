@@ -86,6 +86,11 @@ struct SimGauge: View {
             Text("Warning at \(bytes(sim.thresholds.warnBytes)).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Text(
+                "This cycle began on \(sim.cycle.start.display); the next begins on \(sim.cycle.nextStart.display) (UTC). The meter counts this Mac's traffic through the M7, whichever SIM is in it. After a SIM change, or when the plan starts on another day, move the cycle with `mooringctl sim set-anchor`."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 

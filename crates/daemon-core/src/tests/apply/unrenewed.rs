@@ -188,13 +188,12 @@ fn paid_time_moves_the_expiry_the_three_months_run_from() {
             deployment.users(),
             at("2026-08-10", 0),
             false,
-            None,
         )
         .unwrap()
         .ledger;
     let paid = ledger.entitlements(false);
     let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), now()).unwrap();
-    let extended = effective_policy(&paying, None, &paid, cycle, now())
+    let extended = effective_policy(&paying, None, &paid, cycle, now(), None)
         .expires_at
         .unwrap();
     assert!(revocation_due(extended).unwrap() > now(), "{extended:?}");
