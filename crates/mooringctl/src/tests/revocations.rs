@@ -4,17 +4,20 @@
 //! record each revocation a node's confirmation settles, delete the user's
 //! credentials on that node from the keychain only once that record is
 //! committed, and report what still waits; a node that cannot be reached
-//! keeps the user pending.
+//! keeps the user pending. And the job's revocations at expiry (design
+//! §13.6; the agreement's clause 6 from revision 2): a user suspended at
+//! expiry whose service was not renewed in three months is revoked, when
+//! the agreement they accepted provides for it, and reported otherwise.
 
 use std::collections::BTreeSet;
 
 use mooring_agent_proto::{Generation, RequestKind, Response};
 use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::SecretRef;
-use mooring_model::user::SuspendReason;
+use mooring_model::user::{SuspendReason, UserPolicy};
 use mooring_model::{
-    CalendarDate, ConfigGeneration, Deployment, DeploymentParts, NodeId, UnixTime, User, UserId,
-    UserStatus,
+    AgreementVersion, CalendarDate, ConfigGeneration, Deployment, DeploymentParts,
+    ExpiryRevocation, NodeId, UnixTime, User, UserId, UserStatus,
 };
 use serde_json::Value;
 
@@ -308,7 +311,7 @@ fn the_job_commits_what_its_applies_settle_and_reports_what_waits() {
             "lon1: applied\n\
              revocation committed on lon1: {SECOND}, which still waits on {waits}\n\
              revocation pending: {SECOND} waits on {waits}\n\
-             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 1 of 2 node(s) behind applied, 1 revocation(s) committed, 1 still pending; 1 failure(s)\n"
+             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 1 of 2 node(s) behind applied, 0 revoked at expiry, 1 revocation(s) committed, 1 still pending; 1 failure(s)\n"
         )),
         "{}",
         outcome.stdout
@@ -367,13 +370,232 @@ fn the_job_records_a_revocation_confirmed_earlier() {
         format!(
             "revocation committed on ams1: {SECOND}\n\
              revocation committed on lon1: {SECOND}, now revoked; its credentials there are deleted from the keychain\n\
-             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied, 2 revocation(s) committed, 0 still pending; 0 failure(s)\n"
+             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied, 0 revoked at expiry, 2 revocation(s) committed, 0 still pending; 0 failure(s)\n"
         )
     );
     assert_eq!(
         status(&harness, SECOND),
         UserStatus::Revoked { since: at(NOW) }
     );
+}
+
+/// The fixture's nodes adopted, never applied, so that the job applies
+/// none, with `SECOND` suspended at expiry, its service having expired
+/// `days` days before the run.
+fn unrenewed(days: u64) -> Deployment {
+    fixture(|parts| {
+        for found in &mut parts.nodes {
+            if let NodeLifecycle::Applied { site, .. } = &found.lifecycle {
+                found.lifecycle = NodeLifecycle::Adopted { site: site.clone() };
+            }
+        }
+        let second = user(parts, SECOND);
+        let expired = at(NOW - days * 86_400);
+        second.policy = UserPolicy {
+            expires_at: Some(expired),
+            quota: None,
+        };
+        second.status = UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: at(expired.as_secs() + 3600),
+        };
+    })
+}
+
+/// With an agreement that provides for it, a user suspended at expiry
+/// whose service expired more than three months before is revoked at the
+/// run, pending on the adopted nodes holding its credentials, whose first
+/// apply is the operator's; the report says so, the log counts.
+#[test]
+fn the_job_revokes_a_user_three_months_after_its_expiry() {
+    let mut harness = job(unrenewed(100));
+    harness.expiry_revocation = ExpiryRevocation::since(Some(AgreementVersion::CURRENT));
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let adopted = "adopted; its first `node apply` commits it";
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "revoked {SECOND}: suspended at expiry since 2026-07-05 20:20:00 UTC, its service expired at 2026-07-05 19:20:00 UTC and was not renewed in three months\n\
+             revocation pending: {SECOND} waits on ams1 ({adopted}), lon1 ({adopted})\n\
+             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied, 1 revoked at expiry, 0 revocation(s) committed, 1 still pending; 0 failure(s)\n"
+        )
+    );
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.users()[&id(SECOND)].status, UserStatus::RevokePending);
+    assert_eq!(after.config_generation().get(), 2);
+    let log = log(&harness);
+    assert!(
+        log.contains("; 1 revoked three months after expiry\n"),
+        "{log}"
+    );
+    assert!(!log.contains("fxuser"), "{log}");
+}
+
+/// The JSON outcome names the revocation with its expiry and suspension.
+#[test]
+fn the_json_outcome_names_a_revocation_at_expiry() {
+    let mut harness = job(unrenewed(100));
+    harness.expiry_revocation = ExpiryRevocation::since(Some(AgreementVersion::CURRENT));
+    let outcome = harness.run(&["apply", "--now", "--json"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let value: Value = serde_json::from_str(&outcome.stdout).unwrap();
+    let expired = NOW - 100 * 86_400;
+    assert_eq!(
+        value["policy"]["carried_out"]["revoked"],
+        serde_json::json!([{
+            "user": SECOND,
+            "expired_at": expired,
+            "due": NOW - 8 * 86_400,
+            "since": expired + 3600
+        }])
+    );
+    assert_eq!(
+        value["revocations"]["done"]["pending"],
+        serde_json::json!([{"user": SECOND, "nodes": [
+            {"node": "ams1", "waits_for": "first_apply"},
+            {"node": "lon1", "waits_for": "first_apply"}
+        ]}])
+    );
+}
+
+/// While the payment pull is set up, a revocation at expiry waits for a
+/// pull that succeeded since it fell due, so that a renewal paid in time
+/// and not pulled yet never ends in a revocation, which cannot be undone:
+/// the user is reported, left suspended, and no failure. Once a pull has
+/// succeeded at or after that instant, the next run revokes the user.
+#[test]
+fn a_revocation_at_expiry_waits_for_a_payment_pull_since_it_fell_due() {
+    use super::payments::{connect, page};
+    use crate::payments::pull::{Gate, Puller};
+
+    let mut harness = job(unrenewed(100));
+    harness.expiry_revocation = ExpiryRevocation::since(Some(AgreementVersion::CURRENT));
+    connect(&mut harness, 1, false, 1);
+    // Three calendar months after the expiry, 2026-07-05 19:20:00 UTC.
+    let due = NOW - 8 * 86_400;
+    let pull = |harness: &mut Harness, when: u64| {
+        harness.portal.ok(&page(true, 0, Vec::new(), false));
+        let mut puller = Puller::open(&harness.support_dir());
+        let users = store(harness).load().unwrap().deployment.users().clone();
+        let mut clear = || true;
+        harness.with_env(|env| {
+            puller.tick(
+                env,
+                &users,
+                at(when),
+                Gate {
+                    room: Some(std::time::Duration::from_secs(10)),
+                    network_clear: &mut clear,
+                },
+                &|| None,
+            );
+        });
+        let ledger = super::payments::ledger_on_disk(harness).unwrap();
+        assert_eq!(ledger.pulled_at(), Some(at(when)));
+    };
+    let waiting = format!(
+        "not revoked yet: {SECOND}, suspended at expiry since 2026-07-05 20:20:00 UTC, whose service expired at 2026-07-05 19:20:00 UTC and was not renewed in three months; that fell due at 2026-10-05 19:20:00 UTC, and the payment pull has not succeeded since, so a renewal paid by then may not be known yet: a later run revokes it once one has\n"
+    );
+    // No pull yet, then one a second before the revocation fell due.
+    for pulled in [None, Some(due - 1)] {
+        if let Some(when) = pulled {
+            pull(&mut harness, when);
+        }
+        let outcome = harness.run(&["apply", "--now"]);
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert!(outcome.stdout.starts_with(&waiting), "{}", outcome.stdout);
+        assert!(
+            matches!(
+                status(&harness, SECOND),
+                UserStatus::Suspended {
+                    reason: SuspendReason::Expired,
+                    ..
+                }
+            ),
+            "{pulled:?}"
+        );
+    }
+    let json = harness.run(&["apply", "--now", "--json"]);
+    let value: Value = serde_json::from_str(&json.stdout).unwrap();
+    assert_eq!(
+        value["policy"]["carried_out"]["revocation_awaiting_pull"],
+        serde_json::json!([{
+            "user": SECOND,
+            "expired_at": NOW - 100 * 86_400,
+            "due": due,
+            "since": NOW - 100 * 86_400 + 3600
+        }])
+    );
+    assert!(
+        log(&harness).contains("; 1 due for revocation waiting for a payment pull\n"),
+        "{}",
+        log(&harness)
+    );
+    // A pull that succeeded at the instant it fell due.
+    pull(&mut harness, due);
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        outcome.stdout.starts_with(&format!("revoked {SECOND}: ")),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(status(&harness, SECOND), UserStatus::RevokePending);
+}
+
+/// A pull disconnected (`portal disconnect`) brings no payment any more, so
+/// the records decide again: the user is revoked without waiting.
+#[test]
+fn a_disconnected_pull_lets_the_records_decide() {
+    use super::payments::connect;
+
+    let mut harness = job(unrenewed(100));
+    harness.expiry_revocation = ExpiryRevocation::since(Some(AgreementVersion::CURRENT));
+    connect(&mut harness, 1, false, 1);
+    let disconnected = harness.run(&["portal", "disconnect"]);
+    assert_eq!(disconnected.code, 0, "{}", disconnected.stderr);
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        outcome.stdout.starts_with(&format!("revoked {SECOND}: ")),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(status(&harness, SECOND), UserStatus::RevokePending);
+}
+
+/// While no revision the user accepted provides for it (a closed gate, as
+/// this build's stays until it ships one that does), the user is left
+/// suspended and reported, for the operator to decide; it is no failure.
+/// Under three months, nothing is said.
+#[test]
+fn a_user_the_agreement_does_not_cover_is_reported_not_revoked() {
+    let mut harness = job(unrenewed(100));
+    harness.expiry_revocation = ExpiryRevocation::since(None);
+    let before = store(&harness).load().unwrap().deployment;
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        outcome.stdout.starts_with(&format!(
+            "not revoked: {SECOND}, suspended at expiry since 2026-07-05 20:20:00 UTC, whose service expired at 2026-07-05 19:20:00 UTC and was not renewed in three months; the agreement it accepted does not provide for revoking it, so that is yours to decide (`mooringctl user revoke {SECOND}`)\n"
+        )),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(store(&harness).load().unwrap().deployment, before);
+    assert!(
+        log(&harness).contains(
+            "; 1 due for revocation that the agreement they accepted does not provide for\n"
+        ),
+        "{}",
+        log(&harness)
+    );
+    // Two months on, no word of it.
+    let mut harness = job(unrenewed(60));
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(!outcome.stdout.contains("revoke"), "{}", outcome.stdout);
 }
 
 /// A run that takes its clock for one that stepped back (a suspension for
@@ -408,7 +630,7 @@ fn a_clock_that_stepped_back_records_no_revocation() {
     // The refused step is the one failure; what waits is counted.
     assert!(
         outcome.stdout.ends_with(
-            ": 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied, 0 revocation(s) committed, 1 still pending; 1 failure(s)\n"
+            ": 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied, 0 revoked at expiry, 0 revocation(s) committed, 1 still pending; 1 failure(s)\n"
         ),
         "{}",
         outcome.stdout
@@ -431,6 +653,88 @@ fn a_clock_that_stepped_back_records_no_revocation() {
             {"node": "lon1", "waits_for": "record"}
         ]}]}})
     );
+}
+
+/// A suspension for quota dated after the run's time (a clock that stepped
+/// back) refuses the policy step whole: no one is revoked at expiry.
+#[test]
+fn a_clock_that_stepped_back_revokes_no_one_at_expiry() {
+    let mut deployment = unrenewed(100).into_parts();
+    user(&mut deployment, THIRD).status = UserStatus::Suspended {
+        reason: SuspendReason::QuotaExceeded {
+            cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
+        },
+        since: at(NOW + 86_400),
+    };
+    let mut harness = job(Deployment::try_from(deployment).unwrap());
+    harness.expiry_revocation = ExpiryRevocation::since(Some(AgreementVersion::CURRENT));
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert!(
+        outcome
+            .stdout
+            .starts_with("policy step not carried out: a suspension for quota is dated after now"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(matches!(
+        status(&harness, SECOND),
+        UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            ..
+        }
+    ));
+}
+
+/// A revocation planned before the operator changed the user is not made:
+/// a user resumed meanwhile, or suspended anew, is left as the operator
+/// left it, and the failure is reported.
+#[test]
+fn a_user_changed_since_the_plan_is_not_revoked() {
+    use mooring_daemon_core::apply::{PaymentsKnown, plan_policy, unrenewed as plan_unrenewed};
+    use mooring_daemon_core::payments::Entitlements;
+
+    use crate::apply::policy::carry_out;
+    use crate::apply::report::Change;
+
+    let harness = job(unrenewed(100));
+    let read = store(&harness).load().unwrap().deployment;
+    let plan = plan_policy(&read, &Entitlements::none(), None, at(NOW)).unwrap();
+    let revocations = plan_unrenewed(
+        &read,
+        &Entitlements::none(),
+        PaymentsKnown::NoPull,
+        at(NOW),
+        ExpiryRevocation::since(Some(AgreementVersion::CURRENT)),
+    )
+    .unwrap();
+    assert_eq!(revocations.revoke.len(), 1);
+    let operator = UserStatus::Suspended {
+        reason: SuspendReason::Operator,
+        since: at(NOW - 10),
+    };
+    let store = store(&harness);
+    let changed = store
+        .update_config::<(), _>(read.config_generation(), |mut parts| {
+            user(&mut parts, SECOND).status = UserStatus::Active;
+            Ok(parts)
+        })
+        .unwrap();
+    store
+        .update_config::<(), _>(changed.deployment.config_generation(), |mut parts| {
+            user(&mut parts, SECOND).status = operator;
+            Ok(parts)
+        })
+        .unwrap();
+    let done = carry_out(&store, &plan, &revocations, None);
+    assert!(done.revoked.is_empty());
+    assert_eq!(done.failed.len(), 1);
+    assert_eq!(done.failed[0].change, Change::Revoke);
+    assert_eq!(
+        done.failed[0].error,
+        "the change was refused: the user's status changed since the run planned this"
+    );
+    assert_eq!(status(&harness, SECOND), operator);
 }
 
 /// A revocation the store fails to record (here every state write fails)

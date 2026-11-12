@@ -21,7 +21,10 @@
 //!    or is inconsistent, and a suspension for quota dated after `now` (a
 //!    clock that stepped back). Usage that is behind (the daemon stopped,
 //!    or a node it cannot reach) leaves the quotas unchecked, and the rest
-//!    of the step runs.
+//!    of the step runs. Last, the users suspended at expiry whose service
+//!    was not renewed in three months are revoked, one change each, if the
+//!    agreement they accepted provides for it (`Env::expiry_revocation`);
+//!    the others are reported.
 //! 2. **Removals** ([`policy::remove`]): each user revoked 13 months ago
 //!    (`RevokedUserRemoved`), then the kept ids whose records have expired
 //!    (`ForgottenExpired`); skipped when the clock stepped back. The daemon
@@ -131,7 +134,7 @@ pub(crate) fn apply(
     say_as(&mut log, now, "apply", &format!("run ({})", when.flag()))?;
     let store = Store::new(&support);
     let deployment = load(&store)?.deployment;
-    let policy = policy::step(&store, &support, &deployment, now);
+    let policy = policy::step(&store, &support, &deployment, now, env.expiry_revocation);
     say_as(&mut log, (env.clock)()?, "apply", &policy.log_line())?;
     let removals = policy::remove(&store, now, policy.clock_stepped_back());
     say_as(&mut log, (env.clock)()?, "apply", &removals.log_line())?;

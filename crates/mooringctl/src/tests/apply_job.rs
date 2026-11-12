@@ -542,8 +542,11 @@ fn the_json_outcome_names_each_part() {
             "policy": {"carried_out": {
                 "suspended": [{"user": FIRST, "reason": "expired"}],
                 "resumed": [],
+                "revoked": [],
                 "held_back": [],
                 "kept": [],
+                "revocation_awaiting_pull": [],
+                "revocation_not_covered": [],
                 "failed": [],
                 "quotas_unchecked": [],
                 "usage_behind": "ams1 may have counted traffic, but no usage ledger is given for it"
@@ -687,7 +690,7 @@ fn apply_takes_exactly_one_form() {
 /// such change fails and is reported; the state keeps the operator's.
 #[test]
 fn a_change_the_operator_made_since_the_plan_is_kept() {
-    use mooring_daemon_core::apply::plan_policy;
+    use mooring_daemon_core::apply::{UnrenewedPlan, plan_policy};
     use mooring_daemon_core::payments::Entitlements;
 
     use crate::apply::policy::carry_out;
@@ -731,7 +734,7 @@ fn a_change_the_operator_made_since_the_plan_is_kept() {
             Ok(parts)
         })
         .unwrap();
-    let done = carry_out(&store, &plan, None);
+    let done = carry_out(&store, &plan, &UnrenewedPlan::default(), None);
     assert!(done.suspended.is_empty() && done.resumed.is_empty());
     let failed: Vec<(String, Change)> = done
         .failed

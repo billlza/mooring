@@ -85,6 +85,10 @@ pub(crate) struct Env<'a> {
     /// How the payment pull reaches the portal (`/usr/bin/curl` in the
     /// binary).
     pub(crate) portal: &'a dyn crate::payments::PortalLink,
+    /// Which users the agreement lets the apply job revoke three months
+    /// after their service expired (`ExpiryRevocation::SHIPPED` in the
+    /// binary): none until a revision this build ships provides for it.
+    pub(crate) expiry_revocation: mooring_model::ExpiryRevocation,
 }
 
 /// The system clock, in whole seconds since the epoch.

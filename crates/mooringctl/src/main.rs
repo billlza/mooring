@@ -190,6 +190,7 @@ fn main() -> ExitCode {
         redirect_stderr: &mooring_macsys::redirect_stderr,
         portal_agreement: mooring_model::PortalAgreement::SHIPPED,
         portal: &curl,
+        expiry_revocation: mooring_model::ExpiryRevocation::SHIPPED,
     };
     let code = run(
         cli.command,

@@ -6,7 +6,7 @@
 //! before their next file. A Level 1 drift check: it detects an accidental
 //! edit, not a malicious one.
 
-use mooring_model::{AgreementVersion, PortalAgreement};
+use mooring_model::{AgreementVersion, EXPIRY_REVOCATION_SINCE, PortalAgreement};
 use sha2::{Digest as _, Sha256};
 
 const AGREEMENT: &str = include_str!("../../../../docs/runbooks/user-agreement.md");
@@ -75,6 +75,23 @@ fn the_portal_gate_opens_only_with_a_text_that_names_the_portal() {
         PortalAgreement::SHIPPED.required().is_ok(),
         names_the_portal,
         "the agreement text and PORTAL_AGREEMENT_SINCE disagree about the portal"
+    );
+}
+
+/// The gate on revoking a user three months after its service expired
+/// (design §13.6) opens only with a text that states it: revision 2's
+/// clause 6 says 「服务到期 3 个月后仍未续费，运营者会作废你的账户」, and
+/// revision 1, under which an expired service stays suspended until the
+/// operator resumes it, says nothing of the kind. Like the portal's, a Level
+/// 1 check: it catches the gate opened on a text that was not revised for
+/// it, or a revised text shipped with the gate still closed.
+#[test]
+fn the_expiry_revocation_gate_opens_only_with_a_text_that_states_it() {
+    let states_it = user_visible(AGREEMENT).contains("服务到期 3 个月后仍未续费");
+    let open = EXPIRY_REVOCATION_SINCE.is_some_and(|since| since <= AgreementVersion::CURRENT);
+    assert_eq!(
+        open, states_it,
+        "the agreement text and EXPIRY_REVOCATION_SINCE disagree about revoking a user three months after expiry"
     );
 }
 

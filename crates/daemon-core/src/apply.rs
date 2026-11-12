@@ -34,6 +34,16 @@
 //!   suspension for quota made after `now` (a clock that stepped back, or
 //!   a corrupt record) fails the step as a whole: none of its suspensions
 //!   and resumes is carried out.
+//! - **Revocations at expiry** ([`unrenewed`], 2026-11-12). A user
+//!   suspended at expiry whose service, as paid time extends it, expired
+//!   three calendar months before the run and was not renewed is revoked
+//!   (the agreement's clause 6 from revision 2), each a configuration
+//!   change of its own after the step's resumes; one whose accepted
+//!   revision does not provide for it is reported to the operator instead,
+//!   and so is one whose revocation waits for a payment pull that succeeded
+//!   since it fell due ([`PaymentsKnown`]).
+//!   Computed only once [`plan_policy`] has planned the step, so a clock
+//!   that stepped back revokes no one either.
 //! - **Removals** ([`removals_due`]). A user revoked 13 months ago is
 //!   removed with every record the Mac holds of it (`RevokedUserRemoved`),
 //!   and the kept ids of removed users whose nodes' records have expired go
@@ -42,6 +52,7 @@
 use std::num::NonZeroU16;
 
 use mooring_model::removal::removal_due;
+use mooring_model::revocation::{ExpiryRevocation, revocation_due};
 use mooring_model::user::SuspendReason;
 use mooring_model::{Deployment, ModelError, UnixTime, UserId, UserStatus};
 use serde::Serialize;
@@ -353,6 +364,129 @@ fn suspended_again(
             PolicyAction::Suspend(reason) if action.user == *user => Some(reason),
             PolicyAction::Suspend(_) | PolicyAction::Warn(_) => None,
         }))
+}
+
+/// A user suspended at expiry whose service has not been renewed three
+/// calendar months after it expired ([`unrenewed`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Unrenewed {
+    /// The user, suspended at expiry.
+    pub user: UserId,
+    /// When the user's service expired: its effective expiry, with the time
+    /// its paid orders gave (`effective_policy`).
+    pub expired_at: UnixTime,
+    /// When the revocation fell due: three calendar months after
+    /// `expired_at` ([`revocation_due`]).
+    pub due: UnixTime,
+    /// When the user was suspended at expiry.
+    pub since: UnixTime,
+}
+
+/// How far the payments Mooring holds are known to reach, which a
+/// revocation, never undone, waits on ([`unrenewed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaymentsKnown {
+    /// No payment pull is set up, so no payment reaches Mooring: the
+    /// records held decide.
+    NoPull,
+    /// The payment pull is set up, and its last pull that succeeded was at
+    /// this instant, or none has: a payment made since may not be known.
+    Pulled(Option<UnixTime>),
+}
+
+impl PaymentsKnown {
+    /// Whether every payment made before `instant` is known: without a
+    /// pull, at once; with one, once a pull succeeded at or after it.
+    fn covers(self, instant: UnixTime) -> bool {
+        match self {
+            Self::NoPull => true,
+            Self::Pulled(at) => at.is_some_and(|at| at >= instant),
+        }
+    }
+}
+
+/// The revocations at expiry of the policy step, and the users reported.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnrenewedPlan {
+    /// The users to revoke, each a configuration change of its own, in id
+    /// order.
+    pub revoke: Vec<Unrenewed>,
+    /// The users due whose revocation waits for a payment pull that
+    /// succeeded at or after it fell due, in id order: reported, and
+    /// revoked by a later run once one has.
+    pub awaiting_pull: Vec<Unrenewed>,
+    /// The users as long unrenewed whose acceptance of the agreement does
+    /// not provide for revoking them, in id order: reported, and the
+    /// operator decides.
+    pub not_covered: Vec<Unrenewed>,
+}
+
+/// The users of `deployment` suspended at expiry whose service expired
+/// three calendar months or more before `now` ([`revocation_due`] of their
+/// effective expiry, with what their paid orders gave: `paid`), and was not
+/// renewed since: those whose accepted agreement provides for it (`gate`,
+/// [`ExpiryRevocation::covers`]) to revoke, the others to report (the
+/// agreement's clause 6 from revision 2: 「服务到期 3 个月后仍未续费，运营者会
+/// 作废你的账户」).
+///
+/// A revocation is never undone, so while a payment pull is set up it
+/// waits for a pull that succeeded at or after the instant it fell due
+/// (`known`): until then a renewal paid in time may not have reached
+/// Mooring, and the user is reported as waiting instead. A payment made
+/// after that instant is late by the agreement, whether a pull took it or
+/// not; the ledger holds it, not granted, for a revoked user.
+///
+/// Only a suspension at expiry ends so: a suspension by the operator, for
+/// an abuse review or for quota is never revoked here, whatever the user's
+/// expiry, and an active user whose expiry passed is suspended by the
+/// step first. A user whose effective expiry is no longer past is resumed
+/// by the step instead ([`Lapse::NoLongerExpired`]), so no user is both.
+/// The step plans this only once [`plan_policy`] has planned the rest, so a
+/// suspension for quota after `now`, a clock that stepped back, revokes no
+/// one; a clock behind can only delay a revocation, since the expiry is
+/// compared with `now`, while a clock ahead cannot be told from the true
+/// time.
+pub fn unrenewed(
+    deployment: &Deployment,
+    paid: &Entitlements,
+    known: PaymentsKnown,
+    now: UnixTime,
+    gate: ExpiryRevocation,
+) -> Result<UnrenewedPlan, PolicyError> {
+    let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), now)?;
+    let automatic = automatic_quota(deployment, now)?;
+    let mut plan = UnrenewedPlan::default();
+    for (id, user) in deployment.users() {
+        let UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since,
+        } = user.status
+        else {
+            continue;
+        };
+        let Some(expired_at) = effective_policy(user, automatic, paid, cycle, now).expires_at
+        else {
+            continue;
+        };
+        let falls_due = revocation_due(expired_at)?;
+        if falls_due > now {
+            continue;
+        }
+        let due = Unrenewed {
+            user: id.clone(),
+            expired_at,
+            due: falls_due,
+            since,
+        };
+        if !gate.covers(user) {
+            plan.not_covered.push(due);
+        } else if known.covers(falls_due) {
+            plan.revoke.push(due);
+        } else {
+            plan.awaiting_pull.push(due);
+        }
+    }
+    Ok(plan)
 }
 
 /// The revoked users of `deployment` due for removal at `now`, 13 calendar
