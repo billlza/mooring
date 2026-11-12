@@ -79,8 +79,9 @@ impl UserEntitlements {
     }
 
     /// The bytes of the packs granted within `cycle`, which raise its quota
-    /// (design §9.6: a pack is counted in the billing cycle it is granted
-    /// in, and in no other). Saturates at `u64::MAX`.
+    /// (design §9.6, the operator's decision of 2026-11-12: a pack is
+    /// counted in the billing cycle it is granted in, and in no other, and
+    /// its order's `days` is not applied). Saturates at `u64::MAX`.
     #[must_use]
     pub fn pack_bytes_in(&self, cycle: BillingCycle) -> u64 {
         self.packs

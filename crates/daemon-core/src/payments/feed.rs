@@ -81,7 +81,8 @@ pub struct OrderTerms {
     pub plan: PlanId,
     /// What the plan sells.
     pub plan_kind: PortalPlanKind,
-    /// Days of service, or the days the traffic is meant to last.
+    /// Days of service; of a pack, the days its traffic is meant to last,
+    /// which Mooring records and does not apply (design §9.6).
     pub days: NonZeroU32,
     /// The quota of each billing cycle of the service, or the extra
     /// traffic; decimal bytes.
