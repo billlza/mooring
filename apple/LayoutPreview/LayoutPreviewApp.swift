@@ -17,6 +17,8 @@ private enum Scenario: String, CaseIterable, Identifiable {
     case report = "Usage report"
     case noUsers = "No users"
     case retryCountdown = "Retry countdown"
+    case latchedViolation = "Latched violation"
+    case latchBehindAnotherReason = "Latch behind another reason"
 
     var id: Self { self }
 
@@ -44,6 +46,27 @@ private enum Scenario: String, CaseIterable, Identifiable {
             object["users"] = users
         } else if self == .noUsers {
             object["users"] = [String: Any]()
+        } else if self == .latchedViolation || self == .latchBehindAnotherReason {
+            guard var exit = object["exit"] as? [String: Any], let since = exit["since"] as? UInt64 else {
+                throw PreviewError.invalidFixture
+            }
+            // Found 36 h before the state last became this one, as when
+            // another reason held the exit down in front of the latch.
+            let violation = ["outside_carrier_prefixes": ["ip": "203.0.113.9"]]
+            exit["latches"] = [["violation": violation, "at": since - 130_091] as [String: Any]]
+            exit["carrier_check"] = NSNull()
+            if self == .latchedViolation {
+                exit["state"] = ["down": ["reason": ["violation": violation]]]
+            } else {
+                // Preflight finds the foreign network before the latch.
+                let findings: [[String: Any]] = [
+                    ["routable_ipv4": ["interface": "en0"]],
+                    ["default_route": ["interface": "en0", "family": "v4"]],
+                ]
+                exit["state"] = ["down": ["reason": ["foreign_network_attached": ["findings": findings]]]]
+                exit["foreign_networks"] = findings
+            }
+            object["exit"] = exit
         }
         let changed = try JSONSerialization.data(withJSONObject: object)
         return .deployed(try JSONDecoder().decode(DeployedStatus.self, from: changed))
