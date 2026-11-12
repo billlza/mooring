@@ -34,7 +34,7 @@ pub(crate) const WRITE_RETRY: Duration = Duration::from_secs(60);
 
 /// Whether the file holds the record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum File {
+enum FileState {
     /// It does: it was read from the file, or written to it.
     Current,
     /// It does not: the record was begun or changed, and the next tick
@@ -49,7 +49,7 @@ enum File {
 pub(crate) struct NetworkWatch {
     run_dir: PathBuf,
     record: SimNetworkRecord,
-    file: File,
+    file: FileState,
 }
 
 impl NetworkWatch {
@@ -83,9 +83,9 @@ impl NetworkWatch {
         };
         // A record read is what the file holds; one begun is not there yet.
         let file = if note.is_none() {
-            File::Current
+            FileState::Current
         } else {
-            File::Stale
+            FileState::Stale
         };
         (
             Self {
@@ -122,12 +122,12 @@ impl NetworkWatch {
         if next != self.record {
             notes.extend(said(&self.record, &next));
             self.record = next;
-            self.file = File::Stale;
+            self.file = FileState::Stale;
         }
         let due = match self.file {
-            File::Current => false,
-            File::Stale => true,
-            File::RetryAt(at) => now >= at,
+            FileState::Current => false,
+            FileState::Stale => true,
+            FileState::RetryAt(at) => now >= at,
         };
         if !due {
             return notes;
@@ -140,9 +140,9 @@ impl NetworkWatch {
                 write_sim_network(&self.run_dir, &bytes).map_err(|error| error.to_string())
             });
         match written {
-            Ok(()) => self.file = File::Current,
+            Ok(()) => self.file = FileState::Current,
             Err(error) => {
-                self.file = File::RetryAt(now + WRITE_RETRY);
+                self.file = FileState::RetryAt(now + WRITE_RETRY);
                 notes.push(format!(
                     "sim network: the record could not be written ({error}); the status shows it, and it is written again in {} s",
                     WRITE_RETRY.as_secs()
