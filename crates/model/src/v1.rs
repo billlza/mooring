@@ -238,7 +238,7 @@ pub struct DeploymentV1Parts {
 }
 
 /// A version-1 deployment that satisfies every version-1 invariant: the
-/// version-1 cross-entity rules a current [`Deployment`] also runs, and no
+/// version-1 cross-entity rules a current [`crate::Deployment`] also runs, and no
 /// others (version 1 had no aliases and no cap on active users).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "DeploymentV1Parts", into = "DeploymentV1Parts")]
