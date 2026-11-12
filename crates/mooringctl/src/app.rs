@@ -300,6 +300,9 @@ pub(crate) fn run(
         Command::Sim(SimCommand::SetAnchor { anchor, yes }) => {
             crate::sim::set_anchor(env, out, anchor, yes)
         }
+        Command::Sim(SimCommand::AcceptNetwork { yes }) => {
+            crate::sim::accept_network(env, out, yes)
+        }
         Command::Status {
             follow,
             json,

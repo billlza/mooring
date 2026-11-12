@@ -57,8 +57,9 @@ use crate::usage::{UsageAccuracy, UserActivity, UserUsage};
 use crate::wire::mac_time;
 
 /// The version [`MacStatusV2`] documents carry. The type keeps the name
-/// it was given at version 2; version 3 (2026-11-12) added `sim.network`.
-pub const MAC_STATUS_VERSION: u32 = 3;
+/// it was given at version 2; version 3 (2026-11-12) added `sim.network`,
+/// and version 4 (2026-11-12) its origin `accepted`.
+pub const MAC_STATUS_VERSION: u32 = 4;
 
 /// Where a probe failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

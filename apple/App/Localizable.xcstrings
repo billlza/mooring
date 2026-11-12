@@ -1363,12 +1363,12 @@
         }
       }
     },
-    "If the SIM was changed, both records are the old SIM's. Record them for the new one: `docs/runbooks/swap-day.md`, section 2, steps 3 to 6 (`mooringctl exit disable`, `exit observe`, `exit record-carrier --replace`, `sim set-anchor`, `node apply` for each node, `exit enable`). This notice ends once either is recorded with other values, or once the M7 reports %@ again.": {
+    "If the SIM was changed, both records are the old SIM's. Record them for the new one: `docs/runbooks/swap-day.md`, section 2, steps 3 to 6 (`mooringctl exit disable`, `exit observe`, `exit record-carrier --replace`, `sim set-anchor`, `node apply` for each node, `exit enable`). If both records are right for the SIM now in the M7, `mooringctl sim accept-network` in Terminal takes %@ as the one on record and changes neither record. This notice ends once either is recorded with other values, once that command takes the network, or once the M7 reports %@ again.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "如果换过 SIM 卡，这两项登记仍是旧卡的，需要为新卡重新登记：`docs/runbooks/swap-day.md` 第 2 节第 3 至 6 步（`mooringctl exit disable`、`exit observe`、`exit record-carrier --replace`、`sim set-anchor`、对每个节点运行 `node apply`、`exit enable`）。任何一项登记成别的值之后，或者 M7 重新报告“%@”之后，这条提醒就会消失。"
+            "value": "如果换过 SIM 卡，这两项登记仍是旧卡的，需要为新卡重新登记：`docs/runbooks/swap-day.md` 第 2 节第 3 至 6 步（`mooringctl exit disable`、`exit observe`、`exit record-carrier --replace`、`sim set-anchor`、对每个节点运行 `node apply`、`exit enable`）。如果这两项登记对 M7 里现在这张卡都是对的，在终端里运行 `mooringctl sim accept-network`，它会把“%1$@”记为登记时的网络，两项登记都不改动。任何一项登记成别的值之后、这条命令记下这个网络之后，或者 M7 重新报告“%2$@”之后，这条提醒就会消失。"
           }
         }
       }
@@ -2102,6 +2102,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "登记时"
+          }
+        }
+      }
+    },
+    "On record is the network the M7 reported when `mooringctl sim accept-network` took it at the operator's word; the daemon compares every later poll with it. The carrier check and the billing cycle were not recorded again for it. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“登记时”是指在终端里运行 `mooringctl sim accept-network`、由操作者认可时 M7 报告的网络；守护进程把之后每次轮询的结果与它比较。运营商地址检查和计费周期当时没有为它重新登记。守护进程只读 SIM 卡的名称和网络代码，所以同一运营商的两张卡看起来一样。"
           }
         }
       }
@@ -2928,6 +2938,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "自 %2$@ 起暂停（%1$@）"
+          }
+        }
+      }
+    },
+    "Taken on record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接受时间"
           }
         }
       }

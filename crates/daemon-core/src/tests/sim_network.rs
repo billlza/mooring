@@ -7,7 +7,9 @@
 //! carrier check or a cycle rule other than the record's begins it again;
 //! a poll that found no network changes nothing; no time is left after
 //! the poll; and the record's document round-trips and refuses anything
-//! else, a baseline that is its own other network included.
+//! else, a baseline that is its own other network included. The operator
+//! may take the other network as the one on record, while it is what the
+//! latest poll reported and what they were shown.
 
 use mooring_model::collections::NonEmpty;
 use mooring_model::exit::EgressCheck;
@@ -16,10 +18,13 @@ use proptest::prelude::*;
 
 use super::router;
 use super::support::{date, deployment, edited};
-use crate::router::{CarrierName, Mcc, Mnc, Plmn, RadioState, RouterStatus};
+use crate::router::{
+    CarrierName, Mcc, Mnc, Plmn, RadioState, RouterReading, RouterStatus, RouterUnavailableReason,
+};
 use crate::sim_network::{
-    BaselineOrigin, MAX_SIM_NETWORK_BYTES, NetworkBaseline, OtherNetwork, OtherNetworkIsBaseline,
-    RecordedUnder, SimNetwork, SimNetworkCorrupt, SimNetworkRecord, SimNetworkStatus,
+    BaselineOrigin, MAX_SIM_NETWORK_BYTES, NetworkBaseline, NotAccepted, OtherNetwork,
+    OtherNetworkIsBaseline, RecordedUnder, SimNetwork, SimNetworkCorrupt, SimNetworkRecord,
+    SimNetworkStatus,
 };
 
 fn at(secs: u64) -> UnixTime {
@@ -578,8 +583,236 @@ fn anything_but_a_version_one_record_is_refused() {
     );
 }
 
+/// The first SIM on record and the second reported since `at(500)`: what
+/// the operator sees before taking the second.
+fn swapped() -> SimNetworkRecord {
+    after(BaselineOrigin::Recorded, &[(unnamed(), 10), (one_p(), 500)])
+}
+
+/// A reading says what the M7 reports of the SIM, with the poll's time,
+/// only when the poll found it attached: one without a data session and
+/// one that failed say nothing, whenever the last good poll was.
+#[test]
+fn only_an_attached_poll_says_what_the_m7_reports() {
+    let attached = RouterReading::Available {
+        polled_at: at(70),
+        status: Box::new(router::status()),
+    };
+    assert_eq!(
+        SimNetwork::polled(&attached),
+        Some((network(Some("CMLink"), "234", "30"), at(70)))
+    );
+    let no_service = RouterReading::Available {
+        polled_at: at(70),
+        status: Box::new(status_with(|parts| parts.radio = RadioState::NoService)),
+    };
+    assert_eq!(SimNetwork::polled(&no_service), None);
+    for last_polled_at in [None, Some(at(10))] {
+        let failed = RouterReading::Unavailable {
+            reason: RouterUnavailableReason::Unreachable,
+            last_polled_at,
+        };
+        assert_eq!(SimNetwork::polled(&failed), None);
+    }
+}
+
+/// The operator takes the network the M7 reports: it is the baseline from
+/// the time it was taken, with no other network, and the origin says the
+/// operator took it, whatever the origin was. The carrier check and the
+/// cycle rule the record was taken under stay.
+#[test]
+fn the_network_the_m7_reports_is_taken_as_the_one_on_record() {
+    for origin in [
+        BaselineOrigin::NoRecord,
+        BaselineOrigin::Recorded,
+        BaselineOrigin::RecordUnreadable,
+        BaselineOrigin::Accepted,
+    ] {
+        let swapped = after(origin, &[(unnamed(), 10), (one_p(), 500)]);
+        assert_eq!(
+            swapped.status().acceptable(Some(&one_p())),
+            Ok(&OtherNetwork {
+                network: one_p(),
+                since: at(500),
+            })
+        );
+        let taken = swapped.accepted(&one_p(), Some(&one_p()), at(900)).unwrap();
+        assert_eq!(taken.under(), &under());
+        assert_eq!(
+            taken.status(),
+            &SimNetworkStatus {
+                origin: BaselineOrigin::Accepted,
+                baseline: Some(NetworkBaseline::new(one_p(), at(900), None).unwrap()),
+            }
+        );
+    }
+}
+
+/// Without another network there is nothing to take, whatever the latest
+/// poll reported and whichever network is named: before any baseline,
+/// while the M7 reports the baseline's, and once it reports it again.
+#[test]
+fn without_another_network_there_is_nothing_to_take() {
+    let back = swapped().observed(&under(), Some((&unnamed(), at(700))));
+    for record in [
+        after(BaselineOrigin::NoRecord, &[]),
+        after(BaselineOrigin::Recorded, &[(unnamed(), 10)]),
+        back,
+    ] {
+        for latest in [None, Some(&unnamed()), Some(&one_p())] {
+            assert_eq!(
+                record.status().acceptable(latest),
+                Err(NotAccepted::NoOtherNetwork)
+            );
+            for shown in [unnamed(), one_p()] {
+                assert_eq!(
+                    record.accepted(&shown, latest, at(900)),
+                    Err(NotAccepted::NoOtherNetwork)
+                );
+            }
+        }
+    }
+}
+
+/// A latest poll that failed or found no data session takes nothing: the
+/// other network the record holds may no longer be what is in the M7.
+/// That is said before the network named is looked at.
+#[test]
+fn a_latest_poll_without_a_network_takes_nothing() {
+    let swapped = swapped();
+    assert_eq!(
+        swapped.status().acceptable(None),
+        Err(NotAccepted::NotAttached)
+    );
+    for shown in [one_p(), unnamed(), network(None, "234", "15")] {
+        assert_eq!(
+            swapped.accepted(&shown, None, at(900)),
+            Err(NotAccepted::NotAttached)
+        );
+    }
+}
+
+/// Only the network the operator was shown is taken, and only while it is
+/// both the record's other network and what the latest poll reported.
+#[test]
+fn a_network_the_m7_no_longer_reports_is_not_taken() {
+    let third = network(Some("CMLink"), "234", "30");
+    let swapped = swapped();
+    // The latest poll reported a third network, or the baseline's again,
+    // and the record has not been set against it yet.
+    for latest in [&third, &unnamed()] {
+        assert_eq!(
+            swapped.status().acceptable(Some(latest)),
+            Err(NotAccepted::ReportChanged)
+        );
+        assert_eq!(
+            swapped.accepted(&one_p(), Some(latest), at(900)),
+            Err(NotAccepted::ReportChanged)
+        );
+        assert_eq!(
+            swapped.accepted(latest, Some(latest), at(900)),
+            Err(NotAccepted::ReportChanged)
+        );
+    }
+    // The operator named another network than the one the M7 reports: the
+    // baseline's own, or a third.
+    for shown in [&unnamed(), &third] {
+        assert_eq!(
+            swapped.accepted(shown, Some(&one_p()), at(900)),
+            Err(NotAccepted::ReportChanged)
+        );
+    }
+    // The M7 went on to a third network after the operator was shown the
+    // second: the second is not taken, and the third is when it is named.
+    let moved = swapped.observed(&under(), Some((&third, at(600))));
+    assert_eq!(
+        moved.accepted(&one_p(), Some(&third), at(900)),
+        Err(NotAccepted::ReportChanged)
+    );
+    let taken = moved.accepted(&third, Some(&third), at(900)).unwrap();
+    assert_eq!(baseline(&taken).network(), &third);
+    assert_eq!(baseline(&taken).first_seen(), at(900));
+    assert_eq!(baseline(&taken).other(), None);
+}
+
+/// A network the operator took is the baseline every later poll is set
+/// against: the same network changes nothing, there is nothing more to
+/// take, the network that was on record before is another network since
+/// the poll that reports it, a poll dated before the acceptance brings
+/// its time back, and a record of the carrier check or the cycle begins
+/// the record again as it does any other.
+#[test]
+fn a_network_taken_is_the_baseline_later_polls_are_set_against() {
+    let taken = swapped()
+        .accepted(&one_p(), Some(&one_p()), at(900))
+        .unwrap();
+    assert_eq!(taken.observed(&under(), None), taken);
+    assert_eq!(taken.observed(&under(), Some((&one_p(), at(960)))), taken);
+    assert_eq!(
+        taken.accepted(&one_p(), Some(&one_p()), at(950)),
+        Err(NotAccepted::NoOtherNetwork)
+    );
+    let back = taken.observed(&under(), Some((&unnamed(), at(1_000))));
+    assert_eq!(back.status().origin, BaselineOrigin::Accepted);
+    assert_eq!(baseline(&back).network(), &one_p());
+    assert_eq!(baseline(&back).first_seen(), at(900));
+    assert_eq!(other(&back), Some((unnamed(), 1_000)));
+    let earlier = taken.observed(&under(), Some((&one_p(), at(700))));
+    assert_eq!(baseline(&earlier).first_seen(), at(700));
+    assert_eq!(earlier.status().origin, BaselineOrigin::Accepted);
+    let recorded = &other_records()[0];
+    assert_eq!(
+        taken.observed(recorded, None),
+        SimNetworkRecord::new(recorded.clone(), BaselineOrigin::Recorded)
+    );
+}
+
+/// A record whose baseline the operator took round-trips through its
+/// document, which names the origin `accepted`.
+#[test]
+fn a_record_of_a_network_taken_round_trips() {
+    let taken = swapped()
+        .accepted(&one_p(), Some(&one_p()), at(900))
+        .unwrap();
+    let bytes = taken.encode().unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(document["network"]["origin"], "accepted");
+    assert_eq!(
+        document["network"]["baseline"]["first_seen"],
+        at(900).as_secs()
+    );
+    assert_eq!(
+        document["network"]["baseline"]["other"],
+        serde_json::Value::Null
+    );
+    assert_eq!(SimNetworkRecord::decode(&bytes).unwrap(), taken);
+}
+
+/// Each reason a network is not taken has its own words.
+#[test]
+fn each_reason_a_network_is_not_taken_says_why() {
+    for (reason, text) in [
+        (
+            NotAccepted::NoOtherNetwork,
+            "there is no network other than the one on record",
+        ),
+        (
+            NotAccepted::NotAttached,
+            "the latest poll of the M7 did not find it attached",
+        ),
+        (
+            NotAccepted::ReportChanged,
+            "the M7 no longer reports the network that was to be taken",
+        ),
+    ] {
+        assert_eq!(reason.to_string(), text);
+    }
+}
+
 /// One step of a daemon's life: the records it reads, and the network a
-/// poll reports, if one does, a number of seconds after the step before.
+/// poll reports, if one does, a number of seconds after the step before;
+/// and the network the operator then names to take, if they name one, a
+/// second after the poll.
 #[derive(Debug, Clone)]
 struct Step {
     /// Which records: the fixture's, or one of [`other_records`].
@@ -588,18 +821,22 @@ struct Step {
     network: Option<usize>,
     /// Seconds since the step before.
     after: u64,
+    /// Which network the operator names, if any.
+    named: Option<usize>,
 }
 
 fn step() -> impl Strategy<Value = Step> {
     (
         prop_oneof![9 => Just(0_usize), 1 => 1_usize..3],
         proptest::option::weighted(0.7, 0_usize..3),
-        1_u64..5_000,
+        2_u64..5_000,
+        proptest::option::weighted(0.3, 0_usize..3),
     )
-        .prop_map(|(records, network, after)| Step {
+        .prop_map(|(records, network, after, named)| Step {
             records,
             network,
             after,
+            named,
         })
 }
 
@@ -610,7 +847,12 @@ proptest! {
     /// reported under them when that is not the baseline's, since the
     /// first poll after the last that reported the baseline's; a record
     /// begun again is `Recorded`, and one never begun again keeps its
-    /// origin; and every record along the way round-trips.
+    /// origin; and every record along the way round-trips. A network the
+    /// operator names is taken exactly when another network is held, the
+    /// step's poll found one, and the two are the network named; it is
+    /// then as if the M7 had first reported it when it was taken, and
+    /// the origin is `Accepted` until the record is begun again. A
+    /// network not taken changes nothing.
     #[test]
     fn the_record_follows_what_was_reported_under_the_records_now_read(
         steps in proptest::collection::vec(step(), 0..40),
@@ -619,17 +861,18 @@ proptest! {
         let mut records = vec![under()];
         records.extend(other_records());
         let mut record = SimNetworkRecord::new(under(), BaselineOrigin::NoRecord);
-        // The model: the records read last, whether they ever changed,
-        // and every network reported under them with its time.
+        // The model: the records read last, how the baseline under them
+        // came to be taken, and every network reported under them with
+        // its time, from the one that gave the baseline on.
         let mut read = 0_usize;
-        let mut begun_again = false;
+        let mut origin = BaselineOrigin::NoRecord;
         let mut reported: Vec<(usize, u64)> = Vec::new();
         let mut now = 0_u64;
         for step in steps {
             now += step.after;
             if step.records != read {
                 read = step.records;
-                begun_again = true;
+                origin = BaselineOrigin::Recorded;
                 reported.clear();
             }
             if let Some(index) = step.network {
@@ -639,12 +882,30 @@ proptest! {
                 &records[read],
                 step.network.map(|index| (&networks[index], at(now))),
             );
+            if let Some(named) = step.named {
+                let other = reported
+                    .last()
+                    .map(|(latest, _)| *latest)
+                    .filter(|latest| *latest != reported[0].0);
+                let expected = match (other, step.network) {
+                    (None, _) => Err(NotAccepted::NoOtherNetwork),
+                    (Some(_), None) => Err(NotAccepted::NotAttached),
+                    (Some(other), Some(_)) if other == named => Ok(()),
+                    (Some(_), Some(_)) => Err(NotAccepted::ReportChanged),
+                };
+                let taken = record.accepted(
+                    &networks[named],
+                    step.network.map(|index| &networks[index]),
+                    at(now + 1),
+                );
+                prop_assert_eq!(taken.as_ref().map(|_| ()).map_err(|reason| *reason), expected);
+                if let Ok(taken) = taken {
+                    record = taken;
+                    origin = BaselineOrigin::Accepted;
+                    reported = vec![(named, now + 1)];
+                }
+            }
             prop_assert_eq!(record.under(), &records[read]);
-            let origin = if begun_again {
-                BaselineOrigin::Recorded
-            } else {
-                BaselineOrigin::NoRecord
-            };
             prop_assert_eq!(record.status().origin, origin);
             match reported.first() {
                 None => prop_assert_eq!(&record.status().baseline, &None),

@@ -14,7 +14,7 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroU32;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::process::ExitStatusExt;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -63,7 +63,6 @@ use crate::daemon::deployed::{
     DRAIN_BUDGET, Deployed, ENGINES_DIRECTORY, budget_left, first_power_source, poll_m7,
     stale_watches, unreachable_cause,
 };
-use crate::daemon::hub::Hub;
 use crate::daemon::radio::RadioHistoryWriter;
 use crate::daemon::{Control, Intervals, LoopState, RunPaths, chain};
 use crate::error::{CommandError, LocalError};
@@ -129,16 +128,12 @@ pub(crate) fn deployed_with(deployment: mooring_model::Deployment) -> Harness {
     harness
 }
 
+/// What a loop that serves a deployment shares with its connections,
+/// and the receiving end of its retries.
 pub(crate) fn shared() -> (Control, mpsc::Receiver<()>) {
-    let (retry, retries) = mpsc::channel();
-    (
-        Control {
-            hub: Hub::default(),
-            retry,
-            deployed: AtomicBool::new(true),
-        },
-        retries,
-    )
+    let (control, asked) = Control::new();
+    control.deployed.store(true, Ordering::SeqCst);
+    (control, asked.retries)
 }
 
 /// The status the hub holds.

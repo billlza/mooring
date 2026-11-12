@@ -25,18 +25,22 @@
 //! A baseline is taken anew when the carrier check or the cycle rule is no
 //! longer the one it was taken under ([`RecordedUnder`]), which is how the
 //! daemon sees that the operator recorded either again. The other network
-//! goes when the M7 reports the baseline's again.
+//! goes when the M7 reports the baseline's again, or when the operator
+//! takes it as the one on record (`sim accept-network`,
+//! [`SimNetworkRecord::accepted`]): after a SIM change that needs neither
+//! another carrier check nor another cycle, that is how the record comes
+//! to hold the SIM now in the M7.
 //!
 //! Nothing here reads a clock or a file: [`SimNetworkRecord::observed`]
-//! decides, and the daemon keeps the record's bytes in
-//! `run/sim-network.json` through `mooring-store`, so that a restart
-//! neither forgets the baseline nor dates a change anew.
+//! and [`SimNetworkRecord::accepted`] decide, and the daemon keeps the
+//! record's bytes in `run/sim-network.json` through `mooring-store`, so
+//! that a restart neither forgets the baseline nor dates a change anew.
 
 use mooring_model::exit::{EgressCheck, ExitSite};
 use mooring_model::{CycleRule, UnixTime};
 use serde::{Deserialize, Serialize};
 
-use crate::router::{CarrierName, Plmn, RadioState, RouterStatus};
+use crate::router::{CarrierName, Plmn, RadioState, RouterReading, RouterStatus};
 
 /// The record's document version.
 pub const SIM_NETWORK_VERSION: u32 = 1;
@@ -72,6 +76,19 @@ impl SimNetwork {
             }),
         }
     }
+
+    /// What a poll's `reading` says of the SIM and its network, and when
+    /// the Mac polled it; `None` for a poll that failed or found no data
+    /// session, which says nothing of the SIM.
+    #[must_use]
+    pub fn polled(reading: &RouterReading) -> Option<(Self, UnixTime)> {
+        match reading {
+            RouterReading::Available { polled_at, status } => {
+                Self::of(status).map(|network| (network, *polled_at))
+            }
+            RouterReading::Unavailable { .. } => None,
+        }
+    }
 }
 
 /// How the baseline came to be taken when it was.
@@ -88,6 +105,11 @@ pub enum BaselineOrigin {
     /// The record could not be read and was begun again. A SIM changed
     /// before then is not noticed.
     RecordUnreadable,
+    /// The operator took the network the M7 then reported as the one on
+    /// record (`sim accept-network`). The carrier check and the cycle rule
+    /// were not recorded again: they are taken to go with it at the
+    /// operator's word.
+    Accepted,
 }
 
 /// A network other than the baseline's, which the M7 reports now.
@@ -151,7 +173,9 @@ impl NetworkBaseline {
         &self.network
     }
 
-    /// When the baseline was taken: the poll's time, by the Mac's clock.
+    /// When the baseline was taken, by the Mac's clock: the time of the
+    /// poll that gave it, or, for one the operator took (`Accepted`), the
+    /// time it was taken.
     #[must_use]
     pub const fn first_seen(&self) -> UnixTime {
         self.first_seen
@@ -210,6 +234,49 @@ pub struct SimNetworkStatus {
     /// carrier check and the cycle rule now recorded.
     #[serde(deserialize_with = "Option::deserialize")]
     pub baseline: Option<NetworkBaseline>,
+}
+
+/// Why the network the M7 reports was not taken as the one on record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+pub enum NotAccepted {
+    /// There is no network other than the baseline's: the M7 reports the
+    /// one on record, or no poll has found it attached since the record
+    /// began.
+    #[error("there is no network other than the one on record")]
+    NoOtherNetwork,
+    /// The daemon's latest poll of the M7 failed or found no data session,
+    /// so what the M7 reports now is not known.
+    #[error("the latest poll of the M7 did not find it attached")]
+    NotAttached,
+    /// The network to take is not what the M7 reported at the daemon's
+    /// latest poll: its report changed after the operator was shown it.
+    #[error("the M7 no longer reports the network that was to be taken")]
+    ReportChanged,
+}
+
+impl SimNetworkStatus {
+    /// The network the operator may take as the one on record: the other
+    /// network, while `latest`, what the daemon's latest poll of the M7
+    /// reported if it found it attached, is that network.
+    ///
+    /// Without another network there is nothing to take
+    /// (`NoOtherNetwork`). A latest poll that failed or found no data
+    /// session says nothing of the SIM now in the M7, so the other
+    /// network may be out of date (`NotAttached`). One that reported
+    /// anything else has not been set against the record yet
+    /// (`ReportChanged`).
+    pub fn acceptable(&self, latest: Option<&SimNetwork>) -> Result<&OtherNetwork, NotAccepted> {
+        let other = self
+            .baseline
+            .as_ref()
+            .and_then(NetworkBaseline::other)
+            .ok_or(NotAccepted::NoOtherNetwork)?;
+        match latest {
+            None => Err(NotAccepted::NotAttached),
+            Some(latest) if *latest == other.network => Ok(other),
+            Some(_) => Err(NotAccepted::ReportChanged),
+        }
+    }
 }
 
 /// What a baseline is taken under: the two records about the SIM.
@@ -323,6 +390,42 @@ impl SimNetworkRecord {
             });
         }
         next
+    }
+
+    /// The record after the operator took `shown`, the network they were
+    /// shown as the one the M7 reports, as the one on record at `at`
+    /// (`sim accept-network`). `latest` is what the daemon's latest poll
+    /// of the M7 reported, if it found it attached.
+    ///
+    /// `shown` is taken only while it is the record's other network and
+    /// what that poll reported ([`SimNetworkStatus::acceptable`]); a
+    /// network the M7 no longer reports is `ReportChanged`. A refusal
+    /// changes nothing. The network taken is the baseline, dated `at`,
+    /// with no other network and the origin `Accepted`. What the record
+    /// was taken under stays: the operator says that the carrier check
+    /// and the cycle rule on record go with this network, and records
+    /// neither again.
+    pub fn accepted(
+        &self,
+        shown: &SimNetwork,
+        latest: Option<&SimNetwork>,
+        at: UnixTime,
+    ) -> Result<Self, NotAccepted> {
+        let other = self.status.acceptable(latest)?;
+        if other.network != *shown {
+            return Err(NotAccepted::ReportChanged);
+        }
+        Ok(Self {
+            under: self.under.clone(),
+            status: SimNetworkStatus {
+                origin: BaselineOrigin::Accepted,
+                baseline: Some(NetworkBaseline {
+                    network: shown.clone(),
+                    first_seen: at,
+                    other: None,
+                }),
+            },
+        })
     }
 
     /// What the record was taken under.

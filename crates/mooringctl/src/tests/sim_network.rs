@@ -39,11 +39,11 @@ use crate::daemon::deployed::Deployed;
 use crate::daemon::sim_network::{NetworkWatch, WRITE_RETRY, said, shown};
 use crate::daemon::{Control, Intervals, RunPaths};
 
-fn at(secs: u64) -> UnixTime {
+pub(crate) fn at(secs: u64) -> UnixTime {
     UnixTime::from_secs(NOW + secs)
 }
 
-fn network(spn: Option<&str>, mcc: &str, mnc: &str) -> SimNetwork {
+pub(crate) fn network(spn: Option<&str>, mcc: &str, mnc: &str) -> SimNetwork {
     SimNetwork {
         spn: spn.map(|name| CarrierName::parse(name).unwrap()),
         plmn: Plmn {
@@ -54,12 +54,12 @@ fn network(spn: Option<&str>, mcc: &str, mnc: &str) -> SimNetwork {
 }
 
 /// The fixture's SIM: `CMLink` on 234 30.
-fn cmlink() -> SimNetwork {
+pub(crate) fn cmlink() -> SimNetwork {
     network(Some("CMLink"), "234", "30")
 }
 
 /// A SIM without a name on 234 20.
-fn unnamed() -> SimNetwork {
+pub(crate) fn unnamed() -> SimNetwork {
     network(None, "234", "20")
 }
 
@@ -75,7 +75,7 @@ fn reading(secs: u64, edit: impl FnOnce(&mut RouterStatusParts)) -> RouterReadin
 }
 
 /// A poll that found the M7 attached and reporting `network`.
-fn reported(network: &SimNetwork, secs: u64) -> RouterReading {
+pub(crate) fn reported(network: &SimNetwork, secs: u64) -> RouterReading {
     reading(secs, |parts| {
         parts.sim_spn.clone_from(&network.spn);
         let RadioState::Attached(radio) = &mut parts.radio else {
@@ -122,12 +122,16 @@ fn anchored_again() -> Deployment {
 }
 
 /// One tick of `watch` at the present time.
-fn track(watch: &mut NetworkWatch, exit: &ExitSite, polled: Option<&RouterReading>) -> Vec<String> {
+pub(crate) fn track(
+    watch: &mut NetworkWatch,
+    exit: &ExitSite,
+    polled: Option<&RouterReading>,
+) -> Vec<String> {
     watch.track(exit, polled, Instant::now())
 }
 
 /// The record on disk in `run_dir`.
-fn on_disk(run_dir: &Path) -> SimNetworkRecord {
+pub(crate) fn on_disk(run_dir: &Path) -> SimNetworkRecord {
     let bytes = read_sim_network(run_dir, MAX_SIM_NETWORK_BYTES + 1)
         .unwrap()
         .unwrap();
@@ -144,7 +148,11 @@ fn no_baseline(origin: BaselineOrigin) -> SimNetworkStatus {
 
 /// A status whose baseline is `network`, first seen `first_seen` seconds
 /// after [`NOW`], with no other network.
-fn baseline_of(origin: BaselineOrigin, network: SimNetwork, first_seen: u64) -> SimNetworkStatus {
+pub(crate) fn baseline_of(
+    origin: BaselineOrigin,
+    network: SimNetwork,
+    first_seen: u64,
+) -> SimNetworkStatus {
     SimNetworkStatus {
         origin,
         baseline: Some(NetworkBaseline::new(network, at(first_seen), None).unwrap()),
@@ -154,7 +162,7 @@ fn baseline_of(origin: BaselineOrigin, network: SimNetwork, first_seen: u64) -> 
 /// The fixture's SIM as the baseline of a record begun without one, seen
 /// at [`NOW`], with the SIM without a name reported since `since` seconds
 /// after it.
-fn swapped_since(since: u64) -> SimNetworkStatus {
+pub(crate) fn swapped_since(since: u64) -> SimNetworkStatus {
     SimNetworkStatus {
         origin: BaselineOrigin::NoRecord,
         baseline: Some(
@@ -173,7 +181,7 @@ fn swapped_since(since: u64) -> SimNetworkStatus {
 
 const NO_RECORD: &str = "sim network: no record yet; the next poll that finds the M7 attached gives the network the carrier check and the billing cycle are taken to go with, so a SIM changed before then is not noticed";
 const TAKEN: &str = "sim network: the M7 reports CMLink (234-30); the carrier check and the billing cycle are taken to go with it";
-const SWAPPED: &str = "sim network: the M7 reports a SIM without a name (234-20), where it reported CMLink (234-30) under the recorded carrier check and billing cycle; if the SIM was changed, record both again (swap-day.md, section 2, steps 3 to 6)";
+pub(crate) const SWAPPED: &str = "sim network: the M7 reports a SIM without a name (234-20), where it reported CMLink (234-30) under the recorded carrier check and billing cycle; if the SIM was changed, record both again (swap-day.md, section 2, steps 3 to 6)";
 const BACK: &str = "sim network: the M7 reports CMLink (234-30) again";
 const RECORDED: &str = "sim network: the carrier check or the billing cycle changed; the next poll that finds the M7 attached gives the network they go with";
 const RECORDED_AND_TAKEN: &str = "sim network: the carrier check or the billing cycle changed; they are taken to go with a SIM without a name (234-20), which the M7 reports";
@@ -590,12 +598,12 @@ fn polls_of(documents: Vec<Vec<u8>>) -> impl FnOnce(u16) -> Vec<Reply> {
 }
 
 /// The M7's document for the fixture's SIM.
-fn cmlink_document() -> Vec<u8> {
+pub(crate) fn cmlink_document() -> Vec<u8> {
     FIXTURE.to_vec()
 }
 
 /// The M7's document with a SIM without a name on 234 20 in it.
-fn unnamed_document() -> Vec<u8> {
+pub(crate) fn unnamed_document() -> Vec<u8> {
     let mut document: serde_json::Value = serde_json::from_slice(FIXTURE).unwrap();
     document["sim"]["SPN"] = serde_json::json!("");
     document["wwanadv"]["MNC"] = serde_json::json!("20");
@@ -617,7 +625,7 @@ fn network_lines(log: &[u8]) -> Vec<String> {
 /// serves `document` and is polled at every tick: the exit is opened and
 /// ticked once, publishing to `control`, `then` runs, and the lines
 /// about the SIM's network are returned with what `then` did.
-fn run_against<T>(
+pub(crate) fn run_against<T>(
     harness: &mut Harness,
     control: &Control,
     secs: u64,
@@ -633,7 +641,7 @@ fn run_against<T>(
 /// [`run_against`] with the M7 polled at the start and then every
 /// `router_poll`, its polls reading `documents` in turn; also returns
 /// how many times the M7 was polled.
-fn run_polling_every<T>(
+pub(crate) fn run_polling_every<T>(
     harness: &mut Harness,
     control: &Control,
     router_poll: Duration,
@@ -666,12 +674,12 @@ fn run_polling_every<T>(
 }
 
 /// What the status `control` holds says of the SIM's network.
-fn shown_by(control: &Control) -> SimNetworkStatus {
+pub(crate) fn shown_by(control: &Control) -> SimNetworkStatus {
     published(control).parts().sim.network.clone()
 }
 
 /// A deployed daemon's harness whose M7 is the loopback stub.
-fn harness_with_the_stub_m7() -> Harness {
+pub(crate) fn harness_with_the_stub_m7() -> Harness {
     let mut harness = deployed();
     harness.link.gateway = Ok(Ipv4Addr::LOCALHOST);
     harness

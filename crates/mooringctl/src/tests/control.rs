@@ -6,23 +6,17 @@
 
 use std::io::{self, BufRead, BufReader};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use mooring_daemon_core::control::{DaemonReply, Refusal, decode_reply};
 
 use crate::daemon::Control;
-use crate::daemon::hub::{Hub, HubPoisoned};
+use crate::daemon::hub::HubPoisoned;
 use crate::daemon::serve::{End, LIMITS, Limits, serve, setsockopt_end};
 
+/// What the connections share, with no loop behind it.
 fn control() -> Control {
-    let (retry, _retries) = mpsc::channel();
-    Control {
-        hub: Hub::default(),
-        retry,
-        deployed: AtomicBool::new(false),
-    }
+    Control::new().0
 }
 
 /// A client that has gone before the daemon wrote its first line has

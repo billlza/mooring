@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The SIM's network in a deployment's status (`sim.network`, design §10.2,
-// §15.2): what the three scenarios carry, the change the console shows
-// (`SimNetworkStatus.change`) and what it differs in, and that the mirror
-// refuses a baseline that is its own other network. On 2026-11-12 the
+// §15.2): what the three scenarios carry, a baseline the operator had the
+// daemon take, the change the console shows (`SimNetworkStatus.change`)
+// and what it differs in, and that the mirror refuses a baseline that is
+// its own other network. On 2026-11-12 the
 // carrier check and the cycle on record were those of a SIM taken out the
 // day before, and nothing on the console said so.
 
@@ -77,6 +78,30 @@ import Testing
         #expect(status.origin == .recordUnreadable)
         #expect(status.baseline == nil)
         #expect(status.change == nil)
+    }
+
+    /// A network the operator had the daemon take (`mooringctl sim
+    /// accept-network`) is a baseline with the origin that says so and the
+    /// time it was taken. Another network reported after it is a change
+    /// against it, as against any baseline.
+    @Test func aNetworkTakenAtTheOperatorsWordIsABaselineWithItsOrigin() throws {
+        let taken = try decode(
+            "{\"origin\": \"accepted\", \"baseline\": {\"network\": \(network("1p", "30")), \"first_seen\": 300, \"other\": null}}"
+        )
+        #expect(taken.origin == .accepted)
+        #expect(taken.baseline?.network.spn == "1p")
+        #expect(taken.baseline?.network.plmn.mnc == "30")
+        #expect(taken.baseline?.firstSeen.seconds == 300)
+        #expect(taken.change == nil)
+        let later = try decode(
+            changed(from: network("1p", "30"), to: network(nil, "20"))
+                .replacingOccurrences(of: "\"recorded\"", with: "\"accepted\""))
+        #expect(later.origin == .accepted)
+        #expect(later.change?.recorded.spn == "1p")
+        #expect(later.change?.reported.plmn.mnc == "20")
+        // The order is the fixture's (`variants.json`), written out here.
+        #expect(BaselineOrigin.allCases == [.noRecord, .recorded, .recordUnreadable, .accepted])
+        #expect(BaselineOrigin.allCases.map(\.rawValue) == ["no_record", "recorded", "record_unreadable", "accepted"])
     }
 
     /// Another name, or a name where there was none or none where there

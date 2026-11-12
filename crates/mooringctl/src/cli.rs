@@ -40,7 +40,7 @@ pub(crate) enum Command {
     /// The exit: the deployment's creation and its carrier check.
     #[command(subcommand)]
     Exit(ExitCommand),
-    /// The SIM line's billing cycles.
+    /// The SIM line: its billing cycles, and its network on record.
     #[command(subcommand)]
     Sim(SimCommand),
     /// The VPS nodes.
@@ -602,6 +602,14 @@ pub(crate) enum SimCommand {
         #[arg(value_name = "DATE")]
         anchor: CalendarDate,
         /// Move without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Take the network the M7 reports as the SIM's network on record,
+    /// which ends the console's notice of another SIM or network. The
+    /// carrier check and the billing cycle stay as they are.
+    AcceptNetwork {
+        /// Take it without asking.
         #[arg(long)]
         yes: bool,
     },

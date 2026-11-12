@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The SIM's network (`mooring-daemon-core`'s `sim_network`, design §10.2,
-// §15.2): what the M7 reported at the first poll under the carrier check
-// and the billing cycle now recorded (the baseline), and the other network
-// it reports now, if it does. The carrier check and the cycle are records
-// about one SIM; another network than the baseline's is how the console
-// learns that they may be another SIM's.
+// §15.2): the baseline, which is what the M7 reported at the first poll
+// under the carrier check and the billing cycle now recorded, or the
+// network the operator had the daemon take since (`mooringctl sim
+// accept-network`); and the other network the M7 reports now, if it does.
+// The carrier check and the cycle are records about one SIM; another
+// network than the baseline's is how the console learns that they may be
+// another SIM's.
 
 import Foundation
 
@@ -38,6 +40,10 @@ public enum BaselineOrigin: String, Decodable, Sendable, CaseIterable {
     /// The record could not be read and was begun again: a SIM changed
     /// before then is not noticed.
     case recordUnreadable = "record_unreadable"
+    /// The operator had the daemon take the network the M7 then reported
+    /// (`mooringctl sim accept-network`); the carrier check and the
+    /// billing cycle were not recorded again for it.
+    case accepted
 }
 
 /// A network other than the baseline's, which the M7 reports now.
@@ -60,7 +66,9 @@ public struct OtherNetwork: Decodable, Hashable, Sendable {
 /// The baseline, and the other network the M7 reports now, if it does.
 public struct NetworkBaseline: Decodable, Hashable, Sendable {
     public let network: SimNetwork
-    /// When the baseline was taken: the poll's time, by the Mac's clock.
+    /// When the baseline was taken, by the Mac's clock: the time of the
+    /// poll that gave it, or, for one the operator took (`accepted`), the
+    /// time it was taken.
     public let firstSeen: UnixTime
     /// `nil` while the M7 reports the baseline's network; never that
     /// network itself.

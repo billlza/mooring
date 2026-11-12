@@ -111,7 +111,7 @@ pub(crate) fn status(
                 return Err(CommandError::Local(LocalError::DaemonRefused { reason }));
             }
             DaemonReply::Status(status) => status,
-            DaemonReply::RetryQueued => {
+            DaemonReply::RetryQueued | DaemonReply::SimNetworkAccepted => {
                 return Err(CommandError::Local(LocalError::DaemonUnexpectedReply));
             }
         };
@@ -241,6 +241,29 @@ pub(crate) fn send_request(
         Err(source) => Err(LocalError::DaemonIo {
             path: socket.to_path_buf(),
             source,
+        }),
+    }
+}
+
+/// One request and its one reply: connects, sends `request` and reads
+/// the reply's line, within [`ANSWER_TIMEOUT`]. A daemon that sends no
+/// reply in that time is `DaemonSilent`.
+pub(crate) fn ask(socket: &Path, request: DaemonRequest) -> Result<DaemonReply, LocalError> {
+    ask_within(socket, request, ANSWER_TIMEOUT)
+}
+
+/// [`ask`], the reply being waited for `limit`.
+pub(crate) fn ask_within(
+    socket: &Path,
+    request: DaemonRequest,
+    limit: Duration,
+) -> Result<DaemonReply, LocalError> {
+    let mut reader = connect(socket, request, limit)?;
+    let deadline = Instant::now() + limit;
+    match read_reply_line(&mut reader, socket, deadline, &|| true)? {
+        Next::Line(line) => decode_reply(&line).map_err(LocalError::DaemonReply),
+        Next::Deadline | Next::ParentGone => Err(LocalError::DaemonSilent {
+            secs: limit.as_secs(),
         }),
     }
 }
