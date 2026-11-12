@@ -43,7 +43,7 @@ use crate::cli::Cli;
 use crate::daemon::hub::Hub;
 use crate::daemon::log::LOG_FILE;
 use crate::daemon::radio::RADIO_HISTORY_DAYS;
-use crate::daemon::serve::{End, Limits, accept, serve};
+use crate::daemon::serve::{End, Limits, accept, refused, serve};
 use crate::daemon::{
     Control, LoopState, PollOutcome, Polled, RunPaths, Waited, after_poll, chain, poll_once,
     poll_router, start, unavailable_reason, wait_for_next_poll,
@@ -103,6 +103,14 @@ fn bounded_client(path: &Path) -> UnixStream {
     client.set_read_timeout(Some(DEADLINE)).unwrap();
     client.connect(&SockAddr::unix(path).unwrap()).unwrap();
     UnixStream::from(client)
+}
+
+/// A stream socket that was never connected: every write on it fails with
+/// "not connected". macOS answers so too when a peer's close overtakes a
+/// write (`daemon/peer.rs`), which a test cannot time, so the tests of
+/// that answer take it from here.
+fn never_connected() -> UnixStream {
+    UnixStream::from(Socket::new(Domain::UNIX, Type::STREAM, None).unwrap())
 }
 
 /// A temporary directory with a short path: `/tmp/.tmpXXXXXX`.
@@ -1049,6 +1057,29 @@ fn a_subscription_follows_the_hub_until_the_client_leaves() {
     assert_eq!(server.result(), End::ClientLeft);
 }
 
+/// A client that closes while a line longer than its socket holds is
+/// being written to it has left, whichever way the write then fails.
+#[test]
+fn a_client_that_closes_during_a_line_has_left() {
+    let (control, _retries) = control();
+    let mut long = vec![b'x'; MAX_REPLY_LINE_BYTES - 1];
+    long.push(b'\n');
+    control.hub.publish(Arc::from(long)).unwrap();
+    let (mut client, server) = serve_pair(&control, b"\"status\"\n");
+    let mut some = [0; 512];
+    assert!(client.read(&mut some).unwrap() > 0);
+    drop(client);
+    assert_eq!(server.result(), End::ClientLeft);
+}
+
+/// A line whose write the socket answers with "not connected" has found
+/// its client gone, as one answered with a broken pipe has.
+#[test]
+fn a_line_written_to_a_socket_not_connected_finds_the_client_gone() {
+    let (control, _retries) = control();
+    assert_eq!(serve(never_connected(), &control, QUICK), End::ClientLeft);
+}
+
 /// A byte after the one request ends a subscription: the client speaks
 /// nothing else.
 #[test]
@@ -1090,6 +1121,32 @@ fn bad_requests_are_refused() {
     let (client, server) = serve_pair(&control, b"");
     drop(client);
     assert_eq!(server.result(), End::ClientLeft);
+}
+
+/// A refusal written to a client that is there is the connection's end;
+/// one that finds its client gone, closed or answered "not connected", is
+/// a client that has left, not the connection's I/O error.
+#[test]
+fn a_refusal_that_finds_its_client_gone_is_a_client_that_left() {
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let client = bounded(client);
+    assert_eq!(
+        refused(&mut server, Refusal::BadRequest),
+        End::Refused(Refusal::BadRequest)
+    );
+    assert_eq!(
+        read_reply(&mut BufReader::new(client)),
+        DaemonReply::Refused {
+            reason: Refusal::BadRequest
+        }
+    );
+    let (client, mut server) = UnixStream::pair().unwrap();
+    drop(client);
+    assert_eq!(refused(&mut server, Refusal::BadRequest), End::ClientLeft);
+    assert_eq!(
+        refused(&mut never_connected(), Refusal::BadRequest),
+        End::ClientLeft
+    );
 }
 
 /// The request's time limit holds for the whole line, not each byte: a
@@ -1686,6 +1743,50 @@ fn a_refusal_written_before_the_daemon_closed_is_read() {
     let mut reader = BufReader::new(client);
     let next = read_reply_line(&mut reader, Path::new("/s"), quick_wait(DEADLINE), &|| true);
     assert_eq!(next.unwrap(), Next::Line(busy));
+}
+
+/// A request whose write the socket answers with "not connected" is
+/// passed over, as one answered with a broken pipe is (the test above).
+#[test]
+fn a_request_written_to_a_socket_not_connected_is_passed_over() {
+    let sent = send_request(
+        never_connected(),
+        mooring_daemon_core::control::DaemonRequest::Status,
+        Path::new("/s"),
+    );
+    assert!(sent.is_ok(), "{sent:?}");
+}
+
+/// Only a daemon that has gone is passed over. A request that cannot be
+/// written for another reason, here to a daemon that reads nothing from a
+/// socket that is full, is the error it is.
+#[test]
+fn a_request_that_cannot_be_written_is_an_error() {
+    let (client, daemon) = UnixStream::pair().unwrap();
+    client.set_write_timeout(Some(QUICK_TICK)).unwrap();
+    client.set_nonblocking(true).unwrap();
+    for piece in [&[0_u8; 4096][..], &[0]] {
+        while (&client).write(piece).is_ok() {}
+    }
+    client.set_nonblocking(false).unwrap();
+    let error = send_request(
+        client,
+        mooring_daemon_core::control::DaemonRequest::Status,
+        Path::new("/s"),
+    )
+    .unwrap_err();
+    let LocalError::DaemonIo { path, source } = error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(path, Path::new("/s"));
+    assert!(
+        matches!(
+            source.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ),
+        "{source:?}"
+    );
+    drop(daemon);
 }
 
 /// A busy daemon's refusal reaches the CLI as a refusal, even when the
