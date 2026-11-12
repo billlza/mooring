@@ -1706,7 +1706,7 @@ fn a_daemon_of_no_or_another_protocol_is_refused_before_its_replies() {
         ),
         (
             vec![b"{\"control_protocol\":1}\n".to_vec(), available_line(NOW)],
-            "mooringctl: the daemon speaks control protocol 1 and this mooringctl speaks 2: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+            "mooringctl: the daemon speaks control protocol 1 and this mooringctl speaks 3: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
         ),
         (
             vec![

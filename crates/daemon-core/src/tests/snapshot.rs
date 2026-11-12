@@ -14,6 +14,7 @@ use crate::error::UsageErrorKind;
 use crate::payments::Entitlements;
 use crate::policy::QuotaState;
 use crate::router::{RouterReading, RouterUnavailableReason};
+use crate::sim_network::{BaselineOrigin, SimNetworkStatus};
 use crate::snapshot::{Ledgers, SimTotals, StatusInputs, assemble};
 use crate::status::{
     AgentUnreachable, ExitSection, ExitState, MacEngines, MacStatusV2, MeterAccuracy,
@@ -80,6 +81,10 @@ fn assembled_with(
             daily: &[],
             accuracy: MeterAccuracy::LowerBound,
         },
+        sim_network: SimNetworkStatus {
+            origin: BaselineOrigin::RecordUnreadable,
+            baseline: None,
+        },
         router: RouterReading::Unavailable {
             reason: RouterUnavailableReason::NotConfigured,
             last_polled_at: None,
@@ -136,6 +141,15 @@ fn before_any_poll_nodes_are_not_polled_and_usage_says_why_it_is_missing() {
     assert_eq!(
         (parts.sim.rx_bytes, parts.sim.tx_bytes, parts.sim.accuracy),
         (3_000, 1_000, MeterAccuracy::LowerBound)
+    );
+    // What the daemon's record says of the SIM's network is carried as
+    // given.
+    assert_eq!(
+        parts.sim.network,
+        SimNetworkStatus {
+            origin: BaselineOrigin::RecordUnreadable,
+            baseline: None,
+        }
     );
     assert!(
         parts

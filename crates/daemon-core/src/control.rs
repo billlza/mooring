@@ -42,8 +42,10 @@ pub const MAX_REPLY_LINE_BYTES: usize = 1 << 20;
 
 /// The control channel's protocol (design §15.1), which the daemon names
 /// on the first line of every connection. From the first release on, any
-/// change to a request, a reply or this line's own shape raises it.
-pub const CONTROL_PROTOCOL: u32 = 2;
+/// change to a request, a reply or this line's own shape raises it:
+/// protocol 3 (2026-11-12) carries the status of version 3 in its `status`
+/// reply.
+pub const CONTROL_PROTOCOL: u32 = 3;
 
 /// The first line of every connection: the protocol the daemon speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

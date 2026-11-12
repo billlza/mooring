@@ -48,7 +48,7 @@ private func running(_ pid: pid_t) -> Bool {
         let deployed = try Fixtures.console("deployed")
         let later = Data(
             String(decoding: deployed, as: UTF8.self)
-                .replacingOccurrences(of: "\"version\": 2", with: "\"version\": 3").utf8)
+                .replacingOccurrences(of: "\"version\": 3", with: "\"version\": 4").utf8)
         let standIn = try StandIn(lines: [deployed, later, try Fixtures.console("no-deployment")])
         defer { try? standIn.remove() }
         let events = await collect(StatusCommand(executable: standIn.executable))
@@ -58,7 +58,7 @@ private func running(_ pid: pid_t) -> Bool {
             return
         }
         #expect(status.nodes.count == 2)
-        #expect(events[1] == .refused(.unsupportedVersion(3)))
+        #expect(events[1] == .refused(.unsupportedVersion(4)))
         guard case .status(.noDeployment) = events[2] else {
             Issue.record("the third line is not an undeployed status")
             return
