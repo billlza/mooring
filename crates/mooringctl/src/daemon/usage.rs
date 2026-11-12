@@ -10,17 +10,19 @@ use std::time::{Duration, Instant};
 
 use mooring_agent_proto::{AgentError, LineRequest, Resolution, Response, SeriesRange, UsageMonth};
 use mooring_daemon_core::error::{UsageError, UsageErrorKind};
+use mooring_daemon_core::payments::RunBegan;
 use mooring_daemon_core::snapshot::{Ledgers, NodePoll};
-use mooring_daemon_core::usage::{CollectedUsage, NodeUsageHistory};
+use mooring_daemon_core::usage::{CollectedUsage, DownlinkCount, NodeUsageHistory, ServedBefore};
 use mooring_model::iface::BsdName;
 use mooring_model::node::{Node, NodeLifecycle};
 use mooring_model::{Deployment, NodeId, UnixTime, UserId};
 use mooring_store::write_user_usage;
 
 use crate::app::Env;
-use crate::collected_usage::{behind, read_collected};
+use crate::collected_usage::{Told, behind, read_collected};
 use crate::error::{CommandError, LocalError};
 use crate::node::{NodeError, session::ops_session};
+use crate::payments::pull::RefundReadings;
 
 const KEEP_ON_NODE: u64 = 48 * 3600;
 const REQUEST_BUDGET: Duration = Duration::from_secs(15);
@@ -45,6 +47,38 @@ pub(crate) enum Pulled {
     /// A node was asked one request: with its `Status` poll, when the
     /// request was one and it succeeded.
     Asked(Option<Box<(NodeId, NodePoll)>>),
+}
+
+/// What the deployed daemon reads at `now` for the traffic packs refunded
+/// in full (design §9.6): the usage collected, and each node's latest
+/// status.
+pub(crate) struct RefundView<'a> {
+    /// The collection.
+    pub(crate) collector: &'a Collector,
+    /// The deployment the usage is read for.
+    pub(crate) deployment: &'a Deployment,
+    /// The instant the usage is read at.
+    pub(crate) now: UnixTime,
+    /// Each node's latest `Status` poll.
+    pub(crate) polls: &'a BTreeMap<NodeId, NodePoll>,
+}
+
+impl RefundReadings for RefundView<'_> {
+    fn served_before(&self, user: &UserId, at: UnixTime) -> Told<ServedBefore> {
+        self.collector
+            .served_before(self.deployment, self.now, user, at)
+    }
+
+    fn reality_downlink(&self, user: &UserId) -> Told<BTreeMap<NodeId, DownlinkCount>> {
+        self.collector
+            .reality_downlink(self.deployment, self.now, user)
+    }
+
+    fn xray_began(&self, node: &NodeId) -> Option<RunBegan> {
+        self.polls
+            .get(node)
+            .and_then(|poll| RunBegan::of(&poll.status))
+    }
 }
 
 #[derive(Debug)]
@@ -119,34 +153,57 @@ impl Collector {
         }
     }
 
-    /// The bytes the nodes had counted for `user` in the billing cycle
-    /// `now` is in before `at`, at most, by the usage collected
+    /// What `user` had served in the billing cycle `now` is in before
+    /// `at`, at most, by the usage collected
     /// ([`CollectedUsage::cycle_served_before`]). A refund in full of a
     /// traffic pack waits for it (design §9.6), and goes on waiting unless
-    /// this is `Ok(Some)`:
-    ///
-    /// - `Ok(None)` while the usage cannot tell yet: the report does not
-    ///   reach far enough past `at`, it has no cycle figure for the user,
-    ///   or the collection is behind ([`behind`]: a node not collected
-    ///   lately, as while it cannot be reached), which the status's usage
-    ///   view and [`Self::failure`] say.
-    /// - `Err` with the kind of a fault, as [`Self::ledgers`] gives it: the
-    ///   store cannot be read or its latest write failed, or the figures
-    ///   contradict each other. It is never read as usage that is behind:
-    ///   the caller logs it.
+    /// this is `Ok(Some)` ([`Self::told`]).
     pub(crate) fn served_before(
         &self,
         deployment: &Deployment,
         now: UnixTime,
         user: &UserId,
         at: UnixTime,
-    ) -> Result<Option<u64>, UsageErrorKind> {
+    ) -> Told<ServedBefore> {
+        self.told(|history| history.cycle_served_before(deployment, now, user, at))
+    }
+
+    /// What each node has counted of `user`'s REALITY downlink in the
+    /// billing cycle `now` is in, by the usage collected
+    /// ([`CollectedUsage::cycle_reality_downlink`]). The use at a refund in
+    /// full of a traffic pack takes it in while a download that was open
+    /// at the refund may still be counted (design §9.6); it is told as
+    /// [`Self::told`] says.
+    pub(crate) fn reality_downlink(
+        &self,
+        deployment: &Deployment,
+        now: UnixTime,
+        user: &UserId,
+    ) -> Told<BTreeMap<NodeId, DownlinkCount>> {
+        self.told(|history| history.cycle_reality_downlink(deployment, now, user))
+    }
+
+    /// What `read` tells of the usage collected:
+    ///
+    /// - `Ok(None)` while the usage cannot tell yet: `read` tells nothing
+    ///   (the report does not reach far enough, or it has no cycle figure
+    ///   for the user), or the collection is behind ([`behind`]: a node
+    ///   not collected lately, as while it cannot be reached), which the
+    ///   status's usage view and [`Self::failure`] say.
+    /// - `Err` with the kind of a fault, as [`Self::ledgers`] gives it: the
+    ///   store cannot be read or its latest write failed, or the figures
+    ///   contradict each other. It is never read as usage that is behind:
+    ///   the caller logs it.
+    fn told<T>(
+        &self,
+        read: impl FnOnce(&CollectedUsage) -> Result<Option<T>, UsageError>,
+    ) -> Told<T> {
         let history = match &self.store {
             StoreState::Ready(history) => history,
             StoreState::Unreadable { kind } => return Err(*kind),
             StoreState::Unwritten { .. } => return Err(UsageErrorKind::StoreUnavailable),
         };
-        match history.cycle_served_before(deployment, now, user, at) {
+        match read(history) {
             Ok(told) => Ok(told),
             Err(error) if behind(error.kind()) => Ok(None),
             Err(error) => Err(error.kind()),

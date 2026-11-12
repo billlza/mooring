@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! What `portal payments` prints: the pull's settings, the ledger's cursor,
-//! last pull and stop, how many refunds wait for the usage, and every order
-//! with what Mooring did about it. It names users by id only, as the ledger
-//! does.
+//! last pull and stop, how many refunds wait for the usage or still take in
+//! downloads, and every order with what Mooring did about it. It names
+//! users by id only, as the ledger does.
 
 use mooring_daemon_core::payments::{
     GrantOutcome, LedgerError, OrderRecord, PaymentLedger, PullSettings, StopReason, TakeBacks,
@@ -93,6 +93,12 @@ pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedge
     if waiting > 0 {
         lines.push(format!(
             "  {waiting} refund(s) in full of traffic packs wait for the usage: the daemon records the user's use at the refund once the usage collected covers its time"
+        ));
+    }
+    let open = ledger.open_downloads().count();
+    if open > 0 {
+        lines.push(format!(
+            "  {open} refund(s) in full of traffic packs still take in REALITY downloads: one that was open at the refund is counted only when it ends, so what a node counts since counts as used at the refund, until that node's Xray has started again or the billing cycle ends"
         ));
     }
     let take_backs = ledger.take_backs();

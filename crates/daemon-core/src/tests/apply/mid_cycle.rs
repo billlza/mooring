@@ -10,16 +10,18 @@
 //! by the operator or for an abuse review is never lifted; and with the
 //! usage behind nothing is lifted within the cycle.
 
+use std::collections::BTreeMap;
+
 use mooring_model::user::{SuspendReason, UserPolicy};
 use mooring_model::{Deployment, UnixTime, User, UserId, UserStatus};
 
-use super::super::payments::{Terms, live};
-use super::super::support::{at, date};
+use super::super::payments::{Serving, Terms, Told, live};
+use super::super::support::{at, date, node};
 use super::{GB, active, holding, now, quota, usage, user};
-use crate::apply::{Kept, Lapse, Lapsed, plan_policy};
+use crate::apply::{Kept, Lapse, Lapsed, Suspension, plan_policy};
 use crate::payments::{Entitlements, PaymentLedger};
 use crate::period::BillingCycle;
-use crate::usage::CycleUsage;
+use crate::usage::{CycleUsage, ServedBefore};
 
 /// The suspension for quota of the run's cycle, from 2026-11-01.
 fn november() -> SuspendReason {
@@ -181,7 +183,7 @@ fn use_learned(
 ) -> Entitlements {
     let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), learned_at).unwrap();
     ledger
-        .settle(learned_at, cycle, &|_, _| Some(120 * GB))
+        .settle(learned_at, cycle, &Serving(&|_, _| Some(120 * GB)))
         .unwrap()
         .ledger
         .entitlements(false)
@@ -473,5 +475,60 @@ fn suspension_due_refuses_usage_evaluate_refuses() {
             &id("packbuyera")
         ),
         Ok(Some(november()))
+    );
+}
+
+/// A download that was open at a pack's refund in full is counted after
+/// it, and a pack bought later does not pay for it (design §9.6).
+/// `packbuyera` had used 120 GB against 100 GB of quota and the refunded
+/// pack, 30 GB of them counted on lon1 as REALITY downlink, and then
+/// bought another 50 GB. At 175 GB used, 10 GB of them counted on lon1
+/// since the use was learned, the user is within what they have: 100 GB,
+/// the 30 GB used of the refunded pack, and the new 50. Had lon1 counted
+/// nothing since, 175 GB would be past their 170 GB, and the run would
+/// suspend them.
+#[test]
+fn a_download_counted_after_a_packs_refund_is_not_charged_to_a_pack_bought_later() {
+    let deployment = holding(vec![named("packbuyera", UserStatus::Active, 100)], None);
+    let learned_at = UnixTime::from_secs(now().as_secs() - 600);
+    let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), learned_at).unwrap();
+    let told = Told {
+        served: Some(ServedBefore {
+            bytes: 120 * GB,
+            reality_downlink: BTreeMap::from([(node("lon1"), 30 * GB), (node("ams1"), 0)]),
+        }),
+        ..Told::default()
+    };
+    let ledger = pack_refunded(&deployment)
+        .settle(learned_at, cycle, &told)
+        .unwrap()
+        .ledger;
+    let again = Terms::pack("bbbbbbbbbbbbbbbbbbbb", "packbuyera");
+    let paid = ledger
+        .apply(
+            &live(2, vec![again.grant(3)]),
+            deployment.users(),
+            UnixTime::from_secs(now().as_secs() - 300),
+            false,
+        )
+        .unwrap()
+        .ledger
+        .entitlements(false);
+    let mut usage = used(&deployment, &[("packbuyera", 175)]);
+    usage
+        .reality_downlink
+        .insert(id("packbuyera"), BTreeMap::from([(node("lon1"), 40 * GB)]));
+    let plan = plan_policy(&deployment, &paid, Some(&usage), now()).unwrap();
+    assert!(plan.suspensions.is_empty(), "{:?}", plan.suspensions);
+    usage
+        .reality_downlink
+        .insert(id("packbuyera"), BTreeMap::from([(node("lon1"), 30 * GB)]));
+    let plan = plan_policy(&deployment, &paid, Some(&usage), now()).unwrap();
+    assert_eq!(
+        plan.suspensions,
+        [Suspension {
+            user: id("packbuyera"),
+            reason: november(),
+        }]
     );
 }

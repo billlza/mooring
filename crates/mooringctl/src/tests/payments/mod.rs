@@ -20,6 +20,7 @@ mod command;
 mod curl;
 mod daemon;
 mod listing;
+mod open_downloads;
 mod prune;
 mod pull;
 mod settle;

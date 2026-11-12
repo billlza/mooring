@@ -82,6 +82,10 @@ pub(crate) enum Usage {
     Behind(UsageError),
 }
 
+/// What the usage collected tells of one question: `Ok(None)` while it
+/// cannot tell yet, `Err` with the kind of a fault.
+pub(crate) type Told<T> = Result<Option<T>, UsageErrorKind>;
+
 /// Whether `kind` says only that the collection is behind: the daemon has
 /// not collected a serving node's usage yet (`MissingLedger`), or not within
 /// the report's freshness bound (`NotCoveredThrough`), as when it is stopped

@@ -57,7 +57,7 @@ fn policy_of(
     paid: &Entitlements,
     at: UnixTime,
 ) -> EffectivePolicy {
-    effective_policy(user, automatic, paid, cycle(at), at)
+    effective_policy(user, automatic, paid, cycle(at), at, None)
 }
 
 /// A paid period's quota is the order's bytes, with the pilot's automatic
@@ -197,10 +197,13 @@ fn a_pack_raises_the_quota_of_its_cycle_only() {
     assert_eq!(policy_of(a, None, &paid, NOW).quota, Some(with_packs));
     let entitlements = paid.user(&id("pilotusera")).unwrap();
     assert_eq!(entitlements.packs().len(), 2);
-    assert_eq!(entitlements.pack_bytes_in(cycle(NOW), NOW, 0), 100 * GB);
+    assert_eq!(
+        entitlements.pack_bytes_in(cycle(NOW), NOW, 0, None),
+        100 * GB
+    );
     let next_cycle = cycle(NOW).ends_at();
     assert_eq!(
-        entitlements.pack_bytes_in(cycle(next_cycle), next_cycle, 0),
+        entitlements.pack_bytes_in(cycle(next_cycle), next_cycle, 0, None),
         0
     );
     assert_eq!(
@@ -267,6 +270,7 @@ fn evaluate_reads_the_paid_policy() {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), NOW).unwrap(),
         through: NOW,
         served: ids.iter().map(|id| (id.clone(), Some(served))).collect(),
+        reality_downlink: BTreeMap::new(),
     };
     let actions = evaluate(&deployment, &paid, Some(&usage(0)), NOW).unwrap();
     let expected_first = UserAction {
@@ -303,6 +307,7 @@ fn evaluate_reads_the_paid_policy() {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), soon).unwrap(),
         through: soon,
         served: ids.iter().map(|id| (id.clone(), Some(0))).collect(),
+        reality_downlink: BTreeMap::new(),
     };
     let warned = evaluate(&deployment, &paid, Some(&soon_usage), soon).unwrap();
     assert!(warned.contains(&UserAction {
@@ -351,6 +356,7 @@ fn a_dispute_never_suspends_the_user() {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), two_days_on).unwrap(),
         through: two_days_on,
         served: ids.iter().map(|id| (id.clone(), Some(0))).collect(),
+        reality_downlink: BTreeMap::new(),
     };
     let actions = evaluate(&deployment, &after, Some(&usage), two_days_on).unwrap();
     assert!(

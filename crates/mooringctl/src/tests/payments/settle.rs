@@ -6,13 +6,15 @@
 //! before it is kept; and the log names orders only.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fs;
 use std::time::{Duration, Instant};
 
 use mooring_daemon_core::error::UsageErrorKind;
-use mooring_daemon_core::payments::{OrderId, PackRefund, PackUse};
+use mooring_daemon_core::payments::{OrderId, PackRefund, PackUse, RunBegan};
 use mooring_daemon_core::period::BillingCycle;
-use mooring_model::{BillDay, CycleRule, UnixTime, UserId};
+use mooring_daemon_core::usage::{DownlinkCount, ServedBefore};
+use mooring_model::{BillDay, CycleRule, NodeId, UnixTime, UserId};
 use mooring_store::{PAYMENT_LEDGER_FILE, PAYMENTS_DIRECTORY};
 
 use super::super::support::{Harness, NOW};
@@ -20,22 +22,23 @@ use super::{
     FIRST, SECOND, block_the_ledger, connect, grant, harness, ledger_on_disk, pack, page,
     refund_in_full,
 };
-use crate::payments::pull::{Gate, Puller, SETTLE_EVERY, UseTold};
+use crate::collected_usage::Told;
+use crate::payments::pull::{Gate, Puller, RefundReadings, SETTLE_EVERY};
 
-const A: &str = "aaaaaaaaaaaaaaaaaaaa";
+pub(super) const A: &str = "aaaaaaaaaaaaaaaaaaaa";
 const B: &str = "bbbbbbbbbbbbbbbbbbbb";
-const GB: u64 = 1_000_000_000;
-const DAY: u64 = 86_400;
+pub(super) const GB: u64 = 1_000_000_000;
+pub(super) const DAY: u64 = 86_400;
 
 /// When the portal recorded the refunds below: 2026-10-13 19:21:00 UTC.
-const REFUNDED: u64 = NOW + 60;
+pub(super) const REFUNDED: u64 = NOW + 60;
 
-fn at(secs: u64) -> UnixTime {
+pub(super) fn at(secs: u64) -> UnixTime {
     UnixTime::from_secs(secs)
 }
 
 /// The billing cycle `secs` is in, billed on the 1st.
-fn cycle(secs: u64) -> BillingCycle {
+pub(super) fn cycle(secs: u64) -> BillingCycle {
     BillingCycle::of_instant(
         CycleRule::Monthly {
             bill_day: BillDay::new(1).unwrap(),
@@ -88,35 +91,78 @@ fn refunded(harness: &mut Harness, granted: &serde_json::Value) -> (Puller, Vec<
 }
 
 /// [`refunded`] for a traffic pack.
-fn pack_refunded(harness: &mut Harness) -> (Puller, Vec<String>) {
+pub(super) fn pack_refunded(harness: &mut Harness) -> (Puller, Vec<String>) {
     refunded(harness, &pack(1, A, FIRST))
 }
 
 /// The use the ledger on disk records on order [`A`]'s refund.
-fn recorded(harness: &Harness) -> Option<PackUse> {
-    ledger_on_disk(harness).unwrap().orders()[&OrderId::parse(A).unwrap()].refunds[0].pack_use
+pub(super) fn recorded(harness: &Harness) -> Option<PackUse> {
+    ledger_on_disk(harness).unwrap().orders()[&OrderId::parse(A).unwrap()].refunds[0]
+        .pack_use
+        .clone()
 }
 
 /// The refund of user [`FIRST`]'s pack as `puller` holds it in memory.
-fn held(puller: &Puller) -> Option<PackRefund> {
-    puller.entitlements().users()[&UserId::parse(FIRST).unwrap()].packs()[0].refund
+pub(super) fn held(puller: &Puller) -> Option<PackRefund> {
+    puller.entitlements().users()[&UserId::parse(FIRST).unwrap()].packs()[0]
+        .refund
+        .clone()
 }
 
-/// The questions the usage was asked, and a usage that answers each with
-/// `answer`.
-type Asked = RefCell<Vec<(UserId, UnixTime)>>;
+/// What the usage tells of the bytes a user had served before an instant.
+type UseTold = Told<u64>;
 
-fn usage(asked: &Asked, answer: UseTold) -> impl Fn(&UserId, UnixTime) -> UseTold + '_ {
-    move |user, instant| {
-        asked.borrow_mut().push((user.clone(), instant));
-        answer
+/// A use of `bytes` that holds no node's REALITY downlink.
+fn bare(bytes: u64) -> ServedBefore {
+    ServedBefore {
+        bytes,
+        reality_downlink: BTreeMap::new(),
     }
 }
 
+/// A use of `bytes` learned at `learned`, with no download open.
+fn served(bytes: u64, learned: u64) -> PackUse {
+    PackUse::Served {
+        bytes,
+        learned_at: at(learned),
+        open_downloads: BTreeMap::new(),
+    }
+}
+
+/// The questions the usage was asked about a use.
+type Asked = RefCell<Vec<(UserId, UnixTime)>>;
+
+/// Readings that answer each question about a use as `tell` does, and
+/// tell of no node's REALITY downlink or status.
+struct Telling<F>(F);
+
+impl<F: Fn(&UserId, UnixTime) -> UseTold> RefundReadings for Telling<F> {
+    fn served_before(&self, user: &UserId, instant: UnixTime) -> Told<ServedBefore> {
+        (self.0)(user, instant).map(|told| told.map(bare))
+    }
+
+    fn reality_downlink(&self, _: &UserId) -> Told<BTreeMap<NodeId, DownlinkCount>> {
+        Ok(None)
+    }
+
+    fn xray_began(&self, _: &NodeId) -> Option<RunBegan> {
+        None
+    }
+}
+
+/// Readings that record each question about a use in `asked` and answer
+/// it with `answer`.
+fn usage(asked: &Asked, answer: UseTold) -> impl RefundReadings + '_ {
+    Telling(move |user: &UserId, instant| {
+        asked.borrow_mut().push((user.clone(), instant));
+        answer
+    })
+}
+
 /// The line a fault of kind `kind` is logged with.
-fn fault_line(kind: &str) -> String {
+pub(super) fn fault_line(kind: &str) -> String {
     format!(
-        "payment ledger: the usage collected cannot tell the use at the refund(s) of traffic packs that wait for it ({kind}); they wait on"
+        "payment ledger: the usage collected cannot tell what the refund(s) in full of traffic packs wait for ({kind}); they wait on"
     )
 }
 
@@ -205,13 +251,7 @@ fn a_refund_the_usage_could_not_tell_of_is_settled_at_a_later_asking() {
         notes[0].contains("no longer waits for the usage"),
         "{notes:?}"
     );
-    assert_eq!(
-        recorded(&harness),
-        Some(PackUse::Served {
-            bytes: 70 * GB,
-            learned_at: at(NOW + 150)
-        })
-    );
+    assert_eq!(recorded(&harness), Some(served(70 * GB, NOW + 150)));
 }
 
 /// A look while no refund waits does not start the minute's wait: a
@@ -271,16 +311,13 @@ fn once_the_usage_tells_the_use_is_written_and_logged_by_order() {
             "payment: order {A}'s refund in full no longer waits for the usage; its pack counts from 2026-10-13 19:21:30 UTC on only what the user had used of it beyond the rest of their quota: 70000000000 bytes served this cycle by the refund's time"
         )]
     );
-    let learned = PackUse::Served {
-        bytes: 70 * GB,
-        learned_at: at(NOW + 90),
-    };
-    assert_eq!(recorded(&harness), Some(learned));
+    let learned = served(70 * GB, NOW + 90);
+    assert_eq!(recorded(&harness), Some(learned.clone()));
     assert_eq!(
         held(&puller),
         Some(PackRefund {
             at: at(REFUNDED),
-            used: learned
+            used: learned.clone()
         })
     );
     assert_eq!(asked.borrow().len(), 1);
@@ -348,7 +385,7 @@ fn a_use_that_cannot_be_written_is_not_kept() {
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(
         notes[0].starts_with(
-            "payment ledger: the use at 1 refund(s) of traffic packs could not be recorded ("
+            "payment ledger: what was learned of the refund(s) in full of traffic packs (1 change(s)) could not be recorded ("
         ) && notes[0].ends_with("); trying again in 60 s"),
         "{notes:?}"
     );
@@ -374,13 +411,7 @@ fn a_use_that_cannot_be_written_is_not_kept() {
             .len(),
         1
     );
-    assert_eq!(
-        recorded(&harness),
-        Some(PackUse::Served {
-            bytes: 70 * GB,
-            learned_at: at(NOW + 150)
-        })
-    );
+    assert_eq!(recorded(&harness), Some(served(70 * GB, NOW + 150)));
 }
 
 /// A fault of the usage leaves the refund waiting and is logged by its
@@ -458,7 +489,7 @@ fn a_fault_at_one_refund_does_not_keep_another_from_being_settled() {
         })
     };
     assert_eq!(
-        puller.settle(began, at(NOW + 90), cycle(NOW), &two_faults),
+        puller.settle(began, at(NOW + 90), cycle(NOW), &Telling(two_faults)),
         [fault_line("MonthlyInconsistent")]
     );
     let one_fault = |user: &UserId, _: UnixTime| {
@@ -468,7 +499,12 @@ fn a_fault_at_one_refund_does_not_keep_another_from_being_settled() {
             Err(UsageErrorKind::LedgerCorrupt)
         }
     };
-    let notes = puller.settle(began + SETTLE_EVERY, at(NOW + 150), cycle(NOW), &one_fault);
+    let notes = puller.settle(
+        began + SETTLE_EVERY,
+        at(NOW + 150),
+        cycle(NOW),
+        &Telling(one_fault),
+    );
     assert_eq!(notes.len(), 2, "{notes:?}");
     assert_eq!(notes[0], fault_line("LedgerCorrupt"));
     assert!(
@@ -478,15 +514,13 @@ fn a_fault_at_one_refund_does_not_keep_another_from_being_settled() {
         "{notes:?}"
     );
     let orders = ledger_on_disk(&harness).unwrap();
-    let use_of = |order: &str| orders.orders()[&OrderId::parse(order).unwrap()].refunds[0].pack_use;
+    let use_of = |order: &str| {
+        orders.orders()[&OrderId::parse(order).unwrap()].refunds[0]
+            .pack_use
+            .clone()
+    };
     assert_eq!(use_of(A), Some(PackUse::Awaiting));
-    assert_eq!(
-        use_of(B),
-        Some(PackUse::Served {
-            bytes: 70 * GB,
-            learned_at: at(NOW + 150)
-        })
-    );
+    assert_eq!(use_of(B), Some(served(70 * GB, NOW + 150)));
 }
 
 /// While no refund waits, the usage is not asked and nothing is written:

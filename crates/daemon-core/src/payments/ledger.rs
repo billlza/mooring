@@ -29,8 +29,10 @@
 //!   The time taken back follows from the grants and refunds
 //!   ([`PaymentLedger::take_backs`]). A pack's refund waits for the usage
 //!   ([`PackUse::Awaiting`]) until [`PaymentLedger::settle`] records the
-//!   user's use at its time, or that the pack's cycle ended first. Nothing
-//!   else of either changes anything.
+//!   user's use at its time, or that the pack's cycle ended first. The use
+//!   then takes in the REALITY downloads each node counts, until `settle`
+//!   records that the node's Xray has started again since the refund, or
+//!   that the cycle has ended. Nothing else of either changes anything.
 //! - **Test mode** (contract §5.3): a page of Stripe's test mode is applied
 //!   only while the operator rehearses ([`ApplyRefusal::TestMode`]), and its
 //!   grants count only while the rehearsal lasts ([`Entitlements`]).
@@ -39,23 +41,27 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mooring_model::date::SECS_PER_DAY;
 use mooring_model::user::SuspendReason;
-use mooring_model::{CalendarDate, Deployment, UnixTime, User, UserId, UserStatus};
+use mooring_model::{CalendarDate, Deployment, NodeId, UnixTime, User, UserId, UserStatus};
 use serde::{Deserialize, Serialize};
 
 use super::entitlement::{Entitlements, PackRefund, PaidPack, PaidPeriod};
 use super::error::{ApplyRefusal, Contradiction, LedgerError};
 use super::feed::{EntryEvent, FeedEntry, FeedPage, OrderTerms};
 use super::ids::OrderId;
-use super::refund::{PackUse, RefundEffect, TakeBacks, pack_taken_back};
+use super::refund::{
+    PackUse, RefundEffect, RefundUsage, TakeBacks, close_restarted, pack_taken_back,
+};
 use crate::period::BillingCycle;
+use crate::usage::boundary_after;
 
 mod v1;
 mod v2;
 
 /// The ledger's version: 3 since a refunded pack waits for the usage
-/// (2026-11-12): a pack's use carries when Mooring learned it, and one not
-/// learned yet is recorded as waited for. Versions 1 and 2 are read and
-/// lifted.
+/// (2026-11-12): a pack's use carries when Mooring learned it and the
+/// nodes that may still count a download that was open at the refund, and
+/// one not learned yet is recorded as waited for. Versions 1 and 2 are
+/// read and lifted.
 pub const LEDGER_VERSION: u32 = 3;
 
 /// The largest ledger written or read, in bytes. An order takes about
@@ -162,7 +168,7 @@ pub struct GrantRecord {
 }
 
 /// A refund entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RefundRecord {
     /// The entry's number.
@@ -369,6 +375,34 @@ pub enum LedgerEvent {
         /// the pack's billing cycle ended first.
         used: PackUse,
     },
+    /// Nodes left the open downloads of a refunded pack's use
+    /// ([`PaymentLedger::settle`]): what they count from now on is not
+    /// added to it. As a refund's, its line names the order only.
+    DownloadsClosed {
+        /// The order.
+        order: OrderId,
+        /// Why they left.
+        why: Closed,
+        /// The nodes that left, in id order.
+        nodes: Vec<NodeId>,
+        /// The bytes they had counted since the use was learned, now part
+        /// of it for good.
+        added: u64,
+        /// The user's use at the refund's time, as it stands now.
+        bytes: u64,
+        /// How many nodes are still open.
+        open: usize,
+    },
+}
+
+/// Why a node left the open downloads of a refunded pack's use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closed {
+    /// Its Xray was seen to have started again since the refund: no
+    /// download that was open at the refund is open on it.
+    XrayBegan,
+    /// The pack's billing cycle has ended.
+    CycleEnded,
 }
 
 /// A page applied to a copy of the ledger.
@@ -640,7 +674,7 @@ impl PaymentLedger {
                         refund: record.first_refund_in_full().and_then(|refund| {
                             pack_taken_back(record).map(|used| PackRefund {
                                 at: refund.recorded_at,
-                                used,
+                                used: used.clone(),
                             })
                         }),
                     },
@@ -656,32 +690,54 @@ impl PaymentLedger {
     pub fn awaiting_usage(&self) -> impl Iterator<Item = &OrderRecord> {
         self.orders
             .values()
-            .filter(|record| pack_taken_back(record) == Some(PackUse::Awaiting))
+            .filter(|record| pack_taken_back(record) == Some(&PackUse::Awaiting))
     }
 
-    /// Records on a copy what can be told at `now` of the packs whose
-    /// refund in full waits for the usage (design §9.6); `None` when
-    /// nothing can. `cycle` is the billing cycle `now` is in, and
-    /// `served_before` tells the bytes the nodes had counted for a user
-    /// in it before an instant, at most (never fewer than they had
-    /// counted), or `None` while the usage cannot tell: it is behind, it
-    /// does not reach the instant, or it has no figure for the user.
+    /// The orders whose pack's use at the refund still takes in REALITY
+    /// downloads ([`PackUse::Served`]'s `open_downloads`), in id order.
+    pub fn open_downloads(&self) -> impl Iterator<Item = &OrderRecord> {
+        self.orders.values().filter(|record| {
+            matches!(
+                pack_taken_back(record),
+                Some(PackUse::Served { open_downloads, .. }) if !open_downloads.is_empty()
+            )
+        })
+    }
+
+    /// Records on a copy what can be told at `now` of the packs refunded
+    /// in full (design §9.6); `None` when nothing can. `cycle` is the
+    /// billing cycle `now` is in, and `usage` tells what the usage
+    /// collected and the nodes' statuses do at `now`.
     ///
-    /// - A pack of `cycle` whose user's use at the refund's time
-    ///   `served_before` tells: the use is recorded as learned at `now`
-    ///   (or when the refund was applied, were that later: a clock that
-    ///   stepped back), and from then on the pack counts only what the
-    ///   user had used of it ([`PackUse::Served`]).
+    /// A refund that waits for the usage ([`PackUse::Awaiting`]):
+    ///
+    /// - A pack of `cycle` whose user's use at the refund's time `usage`
+    ///   tells: the use is recorded as learned at `now` (or when the
+    ///   refund was applied, were that later: a clock that stepped back),
+    ///   with what each node had counted of the user's REALITY downlink,
+    ///   and from then on the pack counts only what the user had used of
+    ///   it ([`PackUse::Served`]).
     /// - A pack of an earlier cycle: its cycle has ended, and nothing of
     ///   it is taken back ([`PackUse::CycleEnded`]). The usage is not
     ///   asked.
     /// - Every other one waits on, and its pack counts in full.
+    ///
+    /// A use that still takes in downloads (`open_downloads`), one just
+    /// learned included:
+    ///
+    /// - A pack of `cycle`: each node whose Xray is seen to have started
+    ///   again since the refund leaves, and what it had counted since the
+    ///   use was learned becomes part of the use for good. The usage is
+    ///   asked only when a status shows such a run.
+    /// - A pack of an earlier cycle: every node leaves, and nothing is
+    ///   added. A pack counts in its own cycle only, so nothing reads the
+    ///   use again, and the usage, which is another cycle's, is not asked.
     #[must_use]
     pub fn settle(
         &self,
         now: UnixTime,
         cycle: BillingCycle,
-        served_before: &dyn Fn(&UserId, UnixTime) -> Option<u64>,
+        usage: &dyn RefundUsage,
     ) -> Option<Settlement> {
         let mut next = self.clone();
         let mut events = Vec::new();
@@ -696,27 +752,64 @@ impl PaymentLedger {
                 .refunds
                 .iter_mut()
                 .find(|refund| refund.refunded_in_full)
-                .filter(|refund| refund.pack_use == Some(PackUse::Awaiting))
             else {
                 continue;
             };
-            let used = if grant.applied_at < cycle.starts_at() {
-                PackUse::CycleEnded
-            } else if cycle.contains(grant.applied_at) {
-                match served_before(&record.terms.user, refund.recorded_at) {
-                    Some(bytes) => PackUse::Served {
-                        bytes,
-                        learned_at: now.max(refund.applied_at),
-                    },
-                    None => continue,
-                }
-            } else {
+            // A pack granted after `cycle` (a clock that stepped back) is
+            // left as it is.
+            let ended = grant.applied_at < cycle.starts_at();
+            if !ended && !cycle.contains(grant.applied_at) {
+                continue;
+            }
+            let user = &record.terms.user;
+            if refund.pack_use == Some(PackUse::Awaiting) {
+                let used = if ended {
+                    PackUse::CycleEnded
+                } else {
+                    match usage.served_before(user, refund.recorded_at) {
+                        Some(served) => PackUse::Served {
+                            bytes: served.bytes,
+                            learned_at: now.max(refund.applied_at),
+                            open_downloads: served.reality_downlink,
+                        },
+                        None => continue,
+                    }
+                };
+                refund.pack_use = Some(used.clone());
+                events.push(LedgerEvent::Settled {
+                    order: record.order.clone(),
+                    used,
+                });
+            }
+            let boundary = boundary_after(refund.recorded_at);
+            let Some(PackUse::Served {
+                bytes,
+                open_downloads,
+                ..
+            }) = &mut refund.pack_use
+            else {
                 continue;
             };
-            refund.pack_use = Some(used);
-            events.push(LedgerEvent::Settled {
+            let (why, (nodes, added)) = if ended {
+                let all = std::mem::take(open_downloads).into_keys().collect();
+                (Closed::CycleEnded, (all, 0))
+            } else {
+                (
+                    Closed::XrayBegan,
+                    close_restarted(open_downloads, boundary, user, usage),
+                )
+            };
+            if nodes.is_empty() {
+                continue;
+            }
+            *bytes = bytes.saturating_add(added);
+            events.push(LedgerEvent::DownloadsClosed {
                 order: record.order.clone(),
-                used,
+                why,
+                nodes,
+                added,
+                bytes: *bytes,
+                open: open_downloads.len(),
             });
         }
         (!events.is_empty()).then_some(Settlement {

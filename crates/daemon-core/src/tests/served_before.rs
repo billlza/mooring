@@ -2,17 +2,19 @@
 
 //! A user's use of the billing cycle before an instant (design §9.6: a
 //! traffic pack refunded in full keeps what the user had used of it by the
-//! refund's time). It is the cycle's figure less the closed bins that begin
-//! at or after the first five-minute boundary a poll's longest gap after
-//! the instant, so never fewer bytes than the nodes had counted for the
-//! user by the instant; and no figure when the report does not reach that
-//! boundary or cannot tell the cycle's.
+//! refund's time). It is the cycle's figure less what the closed bins that
+//! begin at or after a boundary hold of bytes counted as they flow; the
+//! boundary is the first five-minute one a poll's longest gap after the
+//! instant. So it is never fewer bytes than the user had served by the
+//! instant; and no figure when the report does not reach that boundary or
+//! cannot tell the cycle's.
 //!
-//! What a node counts as it flows is what the user had served. The
-//! downlink of a REALITY connection is counted only when the connection
-//! closes: of a download open at the instant and still open at the
-//! boundary the counters tell nothing, and its bytes count after the
-//! instant.
+//! What a node counts as it flows is what the user had served: Hysteria2
+//! both ways, and the uplink of REALITY. The downlink of a REALITY
+//! connection is counted only when the connection closes, so what a later
+//! bin holds of it may have been served before the instant: it is not
+//! taken off, and the figure comes with what each node had counted of it,
+//! so that what a node counts later can be added too.
 
 use std::collections::BTreeMap;
 
@@ -22,7 +24,7 @@ use mooring_model::{Deployment, UnixTime, UserId};
 use super::collected_usage::{empty_other, month, today_history};
 use super::support::{at, deployment_billed_on, email, node, probe, series, traffic, user_ids};
 use crate::error::{UsageError, UsageErrorKind};
-use crate::usage::{CollectedUsage, NodeUsageHistory};
+use crate::usage::{CollectedUsage, DownlinkCount, NodeUsageHistory};
 
 fn after(time: UnixTime, secs: u64) -> UnixTime {
     UnixTime::from_secs(time.as_secs() + secs)
@@ -39,6 +41,7 @@ fn before(
     history
         .cycle_served_before(deployment, now, user, at)
         .unwrap()
+        .map(|served| served.bytes)
 }
 
 /// A poll's longest gap is three minutes: the bins taken off begin at
@@ -48,28 +51,29 @@ fn a_polls_longest_gap_is_three_minutes() {
     assert_eq!(MAX_POLL_GAP_SECS, 180);
 }
 
-/// The user served 100 bytes this cycle, 30 of them in the bin from 00:05
-/// to 00:10 on the 5th. That bin can hold bytes served from 00:02 on, so
-/// before an instant up to 00:02 the user had served 70, and from a second
-/// later all 100: what a bin may hold from before the instant counts as
-/// used. So do the bytes of detail that was never collected (before the
-/// 5th), which nothing places after the instant. An instant before the
-/// cycle began is its beginning. The probe's bytes in the same bin are no
-/// user's.
+/// The user served 100 bytes this cycle. The bin from 00:05 to 00:10 on
+/// the 5th holds 30 of them, 20 counted as they flowed and 10 the downlink
+/// of REALITY. That bin can hold bytes served from 00:02 on, so before an
+/// instant up to 00:02 the user had served 80: the 20 came after it, and
+/// the 10 cannot be placed after it. From a second later it is all 100:
+/// what a bin may hold from before the instant counts as used. So do the
+/// bytes of detail that was never collected (before the 5th), which
+/// nothing places after the instant. An instant before the cycle began is
+/// its beginning. The probe's bytes in the same bin are no user's.
 #[test]
-fn the_use_before_an_instant_is_the_cycles_less_the_bins_that_begin_a_polls_gap_after_it() {
+fn the_use_before_an_instant_is_the_cycles_less_what_later_bins_counted_as_it_flowed() {
     let deployment = deployment_billed_on(1);
     let (history, now) = today_history();
     let user = &user_ids()[0];
     for (instant, expected) in [
-        (at("2026-11-05", 0), 70),
-        (at("2026-11-05", 120), 70),
+        (at("2026-11-05", 0), 80),
+        (at("2026-11-05", 120), 80),
         (at("2026-11-05", 121), 100),
         (at("2026-11-05", 300), 100),
         (at("2026-11-05", 12 * 3600 - 180), 100),
-        (at("2026-11-03", 0), 70),
-        (at("2026-11-01", 0), 70),
-        (at("2026-10-20", 0), 70),
+        (at("2026-11-03", 0), 80),
+        (at("2026-11-01", 0), 80),
+        (at("2026-10-20", 0), 80),
     ] {
         assert_eq!(
             before(&history, &deployment, now, user, instant),
@@ -193,10 +197,10 @@ fn a_cycle_figure_that_cannot_be_told_gives_no_use() {
     );
 }
 
-/// Every node's use counts, each less its own later bins: 100 bytes on
-/// lon1 with 30 of them at 00:05, and 10 on ams1 with 2 of them at 06:00.
-/// The history of a node the deployment no longer holds is in no figure,
-/// and its bins take nothing off.
+/// Every node's use counts, each less what its own later bins counted as
+/// it flowed: 100 bytes on lon1 with 20 of them so at 00:05, and 10 on
+/// ams1 with 2 of them at 06:00. The history of a node the deployment no
+/// longer holds is in no figure, and its bins take nothing off.
 #[test]
 fn every_node_counts_less_its_own_later_bins() {
     let deployment = deployment_billed_on(1);
@@ -235,7 +239,7 @@ fn every_node_counts_less_its_own_later_bins() {
     history.set_node(node("ams1"), ams.clone());
     history.set_node(node("par1"), ams);
     for (instant, expected) in [
-        (at("2026-11-05", 0), 78),
+        (at("2026-11-05", 0), 88),
         (at("2026-11-05", 3 * 3600), 108),
         (at("2026-11-05", 6 * 3600 - 180), 108),
         (at("2026-11-05", 6 * 3600 - 179), 110),
@@ -251,7 +255,9 @@ fn every_node_counts_less_its_own_later_bins() {
 
 /// An instant before the cycle began is its beginning: the bins of the
 /// cycle before take nothing off. The cycle begins on the 5th, with 30
-/// bytes at 00:05; the 8 bytes of the 4th are the cycle before's.
+/// bytes at 00:05, 10 of them the downlink of REALITY, which nothing
+/// places after the instant; the 8 bytes of the 4th are the cycle
+/// before's.
 #[test]
 fn bins_before_the_cycle_began_take_nothing_off() {
     let deployment = deployment_billed_on(5);
@@ -277,8 +283,8 @@ fn bins_before_the_cycle_began_take_nothing_off() {
         Some(30)
     );
     for (instant, expected) in [
-        (at("2026-11-04", 22 * 3600), 0),
-        (at("2026-11-05", 0), 0),
+        (at("2026-11-04", 22 * 3600), 10),
+        (at("2026-11-05", 0), 10),
         (at("2026-11-05", 121), 30),
     ] {
         assert_eq!(
@@ -290,9 +296,10 @@ fn bins_before_the_cycle_began_take_nothing_off() {
 }
 
 /// A bin the node's monthly figure does not reach takes nothing off. The
-/// figure was read at 11:57, so it holds the 4 bytes of the bin from 11:50
-/// and an unknown part of the 6 from 11:55: those count as used before any
-/// instant the report reaches, and it reaches none after 11:52.
+/// figure was read at 11:57, so it holds the 4 bytes of the bin from 11:50,
+/// 1 of them uplink, and an unknown part of the 6 from 11:55: those count
+/// as used before any instant the report reaches, and it reaches none
+/// after 11:52.
 #[test]
 fn a_bin_the_monthly_figure_does_not_reach_takes_nothing_off() {
     let deployment = deployment_billed_on(1);
@@ -333,7 +340,7 @@ fn a_bin_the_monthly_figure_does_not_reach_takes_nothing_off() {
     history.set_node(node("lon1"), lon);
     empty_other(&mut history, now);
     for (instant, expected) in [
-        (at("2026-11-05", 11 * 3600), Some(96)),
+        (at("2026-11-05", 11 * 3600), Some(99)),
         (at("2026-11-05", 12 * 3600 - 480), Some(100)),
         (at("2026-11-05", 12 * 3600 - 479), None),
     ] {
@@ -345,8 +352,9 @@ fn a_bin_the_monthly_figure_does_not_reach_takes_nothing_off() {
     }
 }
 
-/// The user served 100 bytes this cycle on lon1: 30 at 10:05 and 12 at
-/// 10:40 on the 2nd, the rest never placed.
+/// The user served 100 bytes this cycle on lon1, all REALITY: 30 at 10:05
+/// (10 of them uplink) and 12 at 10:40 (5 of them uplink) on the 2nd, the
+/// rest never placed.
 fn two_bins_on_the_second(now: UnixTime) -> CollectedUsage {
     let user = &user_ids()[0];
     let mut lon = NodeUsageHistory::default();
@@ -386,11 +394,11 @@ fn two_bins_on_the_second(now: UnixTime) -> CollectedUsage {
 }
 
 /// While the five-minute bins are held, the use before 10:17 leaves out
-/// the 12 bytes of 10:40. Once they have expired (seven days) only the
-/// hour from 10:00 is held. An instant whose boundary is 10:00 still
-/// leaves that hour out whole; a second later the boundary is 10:05, the
-/// hour begins before it, and its bytes cannot be placed after it, so all
-/// of them count as used.
+/// the 5 bytes of uplink of 10:40. Once they have expired (seven days)
+/// only the hour from 10:00 is held. An instant whose boundary is 10:00
+/// still leaves that hour's uplink out; a second later the boundary is
+/// 10:05, the hour begins before it, and its bytes cannot be placed after
+/// it, so all of them count as used.
 #[test]
 fn once_its_five_minute_bins_have_expired_the_hour_counts_as_used() {
     let deployment = deployment_billed_on(1);
@@ -399,9 +407,9 @@ fn once_its_five_minute_bins_have_expired_the_hour_counts_as_used() {
     let mut history = two_bins_on_the_second(now);
     let ten = 10 * 3600;
     for (secs, expected) in [
-        (ten - 180, 58),
-        (ten + 1020, 88),
-        (ten + 2220, 88),
+        (ten - 180, 85),
+        (ten + 1020, 95),
+        (ten + 2220, 95),
         (ten + 2221, 100),
     ] {
         assert_eq!(
@@ -411,7 +419,7 @@ fn once_its_five_minute_bins_have_expired_the_hour_counts_as_used() {
         );
     }
     history.prune(&deployment, now).unwrap();
-    for (secs, expected) in [(ten - 180, 58), (ten - 179, 100), (ten + 1020, 100)] {
+    for (secs, expected) in [(ten - 180, 85), (ten - 179, 100), (ten + 1020, 100)] {
         assert_eq!(
             before(&history, &deployment, now, user, at("2026-11-02", secs)),
             Some(expected),
@@ -498,7 +506,8 @@ fn bins_that_hold_more_than_the_cycle_are_a_contradiction() {
 /// it: its figure is the month's total less what the detail proves came
 /// before the cycle. The user served 100 bytes in November, 40 of them on
 /// the 2nd, before the cycle began on the 3rd; nothing was collected of
-/// the 3rd and the 4th; 30 were counted in the bin from 00:05 on the 5th.
+/// the 3rd and the 4th; 30 were counted in the bin from 00:05 on the 5th,
+/// 20 of them as they flowed.
 #[test]
 fn a_cycle_begun_mid_month_counts_the_months_total_less_what_came_before_it() {
     let deployment = deployment_billed_on(3);
@@ -526,10 +535,10 @@ fn a_cycle_begun_mid_month_counts_the_months_total_less_what_came_before_it() {
         Some(60)
     );
     for (instant, expected) in [
-        (at("2026-11-02", 0), 30),
-        (at("2026-11-03", 0), 30),
-        (at("2026-11-04", 12 * 3600), 30),
-        (at("2026-11-05", 120), 30),
+        (at("2026-11-02", 0), 40),
+        (at("2026-11-03", 0), 40),
+        (at("2026-11-04", 12 * 3600), 40),
+        (at("2026-11-05", 120), 40),
         (at("2026-11-05", 121), 60),
     ] {
         assert_eq!(
@@ -723,4 +732,190 @@ fn what_was_counted_across_a_gap_between_polls_counts_as_used() {
             None
         );
     }
+}
+
+/// The user's use on lon1 this cycle, each of the four counts its own
+/// figure: REALITY 100 up and 2000 down, Hysteria2 30 000 up and 400 000
+/// down. The bin from 06:00 on the 5th holds 1, 20, 300 and 4000 of them.
+/// lon1's figures were sampled a minute before noon, ams1's at noon.
+fn each_count_its_own_figure() -> (CollectedUsage, UnixTime) {
+    let now = at("2026-11-05", 12 * 3600);
+    let sampled = at("2026-11-05", 12 * 3600 - 60);
+    let user = &user_ids()[0];
+    let mut lon = NodeUsageHistory::default();
+    lon.record_series(
+        &node("lon1"),
+        &series(
+            at("2026-11-05", 0),
+            at("2026-11-05", 12 * 3600 - 300),
+            Resolution::FiveMin,
+            vec![(
+                at("2026-11-05", 6 * 3600),
+                vec![
+                    (email(user, Inbound::Reality), traffic(1, 20)),
+                    (email(user, Inbound::Hy2), traffic(300, 4000)),
+                ],
+            )],
+        ),
+    )
+    .unwrap();
+    lon.record_month(
+        &node("lon1"),
+        month(
+            "2026-11",
+            sampled,
+            vec![
+                (email(user, Inbound::Reality), traffic(100, 2000)),
+                (email(user, Inbound::Hy2), traffic(30_000, 400_000)),
+            ],
+        ),
+        now,
+    )
+    .unwrap();
+    let mut history = CollectedUsage::default();
+    history.set_node(node("lon1"), lon);
+    empty_other(&mut history, now);
+    (history, now)
+}
+
+/// Of what a later bin holds, only the bytes a node counts as they flow
+/// are placed after the instant: Hysteria2 both ways, and the uplink of
+/// REALITY. The downlink of a REALITY connection is counted when the
+/// connection closes, so the bin's 20 may have been served before the
+/// instant, and count as used.
+#[test]
+fn the_reality_downlink_of_a_later_bin_counts_as_used() {
+    let deployment = deployment_billed_on(1);
+    let (history, now) = each_count_its_own_figure();
+    let user = &user_ids()[0];
+    for (instant, expected) in [
+        (at("2026-11-05", 3 * 3600), 432_100 - 1 - 300 - 4000),
+        (at("2026-11-05", 6 * 3600 - 180), 432_100 - 1 - 300 - 4000),
+        (at("2026-11-05", 6 * 3600 - 179), 432_100),
+    ] {
+        assert_eq!(
+            before(&history, &deployment, now, user, instant),
+            Some(expected),
+            "{instant:?}"
+        );
+    }
+}
+
+/// With the use comes what each node of the report had counted of the
+/// user's REALITY downlink in the cycle by its sample, whatever the
+/// instant: all of it, a node that counted none included, and no node the
+/// deployment does not hold. What a node counts beyond it later may have
+/// been served before the instant.
+#[test]
+fn the_use_comes_with_each_nodes_reality_downlink_of_the_cycle() {
+    let deployment = deployment_billed_on(1);
+    let (mut history, now) = each_count_its_own_figure();
+    let user = &user_ids()[0];
+    let gone = history.node(&node("lon1")).unwrap().clone();
+    history.set_node(node("par1"), gone);
+    let expected = BTreeMap::from([(node("ams1"), 0), (node("lon1"), 2000)]);
+    for instant in [at("2026-11-05", 3 * 3600), at("2026-11-05", 11 * 3600)] {
+        let served = history
+            .cycle_served_before(&deployment, now, user, instant)
+            .unwrap()
+            .unwrap();
+        assert_eq!(served.reality_downlink, expected, "{instant:?}");
+    }
+    // A user who served nothing: nothing on either node.
+    let idle = history
+        .cycle_served_before(&deployment, now, &user_ids()[1], at("2026-11-05", 3 * 3600))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        idle.reality_downlink,
+        BTreeMap::from([(node("ams1"), 0), (node("lon1"), 0)])
+    );
+}
+
+/// What each node has counted of a user's REALITY downlink in the cycle,
+/// with when that node's figures were sampled: lon1's a minute before
+/// noon, ams1's at noon. A user the report has no whole cycle figure for
+/// has none, and a report that cannot be made is its error.
+#[test]
+fn each_nodes_reality_downlink_is_dated_by_that_nodes_sample() {
+    let deployment = deployment_billed_on(1);
+    let (history, now) = each_count_its_own_figure();
+    let user = &user_ids()[0];
+    assert_eq!(
+        history
+            .cycle_reality_downlink(&deployment, now, user)
+            .unwrap(),
+        Some(BTreeMap::from([
+            (
+                node("ams1"),
+                DownlinkCount {
+                    bytes: 0,
+                    sampled_at: now
+                }
+            ),
+            (
+                node("lon1"),
+                DownlinkCount {
+                    bytes: 2000,
+                    sampled_at: at("2026-11-05", 12 * 3600 - 60)
+                }
+            ),
+        ]))
+    );
+    let stranger = UserId::parse("strangerxx").unwrap();
+    assert_eq!(
+        history
+            .cycle_reality_downlink(&deployment, now, &stranger)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        history
+            .cycle_reality_downlink(&deployment, after(now, 181), user)
+            .unwrap_err()
+            .kind(),
+        UsageErrorKind::NotCoveredThrough
+    );
+    // The cycle's figure lost (the split across the bill day): no count.
+    let mut lon = history.node(&node("lon1")).unwrap().clone();
+    lon.record_month(
+        &node("lon1"),
+        month(
+            "2026-10",
+            at("2026-10-31", 86_399),
+            vec![(email(user, Inbound::Reality), traffic(100, 100))],
+        ),
+        now,
+    )
+    .unwrap();
+    let mut lost = history.clone();
+    lost.set_node(node("lon1"), lon);
+    let billed_late = deployment_billed_on(28);
+    assert_eq!(
+        lost.cycle_reality_downlink(&billed_late, now, user)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        lost.aggregate(&billed_late, now)
+            .unwrap()
+            .cycle_usage()
+            .reality_downlink
+            .get(user),
+        None
+    );
+    // The usage of the cycle carries the same counts, per node that
+    // counted any.
+    assert_eq!(
+        history
+            .aggregate(&deployment, now)
+            .unwrap()
+            .cycle_usage()
+            .reality_downlink,
+        BTreeMap::from([
+            (user.clone(), BTreeMap::from([(node("lon1"), 2000)])),
+            (user_ids()[1].clone(), BTreeMap::new()),
+            (user_ids()[2].clone(), BTreeMap::new()),
+        ])
+    );
 }

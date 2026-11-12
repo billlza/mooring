@@ -267,7 +267,8 @@ fn lapsed_suspensions(
                 }
             }
             SuspendReason::Expired => {
-                let policy = effective_policy(user, automatic, paid, cycle, now);
+                // The expiry reads no usage.
+                let policy = effective_policy(user, automatic, paid, cycle, now, None);
                 (!matches!(
                     ExpiryState::of(policy.expires_at, now),
                     ExpiryState::Expired { .. }
@@ -310,7 +311,7 @@ fn granted_since(
         orders.packs().iter().any(|pack| {
             pack.granted_at > since
                 && cycle.contains(pack.granted_at)
-                && pack.taken_back_by(now).is_none()
+                && pack.taken_back_by(now, None).is_none()
         }) || orders
             .period_at(now)
             .is_some_and(|period| period.from > since)

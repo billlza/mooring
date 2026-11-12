@@ -32,6 +32,12 @@ pub const VIEWER_STOP_WAIT_SECS: u64 = 3 * WATCH_TICK_SECS;
 pub const GATE_SET_REREAD_SECS: u64 = 60;
 /// Seconds between accounting polls (§11.5).
 pub const ACCOUNTING_INTERVAL_SECS: u64 = 60;
+/// Seconds between the watch's readings of the host and the engine units
+/// (§11.3 step 4): the accounting interval. A status carries the latest
+/// reading, which is dated by the tick that took it, so its `host` and
+/// `engines` are of a tick less than this long before its `watch_at`. The
+/// Mac relies on that to tell when a run of Xray began (design §9.6).
+pub const HOST_READING_SECS: u64 = ACCOUNTING_INTERVAL_SECS;
 /// The longest gap, in seconds, between two accounting polls that the usage
 /// series still places in its bins (§11.5): three accounting intervals, so
 /// a missed poll or a quick restart of the watch or of Xray (the nightly

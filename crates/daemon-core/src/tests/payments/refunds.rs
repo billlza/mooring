@@ -19,7 +19,7 @@ use mooring_model::{
 };
 use serde_json::{Value, json};
 
-use super::{DAY, NOW, Terms, by_id, id, live, order, secs, user};
+use super::{DAY, NOW, Serving, Terms, by_id, id, live, order, secs, user};
 use crate::payments::{
     LedgerError, LedgerEvent, PackRefund, PackUse, PaymentLedger, RefundEffect, Settlement,
     TimeTakenBack,
@@ -27,17 +27,17 @@ use crate::payments::{
 use crate::period::BillingCycle;
 use crate::policy::effective_policy;
 
-const GB: u64 = 1_000_000_000;
-const HOUR: u64 = 3600;
-const A: &str = "aaaaaaaaaaaaaaaaaaaa";
-const B: &str = "bbbbbbbbbbbbbbbbbbbb";
+pub(super) const GB: u64 = 1_000_000_000;
+pub(super) const HOUR: u64 = 3600;
+pub(super) const A: &str = "aaaaaaaaaaaaaaaaaaaa";
+pub(super) const B: &str = "bbbbbbbbbbbbbbbbbbbb";
 const C: &str = "cccccccccccccccccccc";
 const D: &str = "dddddddddddddddddddd";
 const E: &str = "eeeeeeeeeeeeeeeeeeee";
 
 /// The billing cycle `at` is in, on monthly cycles from the 1st: NOW's
 /// runs to 2027-01-01.
-fn cycle(at: UnixTime) -> BillingCycle {
+pub(super) fn cycle(at: UnixTime) -> BillingCycle {
     BillingCycle::of_instant(
         CycleRule::Monthly {
             bill_day: BillDay::new(1).unwrap(),
@@ -48,7 +48,7 @@ fn cycle(at: UnixTime) -> BillingCycle {
 }
 
 /// A quota of `gigabytes` that suspends.
-fn quota(gigabytes: u64) -> UserQuota {
+pub(super) fn quota(gigabytes: u64) -> UserQuota {
     UserQuota {
         cycle_served_bytes: NonZeroU64::new(gigabytes * GB).unwrap(),
         warn_percent: WarnPercent::new(80).unwrap(),
@@ -57,12 +57,12 @@ fn quota(gigabytes: u64) -> UserQuota {
 }
 
 /// `entry`, recorded by the portal at `at`.
-fn recorded(mut entry: Value, at: u64) -> Value {
+pub(super) fn recorded(mut entry: Value, at: u64) -> Value {
     entry["recorded_at"] = json!(at);
     entry
 }
 
-fn users() -> BTreeMap<UserId, User> {
+pub(super) fn users() -> BTreeMap<UserId, User> {
     by_id(vec![
         user("pilotusera", UserStatus::Active, None),
         user("pilotuserb", UserStatus::Active, None),
@@ -84,7 +84,7 @@ fn step_for(
 }
 
 /// [`step_for`] for [`users`].
-fn step(ledger: &PaymentLedger, entry: Value, at: u64) -> (PaymentLedger, LedgerEvent) {
+pub(super) fn step(ledger: &PaymentLedger, entry: Value, at: u64) -> (PaymentLedger, LedgerEvent) {
     step_for(ledger, &users(), entry, at)
 }
 
@@ -92,9 +92,11 @@ fn step(ledger: &PaymentLedger, entry: Value, at: u64) -> (PaymentLedger, Ledger
 /// user asked about had served `served` GB by the instant asked about
 /// (`None`: it cannot tell).
 fn settle(ledger: &PaymentLedger, at: u64, served: Option<u64>) -> Option<Settlement> {
-    ledger.settle(secs(at), cycle(secs(at)), &|_, _| {
-        served.map(|gigabytes| gigabytes * GB)
-    })
+    ledger.settle(
+        secs(at),
+        cycle(secs(at)),
+        &Serving(&|_, _| served.map(|gigabytes| gigabytes * GB)),
+    )
 }
 
 /// `ledger` settled at `at` with `served` GB told ([`settle`]).
@@ -107,6 +109,7 @@ fn served(gigabytes: u64, at: u64) -> PackUse {
     PackUse::Served {
         bytes: gigabytes * GB,
         learned_at: secs(at),
+        open_downloads: BTreeMap::new(),
     }
 }
 
@@ -178,7 +181,7 @@ fn a_refund_in_full_takes_back_the_rest_of_a_running_period() {
     let automatic = quota(19);
     let pilot = &users()[&id("pilotusera")];
     let later = secs(now + 11 * DAY);
-    let policy = effective_policy(pilot, Some(automatic), &paid, cycle(later), later);
+    let policy = effective_policy(pilot, Some(automatic), &paid, cycle(later), later, None);
     assert_eq!(policy.quota, Some(automatic));
     assert_eq!(policy.expires_at, Some(secs(now + 10 * DAY)));
     let (_, again) = step(
@@ -352,7 +355,7 @@ fn a_period_ended_loses_nothing_and_one_not_begun_loses_all() {
     let pilot = &users()[&id("pilotusera")];
     let later = secs(now + 41 * DAY);
     assert_eq!(
-        effective_policy(pilot, None, &paid, cycle(later), later).expires_at,
+        effective_policy(pilot, None, &paid, cycle(later), later, None).expires_at,
         Some(secs(now + 40 * DAY))
     );
 }
@@ -443,7 +446,7 @@ fn uses(ledger: &PaymentLedger, text: &str) -> Vec<Option<PackUse>> {
     ledger.orders()[&order(text)]
         .refunds
         .iter()
-        .map(|refund| refund.pack_use)
+        .map(|refund| refund.pack_use.clone())
         .collect()
 }
 
@@ -458,6 +461,7 @@ fn quota_at(ledger: &PaymentLedger, at: u64) -> u64 {
         &ledger.entitlements(false),
         cycle(at),
         at,
+        None,
     )
     .quota
     .unwrap()
@@ -499,7 +503,7 @@ fn a_refund_in_full_of_a_pack_waits_for_the_usage() {
             used: PackUse::Awaiting
         })
     );
-    assert_eq!(pack.taken_back_by(secs(refund + DAY)), None);
+    assert_eq!(pack.taken_back_by(secs(refund + DAY), None), None);
     for at in [
         refund - 1,
         refund,
@@ -547,10 +551,14 @@ fn the_use_at_the_refund_is_recorded_once_the_usage_tells_it() {
     for (used, after) in [(120, 120), (80, 100), (100, 100), (200, 150), (0, 100)] {
         let asked = RefCell::new(Vec::new());
         let settlement = ledger
-            .settle(secs(learned), cycle(secs(learned)), &|user, at| {
-                asked.borrow_mut().push((user.clone(), at));
-                Some(used * GB)
-            })
+            .settle(
+                secs(learned),
+                cycle(secs(learned)),
+                &Serving(&|user, at| {
+                    asked.borrow_mut().push((user.clone(), at));
+                    Some(used * GB)
+                }),
+            )
             .unwrap();
         assert_eq!(asked.into_inner(), [(id("pilotusera"), secs(refund))]);
         assert_eq!(
@@ -574,9 +582,9 @@ fn the_use_at_the_refund_is_recorded_once_the_usage_tells_it() {
         assert_eq!(quota_at(&ledger, learned + 3 * HOUR), after, "{used}");
         let paid = ledger.entitlements(false);
         let pack = &paid.users()[&id("pilotusera")].packs()[0];
-        assert_eq!(pack.taken_back_by(secs(learned - 1)), None);
+        assert_eq!(pack.taken_back_by(secs(learned - 1), None), None);
         assert_eq!(
-            pack.taken_back_by(secs(learned)),
+            pack.taken_back_by(secs(learned), None),
             Some((secs(refund), used * GB))
         );
     }
@@ -612,7 +620,7 @@ fn a_refund_that_waits_past_its_cycle_takes_nothing_back() {
     let never = |_: &UserId, _: UnixTime| -> Option<u64> { panic!("the usage is not asked about") };
     let next_cycle = secs(now + 30 * DAY);
     let settlement = ledger
-        .settle(next_cycle, cycle(next_cycle), &never)
+        .settle(next_cycle, cycle(next_cycle), &Serving(&never))
         .unwrap();
     assert_eq!(
         settlement.events,
@@ -626,14 +634,17 @@ fn a_refund_that_waits_past_its_cycle_takes_nothing_back() {
     assert_eq!(ended.awaiting_usage().count(), 0);
     let paid = ended.entitlements(false);
     let pack = &paid.users()[&id("pilotusera")].packs()[0];
-    assert_eq!(pack.taken_back_by(next_cycle), None);
+    assert_eq!(pack.taken_back_by(next_cycle, None), None);
     for at in [refund, refund + 3 * HOUR, now + 20 * DAY] {
         assert_eq!(quota_at(&ended, at), 150, "{at}");
     }
     // A pack counts in its own cycle only.
     assert_eq!(quota_at(&ended, now + 30 * DAY), 100);
     let earlier = secs(now - 40 * DAY);
-    assert_eq!(ledger.settle(earlier, cycle(earlier), &never), None);
+    assert_eq!(
+        ledger.settle(earlier, cycle(earlier), &Serving(&never)),
+        None
+    );
 }
 
 /// A pack bought later in the cycle never pays for what the user had used
@@ -701,9 +712,11 @@ fn the_rest_of_the_quota_holds_the_packs_granted_by_the_refund() {
 }
 
 /// The refund that takes a pack back carries the use in the file: awaited,
-/// or the bytes with when Mooring learned them. A ledger without one there,
-/// with one on another refund, with a use learned before its refund was
-/// applied, or with a use as version 2 wrote it, is refused.
+/// or the bytes with when Mooring learned them and the nodes that may
+/// still count a download open at the refund (none here). A ledger without
+/// one there, with one on another refund, with a use learned before its
+/// refund was applied, with a use as version 2 wrote it, or with one that
+/// does not say which nodes are still open, is refused.
 #[test]
 fn the_use_is_recorded_on_the_refund_that_takes_a_pack_back_and_no_other() {
     let now = NOW.as_secs();
@@ -725,7 +738,11 @@ fn the_use_is_recorded_on_the_refund_that_takes_a_pack_back_and_no_other() {
     let value: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         value["orders"][0]["refunds"][1]["pack_use"],
-        json!({"served": {"bytes": 120 * GB, "learned_at": now + 2 * HOUR}})
+        json!({"served": {
+            "bytes": 120 * GB,
+            "learned_at": now + 2 * HOUR,
+            "open_downloads": {},
+        }})
     );
     assert_eq!(value["orders"][0]["refunds"][0]["pack_use"], Value::Null);
     for (index, pack_use) in [
@@ -735,7 +752,11 @@ fn the_use_is_recorded_on_the_refund_that_takes_a_pack_back_and_no_other() {
         // Learned a second before the refund was applied.
         (
             1,
-            json!({"served": {"bytes": 5, "learned_at": now + HOUR - 1}}),
+            json!({"served": {
+                "bytes": 5,
+                "learned_at": now + HOUR - 1,
+                "open_downloads": {},
+            }}),
         ),
     ] {
         let mut broken = value.clone();
@@ -750,10 +771,17 @@ fn the_use_is_recorded_on_the_refund_that_takes_a_pack_back_and_no_other() {
     }
     // Learned as the refund was applied is the earliest there is.
     let mut earliest = value.clone();
-    earliest["orders"][0]["refunds"][1]["pack_use"] =
-        json!({"served": {"bytes": 5, "learned_at": now + HOUR}});
+    earliest["orders"][0]["refunds"][1]["pack_use"] = json!({"served": {
+        "bytes": 5,
+        "learned_at": now + HOUR,
+        "open_downloads": {},
+    }});
     assert!(PaymentLedger::decode(&serde_json::to_vec(&earliest).unwrap()).is_ok());
-    for pack_use in [json!("unknown"), json!({"served": {"bytes": 5}})] {
+    for pack_use in [
+        json!("unknown"),
+        json!({"served": {"bytes": 5}}),
+        json!({"served": {"bytes": 5, "learned_at": now + HOUR}}),
+    ] {
         let mut old = value.clone();
         old["orders"][0]["refunds"][1]["pack_use"] = pack_use.clone();
         assert!(
@@ -888,9 +916,11 @@ fn settling_records_what_the_usage_tells_and_leaves_the_rest_waiting() {
     let at = now + 3 * HOUR;
     let only = |told: &'static str| {
         ledger
-            .settle(secs(at), cycle(secs(at)), &|user, _| {
-                (*user == id(told)).then_some(7 * GB)
-            })
+            .settle(
+                secs(at),
+                cycle(secs(at)),
+                &Serving(&|user, _| (*user == id(told)).then_some(7 * GB)),
+            )
             .unwrap()
     };
     let rehearsal = only("pilotuserb");
@@ -908,9 +938,11 @@ fn settling_records_what_the_usage_tells_and_leaves_the_rest_waiting() {
     assert_eq!(uses(&live_one.ledger, B), [Some(served(7, at))]);
     // Each refund is asked about at its own time.
     let both = ledger
-        .settle(secs(at), cycle(secs(at)), &|_, refunded_at| {
-            Some((refunded_at.as_secs() - now) / HOUR * GB)
-        })
+        .settle(
+            secs(at),
+            cycle(secs(at)),
+            &Serving(&|_, refunded_at| Some((refunded_at.as_secs() - now) / HOUR * GB)),
+        )
         .unwrap();
     assert_eq!(
         both.events,
@@ -999,13 +1031,17 @@ fn refunded_packs_count_in_the_order_their_refunds_were_recorded() {
     );
     let at = now + 3 * HOUR;
     let ledger = ledger
-        .settle(secs(at), cycle(secs(at)), &|_, refunded_at| {
-            Some(if refunded_at == secs(now + HOUR) {
-                120 * GB
-            } else {
-                170 * GB
-            })
-        })
+        .settle(
+            secs(at),
+            cycle(secs(at)),
+            &Serving(&|_, refunded_at| {
+                Some(if refunded_at == secs(now + HOUR) {
+                    120 * GB
+                } else {
+                    170 * GB
+                })
+            }),
+        )
         .unwrap()
         .ledger;
     assert_eq!(quota_at(&ledger, at - 1), 180);

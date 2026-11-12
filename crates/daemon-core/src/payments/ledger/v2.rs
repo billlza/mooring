@@ -17,6 +17,8 @@
 //!   counts from when version 2 counted it.
 //! - **A cycle that had ended** stays so.
 
+use std::collections::BTreeMap;
+
 use mooring_model::UnixTime;
 use serde::Deserialize;
 
@@ -117,6 +119,7 @@ impl RefundRecord {
             PackUse::Served { bytes } => super::PackUse::Served {
                 bytes,
                 learned_at: self.applied_at.max(self.recorded_at),
+                open_downloads: BTreeMap::new(),
             },
             PackUse::Unknown => super::PackUse::Awaiting,
             PackUse::CycleEnded => super::PackUse::CycleEnded,

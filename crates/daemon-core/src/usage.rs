@@ -48,7 +48,10 @@ use crate::share::{BasisPoints, basis_points, require_whole};
 use crate::wire::{accounting_user, mac_time};
 
 mod collected;
-pub use collected::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES, NodeUsageHistory, history};
+pub use collected::{
+    CollectedUsage, MAX_COLLECTED_USAGE_BYTES, NodeUsageHistory, ServedBefore, boundary_after,
+    history,
+};
 
 /// The totals of one node's accounting emails before `as_of`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,6 +313,62 @@ struct Counted {
     lifetime: Traffic,
     cycle_by_node: BTreeMap<NodeId, Traffic>,
     cycle_by_protocol: ProtocolTraffic,
+    /// The cycle's REALITY downlink per node that counted any
+    /// ([`UsageReport::cycle_reality_downlink`]).
+    cycle_reality_downlink: BTreeMap<NodeId, u64>,
+}
+
+impl Counted {
+    /// Counts `traffic` of `inbound` on `node`, which is of the cycle, into
+    /// the cycle's REALITY downlink per node.
+    fn count_reality_downlink(
+        &mut self,
+        node: &NodeId,
+        inbound: Inbound,
+        traffic: Traffic,
+    ) -> Result<(), UsageError> {
+        let bytes = counted_at_close(inbound, traffic);
+        if bytes != 0 {
+            let counted = self.cycle_reality_downlink.entry(node.clone()).or_default();
+            *counted = counted
+                .checked_add(bytes)
+                .ok_or(UsageError::CounterOverflow)?;
+        }
+        Ok(())
+    }
+}
+
+/// The bytes of `traffic` on `inbound` that a node counts only when a
+/// connection closes: the downlink of REALITY (the accuracy note above).
+/// It counts the rest as they flow.
+const fn counted_at_close(inbound: Inbound, traffic: Traffic) -> u64 {
+    match inbound {
+        Inbound::Reality => traffic.downlink,
+        Inbound::Hy2 => 0,
+    }
+}
+
+/// Every row derived, and the cycle's REALITY downlink per node of each
+/// user whose cycle figure is whole.
+type Finished = (
+    BTreeMap<UserId, UserUsage>,
+    BTreeMap<UserId, BTreeMap<NodeId, u64>>,
+);
+
+/// Derives every user's row from what was counted into it.
+fn finish(rows: BTreeMap<UserId, Counted>) -> Result<Finished, UsageError> {
+    let mut users = BTreeMap::new();
+    let mut downlink = BTreeMap::new();
+    for (user, mut counted) in rows {
+        if !counted.missing.cycle {
+            downlink.insert(
+                user.clone(),
+                std::mem::take(&mut counted.cycle_reality_downlink),
+            );
+        }
+        users.insert(user, UserUsage::derive(counted)?);
+    }
+    Ok((users, downlink))
 }
 
 #[derive(Debug, Default)]
@@ -449,6 +508,9 @@ impl TryFrom<UserUsageRepr> for UserUsage {
             lifetime: repr.lifetime.unwrap_or_default(),
             cycle_by_node: repr.cycle_by_node.unwrap_or_default(),
             cycle_by_protocol: repr.cycle_by_protocol.unwrap_or_default(),
+            // A decoded row derives no report: the split by node of one
+            // protocol's downlink is not in it.
+            cycle_reality_downlink: BTreeMap::new(),
         })
         .map_err(|_| FigureError::DerivedMismatch)?;
         if stated != (derived.cycle_served_bytes, derived.cycle_shares.clone()) {
@@ -499,6 +561,21 @@ pub struct UsageReport {
     pub sampled_at: BTreeMap<NodeId, UsageSampleTimes>,
     /// The Mac's in-chain probe traffic this cycle, per node (`probe@…`).
     pub probe_cycle: BTreeMap<NodeId, Option<ProtocolTraffic>>,
+    /// The cycle's REALITY downlink of each user whose cycle figure is
+    /// whole, per node that counted any. Xray counts it when a connection
+    /// closes (the accuracy note above), so what a node counts of it after
+    /// an instant may have been served before: a traffic pack refunded in
+    /// full reads it (design §9.6).
+    pub cycle_reality_downlink: BTreeMap<UserId, BTreeMap<NodeId, u64>>,
+}
+
+/// One node's count of a user's REALITY downlink in the billing cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownlinkCount {
+    /// The bytes the node had counted by its sample.
+    pub bytes: u64,
+    /// When the node's figures were sampled.
+    pub sampled_at: UnixTime,
 }
 
 /// The cycle's served bytes per user, the input of quota evaluation.
@@ -513,9 +590,36 @@ pub struct CycleUsage {
     /// does not cover the cycle, or the user's usage was erased), never
     /// read as zero.
     pub served: BTreeMap<UserId, Option<u64>>,
+    /// The REALITY downlink in `served`, per node that counted any, of
+    /// each user whose figure is known
+    /// ([`UsageReport::cycle_reality_downlink`]).
+    pub reality_downlink: BTreeMap<UserId, BTreeMap<NodeId, u64>>,
 }
 
 impl UsageReport {
+    /// `user`'s REALITY downlink of the cycle on every node the report
+    /// holds, one that counted none included, with when the node's figures
+    /// were sampled; `None` when the report has no whole cycle figure for
+    /// the user.
+    #[must_use]
+    pub fn reality_downlink(&self, user: &UserId) -> Option<BTreeMap<NodeId, DownlinkCount>> {
+        let counted = self.cycle_reality_downlink.get(user)?;
+        Some(
+            self.sampled_at
+                .iter()
+                .map(|(node, sample)| {
+                    (
+                        node.clone(),
+                        DownlinkCount {
+                            bytes: counted.get(node).copied().unwrap_or(0),
+                            sampled_at: sample.monthly_at,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// The cycle's served bytes of every user the report covers.
     #[must_use]
     pub fn cycle_usage(&self) -> CycleUsage {
@@ -527,6 +631,7 @@ impl UsageReport {
                 .iter()
                 .map(|(user, usage)| (user.clone(), usage.cycle_served_bytes()))
                 .collect(),
+            reality_downlink: self.cycle_reality_downlink.clone(),
         }
     }
 }
@@ -637,6 +742,7 @@ impl Totals<'_> {
                     add(&mut row.cycle, traffic)?;
                     add(row.cycle_by_node.entry(node.clone()).or_default(), traffic)?;
                     row.cycle_by_protocol.add(email.inbound, traffic)?;
+                    row.count_reality_downlink(node, email.inbound, traffic)?;
                 }
             }
         }
@@ -733,6 +839,7 @@ pub fn aggregate(
             }
         }
     }
+    let (users, cycle_reality_downlink) = finish(totals.usage)?;
     Ok(UsageReport {
         sampled_at: ledgers
             .iter()
@@ -747,11 +854,8 @@ pub fn aggregate(
             })
             .collect(),
         periods,
-        users: totals
-            .usage
-            .into_iter()
-            .map(|(user, counted)| Ok((user, UserUsage::derive(counted)?)))
-            .collect::<Result<_, UsageError>>()?,
+        users,
+        cycle_reality_downlink,
         probe_cycle: totals
             .probe_cycle
             .into_iter()

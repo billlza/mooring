@@ -15,7 +15,8 @@ use super::{CollectedUsage, Counters, NodeUsageHistory, add_counters, corrupt, p
 use crate::error::UsageError;
 use crate::period::UsagePeriods;
 use crate::usage::{
-    Counted, MissingPeriods, ProtocolTraffic, UsageReport, UserUsage, add, both_ways, resolve,
+    Counted, DownlinkCount, MissingPeriods, ProtocolTraffic, UsageReport, UserUsage, add,
+    both_ways, counted_at_close, finish, resolve,
 };
 
 /// The latest accounting sample may trail publication by at most three
@@ -395,6 +396,7 @@ impl CollectedUsage {
                                 add(row.cycle_by_node.entry(node.clone()).or_default(), bytes)?;
                             }
                             row.cycle_by_protocol.add(inbound, bytes)?;
+                            row.count_reality_downlink(node, inbound, bytes)?;
                         }
                         None => row.missing.cycle = true,
                     }
@@ -419,47 +421,73 @@ impl CollectedUsage {
             }
             probe_cycle.insert(node.clone(), complete_probe.then_some(counted_probe));
         }
+        let (users, cycle_reality_downlink) = finish(rows)?;
         Ok(UsageReport {
             periods,
             sampled_at,
             probe_cycle,
-            users: rows
-                .into_iter()
-                .map(|(id, counted)| Ok((id, UserUsage::derive(counted)?)))
-                .collect::<Result<_, UsageError>>()?,
+            users,
+            cycle_reality_downlink,
         })
     }
 }
 
+/// The first five-minute boundary at least [`MAX_POLL_GAP_SECS`] after
+/// `at`: a bin that begins at or after it holds only bytes counted after
+/// `at` ([`CollectedUsage::cycle_served_before`]). The margin also covers
+/// what the node's clock and the clock that dated `at` differ by.
+#[must_use]
+pub fn boundary_after(at: UnixTime) -> UnixTime {
+    UnixTime::from_secs(at.as_secs().saturating_add(MAX_POLL_GAP_SECS + 299) / 300 * 300)
+}
+
+/// What a user had served in the billing cycle before an instant, as far
+/// as the nodes' counts tell at one report
+/// ([`CollectedUsage::cycle_served_before`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedBefore {
+    /// The bytes, at most.
+    pub bytes: u64,
+    /// The user's REALITY downlink of the cycle that `bytes` holds, per
+    /// node of the report: all the node had counted by its sample, none
+    /// included. What a node counts beyond it later may be a download that
+    /// was open at the instant.
+    pub reality_downlink: BTreeMap<NodeId, u64>,
+}
+
 impl CollectedUsage {
-    /// The bytes the nodes had counted for `user` in the billing cycle `now`
-    /// is in before `at`, at most: never fewer than they had counted. A
-    /// traffic pack refunded in full keeps what the user had used of it by
-    /// the refund's time (design §9.6), so an error here may only leave the
-    /// user more.
+    /// The bytes `user` had served in the billing cycle `now` is in before
+    /// `at`, at most, as far as the nodes' counts tell at the report at
+    /// `now`: never fewer than they tell. A traffic pack refunded in full
+    /// keeps what the user had used of it by the refund's time (design
+    /// §9.6), so an error here may only leave the user more.
     ///
     /// It is the cycle's figure by the report at `now` ([`Self::aggregate`]),
-    /// less the bytes of the closed bins that begin at or after a boundary:
-    /// the first five-minute boundary at least [`MAX_POLL_GAP_SECS`] after
-    /// `at`. A bin holds the accounting polls that end inside it, and a
-    /// poll holds what Xray counted since the poll before, at most that
-    /// long earlier. So the bins from the boundary on hold only bytes
-    /// counted after `at`, and the cycle's figure, once every node's
-    /// figures reach the boundary, holds every byte counted by `at`.
+    /// less what the closed bins that begin at or after a boundary hold of
+    /// bytes counted as they flow; the boundary is the first five-minute
+    /// one at least [`MAX_POLL_GAP_SECS`] after `at`. A bin holds the
+    /// accounting polls that end inside it, and a poll holds what Xray
+    /// counted since the poll before, at most that long earlier. So the
+    /// bins from the boundary on hold only bytes counted after `at`, and
+    /// the cycle's figure, once every node's figures reach the boundary,
+    /// holds every byte counted by `at`.
     ///
-    /// - Where the detail from the boundary on is whole, that is the
-    ///   user's counted use at the boundary, three to eight minutes after
-    ///   `at`.
+    /// - **Counted as they flow** are Hysteria2 both ways and the uplink of
+    ///   REALITY: those bytes of a later bin were served after `at`, and
+    ///   are taken off.
+    /// - **The downlink of a REALITY connection** is counted only when the
+    ///   connection closes (the accuracy note of [`crate::usage`]). What a
+    ///   later bin holds of it may be a download that was open at `at`, so
+    ///   it is not taken off: it counts as used before `at`. A download
+    ///   still open at the report is in no count yet, so the figure comes
+    ///   with what each node had counted of the user's REALITY downlink
+    ///   ([`ServedBefore::reality_downlink`]): what a node counts beyond
+    ///   that later is added by the reader of the figure
+    ///   ([`PackUse::Served`](crate::payments::PackUse::Served)).
     /// - Bytes the detail cannot place after the boundary count as used
-    ///   before `at`: those of a stretch of detail that was lost, of an
+    ///   before `at` too: those of a stretch of detail that was lost, of an
     ///   hour that begins before the boundary once its five-minute bins
     ///   have expired, and of the minutes since the last closed bin.
-    /// - **What the counters cannot tell.** Xray counts the downlink of a
-    ///   REALITY connection only when the connection closes (the accuracy
-    ///   note of [`crate::usage`]). A download open at `at` and still open
-    ///   at the boundary is counted after it, whole, so the bytes it had
-    ///   carried by `at` are not in this figure. Nothing a node records
-    ///   places them.
     ///
     /// `None` when it cannot be told: the report does not reach the
     /// boundary (it is after `now`, or after the sample of a node's
@@ -473,9 +501,9 @@ impl CollectedUsage {
         now: UnixTime,
         user: &UserId,
         at: UnixTime,
-    ) -> Result<Option<u64>, UsageError> {
+    ) -> Result<Option<ServedBefore>, UsageError> {
         let report = self.aggregate(deployment, now)?;
-        let boundary = at.as_secs().saturating_add(MAX_POLL_GAP_SECS + 299) / 300 * 300;
+        let boundary = boundary_after(at).as_secs();
         // The report reaches `now`, or the earliest of its nodes' samples.
         let reached = report
             .sampled_at
@@ -488,6 +516,9 @@ impl CollectedUsage {
         let Some(by_node) = report.users.get(user).and_then(UserUsage::cycle_by_node) else {
             return Ok(None);
         };
+        let Some(downlink) = report.reality_downlink(user) else {
+            return Ok(None);
+        };
         let from = boundary.max(report.periods.cycle.starts_at().as_secs());
         let principal = principal_of(user)?;
         let mut before = 0_u64;
@@ -498,24 +529,51 @@ impl CollectedUsage {
                 continue;
             };
             let later = history.known(from, sample.monthly_at.as_secs() / 300 * 300)?;
-            let mut since = 0_u64;
+            // What the later bins hold, and what of it was counted when a
+            // connection closed.
+            let (mut since, mut at_close) = (0_u64, 0_u64);
             for &inbound in Inbound::ALL {
                 let email = StatsEmail {
                     principal: principal.clone(),
                     inbound,
                 };
+                let traffic = later.get(&email).copied().unwrap_or_default();
                 since = since
-                    .checked_add(both_ways(later.get(&email).copied().unwrap_or_default())?)
+                    .checked_add(both_ways(traffic)?)
+                    .ok_or(UsageError::CounterOverflow)?;
+                at_close = at_close
+                    .checked_add(counted_at_close(inbound, traffic))
                     .ok_or(UsageError::CounterOverflow)?;
             }
             let counted = both_ways(by_node.get(node).copied().unwrap_or_default())?;
             let Some(earlier) = counted.checked_sub(since) else {
                 return Err(UsageError::MonthlyInconsistent { node: node.clone() });
             };
+            // `at_close` is part of `since`, which is no more than
+            // `counted`: the sum cannot pass it.
             before = before
-                .checked_add(earlier)
+                .checked_add(earlier + at_close)
                 .ok_or(UsageError::CounterOverflow)?;
         }
-        Ok(Some(before))
+        Ok(Some(ServedBefore {
+            bytes: before,
+            reality_downlink: downlink
+                .into_iter()
+                .map(|(node, count)| (node, count.bytes))
+                .collect(),
+        }))
+    }
+
+    /// `user`'s REALITY downlink of the billing cycle `now` is in, on every
+    /// node the report at `now` holds ([`UsageReport::reality_downlink`]);
+    /// `None` when the report has no whole cycle figure for the user. What
+    /// makes the report itself fail is that error.
+    pub fn cycle_reality_downlink(
+        &self,
+        deployment: &Deployment,
+        now: UnixTime,
+        user: &UserId,
+    ) -> Result<Option<BTreeMap<NodeId, DownlinkCount>>, UsageError> {
+        Ok(self.aggregate(deployment, now)?.reality_downlink(user))
     }
 }

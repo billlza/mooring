@@ -6,12 +6,14 @@
 use std::collections::BTreeMap;
 
 use mooring_daemon_core::payments::{
-    FeedPage, GrantOutcome, HeldReason, LedgerEvent, OrderId, PackUse, PaymentLedger, PortalOrigin,
-    PullSettings, RefundEffect, Stop, StopReason, TimeTakenBack,
+    Closed, FeedPage, GrantOutcome, HeldReason, LedgerEvent, OrderId, PackUse, PaymentLedger,
+    PortalOrigin, PullSettings, RefundEffect, RefundUsage, RunBegan, Stop, StopReason,
+    TimeTakenBack,
 };
 use mooring_daemon_core::period::BillingCycle;
+use mooring_daemon_core::usage::{DownlinkCount, ServedBefore};
 use mooring_model::user::SuspendReason;
-use mooring_model::{BillDay, CalendarDate, CycleRule, UnixTime, UserId};
+use mooring_model::{BillDay, CalendarDate, CycleRule, NodeId, UnixTime, UserId};
 use serde_json::{Value, json};
 
 use super::super::support::NOW;
@@ -25,6 +27,35 @@ fn users() -> BTreeMap<UserId, mooring_model::User> {
         .deployment
         .users()
         .clone()
+}
+
+fn node(name: &str) -> NodeId {
+    NodeId::parse(name).unwrap()
+}
+
+/// What the usage and the nodes' statuses tell the ledger in these tests:
+/// the use of whichever user is asked about, what lon1 has counted of
+/// their REALITY downlink, and when lon1's Xray began.
+#[derive(Default)]
+struct Shown {
+    served: Option<ServedBefore>,
+    lon1_counted: Option<DownlinkCount>,
+    lon1_began: Option<RunBegan>,
+}
+
+impl RefundUsage for Shown {
+    fn served_before(&self, _: &UserId, _: UnixTime) -> Option<ServedBefore> {
+        self.served.clone()
+    }
+
+    fn reality_downlink(&self, _: &UserId) -> Option<BTreeMap<NodeId, DownlinkCount>> {
+        self.lon1_counted
+            .map(|counted| BTreeMap::from([(node("lon1"), counted)]))
+    }
+
+    fn xray_began(&self, node: &NodeId) -> Option<RunBegan> {
+        self.lon1_began.filter(|_| node.as_str() == "lon1")
+    }
 }
 
 fn applied(ledger: &PaymentLedger, body: &[u8], rehearsal: bool) -> PaymentLedger {
@@ -373,10 +404,63 @@ fn every_event_has_its_line() {
                 used: PackUse::Served {
                     bytes: 70_000_000_000,
                     learned_at: UnixTime::from_secs(NOW + 90),
+                    open_downloads: BTreeMap::new(),
                 },
             },
             format!(
                 "payment: order {order}'s refund in full no longer waits for the usage; its pack counts from 2026-10-13 19:21:30 UTC on only what the user had used of it beyond the rest of their quota: 70000000000 bytes served this cycle by the refund's time"
+            ),
+        ),
+        (
+            LedgerEvent::Settled {
+                order: order.clone(),
+                used: PackUse::Served {
+                    bytes: 70_000_000_000,
+                    learned_at: UnixTime::from_secs(NOW + 90),
+                    open_downloads: BTreeMap::from([(node("lon1"), 30_000_000_000)]),
+                },
+            },
+            format!(
+                "payment: order {order}'s refund in full no longer waits for the usage; its pack counts from 2026-10-13 19:21:30 UTC on only what the user had used of it beyond the rest of their quota: 70000000000 bytes served this cycle by the refund's time; a REALITY download that was open then is counted only when it ends, so what lon1 count(s) of the user's REALITY downloads beyond that counts as used then too, until that node's Xray has started again or the billing cycle ends"
+            ),
+        ),
+        (
+            LedgerEvent::DownloadsClosed {
+                order: order.clone(),
+                why: Closed::XrayBegan,
+                nodes: vec![node("ams1"), node("lon1")],
+                added: 12_000_000_000,
+                bytes: 82_000_000_000,
+                open: 1,
+            },
+            format!(
+                "payment: order {order}'s refunded pack: Xray on ams1, lon1 has started again since the refund, so no download that was open at it is left there; the 12000000000 bytes of REALITY downloads counted there since the use was learned are part of it for good, 82000000000 bytes now; 1 node(s) may still count such a download"
+            ),
+        ),
+        (
+            LedgerEvent::DownloadsClosed {
+                order: order.clone(),
+                why: Closed::XrayBegan,
+                nodes: vec![node("par1")],
+                added: 0,
+                bytes: 82_000_000_000,
+                open: 0,
+            },
+            format!(
+                "payment: order {order}'s refunded pack: Xray on par1 has started again since the refund, so no download that was open at it is left there; the 0 bytes of REALITY downloads counted there since the use was learned are part of it for good, 82000000000 bytes now; no node may still count such a download"
+            ),
+        ),
+        (
+            LedgerEvent::DownloadsClosed {
+                order: order.clone(),
+                why: Closed::CycleEnded,
+                nodes: vec![node("ams1"), node("lon1")],
+                added: 0,
+                bytes: 82_000_000_000,
+                open: 0,
+            },
+            format!(
+                "payment: order {order}'s refunded pack: its billing cycle has ended, so its use at the refund's time takes in nothing more (82000000000 bytes)"
             ),
         ),
         (
@@ -430,8 +514,9 @@ fn every_event_has_its_line() {
 /// refund's time, the month that followed it moved as much earlier, and
 /// the pack's refund as it stands: waiting for the usage, which the
 /// summary counts and `--json` carries; then with the user's use at the
-/// refund's time and when Mooring learned it; or with nothing taken back,
-/// its cycle over.
+/// refund's time and when Mooring learned it, and, while a node may still
+/// count a download that was open at the refund, with that node, which
+/// the summary counts too; or with nothing taken back, its cycle over.
 #[test]
 fn what_refunds_in_full_took_back_is_listed() {
     let month = grant(1, "aaaaaaaaaaaaaaaaaaaa", FIRST);
@@ -481,7 +566,7 @@ fn what_refunds_in_full_took_back_is_listed() {
         .settle(
             UnixTime::from_secs(next_cycle),
             cycle_at(next_cycle),
-            &|_, _| None,
+            &Shown::default(),
         )
         .unwrap()
         .ledger;
@@ -491,16 +576,58 @@ fn what_refunds_in_full_took_back_is_listed() {
         listed.contains("    refund, entry 5: 800 gbp so far, in full; its pack's billing cycle has ended, so nothing is taken back\n"),
         "{listed}"
     );
-    let ledger = waiting
+    let learned = Shown {
+        served: Some(ServedBefore {
+            bytes: 120_000_000_000,
+            reality_downlink: BTreeMap::from([(node("lon1"), 30_000_000_000)]),
+        }),
+        ..Shown::default()
+    };
+    let open = waiting
+        .settle(UnixTime::from_secs(NOW + 2 * 3600), cycle_at(NOW), &learned)
+        .unwrap()
+        .ledger;
+    let listed = text(None, Some(&open));
+    assert!(!listed.contains("wait for the usage"), "{listed}");
+    let still_open = "  1 refund(s) in full of traffic packs still take in REALITY downloads: one that was open at the refund is counted only when it ends, so what a node counts since counts as used at the refund, until that node's Xray has started again or the billing cycle ends\n";
+    assert!(
+        listed.contains(&format!(
+            "orders: 3 (0 held, 2 refunded, 0 disputed)\n{still_open}"
+        )),
+        "{listed}"
+    );
+    assert!(
+        listed.contains("    refund, entry 5: 800 gbp so far, in full; its pack counts from 2026-10-13 21:20:00 UTC on only what the user had used of it beyond the rest of their quota: 120000000000 bytes served this cycle by the refund's time; a REALITY download that was open then is counted only when it ends, so what lon1 count(s) of the user's REALITY downloads beyond that counts as used then too, until that node's Xray has started again or the billing cycle ends\n"),
+        "{listed}"
+    );
+    assert!(
+        json_line(None, Some(&open))
+            .unwrap()
+            .contains("\"open_downloads\":{\"lon1\":30000000000}"),
+    );
+    // lon1's Xray began again three hours after the refund, and its
+    // figures were sampled after that: no download is open any more.
+    let restarted = Shown {
+        lon1_counted: Some(DownlinkCount {
+            bytes: 30_000_000_000,
+            sampled_at: UnixTime::from_secs(NOW + 5 * 3600),
+        }),
+        lon1_began: Some(RunBegan {
+            no_earlier_than: UnixTime::from_secs(NOW + 4 * 3600),
+            no_later_than: UnixTime::from_secs(NOW + 4 * 3600 + 122),
+        }),
+        ..Shown::default()
+    };
+    let ledger = open
         .settle(
-            UnixTime::from_secs(NOW + 2 * 3600),
+            UnixTime::from_secs(NOW + 5 * 3600),
             cycle_at(NOW),
-            &|_, _| Some(120_000_000_000),
+            &restarted,
         )
         .unwrap()
         .ledger;
     let listed = text(None, Some(&ledger));
-    assert!(!listed.contains("wait for the usage"), "{listed}");
+    assert!(!listed.contains("still take in"), "{listed}");
     let on = |days: u64| stamp(UnixTime::from_secs(NOW + days * day));
     for line in [
         format!(

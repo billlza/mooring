@@ -8,17 +8,20 @@
 //! the portal repository's `contract/fixtures/entitlements-v1/` at its
 //! commit 8b7c170, synthetic data only.
 
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 use mooring_model::{
-    ClientLine, ClientProfile, LocalLabel, UnixTime, User, UserId, UserPolicy, UserStatus,
+    ClientLine, ClientProfile, LocalLabel, NodeId, UnixTime, User, UserId, UserPolicy, UserStatus,
 };
 use serde_json::{Value, json};
 
-use crate::payments::{FeedError, FeedPage, OrderId};
+use crate::payments::{FeedError, FeedPage, OrderId, RefundUsage, RunBegan};
+use crate::usage::{DownlinkCount, ServedBefore};
 
 mod feed;
 mod ledger;
+mod open_downloads;
 mod policy;
 mod refunds;
 mod retention;
@@ -42,6 +45,62 @@ pub(super) const NOW: UnixTime = UnixTime::from_secs(1_797_000_100);
 
 pub(super) fn id(text: &str) -> UserId {
     UserId::parse(text).unwrap()
+}
+
+/// What the usage collected and the nodes' statuses tell in a test, of
+/// whichever user is asked about, and how often each was asked.
+#[derive(Default)]
+pub(in crate::tests) struct Told {
+    /// The use before any instant; `None`: the usage cannot tell.
+    pub(in crate::tests) served: Option<ServedBefore>,
+    /// The REALITY downlink of the cycle on every node; `None`: the usage
+    /// cannot tell.
+    pub(in crate::tests) downlink: Option<BTreeMap<NodeId, DownlinkCount>>,
+    /// When each node's run of Xray began; a node left out shows none.
+    pub(in crate::tests) began: BTreeMap<NodeId, RunBegan>,
+    /// How often the use was asked for.
+    pub(in crate::tests) asked_served: Cell<u32>,
+    /// The users whose downlink was asked for, in order.
+    pub(in crate::tests) asked_downlink: RefCell<Vec<UserId>>,
+}
+
+impl RefundUsage for Told {
+    fn served_before(&self, _: &UserId, _: UnixTime) -> Option<ServedBefore> {
+        self.asked_served.set(self.asked_served.get() + 1);
+        self.served.clone()
+    }
+
+    fn reality_downlink(&self, user: &UserId) -> Option<BTreeMap<NodeId, DownlinkCount>> {
+        self.asked_downlink.borrow_mut().push(user.clone());
+        self.downlink.clone()
+    }
+
+    fn xray_began(&self, node: &NodeId) -> Option<RunBegan> {
+        self.began.get(node).copied()
+    }
+}
+
+/// The usage that tells only the bytes a user had served before an
+/// instant: no node's REALITY downlink, and no status.
+pub(in crate::tests) struct Serving<'a>(
+    pub(in crate::tests) &'a dyn Fn(&UserId, UnixTime) -> Option<u64>,
+);
+
+impl RefundUsage for Serving<'_> {
+    fn served_before(&self, user: &UserId, at: UnixTime) -> Option<ServedBefore> {
+        (self.0)(user, at).map(|bytes| ServedBefore {
+            bytes,
+            reality_downlink: BTreeMap::new(),
+        })
+    }
+
+    fn reality_downlink(&self, _: &UserId) -> Option<BTreeMap<NodeId, DownlinkCount>> {
+        None
+    }
+
+    fn xray_began(&self, _: &NodeId) -> Option<RunBegan> {
+        None
+    }
 }
 
 pub(super) fn order(text: &str) -> OrderId {

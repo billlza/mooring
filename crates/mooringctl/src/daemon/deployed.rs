@@ -49,7 +49,7 @@ use super::{
     wait_for_next_poll,
 };
 use crate::app::Env;
-use crate::daemon::usage::Pulled;
+use crate::daemon::usage::{Pulled, RefundView};
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::node::session::ops_session;
@@ -475,20 +475,25 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 say(log, now, &note)?;
             }
         }
-        // A refund in full of a traffic pack waits for the usage (design
-        // §9.6): what was collected by now may end the wait. It asks no
-        // node and makes no request. What this tick collected is dated by a
-        // clock read after the tick began, so the step reads the clock
-        // again, as the publishing below does.
+        // A refund in full of a traffic pack waits for the usage, and the
+        // use learned takes in REALITY downloads counted later until each
+        // node's Xray has started again (design §9.6): what was collected
+        // by now, and the nodes' latest statuses, may end either. It asks
+        // no node and makes no request. What this tick collected is dated
+        // by a clock read after the tick began, so the step reads the
+        // clock again, as the publishing below does.
         let settled_at = (env.clock)()?;
         let settled_cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), settled_at)
             .map_err(LocalError::Cycle)?;
-        let collector = &self.usage;
+        let readings = RefundView {
+            collector: &self.usage,
+            deployment,
+            now: settled_at,
+            polls: &self.polls,
+        };
         for note in self
             .payments
-            .settle(Instant::now(), settled_at, settled_cycle, &|user, at| {
-                collector.served_before(deployment, settled_at, user, at)
-            })
+            .settle(Instant::now(), settled_at, settled_cycle, &readings)
         {
             say(log, settled_at, &note)?;
         }

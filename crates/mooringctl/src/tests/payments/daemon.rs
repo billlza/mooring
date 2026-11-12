@@ -4,15 +4,18 @@
 //! on no foreign network, records what it gets, and the status line shows
 //! what was granted; on a foreign network it waits.
 
+use std::collections::BTreeMap;
+
+use mooring_agent_proto::{EngineRun, Response};
 use mooring_daemon_core::payments::{OrderId, PackUse};
-use mooring_daemon_core::usage::CollectedUsage;
+use mooring_daemon_core::usage::{CollectedUsage, NodeUsageHistory};
 use mooring_daemon_core::{ExpiryState, QuotaState};
 use mooring_model::{NodeId, UnixTime, UserId};
 use mooring_store::write_user_usage;
 
 use super::super::deployed::{
-    CARRIER, deployed, deployed_with, joined_to_the_declared_hotspot, published, shared, statuses,
-    with_exit_on,
+    CARRIER, deployed, deployed_with, joined_to_the_declared_hotspot, published, shared,
+    status_reply, statuses, statuses_as, with_exit_on,
 };
 use super::super::portal::{collected, with_usage};
 use super::super::support::{Harness, NOW};
@@ -244,8 +247,9 @@ fn with_a_quota() -> Harness {
 }
 
 /// What the daemon collected by [`NOW`]: 70 GB served this cycle by user
-/// [`FIRST`] on lon1, 20 GB of them in the five minutes that began half an
-/// hour ago.
+/// [`FIRST`] on lon1. 50 GB of them are the downlink of REALITY; 20 GB are
+/// Hysteria2's, counted as they flowed in the five minutes that began
+/// half an hour ago.
 fn collected_with_detail() -> CollectedUsage {
     collected_with_detail_at(NOW)
 }
@@ -253,47 +257,84 @@ fn collected_with_detail() -> CollectedUsage {
 /// [`collected_with_detail`], with each node's figures sampled at
 /// `sampled`.
 fn collected_with_detail_at(sampled: u64) -> CollectedUsage {
-    use std::collections::BTreeMap;
-
     use mooring_agent_proto::{
         Inbound, OpaqueUserId, Principal, Resolution, SeriesRange, StatsEmail, Traffic, UsageBin,
-        UsageSeriesV1,
+        UsageMonth, UsageSeriesV1, UsageV1,
     };
 
     let wire = mooring_agent_proto::UnixTime::from_secs;
     let user = UserId::parse(FIRST).unwrap();
     let lon = NodeId::parse("lon1").unwrap();
-    let mut usage = collected(sampled, &user, 70_000_000_000);
-    let mut history = usage.node(&lon).unwrap().clone();
-    let email = StatsEmail {
+    let mut usage = collected(sampled, &user, 0);
+    let email = |inbound| StatsEmail {
         principal: Principal::User(OpaqueUserId::new(user.as_str()).unwrap()),
-        inbound: Inbound::Reality,
+        inbound,
     };
+    let down = |bytes| Traffic {
+        uplink: 0,
+        downlink: bytes,
+    };
+    let mut history = NodeUsageHistory::default();
     let bin = UsageBin::new(
         wire(NOW - 1800),
-        BTreeMap::from([(
-            email,
-            Traffic {
-                uplink: 0,
-                downlink: 20_000_000_000,
-            },
-        )]),
+        BTreeMap::from([(email(Inbound::Hy2), down(20_000_000_000))]),
     )
     .unwrap();
     let range = SeriesRange::new(wire(NOW - 3600), wire(NOW), Resolution::FiveMin).unwrap();
     history
         .record_series(&lon, &UsageSeriesV1::new(range, vec![bin]).unwrap())
         .unwrap();
+    history
+        .record_month(
+            &lon,
+            UsageV1 {
+                month: UsageMonth::containing(wire(sampled)).unwrap(),
+                updated_at: wire(sampled),
+                traffic: BTreeMap::from([
+                    (email(Inbound::Reality), down(50_000_000_000)),
+                    (email(Inbound::Hy2), down(20_000_000_000)),
+                ]),
+            },
+            UnixTime::from_secs(sampled),
+        )
+        .unwrap();
     usage.set_node(lon, history);
     usage
+}
+
+/// The use the daemon learns from [`collected_with_detail`] of a refund an
+/// hour before [`NOW`], learned at `learned`: the 70 GB less the 20 GB of
+/// Hysteria2 counted since, with what `open` nodes had counted of the
+/// user's REALITY downlink (lon1 50 GB, ams1 none).
+fn learned_use(learned: u64, open: &[&str]) -> PackUse {
+    PackUse::Served {
+        bytes: 50_000_000_000,
+        learned_at: UnixTime::from_secs(learned),
+        open_downloads: open
+            .iter()
+            .map(|name| {
+                let counted = if *name == "lon1" { 50_000_000_000 } else { 0 };
+                (NodeId::parse(name).unwrap(), counted)
+            })
+            .collect(),
+    }
 }
 
 /// The log of a deployed daemon that pulled user [`FIRST`]'s traffic pack
 /// and its refund in full, recorded at `refunded_at`, over four ticks; and
 /// the quota the status then shows for the user.
 fn pack_refunded_on_the_daemon(harness: &mut Harness, refunded_at: u64) -> (String, QuotaState) {
-    harness.probes.borrow_mut().push_back(Ok(CARRIER));
     statuses(harness);
+    pack_refunded_with_statuses_scripted(harness, refunded_at)
+}
+
+/// [`pack_refunded_on_the_daemon`], with the nodes' `Status` answers
+/// scripted already.
+fn pack_refunded_with_statuses_scripted(
+    harness: &mut Harness,
+    refunded_at: u64,
+) -> (String, QuotaState) {
+    harness.probes.borrow_mut().push_back(Ok(CARRIER));
     connect(harness, 1, false, 1);
     let granted = pack(1, "aaaaaaaaaaaaaaaaaaaa", FIRST);
     harness.portal.ok(&page(
@@ -318,13 +359,17 @@ fn recorded(harness: &Harness) -> Option<PackUse> {
     ledger_on_disk(harness).unwrap().orders()[&OrderId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap()]
         .refunds[0]
         .pack_use
+        .clone()
 }
 
 /// With the usage it collected reaching the refund's time, an hour ago,
 /// the daemon records on its tick what the user had served this cycle by
-/// then (design §9.6): the 70 GB served by now less the 20 GB served since
-/// the refund. It logs the wait's end by the order. From then on the pack
-/// counts only what the user had used of it: none, at 50 GB of 100.
+/// then (design §9.6): the 70 GB served by now less the 20 GB of Hysteria2
+/// counted since the refund, with what each node had counted of the
+/// user's REALITY downlink. Both nodes' Xray has run since long before the
+/// refund, so either may still count a download that was open at it. It
+/// logs the wait's end by the order. From then on the pack counts only
+/// what the user had used of it: none, at 50 GB of 100.
 #[test]
 fn the_daemon_records_what_the_user_had_used_of_a_refunded_pack() {
     let mut harness = with_a_quota();
@@ -332,24 +377,54 @@ fn the_daemon_records_what_the_user_had_used_of_a_refunded_pack() {
     let (log, quota) = pack_refunded_on_the_daemon(&mut harness, NOW - 3600);
     assert_eq!(
         recorded(&harness),
-        Some(PackUse::Served {
-            bytes: 50_000_000_000,
-            learned_at: UnixTime::from_secs(NOW),
-        }),
+        Some(learned_use(NOW, &["ams1", "lon1"])),
         "{log}"
     );
     for line in [
         "mooringctl daemon: payment: order aaaaaaaaaaaaaaaaaaaa refunded 800 so far, in full; it waits for the usage: its pack counts in full",
-        "mooringctl daemon: payment: order aaaaaaaaaaaaaaaaaaaa's refund in full no longer waits for the usage; its pack counts from 2026-10-13 19:20:00 UTC on only what the user had used of it beyond the rest of their quota: 50000000000 bytes served this cycle by the refund's time",
+        "mooringctl daemon: payment: order aaaaaaaaaaaaaaaaaaaa's refund in full no longer waits for the usage; its pack counts from 2026-10-13 19:20:00 UTC on only what the user had used of it beyond the rest of their quota: 50000000000 bytes served this cycle by the refund's time; a REALITY download that was open then is counted only when it ends, so what ams1, lon1 count(s) of the user's REALITY downloads beyond that counts as used then too, until that node's Xray has started again or the billing cycle ends",
     ] {
         assert_eq!(log.matches(line).count(), 1, "{line}\n{log}");
     }
+    assert!(!log.contains("has started again since the refund"), "{log}");
     assert_eq!(
         quota,
         QuotaState::Within {
             used_bytes: 70_000_000_000,
             quota_bytes: WITHOUT_PACK
         },
+        "{log}"
+    );
+}
+
+/// A node's latest status shows when its Xray began. Here both nodes'
+/// Xray began ten minutes before [`NOW`], after the refund an hour ago:
+/// no connection that was open at the refund is left on either. On the
+/// tick that learns the use, the daemon reads that from the statuses it
+/// holds and from the usage it collected, sampled since: no download
+/// stays open, and the log says so by the order.
+#[test]
+fn the_daemon_ends_the_open_downloads_of_nodes_whose_xray_began_after_the_refund() {
+    let mut harness = with_a_quota();
+    with_usage(&harness, &collected_with_detail());
+    let Response::Status(mut status) = status_reply() else {
+        panic!("the golden is a status");
+    };
+    status.now = mooring_agent_proto::UnixTime::from_secs(NOW);
+    status.watch_at = mooring_agent_proto::UnixTime::from_secs(NOW - 2);
+    status.engines.xray.run = EngineRun::Active {
+        uptime_secs: 598,
+        go_heap_bytes: None,
+    };
+    statuses_as(&harness, &Response::Status(status));
+    let (log, _quota) = pack_refunded_with_statuses_scripted(&mut harness, NOW - 3600);
+    assert_eq!(recorded(&harness), Some(learned_use(NOW, &[])), "{log}");
+    let line = "mooringctl daemon: payment: order aaaaaaaaaaaaaaaaaaaa's refunded pack: Xray on ams1, lon1 has started again since the refund, so no download that was open at it is left there; the 0 bytes of REALITY downloads counted there since the use was learned are part of it for good, 50000000000 bytes now; no node may still count such a download";
+    assert_eq!(log.matches(line).count(), 1, "{line}\n{log}");
+    assert!(
+        log.lines()
+            .filter(|line| line.contains("refund"))
+            .all(|line| !line.contains(FIRST)),
         "{log}"
     );
 }
@@ -363,7 +438,7 @@ fn without_the_usage_the_daemon_leaves_the_refund_waiting() {
     let (log, quota) = pack_refunded_on_the_daemon(&mut harness, NOW);
     assert_eq!(recorded(&harness), Some(PackUse::Awaiting), "{log}");
     assert!(!log.contains("no longer waits for the usage"), "{log}");
-    assert!(!log.contains("cannot tell the use"), "{log}");
+    assert!(!log.contains("the usage collected cannot tell"), "{log}");
     assert_eq!(
         quota,
         QuotaState::UsageUnavailable {
@@ -383,7 +458,7 @@ fn the_daemon_logs_a_fault_of_the_usage_once_and_the_refund_waits() {
     let (log, _quota) = pack_refunded_on_the_daemon(&mut harness, NOW - 3600);
     assert_eq!(recorded(&harness), Some(PackUse::Awaiting), "{log}");
     assert_eq!(
-        log.matches("mooringctl daemon: payment ledger: the usage collected cannot tell the use at the refund(s) of traffic packs that wait for it (LedgerCorrupt); they wait on")
+        log.matches("mooringctl daemon: payment ledger: the usage collected cannot tell what the refund(s) in full of traffic packs wait for (LedgerCorrupt); they wait on")
             .count(),
         1,
         "{log}"
@@ -443,10 +518,7 @@ fn a_waiting_refund_is_settled_while_the_pull_waits_on_a_foreign_network() {
     );
     assert_eq!(
         recorded(&harness),
-        Some(PackUse::Served {
-            bytes: 50_000_000_000,
-            learned_at: UnixTime::from_secs(NOW),
-        }),
+        Some(learned_use(NOW, &["ams1", "lon1"])),
         "{log}"
     );
     assert_eq!(
@@ -485,10 +557,13 @@ fn the_settle_step_reads_the_clock_again() {
     with_usage(&harness, &collected_with_detail_at(began + 1));
     let (log, _quota) = pack_refunded_on_the_daemon(&mut harness, NOW - 3600);
     assert_eq!(refund_applied_at(&harness), began, "{log}");
-    let Some(PackUse::Served { bytes, learned_at }) = recorded(&harness) else {
+    let Some(PackUse::Served {
+        bytes, learned_at, ..
+    }) = recorded(&harness)
+    else {
         panic!("the refund still waits: {log}");
     };
     assert_eq!(bytes, 50_000_000_000, "{log}");
     assert!(learned_at.as_secs() > began, "{log}");
-    assert!(!log.contains("cannot tell the use"), "{log}");
+    assert!(!log.contains("the usage collected cannot tell"), "{log}");
 }
