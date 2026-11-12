@@ -352,6 +352,7 @@ fn variants() -> Variants {
             BaselineOrigin::NoRecord,
             BaselineOrigin::Recorded,
             BaselineOrigin::RecordUnreadable,
+            BaselineOrigin::Accepted,
         ],
         forecast_view: vec![
             ForecastView::Projected(forecast),
@@ -743,8 +744,9 @@ fn the_variants_fixture_lists_every_variant() {
             BaselineOrigin::NoRecord => 0,
             BaselineOrigin::Recorded => 1,
             BaselineOrigin::RecordUnreadable => 2,
+            BaselineOrigin::Accepted => 3,
         },
-        3,
+        4,
     );
     every_variant(
         "forecast_view",

@@ -15,14 +15,18 @@
 //! [`DaemonRequest::Subscribe`] with the latest and then each new one,
 //! until either side closes. [`DaemonRequest::Retry`] (`exit retry`, M5c)
 //! is queued for the daemon's next tick and answered
-//! [`DaemonReply::RetryQueued`]. A request the daemon will not serve is
-//! answered with [`DaemonReply::Refused`], after which it closes the
-//! connection.
+//! [`DaemonReply::RetryQueued`]. [`DaemonRequest::AcceptSimNetwork`] (`sim
+//! accept-network`, design §10.2) waits for the daemon's loop, which
+//! takes the network named as the SIM's network on record and answers
+//! [`DaemonReply::SimNetworkAccepted`], or refuses and changes nothing. A
+//! request the daemon will not serve is answered with
+//! [`DaemonReply::Refused`], after which it closes the connection.
 
 use serde::{Deserialize, Serialize};
 
 use crate::console::ConsoleStatus;
 use crate::error::ControlError;
+use crate::sim_network::{NotAccepted, SimNetwork};
 
 /// The daemon's runtime directory, in the support directory (design §5.1:
 /// the control socket, latches and engine pid files live there).
@@ -31,8 +35,10 @@ pub const RUN_DIRECTORY: &str = "run";
 /// The control socket's file name, in [`RUN_DIRECTORY`].
 pub const CONTROL_SOCKET_FILE: &str = "control.sock";
 
-/// The longest request line, its newline included. Every request is a few
-/// bytes; the bound only refuses a client that sends something else.
+/// The longest request line, its newline included. Every request is
+/// short, the longest one that names a network, 143 bytes with the longest
+/// name a SIM can carry (`the_longest_request_fits_a_request_line`); the
+/// bound only refuses a client that sends something else.
 pub const MAX_REQUEST_LINE_BYTES: usize = 256;
 
 /// The longest reply line, its newline included: 1 MiB, the bound of the
@@ -44,8 +50,9 @@ pub const MAX_REPLY_LINE_BYTES: usize = 1 << 20;
 /// on the first line of every connection. From the first release on, any
 /// change to a request, a reply or this line's own shape raises it:
 /// protocol 3 (2026-11-12) carries the status of version 3 in its `status`
-/// reply.
-pub const CONTROL_PROTOCOL: u32 = 3;
+/// reply, and protocol 4 (2026-11-12) the status of version 4, and adds
+/// the `accept_sim_network` request with its reply and its refusals.
+pub const CONTROL_PROTOCOL: u32 = 4;
 
 /// The first line of every connection: the protocol the daemon speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,8 +70,8 @@ impl ProtocolLine {
 }
 
 /// What the CLI asks the daemon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum DaemonRequest {
     /// The latest status, once.
     Status,
@@ -73,6 +80,14 @@ pub enum DaemonRequest {
     /// Clear the exit's latch and holds and run a fresh preflight
     /// (`exit retry`, design §10.2).
     Retry,
+    /// Take `network` as the SIM's network on record (`sim
+    /// accept-network`, design §10.2). It is the network the operator was
+    /// shown as the one the M7 reports: the daemon takes it only while its
+    /// record and its latest poll of the M7 still say so.
+    AcceptSimNetwork {
+        /// The network to take.
+        network: SimNetwork,
+    },
 }
 
 /// Why the daemon refused a request. It closes the connection after
@@ -89,8 +104,30 @@ pub enum Refusal {
     /// a `Status` request is refused for it; a subscription waits for the
     /// first status.
     NoStatusYet,
-    /// The request is about the exit, and there is no deployment yet.
+    /// The request needs a deployment, and there is none yet.
     NotDeployed,
+    /// `accept_sim_network`: the daemon's record holds no network other
+    /// than the one on record, so there is nothing to take.
+    NoOtherSimNetwork,
+    /// `accept_sim_network`: the daemon's latest poll of the M7 failed or
+    /// found no data session, so what the M7 reports now is not known.
+    M7NotAttached,
+    /// `accept_sim_network`: the M7 no longer reports the network the
+    /// request names.
+    SimNetworkReportChanged,
+    /// The daemon's loop did not come to the request in the time the
+    /// connection waits for it. Nothing was changed.
+    LoopBusy,
+}
+
+impl From<NotAccepted> for Refusal {
+    fn from(reason: NotAccepted) -> Self {
+        match reason {
+            NotAccepted::NoOtherNetwork => Self::NoOtherSimNetwork,
+            NotAccepted::NotAttached => Self::M7NotAttached,
+            NotAccepted::ReportChanged => Self::SimNetworkReportChanged,
+        }
+    }
 }
 
 /// One line the daemon sends.
@@ -106,6 +143,8 @@ pub enum DaemonReply {
     },
     /// The retry is queued: the daemon's next tick runs it.
     RetryQueued,
+    /// The network the request named is the SIM's network on record now.
+    SimNetworkAccepted,
 }
 
 /// `value` as one line: its compact JSON and a newline, refused when the

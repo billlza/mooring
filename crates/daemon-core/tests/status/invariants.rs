@@ -184,10 +184,10 @@ fn json(parts: MacStatusParts) -> serde_json::Value {
 }
 
 #[test]
-fn the_document_is_version_3_with_every_key_required_and_known() {
+fn the_document_is_version_4_with_every_key_required_and_known() {
     let document = json(serving());
-    assert_eq!(document["version"], 3);
-    for version in [0, 1, 2, 4, u32::MAX] {
+    assert_eq!(document["version"], 4);
+    for version in [0, 1, 2, 3, 5, u32::MAX] {
         let mut other = document.clone();
         other["version"] = version.into();
         let error = serde_json::from_value::<MacStatusV2>(other).unwrap_err();

@@ -3,8 +3,9 @@
 // The SIM screen (design §15.3): the billing cycle, the line's bytes
 // received and sent against the warning, the stop policy and the plan's
 // line, whether the meter is exact, the forecast with each threshold's
-// crossing, and the SIM and network on record against what the M7 reports
-// now, with a notice when they differ.
+// crossing, and the SIM and network on record (first reported by the M7,
+// or taken at the operator's word) against what the M7 reports now, with a
+// notice when they differ.
 
 import MooringKit
 import SwiftUI
@@ -25,7 +26,7 @@ struct SimView: View {
             Section {
                 if let baseline = sim.network.baseline {
                     LabeledContent("On record", value: baseline.network.text)
-                    LabeledContent("First reported", value: baseline.firstSeen.text)
+                    LabeledContent(sim.network.origin.timeLabel, value: baseline.firstSeen.text)
                     LabeledContent("Reported now") {
                         if let other = baseline.other {
                             Text(other.text)

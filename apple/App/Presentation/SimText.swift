@@ -136,11 +136,14 @@ extension SimNetworkChange {
     }
 
     /// What to do after a SIM change (`docs/runbooks/swap-day.md`, section
-    /// 2, steps 3 to 6), and what ends the notice.
+    /// 2, steps 3 to 6), the command that takes what the M7 reports as the
+    /// one on record when both records are right as they are, and what
+    /// ends the notice. The command runs in Terminal: the console has no
+    /// button for it.
     var remedy: String {
         String(
             localized:
-                "If the SIM was changed, both records are the old SIM's. Record them for the new one: `docs/runbooks/swap-day.md`, section 2, steps 3 to 6 (`mooringctl exit disable`, `exit observe`, `exit record-carrier --replace`, `sim set-anchor`, `node apply` for each node, `exit enable`). This notice ends once either is recorded with other values, or once the M7 reports \(recorded.text) again."
+                "If the SIM was changed, both records are the old SIM's. Record them for the new one: `docs/runbooks/swap-day.md`, section 2, steps 3 to 6 (`mooringctl exit disable`, `exit observe`, `exit record-carrier --replace`, `sim set-anchor`, `node apply` for each node, `exit enable`). If both records are right for the SIM now in the M7, `mooringctl sim accept-network` in Terminal takes \(reported.text) as the one on record and changes neither record. This notice ends once either is recorded with other values, once that command takes the network, or once the M7 reports \(recorded.text) again."
         )
     }
 }
@@ -164,6 +167,20 @@ extension BaselineOrigin {
                 localized:
                     "The daemon could not read its record of the SIM's network and began it again, so on record is what the M7 reported at the first poll after that, which may not be what it reported when the carrier check and the billing cycle were recorded: a SIM changed before that is not noticed. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike."
             )
+        case .accepted:
+            String(
+                localized:
+                    "On record is the network the M7 reported when `mooringctl sim accept-network` took it at the operator's word; the daemon compares every later poll with it. The carrier check and the billing cycle were not recorded again for it. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike."
+            )
+        }
+    }
+
+    /// What the baseline's time is the time of: the poll that first
+    /// reported it, or the operator's word that took it.
+    var timeLabel: String {
+        switch self {
+        case .noRecord, .recorded, .recordUnreadable: String(localized: "First reported")
+        case .accepted: String(localized: "Taken on record")
         }
     }
 }

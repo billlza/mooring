@@ -22,6 +22,7 @@ private enum Scenario: String, CaseIterable, Identifiable {
     case simChanged = "SIM changed"
     case networkChanged = "Network changed, same SIM name"
     case noNetworkOnRecord = "No network on record yet"
+    case networkTaken = "Network taken at the operator's word"
 
     var id: Self { self }
 
@@ -70,7 +71,9 @@ private enum Scenario: String, CaseIterable, Identifiable {
                 exit["foreign_networks"] = findings
             }
             object["exit"] = exit
-        } else if self == .simChanged || self == .networkChanged || self == .noNetworkOnRecord {
+        } else if self == .simChanged || self == .networkChanged || self == .noNetworkOnRecord
+            || self == .networkTaken
+        {
             guard var sim = object["sim"] as? [String: Any], var network = sim["network"] as? [String: Any],
                 let at = object["at"] as? UInt64
             else {
@@ -81,6 +84,15 @@ private enum Scenario: String, CaseIterable, Identifiable {
                 // M7 attached since.
                 network["origin"] = "record_unreadable"
                 network["baseline"] = NSNull()
+            } else if self == .networkTaken {
+                guard var baseline = network["baseline"] as? [String: Any] else {
+                    throw PreviewError.invalidFixture
+                }
+                // `mooringctl sim accept-network` took the fixture's network
+                // ten minutes before the status, and the M7 still reports it.
+                network["origin"] = "accepted"
+                baseline["first_seen"] = at - 600
+                network["baseline"] = baseline
             } else {
                 guard var baseline = network["baseline"] as? [String: Any] else {
                     throw PreviewError.invalidFixture

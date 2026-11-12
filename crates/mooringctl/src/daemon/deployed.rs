@@ -44,9 +44,9 @@ use mooring_model::{Deployment, ExitSite, NodeId};
 use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
 use super::{
-    Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending, poll_router_on,
-    publish, radio::RadioHistoryWriter, router_after_poll, say, sim_network::NetworkWatch,
-    unavailable_reason, wait_for_next_poll,
+    AcceptRequest, Asked, Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending,
+    poll_router_on, publish, radio::RadioHistoryWriter, router_after_poll, say,
+    sim_network::NetworkWatch, unavailable_reason, wait_for_next_poll,
 };
 use crate::app::Env;
 use crate::daemon::usage::{Pulled, RefundView};
@@ -584,6 +584,34 @@ impl<'e, 'a> Deployed<'e, 'a> {
         Ok(section.state)
     }
 
+    /// Answers each request to take a network as the SIM's network on
+    /// record (`sim accept-network`, design §10.2). It runs right after a
+    /// tick, when the record has been set against the latest poll of the
+    /// M7: the network is taken while the record and that poll say the M7
+    /// reports it, and the connection that asked is still waiting for the
+    /// answer. It changes the record of the SIM's network and nothing
+    /// else: no state, no latch, and nothing of the exit.
+    pub(crate) fn accept_networks(
+        &mut self,
+        log: &mut dyn Write,
+        asked: &mpsc::Receiver<AcceptRequest>,
+    ) -> Result<(), CommandError> {
+        for request in asked.try_iter() {
+            let now = (self.env.clock)()?;
+            let notes = self.sim_network.accept(
+                &request.network,
+                &self.router,
+                now,
+                Instant::now(),
+                |answer| request.answer.send(answer).is_ok(),
+            );
+            for note in notes {
+                say(log, now, &note)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Takes the power helper's events: the source, the assertions it
     /// holds, a sleep, which is drained at once, and a wake. When the
     /// helper has ended it is started again [`HELPER_RESTART_EVERY`] later.
@@ -1075,20 +1103,22 @@ pub(crate) fn poll_m7(
 
 /// Serves the opened exit until the acceptor ends or the daemon fails: a
 /// tick every `intervals.tick`, with a retry when the operator asked for
-/// one since the last.
+/// one since the last, and after each tick an answer to every request to
+/// take a network as the SIM's network on record.
 pub(crate) fn serve(
     exit: &mut Deployed<'_, '_>,
     log: &mut dyn Write,
     control: &Control,
     acceptor_ended: &mpsc::Receiver<()>,
-    retries: &mpsc::Receiver<()>,
+    asked: &Asked,
 ) -> Result<Stopped, CommandError> {
     control.deployed.store(true, Ordering::SeqCst);
     say(log, (exit.env.clock)()?, "serving the exit")?;
     loop {
         let next = Instant::now() + exit.intervals.tick;
-        let retry = retries.try_iter().count() > 0;
+        let retry = asked.retries.try_iter().count() > 0;
         exit.tick(control, log, retry)?;
+        exit.accept_networks(log, &asked.acceptances)?;
         if wait_for_next_poll(next, acceptor_ended) == Waited::AcceptorEnded {
             return Ok(Stopped::AcceptorEnded);
         }

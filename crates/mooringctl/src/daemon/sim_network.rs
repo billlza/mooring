@@ -8,7 +8,8 @@
 //! console shows as a notice when the M7 reports another network than the
 //! baseline's. The record is written to `run/sim-network.json` whenever it
 //! changes, so that a restart keeps the baseline and the time another
-//! network was first seen.
+//! network was first seen. At the operator's word (`sim accept-network`)
+//! the network the M7 reports becomes the baseline ([`NetworkWatch::accept`]).
 //!
 //! A record that cannot be read at the start is said and begun again, and
 //! the status says so for as long as that record lasts
@@ -23,10 +24,10 @@ use std::time::{Duration, Instant};
 
 use mooring_daemon_core::router::RouterReading;
 use mooring_daemon_core::sim_network::{
-    BaselineOrigin, MAX_SIM_NETWORK_BYTES, RecordedUnder, SimNetwork, SimNetworkRecord,
-    SimNetworkStatus,
+    BaselineOrigin, MAX_SIM_NETWORK_BYTES, NotAccepted, RecordedUnder, SimNetwork,
+    SimNetworkRecord, SimNetworkStatus,
 };
-use mooring_model::ExitSite;
+use mooring_model::{ExitSite, UnixTime};
 use mooring_store::{read_sim_network, write_sim_network};
 
 /// How long after a failed write the record is written again.
@@ -108,29 +109,71 @@ impl NetworkWatch {
         polled: Option<&RouterReading>,
         now: Instant,
     ) -> Vec<String> {
-        let poll = polled.and_then(|reading| match reading {
-            RouterReading::Available { polled_at, status } => {
-                SimNetwork::of(status).map(|network| (network, *polled_at))
-            }
-            RouterReading::Unavailable { .. } => None,
-        });
+        let poll = polled.and_then(SimNetwork::polled);
         let next = self.record.observed(
             &RecordedUnder::of(exit),
             poll.as_ref().map(|(network, at)| (network, *at)),
         );
         let mut notes = Vec::new();
         if next != self.record {
-            notes.extend(said(&self.record, &next));
-            self.record = next;
-            self.file = FileState::Stale;
+            notes.extend(self.replace(next));
         }
+        notes.extend(self.write_when_due(now));
+        notes
+    }
+
+    /// The operator's word that `shown` is the SIM's network on record
+    /// (`sim accept-network`), at `at` by the Mac's clock, decided
+    /// against the record and `latest`, the daemon's latest poll of the
+    /// M7 (`SimNetworkRecord::accepted`). `answer` hands the outcome to
+    /// whoever asked and says whether they got it. The network is taken
+    /// only when it was accepted and they did, so that no one who was
+    /// told nothing, or told something else, finds it taken. The record
+    /// is then written as [`Self::track`] writes it. Returns what to say.
+    pub(crate) fn accept(
+        &mut self,
+        shown: &SimNetwork,
+        latest: &RouterReading,
+        at: UnixTime,
+        now: Instant,
+        answer: impl FnOnce(Result<(), NotAccepted>) -> bool,
+    ) -> Vec<String> {
+        let reported = SimNetwork::polled(latest);
+        let decided =
+            self.record
+                .accepted(shown, reported.as_ref().map(|(network, _)| network), at);
+        let told = answer(decided.as_ref().map(|_| ()).map_err(|reason| *reason));
+        let Ok(next) = decided else {
+            return Vec::new();
+        };
+        if !told {
+            return Vec::new();
+        }
+        let mut notes: Vec<String> = self.replace(next).into_iter().collect();
+        notes.extend(self.write_when_due(now));
+        notes
+    }
+
+    /// Makes `next` the record, which the file then does not hold, and
+    /// returns the log's line for the change.
+    fn replace(&mut self, next: SimNetworkRecord) -> Option<String> {
+        let note = said(&self.record, &next);
+        self.record = next;
+        self.file = FileState::Stale;
+        note
+    }
+
+    /// Writes the record when the file does not hold it and a write is
+    /// due at `now`: at once after a change, and [`WRITE_RETRY`] after a
+    /// write that failed. Returns what to say of a write that fails.
+    fn write_when_due(&mut self, now: Instant) -> Option<String> {
         let due = match self.file {
             FileState::Current => false,
             FileState::Stale => true,
             FileState::RetryAt(at) => now >= at,
         };
         if !due {
-            return notes;
+            return None;
         }
         let written = self
             .record
@@ -140,16 +183,18 @@ impl NetworkWatch {
                 write_sim_network(&self.run_dir, &bytes).map_err(|error| error.to_string())
             });
         match written {
-            Ok(()) => self.file = FileState::Current,
+            Ok(()) => {
+                self.file = FileState::Current;
+                None
+            }
             Err(error) => {
                 self.file = FileState::RetryAt(now + WRITE_RETRY);
-                notes.push(format!(
+                Some(format!(
                     "sim network: the record could not be written ({error}); the status shows it, and it is written again in {} s",
                     WRITE_RETRY.as_secs()
-                ));
+                ))
             }
         }
-        notes
     }
 
     /// What the status says of the SIM's network.
@@ -190,6 +235,14 @@ pub(crate) fn said(before: &SimNetworkRecord, after: &SimNetworkRecord) -> Optio
         });
     };
     let first = shown(taken.network());
+    if held.network() != taken.network() {
+        // Under the same records only the operator's word gives another
+        // baseline.
+        return Some(format!(
+            "sim network: {first} is taken as the one on record at the operator's word (`sim accept-network`), in place of {}; the carrier check and the billing cycle stay as they are",
+            shown(held.network())
+        ));
+    }
     match (held.other(), taken.other()) {
         (None, Some(other)) => Some(format!(
             "sim network: the M7 reports {}, where it reported {first} under the recorded carrier check and billing cycle; if the SIM was changed, record both again (swap-day.md, section 2, steps 3 to 6)",

@@ -195,7 +195,8 @@
   "baseline_origin": [
     "no_record",
     "recorded",
-    "record_unreadable"
+    "record_unreadable",
+    "accepted"
   ],
   "forecast_view": [
     {

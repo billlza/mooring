@@ -159,12 +159,13 @@ import Testing
     }
 
     /// Another version is refused as such, the one before `sim.network`
-    /// (version 2, read until 2026-11-12) included: a daemon of that build
-    /// is told apart from a document that cannot be read.
-    @Test(arguments: [2, 4] as [UInt32])
+    /// (version 2) and the one before its origin `accepted` (version 3)
+    /// included, both read until 2026-11-12: a daemon of either build is
+    /// told apart from a document that cannot be read.
+    @Test(arguments: [2, 3, 5] as [UInt32])
     func anotherVersionIsRefusedAsSuch(_ version: UInt32) throws {
         let line = String(decoding: try scenario("serving"), as: UTF8.self)
-        let other = line.replacingOccurrences(of: "\"version\": 3", with: "\"version\": \(version)")
+        let other = line.replacingOccurrences(of: "\"version\": 4", with: "\"version\": \(version)")
         #expect(other != line)
         #expect(throws: ConsoleDecodingError.unsupportedVersion(version)) {
             try decode(Data(other.utf8))

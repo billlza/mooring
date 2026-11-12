@@ -42,6 +42,7 @@ use mooring_daemon_core::control::{
     CONTROL_SOCKET_FILE, DaemonReply, MAX_REPLY_LINE_BYTES, RUN_DIRECTORY, encode_line,
 };
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
+use mooring_daemon_core::sim_network::{NotAccepted, SimNetwork};
 use mooring_model::iface::BsdName;
 use mooring_model::time::UnixTime;
 use mooring_store::{STATE_FILE, write_status_snapshot};
@@ -238,17 +239,65 @@ pub(crate) fn deployment_exists(support_dir: &Path) -> Result<bool, LocalError> 
     }
 }
 
+/// A request to take a network as the SIM's network on record (`sim
+/// accept-network`, design §10.2), from a connection to the daemon's loop.
+#[derive(Debug)]
+pub(crate) struct AcceptRequest {
+    /// The network the operator was shown and named.
+    pub(crate) network: SimNetwork,
+    /// Where the loop's answer goes. It holds nothing: the loop's send
+    /// succeeds only into the hands of a connection still waiting, so the
+    /// loop knows whether its answer was heard.
+    pub(crate) answer: mpsc::SyncSender<Result<(), NotAccepted>>,
+}
+
 /// What the control socket's connections share with the daemon's loop:
-/// the latest status, the retries asked for, and whether a deployment is
-/// served (a retry is refused without one).
+/// the latest status, what they ask of the loop, and whether a deployment
+/// is served (a request about one is refused without it).
 #[derive(Debug)]
 pub(crate) struct Control {
     /// The latest status.
     pub(crate) hub: Hub,
     /// `exit retry`s, for the loop's next tick.
     pub(crate) retry: mpsc::Sender<()>,
+    /// `sim accept-network`s, which the loop answers after its next tick.
+    /// It holds at most [`MAX_CLIENTS`] requests, as many as the
+    /// connections that can wait at once. The loop takes every request
+    /// each tick, so it fills only while the loop is held up and askers
+    /// come and go; a request that finds it full is refused as `LoopBusy`.
+    pub(crate) accept: mpsc::SyncSender<AcceptRequest>,
     /// Whether the loop serves a deployment.
     pub(crate) deployed: AtomicBool,
+}
+
+/// The loop's ends of what the connections ask of it.
+#[derive(Debug)]
+pub(crate) struct Asked {
+    /// The retries asked for.
+    pub(crate) retries: mpsc::Receiver<()>,
+    /// The networks to take as the SIM's network on record.
+    pub(crate) acceptances: mpsc::Receiver<AcceptRequest>,
+}
+
+impl Control {
+    /// What a daemon's connections and its loop share before a deployment
+    /// is served, and the loop's ends of it.
+    pub(crate) fn new() -> (Self, Asked) {
+        let (retry, retries) = mpsc::channel();
+        let (accept, acceptances) = mpsc::sync_channel(MAX_CLIENTS);
+        (
+            Self {
+                hub: Hub::default(),
+                retry,
+                accept,
+                deployed: AtomicBool::new(false),
+            },
+            Asked {
+                retries,
+                acceptances,
+            },
+        )
+    }
 }
 
 /// What the poll loop carries from one poll to the next.
@@ -449,12 +498,8 @@ pub(crate) fn wait_for_next_poll(until: Instant, acceptor_ended: &mpsc::Receiver
 pub(crate) fn run(env: &mut Env<'_>, log: &mut dyn Write) -> Result<(), CommandError> {
     let support_dir = crate::app::support_dir(env)?;
     let started = start(&support_dir)?;
-    let (retry, retries) = mpsc::channel();
-    let control = Arc::new(Control {
-        hub: Hub::default(),
-        retry,
-        deployed: AtomicBool::new(false),
-    });
+    let (control, asked) = Control::new();
+    let control = Arc::new(control);
     let (acceptor, acceptor_ended) = spawn_acceptor(started.listener, &control)?;
     let ended = serve_until_stopped(
         env,
@@ -462,7 +507,7 @@ pub(crate) fn run(env: &mut Env<'_>, log: &mut dyn Write) -> Result<(), CommandE
         &support_dir,
         &control,
         &acceptor_ended,
-        &retries,
+        &asked,
         Intervals::DAEMON,
     )?;
     match ended {
@@ -479,7 +524,7 @@ pub(crate) fn serve_until_stopped(
     support_dir: &Path,
     control: &Control,
     acceptor_ended: &mpsc::Receiver<()>,
-    retries: &mpsc::Receiver<()>,
+    asked: &Asked,
     intervals: Intervals,
 ) -> Result<deployed::Stopped, CommandError> {
     let begun = (env.clock)()?;
@@ -508,7 +553,7 @@ pub(crate) fn serve_until_stopped(
     }
     let env: &Env<'_> = env;
     let mut exit = deployed::Deployed::open(env, support_dir, log, state, intervals)?;
-    deployed::serve(&mut exit, log, control, acceptor_ended, retries)
+    deployed::serve(&mut exit, log, control, acceptor_ended, asked)
 }
 
 /// Starts the acceptor, which says on the returned channel when it ends.
