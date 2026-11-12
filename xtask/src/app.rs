@@ -8,8 +8,9 @@
 //! errors) and requires Xcode's own result bundle to report no error and no
 //! warning, then copies the app with the signed `mooringctl` inside it
 //! (`Contents/MacOS/mooringctl`, the same bytes, so one keychain approval
-//! covers both copies), checks that the daemon's plist sits in
-//! `Contents/Library/LaunchAgents` as `apple/App/LaunchAgents` has it,
+//! covers both copies), checks that the daemon's and the apply job's
+//! plists sit in `Contents/Library/LaunchAgents` as
+//! `apple/App/LaunchAgents` has them,
 //! signs the power helper Xcode built beside it (`mooring-power`, as
 //! `com.bill.mooring.power`), signs the bundle ad hoc, and checks the three
 //! signatures.
@@ -62,6 +63,11 @@ pub(crate) const POWER_IDENTIFIER: &str = "com.bill.mooring.power";
 
 /// The daemon's launchd label (design §5.1: `com.bill.mooring.daemon.plist`).
 pub(crate) const AGENT_LABEL: &str = "com.bill.mooring.daemon";
+
+/// The nightly apply job's launchd label (design §13.6:
+/// `com.bill.mooring.apply.plist`), which the app registers beside the
+/// daemon's.
+pub(crate) const APPLY_JOB_LABEL: &str = "com.bill.mooring.apply";
 
 /// The app's own executable, `Contents/MacOS/Mooring` (`apple/project.yml`).
 pub(crate) const APP_EXECUTABLE: &str = "Mooring";
@@ -222,7 +228,7 @@ pub(crate) enum AppError {
         source: io::Error,
     },
     #[error(
-        "the built app's {} is not the daemon's plist {}",
+        "the built app's {} is not the repository's plist {}",
         embedded.display(),
         source_plist.display()
     )]
@@ -399,6 +405,11 @@ pub(crate) struct AppPaths {
     pub(crate) agent_plist_source: PathBuf,
     /// The daemon's plist in the built app, which `SMAppService` registers.
     pub(crate) agent_plist: PathBuf,
+    /// The apply job's plist in the repository.
+    pub(crate) apply_plist_source: PathBuf,
+    /// The apply job's plist in the built app, which `SMAppService`
+    /// registers beside the daemon's.
+    pub(crate) apply_plist: PathBuf,
 }
 
 impl AppPaths {
@@ -434,6 +445,15 @@ impl AppPaths {
                 .join("Library")
                 .join("LaunchAgents")
                 .join(format!("{AGENT_LABEL}.plist")),
+            apply_plist_source: apple
+                .join("App")
+                .join("LaunchAgents")
+                .join(format!("{APPLY_JOB_LABEL}.plist")),
+            apply_plist: app
+                .join("Contents")
+                .join("Library")
+                .join("LaunchAgents")
+                .join(format!("{APPLY_JOB_LABEL}.plist")),
             app,
             signed: signed_copy(target),
         }
@@ -844,21 +864,25 @@ pub(crate) fn check_signatures(
     Ok(())
 }
 
-/// Checks that the built app carries the daemon's plist exactly as the
-/// repository has it: Xcode's copy phase copies it unprocessed
-/// (`apple/project.yml`), and `SMAppService` registers this file.
+/// Checks that the built app carries the daemon's and the apply job's
+/// plists exactly as the repository has them: Xcode's copy phase copies
+/// them unprocessed (`apple/project.yml`), and `SMAppService` registers
+/// these files.
 fn check_agent_plist(paths: &AppPaths) -> Result<(), AppError> {
-    let source = fs::read(&paths.agent_plist_source)
-        .map_err(file_error("read", &paths.agent_plist_source))?;
-    let embedded = fs::read(&paths.agent_plist).map_err(file_error("read", &paths.agent_plist))?;
-    if embedded == source {
-        Ok(())
-    } else {
-        Err(AppError::AgentPlistMismatch {
-            embedded: paths.agent_plist.clone(),
-            source_plist: paths.agent_plist_source.clone(),
-        })
+    for (source_path, embedded_path) in [
+        (&paths.agent_plist_source, &paths.agent_plist),
+        (&paths.apply_plist_source, &paths.apply_plist),
+    ] {
+        let source = fs::read(source_path).map_err(file_error("read", source_path))?;
+        let embedded = fs::read(embedded_path).map_err(file_error("read", embedded_path))?;
+        if embedded != source {
+            return Err(AppError::AgentPlistMismatch {
+                embedded: embedded_path.clone(),
+                source_plist: source_path.clone(),
+            });
+        }
     }
+    Ok(())
 }
 
 /// Checks that the built app's Simplified Chinese `InfoPlist.strings`,
@@ -1093,10 +1117,11 @@ mod tests {
         (root.clone(), AppPaths::new(&root, &target))
     }
 
-    /// The daemon's plist in the scratch repository.
+    /// The daemon's and the apply job's plists in the scratch repository.
     fn agent_plist(paths: &AppPaths) {
         fs::create_dir_all(paths.agent_plist_source.parent().unwrap()).unwrap();
         fs::write(&paths.agent_plist_source, b"the daemon's plist").unwrap();
+        fs::write(&paths.apply_plist_source, b"the apply job's plist").unwrap();
     }
 
     /// A one-string catalog and the extracted strings it matches.
@@ -1456,10 +1481,16 @@ mod tests {
                 .iter()
                 .all(|(line, _)| !line.contains("codesign"))
         );
-        // The same bytes pass; any other bytes are refused.
+        // The same bytes pass; any other bytes are refused, the apply job's
+        // as the daemon's, and a missing apply job's plist too.
         agent_plist(&paths);
         fs::create_dir_all(paths.agent_plist.parent().unwrap()).unwrap();
         fs::write(&paths.agent_plist, b"the daemon's plist").unwrap();
+        assert!(matches!(
+            super::check_agent_plist(&paths),
+            Err(AppError::File { .. })
+        ));
+        fs::write(&paths.apply_plist, b"the apply job's plist").unwrap();
         super::check_agent_plist(&paths).unwrap();
         fs::write(&paths.agent_plist, b"<binary plist>").unwrap();
         let error = super::check_agent_plist(&paths).unwrap_err();
@@ -1469,6 +1500,44 @@ mod tests {
             "{error:?}"
         );
         assert!(error.to_string().starts_with("the built app's "), "{error}");
+        fs::write(&paths.agent_plist, b"the daemon's plist").unwrap();
+        fs::write(&paths.apply_plist, b"<binary plist>").unwrap();
+        let error = super::check_agent_plist(&paths).unwrap_err();
+        assert!(
+            matches!(&error, AppError::AgentPlistMismatch { embedded, source_plist }
+                if *embedded == paths.apply_plist && *source_plist == paths.apply_plist_source),
+            "{error:?}"
+        );
+    }
+
+    /// The repository's apply job plist runs the `mooringctl` inside the
+    /// app as `mooringctl apply --pending`, every hour at minute 20 and not
+    /// at load, and names no log (design §13.6).
+    #[test]
+    fn the_repositorys_apply_plist_runs_the_bundled_job_hourly() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let paths = AppPaths::new(root, &root.join("target"));
+        let plist = fs::read_to_string(&paths.apply_plist_source).unwrap();
+        for part in [
+            "<key>Label</key>\n\t<string>com.bill.mooring.apply</string>",
+            "<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>com.bill.mooring</string>\n\t</array>",
+            "<key>BundleProgram</key>\n\t<string>Contents/MacOS/mooringctl</string>",
+            "<key>ProgramArguments</key>\n\t<array>\n\t\t<string>mooringctl</string>\n\t\t<string>apply</string>\n\t\t<string>--pending</string>\n\t</array>",
+            "<key>StartCalendarInterval</key>\n\t<dict>\n\t\t<key>Minute</key>\n\t\t<integer>20</integer>\n\t</dict>",
+            "<key>ProcessType</key>\n\t<string>Standard</string>",
+        ] {
+            assert!(plist.contains(part), "{part}\n{plist}");
+        }
+        for absent in [
+            "RunAtLoad",
+            "KeepAlive",
+            "<key>Hour</key>",
+            "StandardErrorPath",
+            "StandardOutPath",
+            "/Users/",
+        ] {
+            assert!(!plist.contains(absent), "{absent}");
+        }
     }
 
     /// The repository's daemon plist runs the `mooringctl` inside the app
