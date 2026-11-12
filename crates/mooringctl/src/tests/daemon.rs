@@ -1211,16 +1211,40 @@ fn clients_beyond_the_limit_are_told_busy() {
 
 /// A fake daemon on the harness's control socket that answers one
 /// connection as the daemon does, with the protocol line and then
-/// `replies`, then closes it, and returns the request it read.
+/// `replies`, then closes it, and returns the request it read. Its client
+/// reads every line: one that cannot be written fails the test.
 pub(crate) fn fake_daemon(harness: &Harness, replies: Vec<Vec<u8>>) -> Running<Vec<u8>> {
     let mut lines = vec![protocol_line()];
     lines.extend(replies);
-    raw_daemon(harness, lines)
+    stand_in(harness, move |client| {
+        for line in lines {
+            client.write_all(&line).unwrap();
+        }
+    })
 }
 
 /// [`fake_daemon`] with exactly `lines`, and no protocol line unless one of
-/// them is.
-pub(crate) fn raw_daemon(harness: &Harness, lines: Vec<Vec<u8>>) -> Running<Vec<u8>> {
+/// them is: a daemon the client is to refuse. The client closes as soon as
+/// it has refused a line, without waiting for the next, so this daemon's
+/// writing ends once the client has gone ([`client_left`]); the real
+/// daemon ends the connection there too.
+fn refused_daemon(harness: &Harness, lines: Vec<Vec<u8>>) -> Running<Vec<u8>> {
+    stand_in(harness, move |client| {
+        for line in lines {
+            if client_left(client.write_all(&line)).unwrap() {
+                break;
+            }
+        }
+    })
+}
+
+/// A stand-in for the daemon on the harness's control socket: it accepts
+/// one connection, reads the request, lets `answer` write to the client,
+/// closes the connection, and returns the request.
+fn stand_in(
+    harness: &Harness,
+    answer: impl FnOnce(&mut UnixStream) + Send + 'static,
+) -> Running<Vec<u8>> {
     let paths = RunPaths::under(&harness.support_dir());
     fs::create_dir_all(&paths.dir).unwrap();
     let listener = UnixListener::bind(&paths.socket).unwrap();
@@ -1230,11 +1254,34 @@ pub(crate) fn raw_daemon(harness: &Harness, lines: Vec<Vec<u8>>) -> Running<Vec<
         let mut request = Vec::new();
         reader.read_until(b'\n', &mut request).unwrap();
         let mut stream = stream;
-        for line in lines {
-            stream.write_all(&line).unwrap();
-        }
+        answer(&mut stream);
         request
     })
+}
+
+/// Whether a write to a stand-in daemon's client found the client gone.
+/// It did when it failed with a broken pipe; with "not connected", which
+/// this Mac gives instead when the client's close lands while the write is
+/// under way (measured on 2026-11-12: 22 of 3000 writes longer than the
+/// socket holds); or with a reset, which the daemon reads as its client
+/// having left as it does a broken pipe (`End::ClientLeft`), though this
+/// Mac was not seen to give one. A write that succeeded did not, and any
+/// other failure is returned, for the test to fail on.
+fn client_left(written: std::io::Result<()>) -> std::io::Result<bool> {
+    use std::io::ErrorKind;
+
+    match written {
+        Ok(()) => Ok(false),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::BrokenPipe | ErrorKind::NotConnected | ErrorKind::ConnectionReset
+            ) =>
+        {
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) fn available_line(at: u64) -> Vec<u8> {
@@ -1718,7 +1765,7 @@ fn a_daemon_of_no_or_another_protocol_is_refused_before_its_replies() {
         (vec![], "mooringctl: the daemon closed the status stream\n"),
     ] {
         for args in [&["status", "--json"][..], &["status", "--follow", "--json"]] {
-            let daemon = raw_daemon(&harness, lines.clone());
+            let daemon = refused_daemon(&harness, lines.clone());
             let outcome = harness.run(args);
             daemon.result();
             assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
@@ -1726,6 +1773,68 @@ fn a_daemon_of_no_or_another_protocol_is_refused_before_its_replies() {
             assert_eq!(outcome.stderr, stderr, "{args:?}");
             fs::remove_file(RunPaths::under(&harness.support_dir()).socket).unwrap();
         }
+    }
+}
+
+/// The race of the test above, made certain. A client that refuses the
+/// daemon's first line closes without waiting for what follows, which the
+/// daemon may not have written yet. Here more follows than a socket holds,
+/// so the client has gone before the daemon has written it all: the
+/// stand-in's writing ends there and it still returns the request, and the
+/// client's answer is the refusal alone. On 2026-11-12 the stand-in failed
+/// the test above on such a write, once, on a loaded machine. The write
+/// fails with a broken pipe, or about once in a hundred runs with "not
+/// connected".
+#[test]
+fn a_refused_daemon_still_writing_when_its_client_has_gone_ends_there() {
+    let mut harness = harness();
+    // More than a socket and its peer hold between them.
+    let flood = vec![b'x'; 4 << 20];
+    let daemon = refused_daemon(
+        &harness,
+        vec![
+            b"{\"control_protocol\":1}\n".to_vec(),
+            available_line(NOW),
+            flood,
+        ],
+    );
+    let outcome = harness.run(&["status", "--json"]);
+    assert_eq!(daemon.result(), b"\"status\"\n");
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stdout, "");
+    assert!(
+        outcome.stderr.starts_with(
+            "mooringctl: the daemon speaks control protocol 1 and this mooringctl speaks "
+        ),
+        "{}",
+        outcome.stderr
+    );
+}
+
+/// A client that has closed the connection is gone, by each of the three
+/// errors a write then fails with, and a line written whole found it
+/// there. No other failure is read as a client gone: it stays an error.
+#[test]
+fn only_a_closed_connection_is_a_client_gone() {
+    use std::io::ErrorKind;
+
+    assert!(!client_left(Ok(())).unwrap());
+    for gone in [
+        ErrorKind::BrokenPipe,
+        ErrorKind::NotConnected,
+        ErrorKind::ConnectionReset,
+    ] {
+        assert!(client_left(Err(gone.into())).unwrap(), "{gone:?}");
+    }
+    for other in [
+        ErrorKind::TimedOut,
+        ErrorKind::WouldBlock,
+        ErrorKind::WriteZero,
+        ErrorKind::ConnectionAborted,
+        ErrorKind::PermissionDenied,
+    ] {
+        let error = client_left(Err(other.into())).unwrap_err();
+        assert_eq!(error.kind(), other);
     }
 }
 
