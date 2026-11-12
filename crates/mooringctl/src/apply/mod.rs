@@ -114,6 +114,10 @@ pub(crate) fn apply(
         ROTATE_AT_BYTES,
         redirect,
     )?;
+    let restored: Vec<String> = log.restored().iter().map(|mode| mode.line()).collect();
+    for line in restored {
+        say_as(&mut log, now, "apply", &line)?;
+    }
     say_as(&mut log, now, "apply", &format!("run ({})", when.flag()))?;
     let store = Store::new(&support);
     let deployment = load(&store)?.deployment;

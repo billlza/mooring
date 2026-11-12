@@ -601,6 +601,39 @@ fn a_node_behind_is_applied() {
     assert!(log(&harness).contains("mooringctl apply: lon1: applied\n"));
 }
 
+/// The job's log found readable by others is made private again when a
+/// run opens it, and the run's first line says so; the next run finds it
+/// private and says nothing of it.
+#[test]
+fn the_jobs_log_is_made_private_again() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut harness = job(unapplied(|_| {}));
+    let path = log_path(&harness);
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&path, "").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+        0o600
+    );
+    let first = log(&harness);
+    assert!(
+        first.starts_with(
+            "2026-10-13 19:20:00 UTC mooringctl apply: apply.log had mode 0644; set to 0600\n\
+             2026-10-13 19:20:00 UTC mooringctl apply: run (--now)\n"
+        ),
+        "{first}"
+    );
+    harness.run(&["apply", "--now"]);
+    let second = log(&harness);
+    assert_eq!(second.matches("had mode").count(), 1, "{second}");
+}
+
 /// While a run holds the job's lock, another does nothing and fails.
 #[test]
 fn two_runs_never_overlap() {
