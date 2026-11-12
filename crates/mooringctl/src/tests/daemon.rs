@@ -34,6 +34,7 @@ use mooring_store::{
     RADIO_DIRECTORY, ROUTER_PIN_FILE, STATE_FILE, STATUS_SNAPSHOT_FILE, append_radio_line,
     radio_day_path, read_radio_day,
 };
+use socket2::{Domain, SockAddr, Socket, Type};
 use tempfile::TempDir;
 
 use super::support::FakeParent;
@@ -89,6 +90,19 @@ impl<T: Send + 'static> Running<T> {
 fn bounded(stream: UnixStream) -> UnixStream {
     stream.set_read_timeout(Some(DEADLINE)).unwrap();
     stream
+}
+
+/// A client connected to the socket at `path` that fails a read after
+/// [`DEADLINE`]. The time limit is set before it connects, as `connect`
+/// sets its own: a busy daemon refuses and closes at once, and
+/// setsockopt(2) fails on macOS once the peer has closed (with the limit
+/// set after connecting, 7 of 20,000 connections to a busy daemon on this
+/// Mac, 2026-11-12).
+fn bounded_client(path: &Path) -> UnixStream {
+    let client = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+    client.set_read_timeout(Some(DEADLINE)).unwrap();
+    client.connect(&SockAddr::unix(path).unwrap()).unwrap();
+    UnixStream::from(client)
 }
 
 /// A temporary directory with a short path: `/tmp/.tmpXXXXXX`.
@@ -908,13 +922,16 @@ fn failures_map_to_panel_reasons() {
 /// Serves one connection on a socket pair whose client has already sent
 /// `request` (the pair buffers it, so a slow test thread cannot make it
 /// late): the client end, past the protocol line the connection begins
-/// with, and how the connection ended.
+/// with, and how the connection ended. The client's time limit is set
+/// before the connection is served: a request that is refused at once
+/// closes the daemon's end, and setsockopt(2) fails on macOS once the peer
+/// has closed.
 fn serve_pair(control: &Arc<Control>, request: &[u8]) -> (UnixStream, Running<End>) {
-    let (mut client, server) = UnixStream::pair().unwrap();
+    let (client, server) = UnixStream::pair().unwrap();
+    let mut client = bounded(client);
     client.write_all(request).unwrap();
     let control = Arc::clone(control);
     let served = Running::start(move || serve(server, &control, QUICK));
-    let mut client = bounded(client);
     read_protocol_line(&mut client);
     (client, served)
 }
@@ -1160,7 +1177,7 @@ fn clients_beyond_the_limit_are_told_busy() {
         let control = Arc::clone(&control);
         thread::spawn(move || accept(&listener, &control, QUICK, 1));
     }
-    let mut first = bounded(UnixStream::connect(&path).unwrap());
+    let mut first = bounded_client(&path);
     first.write_all(b"\"subscribe\"\n").unwrap();
     let mut first_reader = BufReader::new(first.try_clone().unwrap());
     let mut line = Vec::new();
@@ -1170,7 +1187,7 @@ fn clients_beyond_the_limit_are_told_busy() {
     first_reader.read_until(b'\n', &mut line).unwrap();
     assert_eq!(line, &*unavailable(1));
     // A busy daemon names its protocol too, then refuses.
-    let mut second = bounded(UnixStream::connect(&path).unwrap());
+    let mut second = bounded_client(&path);
     read_protocol_line(&mut second);
     let mut second_reader = BufReader::new(second);
     assert_eq!(
@@ -1192,7 +1209,7 @@ fn clients_beyond_the_limit_are_told_busy() {
     .unwrap();
     let started = std::time::Instant::now();
     loop {
-        let mut third = bounded(UnixStream::connect(&path).unwrap());
+        let mut third = bounded_client(&path);
         // A busy daemon may close before the request arrives.
         let _ = third.write_all(b"\"status\"\n");
         let mut all = Vec::new();
