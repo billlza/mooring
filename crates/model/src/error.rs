@@ -517,6 +517,13 @@ pub enum ModelError {
         /// The user.
         user: UserId,
     },
+    /// Only a revoked user is removed from the deployment
+    /// (`RevokedUserRemoved`, design §15.7).
+    #[error("user {user} is not revoked; only a revoked user is removed")]
+    UserNotRevoked {
+        /// The user.
+        user: UserId,
+    },
     /// The user is already pending revocation or revoked; revocation never
     /// goes back.
     #[error("user {user} is already pending revocation or revoked")]
@@ -753,6 +760,8 @@ kinds! {
         UserNotActive,
         /// See [`ModelError::UserNotSuspended`].
         UserNotSuspended,
+        /// See [`ModelError::UserNotRevoked`].
+        UserNotRevoked,
         /// See [`ModelError::RevocationAlreadyStarted`].
         RevocationAlreadyStarted,
         /// See [`ModelError::NoCredentialsOnNode`].
@@ -861,6 +870,7 @@ impl ModelError {
             Self::NotRevoking { .. } => ModelErrorKind::NotRevoking,
             Self::UserNotActive { .. } => ModelErrorKind::UserNotActive,
             Self::UserNotSuspended { .. } => ModelErrorKind::UserNotSuspended,
+            Self::UserNotRevoked { .. } => ModelErrorKind::UserNotRevoked,
             Self::RevocationAlreadyStarted { .. } => ModelErrorKind::RevocationAlreadyStarted,
             Self::NoCredentialsOnNode { .. } => ModelErrorKind::NoCredentialsOnNode,
             Self::AgreementRegressed { .. } => ModelErrorKind::AgreementRegressed,
@@ -883,6 +893,9 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use super::*;
+
+    /// The time the tests' revocations and records are made at.
+    const REVOKED_AT: UnixTime = UnixTime::from_secs(1_791_417_600);
     use crate::alerting::{AlertSettings, WallClockTime};
     use crate::cert::{CertificatePem, Hy2Sni};
     use crate::collections::NonEmpty;
@@ -949,7 +962,7 @@ mod tests {
             bill_day: BillDay::new(1).unwrap(),
         };
         let mut revoked = user(1, &[]);
-        revoked.status = UserStatus::Revoked;
+        revoked.status = UserStatus::Revoked { since: REVOKED_AT };
         let deployment = Deployment::try_from(two_node_parts()).unwrap();
         let site = testing::exit_site();
         let mut separate_site = site.clone();
@@ -1270,6 +1283,7 @@ mod tests {
                 record_error(Bookkeeping::RevocationCommitted {
                     user: user_id(1),
                     node: node_id("lon1"),
+                    at: REVOKED_AT,
                 }),
             ),
             (
@@ -1281,8 +1295,15 @@ mod tests {
             ),
             (K::UserNotSuspended, user(1, &[]).resume().unwrap_err()),
             (
+                K::UserNotRevoked,
+                record_error(Bookkeeping::RevokedUserRemoved {
+                    user: user_id(1),
+                    at: REVOKED_AT,
+                }),
+            ),
+            (
                 K::RevocationAlreadyStarted,
-                revoked.clone().revoke().unwrap_err(),
+                revoked.clone().revoke(REVOKED_AT).unwrap_err(),
             ),
             (
                 K::NoCredentialsOnNode,
@@ -1295,6 +1316,7 @@ mod tests {
                 .record(Bookkeeping::RevocationCommitted {
                     user: user_id(1),
                     node: node_id("par1"),
+                    at: REVOKED_AT,
                 })
                 .unwrap_err(),
             ),
@@ -1330,17 +1352,21 @@ mod tests {
                 K::NodeNotRetiring,
                 record_error(Bookkeeping::RetirementShutDown {
                     node: node_id("lon1"),
+                    at: REVOKED_AT,
                 }),
             ),
             (
                 K::NodeNotPlanned,
                 record_error(Bookkeeping::PlanCancelled {
                     node: node_id("lon1"),
+                    at: REVOKED_AT,
                 }),
             ),
             (
                 K::RevokedUserHoldsCredentials,
-                deployment_error(|parts| parts.users[0].status = UserStatus::Revoked),
+                deployment_error(|parts| {
+                    parts.users[0].status = UserStatus::Revoked { since: REVOKED_AT }
+                }),
             ),
             (
                 K::RevokePendingWithoutCredentials,

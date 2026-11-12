@@ -69,7 +69,7 @@ impl StatusV1 {
                 reason: ReasonV1::of(reason),
                 since,
             },
-            UserStatus::RevokePending | UserStatus::Revoked => Self::Revoked,
+            UserStatus::RevokePending | UserStatus::Revoked { .. } => Self::Revoked,
         }
     }
 }

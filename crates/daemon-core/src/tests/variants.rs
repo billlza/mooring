@@ -514,7 +514,9 @@ fn variants() -> Variants {
                 since: t(0),
             },
             UserStatus::RevokePending,
-            UserStatus::Revoked,
+            UserStatus::Revoked {
+                since: UnixTime::from_secs(1_791_417_600),
+            },
         ],
         suspend_reason: vec![
             SuspendReason::Operator,
@@ -1098,7 +1100,7 @@ fn the_variants_fixture_lists_every_variant() {
             UserStatus::Active => 0,
             UserStatus::Suspended { .. } => 1,
             UserStatus::RevokePending => 2,
-            UserStatus::Revoked => 3,
+            UserStatus::Revoked { .. } => 3,
         },
         4,
     );

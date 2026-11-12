@@ -15,8 +15,8 @@ use mooring_model::node::{AppliedConfig, LifecycleStage, NodeLifecycle};
 use mooring_model::user::{SuspendReason, UserStatus};
 
 use super::builders::{
-    added_refs, adopted_store, applied_record, entries_for, initialised, node_id, planned_node,
-    site, user, with_lifecycle, with_node, with_user,
+    RECORDED_AT, added_refs, adopted_store, applied_record, entries_for, initialised, node_id,
+    planned_node, site, user, with_lifecycle, with_node, with_user,
 };
 use super::{state_bytes, store_error};
 use crate::error::{ChangeError, ChangeErrorKind, StoreError, StoreErrorKind};
@@ -322,6 +322,7 @@ fn records_that_drop_secrets_take_the_ordered_path() {
     let commit = Bookkeeping::RevocationCommitted {
         user: applied.deployment.users().keys().next().unwrap().clone(),
         node: node_id("lon1"),
+        at: RECORDED_AT,
     };
     let error = store
         .record(revoking_generation, commit.clone())
@@ -345,7 +346,7 @@ fn records_that_drop_secrets_take_the_ordered_path() {
     );
     assert_eq!(
         revoked.deployment.users().values().next().unwrap().status,
-        UserStatus::Revoked
+        UserStatus::Revoked { since: RECORDED_AT }
     );
     for secret_ref in user_secrets {
         assert!(
@@ -601,8 +602,8 @@ fn set_status(
 /// A closure changes a user's status only along the user transitions
 /// (`User::suspend`, `resume`, `revoke`; design §7): a revocation in
 /// progress settles only through `Bookkeeping` and never goes back, a
-/// suspension is not re-labelled, and a user who still holds credentials
-/// leaves only through revocation. Setting the field directly cannot get
+/// suspension is not re-labelled, and no user leaves but by the record
+/// `RevokedUserRemoved` (§15.7). Setting the field directly cannot get
 /// round that, through either write, and a refused change writes nothing.
 #[test]
 fn a_closure_changes_a_status_only_along_the_user_transitions() {
@@ -688,23 +689,41 @@ fn a_closure_changes_a_status_only_along_the_user_transitions() {
     let commit = Bookkeeping::RevocationCommitted {
         user: user_id.clone(),
         node: node_id("lon1"),
+        at: RECORDED_AT,
     };
     let revoked = record_with_secrets(&store, &mut secrets, current, commit).unwrap();
     assert_eq!(
         revoked.deployment.users()[&user_id].status,
-        UserStatus::Revoked
+        UserStatus::Revoked { since: RECORDED_AT }
     );
     let on_disk = state_bytes(&store);
     for to in [UserStatus::Active, operator] {
         refused(
             store_error(store.update_config(current, set_status(to)).unwrap_err()),
-            UserStatus::Revoked,
+            UserStatus::Revoked { since: RECORDED_AT },
             Some(to),
         );
     }
+    // No closure removes a user, not even a revoked one: only the record
+    // does, keeping the generation.
+    refused(
+        store_error(store.update_config(current, remove).unwrap_err()),
+        UserStatus::Revoked { since: RECORDED_AT },
+        None,
+    );
     assert_eq!(state_bytes(&store), on_disk);
-    let removed = store.update_config(current, remove).unwrap();
+    let removed = store
+        .record(
+            current,
+            Bookkeeping::RevokedUserRemoved {
+                user: user_id.clone(),
+                at: RECORDED_AT,
+            },
+        )
+        .unwrap();
     assert!(removed.deployment.users().is_empty());
+    assert_eq!(removed.deployment.config_generation(), current);
+    assert!(removed.deployment.forgotten().contains_key(&user_id));
 }
 
 /// lon1 on its site at `stage`; an applied lon1 confirmed `generation`.
@@ -779,7 +798,10 @@ fn a_closure_moves_a_node_only_forward_along_its_lifecycle() {
                 &store,
                 &mut secrets,
                 at,
-                Bookkeeping::RetirementShutDown { node: lon1.clone() },
+                Bookkeeping::RetirementShutDown {
+                    node: lon1.clone(),
+                    at: RECORDED_AT,
+                },
             )
             .unwrap(),
         };
@@ -1042,4 +1064,82 @@ fn a_closure_moves_a_planned_node_only_to_adopted() {
             .stage(),
         LifecycleStage::Adopted
     );
+}
+
+/// The ids of removed users kept while a node may still name them change
+/// only by the records `RevokedUserRemoved` and `ForgottenExpired`: a
+/// closure that adds one, drops one or moves its expiry is
+/// `ForgottenEdited`, through either write, and writes nothing; one that
+/// leaves them is a change like any other.
+#[test]
+fn a_closure_never_edits_the_ids_of_removed_users() {
+    let (_dir, store, state) = initialised();
+    let mut revoked = user(1, &[]);
+    revoked.status = UserStatus::Revoked { since: RECORDED_AT };
+    let added = store
+        .update_config(state.deployment.config_generation(), |mut parts| {
+            parts.users.push(revoked.clone());
+            Ok::<_, Infallible>(parts)
+        })
+        .unwrap();
+    let current = added.deployment.config_generation();
+    let removed = store
+        .record(
+            current,
+            Bookkeeping::RevokedUserRemoved {
+                user: revoked.id.clone(),
+                at: RECORDED_AT,
+            },
+        )
+        .unwrap();
+    assert_eq!(removed.deployment.forgotten().len(), 1);
+    let on_disk = state_bytes(&store);
+    let edits: [fn(&mut DeploymentParts); 3] = [
+        |parts| parts.forgotten.clear(),
+        |parts| parts.forgotten[0].until = RECORDED_AT,
+        |parts| {
+            let mut other = parts.forgotten[0].clone();
+            other.user = mooring_model::ids::UserId::from_low_bits(9);
+            parts.forgotten.push(other);
+        },
+    ];
+    for edit in edits {
+        let error = store_error(
+            store
+                .update_config(current, |mut parts| {
+                    edit(&mut parts);
+                    Ok::<_, Infallible>(parts)
+                })
+                .unwrap_err(),
+        );
+        assert!(matches!(error, StoreError::ForgottenEdited), "{error:?}");
+        assert_eq!(error.kind(), StoreErrorKind::ForgottenEdited);
+        let error = store_error(
+            update_config_with_secrets(
+                &store,
+                &mut crate::secrets::InMemorySecretStore::new(),
+                current,
+                Vec::new(),
+                |mut parts| {
+                    edit(&mut parts);
+                    Ok::<_, Infallible>(parts)
+                },
+            )
+            .unwrap_err(),
+        );
+        assert!(matches!(error, StoreError::ForgottenEdited), "{error:?}");
+        assert_eq!(state_bytes(&store), on_disk);
+    }
+    let kept = store.update_config(current, Ok::<_, Infallible>).unwrap();
+    assert_eq!(kept.deployment.forgotten(), removed.deployment.forgotten());
+    // The record that expires them is the way they go.
+    let expired = store
+        .record(
+            kept.deployment.config_generation(),
+            Bookkeeping::ForgottenExpired {
+                at: mooring_model::time::UnixTime::from_secs(u64::from(u32::MAX)),
+            },
+        )
+        .unwrap();
+    assert!(expired.deployment.forgotten().is_empty());
 }

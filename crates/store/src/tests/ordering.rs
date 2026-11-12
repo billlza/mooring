@@ -14,10 +14,10 @@ use mooring_model::error::ModelError;
 use mooring_model::node::NodeLifecycle;
 use mooring_model::ports::ListenerIdx;
 use mooring_model::secret::{SecretEntry, SecretMaterial, SecretRef};
-use mooring_model::state::StateV2;
+use mooring_model::state::StateV3;
 
 use super::builders::{
-    added_refs, adopted, entries_for, initialised, node_id, planned_node, site, user,
+    RECORDED_AT, added_refs, adopted, entries_for, initialised, node_id, planned_node, site, user,
     with_lifecycle, with_node, with_user,
 };
 use super::{state_bytes, store_error};
@@ -69,7 +69,7 @@ impl Observer {
 
     fn observe(&mut self, op: SecretOp, secret_ref: &SecretRef) {
         let file = parse(&fs::read(&self.state_path).unwrap()).unwrap();
-        let referenced_on_disk = migrate(file)
+        let referenced_on_disk = migrate(file, RECORDED_AT)
             .unwrap()
             .deployment
             .required_secrets()
@@ -143,7 +143,7 @@ fn add_lon1(parts: DeploymentParts) -> Result<DeploymentParts, Infallible> {
 }
 
 /// An initialised store with the planned node lon1 and its secrets.
-fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV2) {
+fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV3) {
     let (dir, store, state) = initialised();
     let mut secrets = Observer::new(&store);
     let next = update_config_with_secrets(
@@ -160,7 +160,7 @@ fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV2) {
 
 /// Adopts lon1 at its site from `from`, then starts retiring it: the state
 /// a record of its shutdown starts from.
-fn retiring_lon1(store: &Store, secrets: &mut Observer, from: &StateV2) -> StateV2 {
+fn retiring_lon1(store: &Store, secrets: &mut Observer, from: &StateV3) -> StateV3 {
     let adopted_state = update_config_with_secrets(
         store,
         secrets,
@@ -183,7 +183,7 @@ fn retiring_lon1(store: &Store, secrets: &mut Observer, from: &StateV2) -> State
 }
 
 /// Every secret the state references is readable from `secrets`.
-fn assert_references_resolve(state: &StateV2, secrets: &impl SecretStore) {
+fn assert_references_resolve(state: &StateV3, secrets: &impl SecretStore) {
     for secret_ref in state.deployment.required_secrets() {
         let material = secrets.get(&secret_ref).unwrap();
         assert_eq!(material.kind(), secret_ref.kind());
@@ -508,6 +508,7 @@ fn a_records_failed_deletions_are_reported_after_the_commit() {
         retiring.deployment.config_generation(),
         Bookkeeping::RetirementShutDown {
             node: node_id("lon1"),
+            at: RECORDED_AT,
         },
     )
     .unwrap_err();
@@ -711,6 +712,7 @@ fn alert_channel_secrets_follow_their_node() {
         retiring.deployment.config_generation(),
         Bookkeeping::RetirementShutDown {
             node: node_id("lon1"),
+            at: RECORDED_AT,
         },
     )
     .unwrap();
@@ -736,7 +738,7 @@ fn alert_channel_secrets_follow_their_node() {
 
 /// Planned lon1 and ams1 with their secrets, and lon1's alert channels set
 /// up: the topic and lon1's checks written before the state names them.
-fn with_lon1_channels_and_planned_ams1() -> (tempfile::TempDir, Store, Observer, StateV2) {
+fn with_lon1_channels_and_planned_ams1() -> (tempfile::TempDir, Store, Observer, StateV3) {
     let (dir, store, mut secrets, state) = with_planned_lon1();
     let two = update_config_with_secrets(
         &store,
@@ -822,6 +824,7 @@ fn the_alert_topic_is_shared_and_outlives_one_channel_node() {
         retiring.deployment.config_generation(),
         Bookkeeping::RetirementShutDown {
             node: node_id("lon1"),
+            at: RECORDED_AT,
         },
     )
     .unwrap();
@@ -919,6 +922,7 @@ fn a_cancelled_plans_secrets_are_deleted_only_after_the_state_stops_referencing_
         state.deployment.config_generation(),
         Bookkeeping::PlanCancelled {
             node: node_id("lon1"),
+            at: RECORDED_AT,
         },
     )
     .unwrap();
@@ -955,6 +959,7 @@ fn a_refused_or_stale_cancel_writes_and_deletes_nothing() {
     let (_dir, store, mut secrets, state) = with_planned_lon1();
     let cancel = Bookkeeping::PlanCancelled {
         node: node_id("lon1"),
+        at: RECORDED_AT,
     };
     let generation = state.deployment.config_generation();
     let on_disk = state_bytes(&store);
@@ -987,6 +992,7 @@ fn a_refused_or_stale_cancel_writes_and_deletes_nothing() {
         (
             Bookkeeping::PlanCancelled {
                 node: node_id("par1"),
+                at: RECORDED_AT,
             },
             ModelError::UnknownNode {
                 id: node_id("par1"),
@@ -1018,6 +1024,7 @@ fn parts_read_before_a_cancel_cannot_bring_the_node_back() {
         generation,
         Bookkeeping::PlanCancelled {
             node: node_id("lon1"),
+            at: RECORDED_AT,
         },
     )
     .unwrap();
@@ -1066,6 +1073,7 @@ fn a_user_given_credentials_on_a_node_cancelled_since_is_refused_and_writes_noth
         generation,
         Bookkeeping::PlanCancelled {
             node: node_id("lon1"),
+            at: RECORDED_AT,
         },
     )
     .unwrap();

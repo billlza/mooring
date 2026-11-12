@@ -842,7 +842,7 @@ fn degraded() -> MacStatusV2 {
     let actions = evaluate(
         &deployment,
         &Entitlements::none(),
-        &report.cycle_usage().unwrap(),
+        Some(&report.cycle_usage()),
         now,
     )
     .unwrap();

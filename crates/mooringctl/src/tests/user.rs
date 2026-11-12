@@ -10,7 +10,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 
 use mooring_model::{
     AgreementRecord, AgreementVersion, CalendarDate, Deployment, DeploymentParts, RuntimeIntent,
-    StateV2, UnixTime, UserId, UserStatus,
+    StateV3, UnixTime, UserId, UserStatus,
 };
 use mooring_store::Store;
 
@@ -27,7 +27,7 @@ pub(crate) fn harness_with(deployment: Deployment) -> Harness {
         .mode(0o700)
         .create(&dir)
         .unwrap();
-    let state = StateV2 {
+    let state = StateV3 {
         deployment,
         runtime: RuntimeIntent::new(),
     };
@@ -145,7 +145,9 @@ fn agree_keeps_an_existing_record_of_the_current_revision() {
 fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_user() {
     let revoking = fixture(|parts| parts.users[0].status = UserStatus::RevokePending);
     let revoked = fixture(|parts| {
-        parts.users[0].status = UserStatus::Revoked;
+        parts.users[0].status = UserStatus::Revoked {
+            since: UnixTime::from_secs(NOW),
+        };
         parts.users[0].per_node.clear();
     });
     let current = AgreementVersion::CURRENT;

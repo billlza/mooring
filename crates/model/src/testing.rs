@@ -250,6 +250,7 @@ pub(crate) fn two_node_parts() -> DeploymentParts {
             user(1, &[("lon1", 1), ("ams1", 1)]),
             user(2, &[("lon1", 2), ("ams1", 2)]),
         ],
+        forgotten: Vec::new(),
         next_wg_index: WgIndex::new(3).unwrap(),
     }
 }

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Reading the usage the daemon collected, `usage/users.json`. The
-//! daemon's collector (`daemon::usage`) starts from it, and `portal export`
-//! and `user usage` read it in their own processes.
+//! daemon's collector (`daemon::usage`) starts from it, and `portal export`,
+//! `user usage` and the apply job read it in their own processes.
 
 use std::path::Path;
 
 use mooring_daemon_core::error::{UsageError, UsageErrorKind};
-use mooring_daemon_core::usage::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES};
+use mooring_daemon_core::usage::{CollectedUsage, MAX_COLLECTED_USAGE_BYTES, UsageReport};
+use mooring_model::{Deployment, UnixTime};
 use mooring_store::{StoreError, read_user_usage};
 
 /// Why `usage/users.json` could not be read.
@@ -67,4 +68,41 @@ pub(crate) fn read_collected_document(
 /// aggregates (a serving node then has no ledger, so the report is behind).
 pub(crate) fn read_collected(support: &Path) -> Result<CollectedUsage, CollectedReadError> {
     Ok(read_collected_document(support)?.unwrap_or_default())
+}
+
+/// What the daemon's collected usage gives at a time.
+#[derive(Debug)]
+pub(crate) enum Usage {
+    /// The usage report.
+    Report(UsageReport),
+    /// No report, because the collection is behind: the daemon has not
+    /// collected a serving node's usage yet (`MissingLedger`), or not within
+    /// the report's freshness bound (`NotCoveredThrough`), as when it is
+    /// stopped or a node cannot be reached.
+    Behind(UsageError),
+}
+
+/// The collected usage aggregated at `now`. A fault is never read as usage
+/// that is behind: that would replace every user's figures with "unknown"
+/// and hide it.
+pub(crate) fn usage(
+    support: &Path,
+    deployment: &Deployment,
+    now: UnixTime,
+) -> Result<Usage, UsageFault> {
+    match read_collected(support)
+        .map_err(UsageFault::Read)?
+        .aggregate(deployment, now)
+    {
+        Ok(report) => Ok(Usage::Report(report)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                UsageErrorKind::MissingLedger | UsageErrorKind::NotCoveredThrough
+            ) =>
+        {
+            Ok(Usage::Behind(error))
+        }
+        Err(error) => Err(UsageFault::Inconsistent(error)),
+    }
 }

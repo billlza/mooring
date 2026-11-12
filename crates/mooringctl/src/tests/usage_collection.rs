@@ -422,7 +422,9 @@ fn expired_user_counters_are_removed_from_replies_and_do_not_reappear() {
     let (mut harness, deployment, mut collector) = ready();
     let mut parts = deployment.into_parts();
     let user = parts.users[0].id.clone();
-    parts.users[0].status = UserStatus::Revoked;
+    parts.users[0].status = UserStatus::Revoked {
+        since: UnixTime::from_secs(NOW),
+    };
     parts.users[0].per_node.clear();
     let deployment = Deployment::try_from(parts).unwrap();
     let counters = BTreeMap::from([(

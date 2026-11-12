@@ -62,8 +62,7 @@
       what the order gave that is not used yet, its time and traffic, and
       nothing already used; a partial refund, such as one by an outage's
       time, changes nothing (the operator's decision of 2026-11-12, built
-      with the nightly apply job, not merged when these notes were
-      written).
+      with the nightly apply job: design §9.6).
     - The text names no price and makes no legal claim. Whether UK consumer
       law, including the rules on subscription contracts, adds to it is the
       operator's to check.
@@ -82,8 +81,7 @@
     suspension ends at the next billing cycle, or once a traffic pack
     covers what the user used over the quota in the current cycle, at the
     next run of the nightly apply job (03:20 Beijing time, inside clause
-    5's window of 3 to 6; design §13.6 on the branch lza/apply-job-5c1c13,
-    not merged when these notes were written). The job resumes no one
+    5's window of 3 to 6; design §13.6). The job resumes no one
     while the cycle's usage is behind, for example while a node cannot be
     reached. The link works again after the next bundle. CFM's wording
     (「导入链接」, 「更新」, 「编辑」, 「QRCode」, 「TUN 模式」, 「系统代理」,
@@ -168,12 +166,12 @@
       keeps no access log, and TLS ends on that host.
     - The Mac's new records are the payments it pulls (design §9.6), which
       clause 4 puts under the 13-month rule, and the operator's ban records
-      (clause 3). The pull keeps every order for now: deleting a revoked
-      user's payments 13 months on, or at once for a user who leaves and
-      asks, is to be built with the other deletion rules (below; design
-      §9.6, the ledger's retention). The ban records are kept until the
-      service ends, outside Mooring's state, so neither the 13-month rule
-      nor `user forget` reaches them.
+      (clause 3). The daemon deletes a removed user's payment orders
+      (design §9.6, the ledger's retention): when the nightly apply job
+      removes the user 13 months after the revocation, or after `user
+      forget` for a user who leaves and asks. The ban records are kept
+      until the service ends, outside Mooring's state, so neither the
+      13-month rule nor `user forget` reaches them.
     - The operator's phone and Mac keep FaceTime's call history with each
       user: the number or Apple ID, and the call times. The operator
       deletes it at the user's revocation (the operator's decision of

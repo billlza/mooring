@@ -71,7 +71,7 @@ use mooring_model::secret::{
 use mooring_model::sim::{
     BillDay, Carrier, CycleRule, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy,
 };
-use mooring_model::state::{RuntimeIntent, StateV2};
+use mooring_model::state::{RuntimeIntent, StateV3};
 use mooring_model::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
     TargetAttestation, TargetFacts, TargetRejected, TlsHandshake, TlsOutcome, TlsVersion, qualify,
@@ -107,8 +107,8 @@ pub struct Fixture {
 impl Fixture {
     /// The fixture as a state document, with the exit enabled.
     #[must_use]
-    pub fn state(&self) -> StateV2 {
-        StateV2 {
+    pub fn state(&self) -> StateV3 {
+        StateV3 {
             deployment: self.deployment.clone(),
             runtime: RuntimeIntent {
                 exit_enabled: true,
@@ -575,6 +575,7 @@ fn build(
         viewers,
         nodes: node_list,
         users: user_list,
+        forgotten: Vec::new(),
         next_wg_index,
     })?;
     Ok(Fixture {

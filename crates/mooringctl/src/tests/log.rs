@@ -15,7 +15,7 @@ use std::path::Path;
 use mooring_macsys::MacsysError;
 
 use super::support::Harness;
-use crate::daemon::log::{DaemonLog, LOG_FILE, ROTATED_LOG_FILE, log_dir};
+use crate::daemon::log::{DAEMON_LOG, LOG_FILE, ROTATED_LOG_FILE, RotatingLog, log_dir};
 use crate::error::{EXIT_LOCAL, LocalError};
 
 fn mode(path: &Path) -> u32 {
@@ -45,7 +45,7 @@ fn the_log_is_private_appended_and_rotated_at_a_line_start() {
         Ok(())
     };
     {
-        let mut log = DaemonLog::open(&dir, 20, &redirect).unwrap();
+        let mut log = RotatingLog::open(&dir, DAEMON_LOG, 20, &redirect).unwrap();
         assert_eq!(redirects.get(), 1, "stderr points at the log once open");
         writeln!(log, "first line here").unwrap();
     }
@@ -53,7 +53,7 @@ fn the_log_is_private_appended_and_rotated_at_a_line_start() {
     assert_eq!(mode(&dir.join(LOG_FILE)), 0o600);
     // Reopened, it appends; a line written in parts is never split, even
     // past the limit.
-    let mut log = DaemonLog::open(&dir, 20, &redirect).unwrap();
+    let mut log = RotatingLog::open(&dir, DAEMON_LOG, 20, &redirect).unwrap();
     write!(log, "second ").unwrap();
     write!(log, "line, longer than the limit").unwrap();
     writeln!(log).unwrap();
@@ -99,7 +99,7 @@ fn a_redirect_that_fails_stops_the_open() {
             errno: 9,
         })
     };
-    let error = DaemonLog::open(&dir, 20, &refuse).unwrap_err();
+    let error = RotatingLog::open(&dir, DAEMON_LOG, 20, &refuse).unwrap_err();
     assert!(matches!(error, LocalError::LogRedirect(_)), "{error:?}");
     assert_eq!(
         error.to_string(),
@@ -120,7 +120,7 @@ fn a_log_that_cannot_be_opened_stops_the_open() {
     // A file where a directory above the log's goes.
     fs::write(home.path().join("Library"), b"").unwrap();
     let dir = home.path().join("Library").join("Logs").join("Mooring");
-    let error = DaemonLog::open(&dir, 20, &redirect).unwrap_err();
+    let error = RotatingLog::open(&dir, DAEMON_LOG, 20, &redirect).unwrap_err();
     assert!(
         matches!(&error, LocalError::LogDir { path, .. } if *path == dir),
         "{error:?}"
@@ -128,7 +128,7 @@ fn a_log_that_cannot_be_opened_stops_the_open() {
     // A directory where the log file goes.
     let dir = home.path().join("logs");
     fs::create_dir_all(dir.join(LOG_FILE)).unwrap();
-    let error = DaemonLog::open(&dir, 20, &redirect).unwrap_err();
+    let error = RotatingLog::open(&dir, DAEMON_LOG, 20, &redirect).unwrap_err();
     assert!(
         matches!(&error, LocalError::LogFile { path, .. } if *path == dir.join(LOG_FILE)),
         "{error:?}"
@@ -143,12 +143,14 @@ fn an_empty_write_is_nothing_and_the_debug_output_names_the_log() {
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join("logs");
     let redirect = |_: std::os::fd::BorrowedFd<'_>| Ok(());
-    let mut log = DaemonLog::open(&dir, 0, &redirect).unwrap();
+    let mut log = RotatingLog::open(&dir, DAEMON_LOG, 0, &redirect).unwrap();
     assert_eq!(log.write(&[]).unwrap(), 0);
     assert!(!dir.join(ROTATED_LOG_FILE).exists());
     assert_eq!(
         format!("{log:?}"),
-        format!("DaemonLog {{ dir: {dir:?}, written: 0, rotate_at: 0, .. }}")
+        format!(
+            "RotatingLog {{ dir: {dir:?}, files: LogFiles {{ name: \"daemon.log\", rotated: \"daemon.log.1\" }}, written: 0, rotate_at: 0, .. }}"
+        )
     );
 }
 
