@@ -58,7 +58,12 @@
       2026-11-07). A ban found to be a mistake is undone: its records are
       deleted, and the days unused at the ban are made up, or refunded if
       the user insists (the operator's decision, the same day). Nothing
-      else is refunded.
+      else is refunded. A refund in full of a granted order takes back
+      what the order gave that is not used yet, its time and traffic, and
+      nothing already used; a partial refund, such as one by an outage's
+      time, changes nothing (the operator's decision of 2026-11-12, built
+      with the nightly apply job, not merged when these notes were
+      written).
     - The text names no price and makes no legal claim. Whether UK consumer
       law, including the rules on subscription contracts, adds to it is the
       operator's to check.
@@ -344,6 +349,7 @@
 - 封禁之后，如果有人用被封禁的人付过款的银行卡付款，运营者不开通服务，并退回这笔付款（第 3 条）。
 - 封禁后发现是误封的，运营者补回被封禁时还没用到的天数；你坚持要退款时，按这些天数退款（第 3 条）。
 - 退款都退回你付款用的银行卡。这张卡已经不能退款时，改为补偿时间或流量，上面所说封禁之后的付款除外；本服务停止时，就无法补偿了。
+- 一笔付款被全额退款后，它为你开通的时间和流量中还没用到的部分随之收回，已经用掉的不追回；部分退款（例如上面按中断时间的退款）不影响你的服务。
 - 其他情况既不补偿也不退款，例如：你自己不再使用；你的配额用完或服务到期；你因为违反本约定被暂停、作废或封禁；你自己的设备或网络出了问题。
 
 ## 2. 配置和链接只给你一人
