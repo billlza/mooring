@@ -44,7 +44,7 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
                     "; the user is suspended at expiry, and the nightly apply job resumes them once their paid time covers it, while the cap on active users leaves room"
                 }
                 Some(SuspendReason::QuotaExceeded { .. }) => {
-                    "; the user is suspended for quota until the next billing cycle, when the nightly apply job resumes them"
+                    "; the user is suspended for quota, and the nightly apply job resumes them once their quota covers what they used this cycle, or in the next billing cycle"
                 }
                 Some(SuspendReason::Operator | SuspendReason::AbuseReview) => {
                     "; the user is suspended, and only the operator resumes them"

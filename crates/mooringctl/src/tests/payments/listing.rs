@@ -266,7 +266,7 @@ fn every_event_has_its_line() {
                 }),
             ),
             format!(
-                "payment: order {order} granted user {user} a traffic pack for this billing cycle; the user is suspended for quota until the next billing cycle, when the nightly apply job resumes them"
+                "payment: order {order} granted user {user} a traffic pack for this billing cycle; the user is suspended for quota, and the nightly apply job resumes them once their quota covers what they used this cycle, or in the next billing cycle"
             ),
         ),
         (

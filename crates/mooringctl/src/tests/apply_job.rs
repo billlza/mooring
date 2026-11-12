@@ -266,8 +266,8 @@ fn the_cap_holds_a_resume_back() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "held back by the cap on active users: {THIRD}, suspended over quota in the billing cycle from 2026-09-01 since 2026-09-03 19:20:00 UTC; still suspended\n\
-             held back by the cap on active users: {SECOND}, suspended over quota in the billing cycle from 2026-09-01 since 2026-09-08 19:20:00 UTC; still suspended\n\
+            "held back by the cap on active users: {THIRD}, suspended for quota in the billing cycle from 2026-09-01 since 2026-09-03 19:20:00 UTC: its billing cycle has ended; still suspended\n\
+             held back by the cap on active users: {SECOND}, suspended for quota in the billing cycle from 2026-09-01 since 2026-09-08 19:20:00 UTC: its billing cycle has ended; still suspended\n\
              apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 2 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied; 0 failure(s)\n"
         )
     );
@@ -283,7 +283,7 @@ fn the_cap_holds_a_resume_back() {
     ));
     assert!(
         outcome.stdout.starts_with(&format!(
-            "resumed {THIRD}, suspended over quota in the billing cycle from 2026-09-01 since 2026-09-03 19:20:00 UTC\n\
+            "resumed {THIRD}, suspended for quota in the billing cycle from 2026-09-01 since 2026-09-03 19:20:00 UTC: its billing cycle has ended\n\
              held back by the cap on active users: {SECOND}"
         )),
         "{}",
@@ -467,7 +467,7 @@ fn only_a_lapsed_suspension_at_expiry_is_resumed_once_paid() {
     ));
     assert!(
         outcome.stdout.starts_with(&format!(
-            "resumed {FIRST}, suspended expired since 2026-10-12 19:20:00 UTC\n"
+            "resumed {FIRST}, suspended at expiry since 2026-10-12 19:20:00 UTC: its expiry is no longer past\n"
         )),
         "{}",
         outcome.stdout
@@ -744,4 +744,74 @@ fn quotas_go_unchecked_while_usage_is_behind() {
         "{log}"
     );
     assert!(!log.contains("fxuser"), "{log}");
+}
+
+/// While the collected usage is behind (here none is collected), a pack
+/// bought by a user suspended for quota this cycle lifts nothing: the job
+/// cannot tell that it covers what the user used, so the suspension stands
+/// until the usage is current again or the cycle ends.
+#[test]
+fn a_pack_lifts_nothing_while_the_usage_is_behind() {
+    use mooring_model::{QuotaAction, UserQuota, WarnPercent};
+
+    use super::payments::{connect, page};
+    use crate::payments::pull::{Gate, Puller};
+
+    let suspended = UserStatus::Suspended {
+        reason: SuspendReason::QuotaExceeded {
+            cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
+        },
+        since: at(NOW - 3600),
+    };
+    let mut harness = job(unapplied(|parts| {
+        let found = user(parts, FIRST);
+        found.policy.quota = Some(UserQuota {
+            cycle_served_bytes: std::num::NonZeroU64::new(1).unwrap(),
+            warn_percent: WarnPercent::new(80).unwrap(),
+            action: QuotaAction::Suspend,
+        });
+        found.status = suspended;
+    }));
+    connect(&mut harness, 1, false, 1);
+    harness.portal.ok(&page(
+        true,
+        0,
+        vec![serde_json::json!({
+            "seq": 1, "kind": "grant", "order": "aaaaaaaaaaaaaaaaaaaa", "user": FIRST,
+            "plan": "traffic-50", "plan_kind": "traffic", "days": 30,
+            "traffic_bytes": 50_000_000_000_u64, "amount": 500, "currency": "gbp",
+            "paid_at": NOW - 120, "renewal_of": null,
+            "amount_refunded": null, "refunded_in_full": null, "amount_disputed": null,
+            "recorded_at": NOW - 60
+        })],
+        false,
+    ));
+    let mut puller = Puller::open(&harness.support_dir());
+    let users = deployment(&harness).users().clone();
+    let mut clear = || true;
+    harness.with_env(|env| {
+        puller.tick(
+            env,
+            &users,
+            at(NOW),
+            Gate {
+                room: Some(std::time::Duration::from_secs(10)),
+                network_clear: &mut clear,
+            },
+        )
+    });
+    assert_eq!(
+        super::payments::ledger_on_disk(&harness)
+            .unwrap()
+            .orders()
+            .len(),
+        1
+    );
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(status(&harness, FIRST), suspended);
+    assert_eq!(
+        outcome.stdout,
+        "apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+    );
 }

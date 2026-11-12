@@ -13,10 +13,17 @@ use super::super::support::{at, date};
 use super::{
     GB, active, holding, id, now, over_quota, quota, suspended, usage, user, with_auto_quota,
 };
-use crate::apply::{Kept, Lapsed, Suspension, plan_policy};
+use crate::apply::{Kept, Lapse, Lapsed, Suspension, plan_policy};
 use crate::error::PolicyError;
 use crate::payments::{Entitlements, PaymentLedger};
 use crate::policy::{PolicyAction, PolicyWarning, UserAction};
+
+/// `user` with a 1 GB quota of its own, which the tests' 2 GB of use
+/// leaves it over: a suspension for quota of the run's cycle holds.
+fn still_over(mut user: mooring_model::User) -> mooring_model::User {
+    user.policy.quota = Some(quota(GB));
+    user
+}
 
 fn november() -> SuspendReason {
     SuspendReason::QuotaExceeded {
@@ -24,11 +31,17 @@ fn november() -> SuspendReason {
     }
 }
 
+/// A lapsed suspension of user `n`, lapsed as its reason lapses at the
+/// cycle's turn or once its expiry is no longer past.
 fn lapsed(n: u64, reason: SuspendReason, since: UnixTime) -> Lapsed {
     Lapsed {
         user: id(n),
         reason,
         since,
+        why: match reason {
+            SuspendReason::Expired => Lapse::NoLongerExpired,
+            _ => Lapse::CycleEnded,
+        },
     }
 }
 
@@ -161,29 +174,30 @@ fn with_places_free_the_earliest_lapsed_suspension_resumes_first() {
     assert!(plan.held_back.is_empty());
 }
 
-/// A suspension for quota made at or after the current cycle's start holds;
-/// one made a second before it has lapsed, whatever start it records.
+/// A suspension for quota made at or after the current cycle's start holds
+/// while the user is still over quota; one made a second before it has
+/// lapsed, whatever start it records.
 #[test]
 fn only_a_suspension_for_quota_from_before_the_cycle_lapses() {
     let start = at("2026-11-01", 0);
     let before = UnixTime::from_secs(start.as_secs() - 1);
     let deployment = holding(
         vec![
-            over_quota(1, "2026-11-01", start),
+            still_over(over_quota(1, "2026-11-01", start)),
             over_quota(2, "2026-10-01", before),
             // A bill day moved forward: the record names this cycle, but
             // the suspension was made before it.
             over_quota(3, "2026-11-01", before),
             // A bill day moved back: the record names the cycle before, but
             // the suspension was made in this one.
-            over_quota(4, "2026-10-01", start),
+            still_over(over_quota(4, "2026-10-01", start)),
         ],
         None,
     );
     let plan = plan_policy(
         &deployment,
         &Entitlements::none(),
-        Some(&usage(&deployment, now(), &[])),
+        Some(&usage(&deployment, now(), &[(1, 2 * GB), (4, 2 * GB)])),
         now(),
     )
     .unwrap();
@@ -210,7 +224,7 @@ fn a_suspension_for_quota_after_now_refuses_the_whole_step() {
                 },
             ),
             over_quota(2, "2026-10-01", at("2026-10-20", 0)),
-            over_quota(3, "2026-11-01", ahead),
+            still_over(over_quota(3, "2026-11-01", ahead)),
         ],
         None,
     );
@@ -229,12 +243,13 @@ fn a_suspension_for_quota_after_now_refuses_the_whole_step() {
             Err(PolicyError::QuotaSuspensionAfterNow { .. })
         ));
     }
-    // Once the clock passes that instant, the step goes ahead.
+    // Once the clock passes that instant, the step goes ahead; the user
+    // suspended then is still over quota, and stays suspended.
     let later = UnixTime::from_secs(ahead.as_secs() + 1);
     let plan = plan_policy(
         &deployment,
         &Entitlements::none(),
-        Some(&usage(&deployment, later, &[])),
+        Some(&usage(&deployment, later, &[(3, 2 * GB)])),
         later,
     )
     .unwrap();
@@ -336,6 +351,7 @@ fn a_suspension_at_expiry_resumes_once_the_expiry_runs_past_now() {
             user: paying.id,
             reason: SuspendReason::Expired,
             since: october,
+            why: Lapse::NoLongerExpired,
         }]
     );
 }

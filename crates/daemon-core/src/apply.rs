@@ -16,9 +16,14 @@
 //!   proposes at the run's `now`, each recorded at that `now`; and the
 //!   resumes of suspensions whose cause has gone: a suspension for quota
 //!   made before the current billing cycle (`quota_suspension_holds_at`
-//!   does not hold it), and a suspension at expiry once the user's paid time
-//!   or own record runs past `now` again (design §9.6; the agreement's
-//!   clause 1: service resumes once the user has paid). A suspension by the
+//!   does not hold it); one made in the current cycle once the user is no
+//!   longer over quota by the cycle's usage as reported then, because a
+//!   pack, a paid period or a raised quota covers what they used (the
+//!   agreement's revision 2: service paused for quota resumes once a pack
+//!   is bought), never while the usage is behind; and a suspension at
+//!   expiry once the user's paid time or own record runs past `now` again
+//!   (design §9.6; the agreement's clause 1: service resumes once the user
+//!   has paid). A suspension by the
 //!   operator or for an abuse review is never resumed here: only the
 //!   operator lifts it. Resumes go earliest suspension first, then by id,
 //!   while fewer users are active than the cap allows, counting the users
@@ -46,7 +51,7 @@ use crate::payments::Entitlements;
 use crate::period::BillingCycle;
 use crate::policy::{
     ExpiryState, PolicyAction, UserAction, automatic_quota, effective_policy, evaluate,
-    quota_suspension_holds_at,
+    quota_suspension_holds_at, suspension_due,
 };
 use crate::usage::CycleUsage;
 
@@ -76,6 +81,24 @@ pub struct Suspension {
     pub reason: SuspendReason,
 }
 
+/// Why the policy step tries to lift a suspension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Lapse {
+    /// A suspension for quota made before the current billing cycle.
+    CycleEnded,
+    /// A suspension for quota made in the current cycle whose user is no
+    /// longer over quota with the cycle's usage as reported now: a pack, a
+    /// paid period or a raised quota covers what they used.
+    NoLongerOverQuota,
+    /// A suspension for quota made in the current cycle after which the
+    /// user was granted a pack or a paid period, which leaves them to be
+    /// suspended again at once: reported, never lifted.
+    PaidSince,
+    /// A suspension at expiry whose expiry is no longer past.
+    NoLongerExpired,
+}
+
 /// A suspension whose cause has gone, which the policy step resumes, or
 /// reports when it cannot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -86,10 +109,14 @@ pub struct Lapsed {
     pub reason: SuspendReason,
     /// When the user was suspended.
     pub since: UnixTime,
+    /// Why it is tried.
+    pub why: Lapse,
 }
 
-/// A lapsed suspension the policy step does not resume, because the user
-/// would be suspended again at once.
+/// A suspension the policy step tried to lift and does not resume, because
+/// the user would be suspended again at once: a lapsed one, or one for
+/// quota in the current cycle that a pack or a paid period granted since
+/// does not lift (`Lapse::PaidSince`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Kept {
     /// The lapsed suspension.
@@ -126,14 +153,16 @@ pub struct PolicyPlan {
 /// warnings. Each lapsed suspension, in order, is resumed while the users
 /// active when the run began, with the resumes before it, are fewer than
 /// the cap; a resume is tried on a copy of the deployment and kept only if
-/// `evaluate` there proposes no suspension for the user.
+/// `evaluate` there proposes no suspension for the user. A user resumed
+/// from a suspension for quota of the current cycle shared the cycle's
+/// automatic quota while suspended, so the resume changes no one's share.
 pub fn plan_policy(
     deployment: &Deployment,
     paid: &Entitlements,
     usage: Option<&CycleUsage>,
     now: UnixTime,
 ) -> Result<PolicyPlan, PolicyError> {
-    let lapsed = lapsed_suspensions(deployment, paid, now)?;
+    let (lapsed, paid_short) = lapsed_suspensions(deployment, paid, usage, now)?;
     let mut suspensions = Vec::new();
     let mut warnings = Vec::new();
     for action in evaluate(deployment, paid, usage, now)? {
@@ -149,7 +178,7 @@ pub fn plan_policy(
     let mut working = deployment.clone();
     let mut resumes = Vec::new();
     let mut held_back = Vec::new();
-    let mut kept = Vec::new();
+    let mut kept = paid_short;
     for candidate in lapsed {
         if !room_for_one(&working, cap) {
             held_back.push(candidate);
@@ -167,6 +196,9 @@ pub fn plan_policy(
             }
         }
     }
+    kept.sort_by(|left, right| {
+        (left.lapsed.since, &left.lapsed.user).cmp(&(right.lapsed.since, &right.lapsed.user))
+    });
     Ok(PolicyPlan {
         now,
         suspensions,
@@ -178,46 +210,109 @@ pub fn plan_policy(
 }
 
 /// Every suspension of `deployment` whose cause has gone at `now`, earliest
-/// first and then by id: one for quota made before the current cycle, one
-/// at expiry whose user's expiry (`effective_policy`, with what their paid
-/// orders gave) is no longer past. One by the operator or for an abuse
-/// review never lapses here. A suspension for quota after `now` is
-/// `QuotaSuspensionAfterNow`.
+/// first and then by id, and the suspensions for quota that a grant since
+/// left in force, to report:
+/// - one for quota made before the current cycle (`CycleEnded`);
+/// - one for quota made in the current cycle whose user `evaluate` would no
+///   longer suspend with the cycle's `usage` (`NoLongerOverQuota`): a pack,
+///   a paid period covering `now` or a raised quota covers what they used.
+///   Only with the user's usage reported, as a suspension for quota needs
+///   it; with the usage behind, a suspension for quota lasts until its
+///   cycle ends. One that `evaluate` would still suspend is reported as
+///   kept when a pack or a period was granted since it (`PaidSince`), and
+///   is otherwise left in force unreported;
+/// - one at expiry whose user's expiry (`effective_policy`, with what their
+///   paid orders gave) is no longer past (`NoLongerExpired`).
+///
+/// One by the operator or for an abuse review never lapses here. A
+/// suspension for quota after `now` is `QuotaSuspensionAfterNow`.
 fn lapsed_suspensions(
     deployment: &Deployment,
     paid: &Entitlements,
+    usage: Option<&CycleUsage>,
     now: UnixTime,
-) -> Result<Vec<Lapsed>, PolicyError> {
+) -> Result<(Vec<Lapsed>, Vec<Kept>), PolicyError> {
     let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), now)?;
     let automatic = automatic_quota(deployment, now)?;
     let mut lapsed = Vec::new();
+    let mut paid_short = Vec::new();
     for (id, user) in deployment.users() {
         let UserStatus::Suspended { reason, since } = user.status else {
             continue;
         };
-        let gone = match reason {
+        let why = match reason {
             SuspendReason::QuotaExceeded { .. } => {
-                !quota_suspension_holds_at(deployment, id, since, now)?
+                if !quota_suspension_holds_at(deployment, id, since, now)? {
+                    Some(Lapse::CycleEnded)
+                } else if usage_reported(usage, id) {
+                    match suspension_due(deployment, paid, usage, now, id)? {
+                        None => Some(Lapse::NoLongerOverQuota),
+                        Some(again) => {
+                            if granted_since(paid, id, since, cycle, now) {
+                                paid_short.push(Kept {
+                                    lapsed: Lapsed {
+                                        user: id.clone(),
+                                        reason,
+                                        since,
+                                        why: Lapse::PaidSince,
+                                    },
+                                    again,
+                                });
+                            }
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
             }
             SuspendReason::Expired => {
                 let policy = effective_policy(user, automatic, paid, cycle, now);
-                !matches!(
+                (!matches!(
                     ExpiryState::of(policy.expires_at, now),
                     ExpiryState::Expired { .. }
-                )
+                ))
+                .then_some(Lapse::NoLongerExpired)
             }
-            SuspendReason::Operator | SuspendReason::AbuseReview => false,
+            SuspendReason::Operator | SuspendReason::AbuseReview => None,
         };
-        if gone {
+        if let Some(why) = why {
             lapsed.push(Lapsed {
                 user: id.clone(),
                 reason,
                 since,
+                why,
             });
         }
     }
     lapsed.sort_by(|left, right| (left.since, &left.user).cmp(&(right.since, &right.user)));
-    Ok(lapsed)
+    Ok((lapsed, paid_short))
+}
+
+/// Whether the cycle's `usage` reports `user`'s own: a report, and a
+/// figure for the user in it.
+fn usage_reported(usage: Option<&CycleUsage>, user: &UserId) -> bool {
+    usage.is_some_and(|usage| usage.served.get(user).is_some_and(Option::is_some))
+}
+
+/// Whether `user`'s paid orders gave, after `since`, a pack counted in
+/// `cycle` or a period covering `now`.
+fn granted_since(
+    paid: &Entitlements,
+    user: &UserId,
+    since: UnixTime,
+    cycle: BillingCycle,
+    now: UnixTime,
+) -> bool {
+    paid.user(user).is_some_and(|orders| {
+        orders
+            .packs()
+            .iter()
+            .any(|pack| pack.granted_at > since && cycle.contains(pack.granted_at))
+            || orders
+                .period_at(now)
+                .is_some_and(|period| period.from > since)
+    })
 }
 
 /// Whether one more user may be active in `deployment` under `cap`.

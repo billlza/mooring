@@ -9,7 +9,7 @@
 
 use std::io::Write;
 
-use mooring_daemon_core::apply::{Kept, Lapsed, Suspension};
+use mooring_daemon_core::apply::{Kept, Lapse, Lapsed, Suspension};
 use mooring_model::user::SuspendReason;
 use mooring_model::{NodeId, UnixTime, UserId};
 use serde::Serialize;
@@ -155,7 +155,7 @@ impl PolicyOutcome {
         }
         for kept in &done.kept {
             lines.push(format!(
-                "kept suspended: {}, {}, would be suspended again at once ({})",
+                "kept suspended: {}, {}, but it would be suspended again at once ({})",
                 kept.lapsed.user,
                 suspended(&kept.lapsed),
                 reason(kept.again)
@@ -487,11 +487,21 @@ fn reason(reason: SuspendReason) -> String {
     }
 }
 
-/// A lapsed suspension, in the report's words.
+/// A suspension the step tried to lift, and why, in the report's words.
 fn suspended(lapsed: &Lapsed) -> String {
-    format!(
-        "suspended {} since {}",
-        reason(lapsed.reason),
-        stamp(lapsed.since)
-    )
+    let what = match lapsed.reason {
+        SuspendReason::Expired => "at expiry".to_owned(),
+        SuspendReason::QuotaExceeded { cycle_start } => {
+            format!("for quota in the billing cycle from {cycle_start}")
+        }
+        SuspendReason::Operator => "by the operator".to_owned(),
+        SuspendReason::AbuseReview => "for an abuse review".to_owned(),
+    };
+    let why = match lapsed.why {
+        Lapse::CycleEnded => "its billing cycle has ended",
+        Lapse::NoLongerOverQuota => "it is no longer over its quota this cycle",
+        Lapse::PaidSince => "a pack or a paid period was granted since",
+        Lapse::NoLongerExpired => "its expiry is no longer past",
+    };
+    format!("suspended {what} since {}: {why}", stamp(lapsed.since))
 }
