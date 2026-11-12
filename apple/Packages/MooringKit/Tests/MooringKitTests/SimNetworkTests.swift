@@ -96,8 +96,9 @@ import Testing
         for (recorded, recordedMnc, reported, reportedMnc, difference) in cases {
             let status = try decode(
                 changed(from: network(recorded, recordedMnc), to: network(reported, reportedMnc)))
-            let change = try #require(status.change, "\(recorded ?? "-") \(reported ?? "-")")
-            #expect(change.difference == difference, "\(recorded ?? "-") \(recordedMnc) \(reported ?? "-") \(reportedMnc)")
+            let named = "\(recorded ?? "-") \(recordedMnc) \(reported ?? "-") \(reportedMnc)"
+            let change = try #require(status.change, "\(named)")
+            #expect(change.difference == difference, "\(named)")
             #expect(change.recorded.spn == recorded)
             #expect(change.recorded.plmn.mnc == recordedMnc)
             #expect(change.reported.spn == reported)
