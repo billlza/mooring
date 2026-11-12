@@ -112,13 +112,24 @@ The app lives in the menu bar (an antenna symbol); its menu opens the console wi
 The colours on RSRP and SINR are rules of thumb for placing the antenna, not limits.
 
 **Once a deployment exists** every screen fills in from the deployment's status (design §15.3):
-- **Overview:** the exit's state and why, the open alerts (critical first), each node's gate and latest REALITY and Hysteria2 verdicts, the SIM gauge, and the router.
+- **Overview:** the exit's state and why, the open alerts (critical first), each node's gate and latest REALITY and Hysteria2 verdicts, the SIM gauge with the billing cycle it covers, and the router.
 - **Exit:** the state since when, latched violations with their evidence, the egress interface and link, the carrier check, `mooring-exit` and `mooring-probe`, the Mac's power and any foreign network.
 - **SIM:** the billing cycle, bytes received and sent, the meter's accuracy, the warning, the stop policy and the plan's line, and the forecast with each threshold's crossing.
 - **Nodes:** per node, its role, stage and generation, the in-chain verdicts, and its agent's report (gate, holds, halt, handshake and watch ages, conditions, engines, host and this month's transfer), or why it could not be polled.
 - **Users:** one row per opaque id and alias; select a row for its figures, quota and expiry. A daemon built since 2026-11-05 reads the nodes' usage. When it has no usage report, the screen says "Usage unavailable" with its reason, never zeros. A daemon built before reads none, so the screen says so and the figures say "not read". Status, activity and last seen are live either way.
 - **Capacity:** the egress rates, the uplink's use against its baseline, the loaded latency and saturation.
 - **Events:** not read by this build; the open alerts are on the overview.
+
+**A latched violation** (design §10.2). When an egress check fails, the exit stops itself, has every node close its gate and stays down until the latch is cleared. It is a finding about the line, not about what you did. The overview and the Exit screen say:
+- what the check found, for example that the egress address is outside the carrier prefixes recorded for this line;
+- what to do about it, by what was found: for an address outside the prefixes, record the new prefixes if the SIM or the carrier's pool changed, or turn the M7's offload off, then `mooringctl exit retry` (`swap-day.md`, section 3). The overview has it under the exit's state, the Exit screen under each latch;
+- when it was found, which is the latch's own time: "Found …" on the overview, "Violation found" on the Exit screen. The state's "Since" can be later: the state starts anew when the daemon restarts, and when another reason held the exit down in front of the latch (a foreign network, the M7 unplugged). Until 2026-11-12 the overview showed only that later time, and a latch two days old read as a new event.
+
+While a latch is set the daemon runs no direct probe, so the address shown is the one it latched: after a SIM swap it is still the old SIM's.
+
+**A latch behind another reason.** The daemon looks at a latch only after it has found the exit enabled, the SIM's plan recorded and its use under the stop, the egress interface there, no foreign network and a carrier check recorded (design §10.2), and a sleeping Mac's exit is paused whatever is latched. While one of those holds the exit down, the state names that reason and not the latch. The overview then says in a second line, in orange, that a violation found at the latch's time is latched as well and will keep the exit down once the reason above is gone; the Exit screen lists it under "Latched violations" with what to do. `mooringctl exit retry` clears a latch whatever the state shows, so the cause can be dealt with before the other reason is gone. Until 2026-11-12 the overview named only the reason in front: from 2026-11-10 22:45 UTC it showed a foreign network for a day and a half, over a latch written a minute before.
+
+**The SIM gauge**, on the overview and on the SIM screen, names the first day of the cycle its figure covers and of the next one (UTC). The meter counts this Mac's traffic through the M7, whichever SIM is in it. After a SIM change the figure therefore still holds what the old SIM carried, until `mooringctl sim set-anchor` moves the cycle to the day the new plan started (`swap-day.md`, section 2, step 5).
 
 The app only shows: every change (`exit enable`, `node apply`, `user …`, `sim …`) is a `mooringctl` command in Terminal.
 
@@ -146,8 +157,12 @@ xcrun xcodebuild -quiet -project apple/LayoutPreview/MooringLayoutPreview.xcodep
 open target/layout-preview/Build/Products/Debug/MooringLayoutPreview.app
 ```
 
-Use the fixture picker for unavailable usage, a usage report, no users and a
-retry countdown (a simulated command exit; the preview runs no command).
+Use the fixture picker for unavailable usage, a usage report, no users, a
+retry countdown (a simulated command exit; the preview runs no command), a
+latched violation (the exit down for an address outside the carrier prefixes,
+found 36 hours before the state's "Since") and a latch behind another reason
+(the same latch, with the exit down for a foreign network on en0). For those
+two, check the overview's exit card and the Exit screen.
 Check the column titles and first row on screen, select a user, switch pages,
 and change to **No users** while its inspector is open. The inspector must
 close, and restoring the users must not restore a stale selection. Check both
