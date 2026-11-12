@@ -70,14 +70,14 @@ fn replies_have_fixed_lines() {
     assert_eq!(decode_reply(&line).unwrap(), reply);
 }
 
-/// The first line of a connection names the protocol, protocol 2 in this
+/// The first line of a connection names the protocol, protocol 3 in this
 /// build, and only that line is read as one: a reply, a line with another
 /// key or another type is not.
 #[test]
 fn the_protocol_line_is_fixed() {
-    assert_eq!(CONTROL_PROTOCOL, 2);
+    assert_eq!(CONTROL_PROTOCOL, 3);
     let line = encode_line(&ProtocolLine::CURRENT, MAX_REPLY_LINE_BYTES).unwrap();
-    assert_eq!(line, b"{\"control_protocol\":2}\n");
+    assert_eq!(line, b"{\"control_protocol\":3}\n");
     assert_eq!(decode_protocol_line(&line).unwrap(), ProtocolLine::CURRENT);
     assert_eq!(
         decode_protocol_line(b"{\"control_protocol\":7}").unwrap(),

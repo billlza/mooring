@@ -59,6 +59,7 @@ use crate::router::{
     PowerState, RadioState, RouterAdvisory, RouterReading, RouterUnavailableReason, ThermalState,
     WifiApStatus,
 };
+use crate::sim_network::BaselineOrigin;
 use crate::status::{
     AgentUnreachable, DegradedReason, DownReason, DrainOutcome, ExitState, ForecastView,
     InChainOutcome, MacStatusV2, MeterAccuracy, NodeAgentState, NodeReport, OwnNetworkInput,
@@ -80,6 +81,7 @@ struct Variants {
     power_source: Vec<PowerSource>,
     drain_outcome: Vec<DrainOutcome>,
     meter_accuracy: Vec<MeterAccuracy>,
+    baseline_origin: Vec<BaselineOrigin>,
     forecast_view: Vec<ForecastView>,
     usage_view: Vec<UsageView>,
     in_chain_outcome: Vec<InChainOutcome>,
@@ -346,6 +348,11 @@ fn variants() -> Variants {
             DrainOutcome::Failed,
         ],
         meter_accuracy: vec![MeterAccuracy::Exact, MeterAccuracy::LowerBound],
+        baseline_origin: vec![
+            BaselineOrigin::NoRecord,
+            BaselineOrigin::Recorded,
+            BaselineOrigin::RecordUnreadable,
+        ],
         forecast_view: vec![
             ForecastView::Projected(forecast),
             ForecastView::Unavailable {
@@ -728,6 +735,16 @@ fn the_variants_fixture_lists_every_variant() {
             MeterAccuracy::LowerBound => 1,
         },
         2,
+    );
+    every_variant(
+        "baseline_origin",
+        &v.baseline_origin,
+        |value| match value {
+            BaselineOrigin::NoRecord => 0,
+            BaselineOrigin::Recorded => 1,
+            BaselineOrigin::RecordUnreadable => 2,
+        },
+        3,
     );
     every_variant(
         "forecast_view",

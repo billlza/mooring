@@ -48,6 +48,7 @@ mod relay_failures;
 mod repin;
 mod router;
 mod runtime;
+mod sim_network;
 mod sockopt;
 mod ssh;
 mod status;

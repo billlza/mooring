@@ -11,6 +11,8 @@
 //! # What it carries
 //!
 //! The exit's state and its evidence, the SIM meter and forecast, the
+//! network the M7 reported for the SIM when the carrier check and the
+//! billing cycle were recorded and the one it reports now, the
 //! router, the uplink's capacity, one row per user and per node, and the
 //! open alerts. It stays on the Mac: users appear by opaque id and public
 //! alias only (labels stay in `state.json`, and the app joins them from
@@ -50,11 +52,13 @@ use crate::network::{AllowedNetwork, ForeignNetworkFinding};
 use crate::period::{BillingCycle, UsagePeriods};
 use crate::policy::{ExpiryState, QuotaState};
 use crate::router::{RouterAdvisory, RouterReading};
+use crate::sim_network::SimNetworkStatus;
 use crate::usage::{UsageAccuracy, UserActivity, UserUsage};
 use crate::wire::mac_time;
 
-/// The version [`MacStatusV2`] documents carry.
-pub const MAC_STATUS_VERSION: u32 = 2;
+/// The version [`MacStatusV2`] documents carry. The type keeps the name
+/// it was given at version 2; version 3 (2026-11-12) added `sim.network`.
+pub const MAC_STATUS_VERSION: u32 = 3;
 
 /// Where a probe failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -517,7 +521,8 @@ pub enum ForecastView {
     },
 }
 
-/// The SIM meter (design §10.1 step 5, console spec B.2.6).
+/// The SIM: its meter (design §10.1 step 5, console spec B.2.6) and the
+/// network the M7 reports for it (design §10.2).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SimMeterStatus {
@@ -534,6 +539,10 @@ pub struct SimMeterStatus {
     pub thresholds: SimThresholds,
     /// The forecast.
     pub forecast: ForecastView,
+    /// What the M7 reported of the SIM and its network when the carrier
+    /// check and the billing cycle were recorded, and what it reports
+    /// instead now, if it does.
+    pub network: SimNetworkStatus,
 }
 
 /// The users' usage figures, why there are none, or that none were pulled.

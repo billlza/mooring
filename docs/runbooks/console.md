@@ -112,9 +112,9 @@ The app lives in the menu bar (an antenna symbol); its menu opens the console wi
 The colours on RSRP and SINR are rules of thumb for placing the antenna, not limits.
 
 **Once a deployment exists** every screen fills in from the deployment's status (design §15.3):
-- **Overview:** the exit's state and why, the open alerts (critical first), each node's gate and latest REALITY and Hysteria2 verdicts, the SIM gauge with the billing cycle it covers, and the router.
-- **Exit:** the state since when, latched violations with their evidence, the egress interface and link, the carrier check, `mooring-exit` and `mooring-probe`, the Mac's power and any foreign network.
-- **SIM:** the billing cycle, bytes received and sent, the meter's accuracy, the warning, the stop policy and the plan's line, and the forecast with each threshold's crossing.
+- **Overview:** the exit's state and why, the open alerts (critical first), each node's gate and latest REALITY and Hysteria2 verdicts, the SIM gauge with the billing cycle it covers, above it the notice when the M7 reports another SIM or network than the one on record, and the router.
+- **Exit:** the state since when, latched violations with their evidence, the egress interface and link, the carrier check (with that notice above it), `mooring-exit` and `mooring-probe`, the Mac's power and any foreign network.
+- **SIM:** the SIM and network on record against what the M7 reports now (with that notice when they differ), the billing cycle, bytes received and sent, the meter's accuracy, the warning, the stop policy and the plan's line, and the forecast with each threshold's crossing.
 - **Nodes:** per node, its role, stage and generation, the in-chain verdicts, and its agent's report (gate, holds, halt, handshake and watch ages, conditions, engines, host and this month's transfer), or why it could not be polled.
 - **Users:** one row per opaque id and alias; select a row for its figures, quota and expiry. A daemon built since 2026-11-05 reads the nodes' usage. When it has no usage report, the screen says "Usage unavailable" with its reason, never zeros. A daemon built before reads none, so the screen says so and the figures say "not read". Status, activity and last seen are live either way.
 - **Capacity:** the egress rates, the uplink's use against its baseline, the loaded latency and saturation.
@@ -130,6 +130,22 @@ While a latch is set the daemon runs no direct probe, so the address shown is th
 **A latch behind another reason.** The daemon looks at a latch only after it has found the exit enabled, the SIM's plan recorded and its use under the stop, the egress interface there, no foreign network and a carrier check recorded (design §10.2), and a sleeping Mac's exit is paused whatever is latched. While one of those holds the exit down, the state names that reason and not the latch. The overview then says in a second line, in orange, that a violation found at the latch's time is latched as well and will keep the exit down once the reason above is gone; the Exit screen lists it under "Latched violations" with what to do. `mooringctl exit retry` clears a latch whatever the state shows, so the cause can be dealt with before the other reason is gone. Until 2026-11-12 the overview named only the reason in front: from 2026-11-10 22:45 UTC it showed a foreign network for a day and a half, over a latch written a minute before.
 
 **The SIM gauge**, on the overview and on the SIM screen, names the first day of the cycle its figure covers and of the next one (UTC). The meter counts this Mac's traffic through the M7, whichever SIM is in it. After a SIM change the figure therefore still holds what the old SIM carried, until `mooringctl sim set-anchor` moves the cycle to the day the new plan started (`swap-day.md`, section 2, step 5).
+
+**The SIM and network on record** (design §10.2). The carrier check and the billing cycle are records about one SIM, and nothing in the deployment ties them to it. So the daemon keeps its own record of what the M7 reported, the SIM's name (or that it has none) and the network's codes, at the first poll that found it attached after either was last recorded, and compares every later poll with it. The SIM screen shows it under "SIM and network": what is on record, when the M7 first reported it, and what it reports now.
+
+While the M7 reports something else, the overview's SIM card, the SIM screen and the Exit screen's carrier check show one notice in orange:
+- "The M7 reports another SIM than the one on record" when the SIM's name differs (a name where there was none counts), or "another network" when the name is the same, or absent both times, and only the network's codes differ. The second also happens when a carrier moves one SIM to another of its networks, and the text says so;
+- what the M7 reports and since when, and what the check and the cycle on record go with;
+- what to do if the SIM was changed: both records are the old SIM's, so record them for the new one (`swap-day.md`, section 2, steps 3 to 6: `exit disable`, `exit observe`, `exit record-carrier --replace`, `sim set-anchor`, `node apply` for each node, `exit enable`).
+
+The notice changes nothing by itself: the exit is not stopped or degraded for it. It ends when the carrier check or the cycle is recorded with other values (the daemon then takes what the M7 reports at its next attached poll as the one on record), or when the M7 reports the one on record again. Recording the same prefixes and pairing again, or an anchor on which a cycle already starts, does not end it. If the SIM was changed and neither record needs other values (two brands on one network's address pool, with the same bill day), or a carrier moved the SIM to another network for good, end it by hand: **Stop the Daemon** in Mooring.app's menu, remove `~/Library/Application Support/Mooring/run/sim-network.json`, and start the daemon again; it then takes the SIM in the M7 as the one on record. Stopping the daemon stops the exit for that long.
+
+What it cannot see:
+- two SIMs of one carrier report the same name and codes, and raise nothing. The daemon never reads the card's number (ICCID) or the subscriber's (IMSI);
+- a SIM changed before the record began. The SIM screen says under "SIM and network" where the record began: at the first attached poll after the check or the cycle was last recorded; or after the daemon started without a record, which is the first run of a build that keeps one (2026-11-12); or after a record it could not read, which it says in its log and begins again. In the last two, what is on record is the SIM that was in the M7 then, whichever SIM the check and the cycle were recorded for. The swap of 2026-11-11 is such a case: the build that first keeps the record takes the new SIM as the one on record and shows no notice, though the check and the cycle were still the old SIM's;
+- a SIM without a data session: the M7 names no network then, and nothing is compared until it attaches.
+
+The daemon's log (`~/Library/Logs/Mooring/daemon.log`) has a line starting `sim network:` for each change: the record begun, the network taken as the one on record, another network reported, the one on record reported again, a record that could not be read or written.
 
 The app only shows: every change (`exit enable`, `node apply`, `user …`, `sim …`) is a `mooringctl` command in Terminal.
 
@@ -163,6 +179,13 @@ latched violation (the exit down for an address outside the carrier prefixes,
 found 36 hours before the state's "Since") and a latch behind another reason
 (the same latch, with the exit down for a foreign network on en0). For those
 two, check the overview's exit card and the Exit screen.
+Three more show the SIM's network: **SIM changed** (the M7 reports a SIM
+named 1p on 234-30 where a SIM without a name on 234-20 is on record),
+**Network changed, same SIM name** (a SIM without a name on 234-10) and **No
+network on record yet** (a record begun again after one that could not be
+read). For the first two, check the notice on the overview's SIM card, on the
+SIM screen and above the Exit screen's carrier check; for all three, the
+"SIM and network" section of the SIM screen and its footnote.
 Check the column titles and first row on screen, select a user, switch pages,
 and change to **No users** while its inspector is open. The inspector must
 close, and restoring the users must not restore a stale selection. Check both

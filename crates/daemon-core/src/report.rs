@@ -21,7 +21,9 @@
 //! (interface name, link-layer address, LAN address); the carrier check
 //! (the line's public address); the engines' processes; the power and
 //! sleep record; the foreign networks; the details of a degraded or down
-//! exit; the router's SIM SPN, network name, PLMN, firmware and web app
+//! exit; the SIM's network on record and the one the M7 reports now
+//! (`sim.network`); the router's SIM SPN, network name, PLMN, firmware
+//! and web app
 //! versions, counters, Wi-Fi, settings, power, thermal state, uptime,
 //! session time, carrier list and unread SMS count; the users' aliases,
 //! node sets,

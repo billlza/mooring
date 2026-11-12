@@ -45,8 +45,8 @@ use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
 use super::{
     Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending, poll_router_on,
-    publish, radio::RadioHistoryWriter, router_after_poll, say, unavailable_reason,
-    wait_for_next_poll,
+    publish, radio::RadioHistoryWriter, router_after_poll, say, sim_network::NetworkWatch,
+    unavailable_reason, wait_for_next_poll,
 };
 use crate::app::Env;
 use crate::daemon::usage::{Pulled, RefundView};
@@ -151,6 +151,13 @@ pub(crate) struct Deployed<'e, 'a> {
     router: RouterReading,
     router_failure: Option<String>,
     router_polled: Option<Instant>,
+    /// Whether the panel holds a poll the record of the SIM's network has
+    /// not seen. The latest poll is set against the record once, by the
+    /// tick that made it, which read the state before it polled; the poll
+    /// made at the start is set against it by the first tick.
+    router_unseen: bool,
+    /// The record of the SIM's network (design §10.2, §15.3).
+    sim_network: NetworkWatch,
     /// The radio history's writer, carried over from the router console.
     history: RadioHistoryWriter,
     /// The power helper while it runs.
@@ -276,6 +283,10 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if let Some(note) = unread {
             say(log, now, &note)?;
         }
+        let (sim_network, begun) = NetworkWatch::open(&run_dir, state.deployment.exit());
+        if let Some(note) = begun {
+            say(log, now, &note)?;
+        }
         let mut router_failure = None;
         let router = poll_m7(
             env,
@@ -300,6 +311,8 @@ impl<'e, 'a> Deployed<'e, 'a> {
             router,
             router_failure,
             router_polled: Some(Instant::now()),
+            router_unseen: true,
+            sim_network,
             history,
             helper: Some(helper),
             helper_lost: None,
@@ -425,6 +438,13 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if let Some(note) = self.pending.track(deployment, now) {
             say(log, now, &note)?;
         }
+        let polled = std::mem::take(&mut self.router_unseen).then_some(&self.router);
+        for note in self
+            .sim_network
+            .track(deployment.exit(), polled, Instant::now())
+        {
+            say(log, now, &note)?;
+        }
         for note in self.payments.prune(deployment) {
             say(log, now, &note)?;
         }
@@ -534,6 +554,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                         .map_err(|error| LocalError::Meter(Box::new(error)))?,
                     accuracy: accuracy(bytes, &router),
                 },
+                sim_network: self.sim_network.status(),
                 router,
                 capacity: None,
                 ledgers: self.usage.ledgers(),
@@ -834,6 +855,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             &mut self.history,
             egress,
         )?;
+        self.router_unseen = true;
         Ok(())
     }
 

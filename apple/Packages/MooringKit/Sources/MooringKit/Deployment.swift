@@ -10,8 +10,8 @@ import Foundation
 
 /// A deployment's status.
 public struct DeployedStatus: Decodable, Hashable, Sendable {
-    /// The version this build reads.
-    public static let version: UInt32 = 2
+    /// The version this build reads: 3 since `sim.network` (2026-11-12).
+    public static let version: UInt32 = 3
 
     public let at: UnixTime
     public let exit: ExitSection

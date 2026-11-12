@@ -1,6 +1,6 @@
 {
   "deployed": {
-    "version": 2,
+    "version": 3,
     "at": 1791453630,
     "exit": {
       "state": {
@@ -109,6 +109,20 @@
               "crossing": "not_this_cycle"
             }
           ]
+        }
+      },
+      "network": {
+        "origin": "recorded",
+        "baseline": {
+          "network": {
+            "spn": null,
+            "plmn": {
+              "mcc": "234",
+              "mnc": "20"
+            }
+          },
+          "first_seen": 1790845200,
+          "other": null
         }
       }
     },

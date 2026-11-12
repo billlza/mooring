@@ -158,10 +158,16 @@ import Testing
         #expect(key.stringValue == "handshake_at_drain")
     }
 
-    @Test func anotherVersionIsRefusedAsSuch() throws {
+    /// Another version is refused as such, the one before `sim.network`
+    /// (version 2, read until 2026-11-12) included: a daemon of that build
+    /// is told apart from a document that cannot be read.
+    @Test(arguments: [2, 4] as [UInt32])
+    func anotherVersionIsRefusedAsSuch(_ version: UInt32) throws {
         let line = String(decoding: try scenario("serving"), as: UTF8.self)
-        #expect(throws: ConsoleDecodingError.unsupportedVersion(3)) {
-            try decode(Data(line.replacingOccurrences(of: "\"version\": 2", with: "\"version\": 3").utf8))
+        let other = line.replacingOccurrences(of: "\"version\": 3", with: "\"version\": \(version)")
+        #expect(other != line)
+        #expect(throws: ConsoleDecodingError.unsupportedVersion(version)) {
+            try decode(Data(other.utf8))
         }
     }
 

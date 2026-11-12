@@ -76,6 +76,8 @@ io_ops! {
     ReadLatch => "read the exit's latch",
     /// Removing the exit's latch.
     RemoveLatch => "remove the exit's latch",
+    /// Opening or reading the daemon's record of the SIM's network.
+    ReadSimNetwork => "read the record of the SIM's network",
     /// Opening or reading the SIM meter's document, or inspecting the
     /// usage directory to read it.
     ReadSimMeter => "read the SIM meter",

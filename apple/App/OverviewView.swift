@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The overview (design §15.3): the exit's state, each node's gate and
-// verdicts, the SIM gauge, the router and the open alerts at a glance.
+// verdicts, the SIM gauge with the notice of another SIM or network than
+// the one on record, the router and the open alerts at a glance.
 // Before `exit init` the exit has no deployment to report, which is said as
 // such, never drawn as zeros.
 
@@ -21,8 +22,13 @@ struct OverviewView: View {
                     }
                     NodesCard(status: deployed)
                     GroupBox {
-                        SimGauge(sim: deployed.sim)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 10) {
+                            if let change = deployed.sim.network.change {
+                                SimNetworkNotice(change: change)
+                            }
+                            SimGauge(sim: deployed.sim)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     } label: {
                         Label("SIM", systemImage: "simcard")
                     }

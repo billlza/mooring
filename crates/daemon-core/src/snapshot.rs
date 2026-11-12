@@ -21,6 +21,7 @@ use crate::payments::Entitlements;
 use crate::period::BillingCycle;
 use crate::policy::{ExpiryState, QuotaState, automatic_quota, effective_policy};
 use crate::router::RouterReading;
+use crate::sim_network::SimNetworkStatus;
 use crate::status::{
     ExitSection, ForecastView, MacStatusParts, MacStatusV2, MeterAccuracy, NodeAgentState,
     NodeReport, NodeRow, ProtocolVerdicts, SimMeterStatus, UsageView, UserRow,
@@ -78,6 +79,8 @@ pub struct StatusInputs<'a> {
     pub exit: ExitSection,
     /// The SIM meter.
     pub sim: SimTotals<'a>,
+    /// What the daemon's record says of the SIM's network.
+    pub sim_network: SimNetworkStatus,
     /// The router.
     pub router: RouterReading,
     /// The latest capacity view, if any.
@@ -247,6 +250,7 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV2, SnapshotError> 
             accuracy: inputs.sim.accuracy,
             thresholds: sim.thresholds(),
             forecast,
+            network: inputs.sim_network,
         },
         router: inputs.router,
         capacity: inputs.capacity,

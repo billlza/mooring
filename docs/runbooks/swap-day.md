@@ -135,7 +135,7 @@ The exit is `disabled` (it starts so, and section 0.7 ends so), which is right b
 
 0. **Keep the exit disabled** (section 1; if it is not, `mooringctl exit disable`): with the old carrier check recorded, the new SIM's address would be latched as a violation and every gate closed with a hold (a retry would undo it, but there is no need).
 1. **Buy the Boost** in the 1pMobile app. Note the UTC date: it is the cycle anchor.
-2. **Swap the SIM.** Power the M7 off, put the 1pMobile SIM in, power it on. Wait until `mooringctl router status --interface en9` shows a data service. If none comes within a few minutes, check that mobile data is on in the 1pMobile account (its network settings can turn data off), then give the M7 1pMobile's APN in its web page: APN `data.uk`, user name `user`, password `one2one`, authentication CHAP (1pMobile's own help pages, read 2026-10-23).
+2. **Swap the SIM.** Power the M7 off, put the 1pMobile SIM in, power it on. Wait until `mooringctl router status --interface en9` shows a data service. If none comes within a few minutes, check that mobile data is on in the 1pMobile account (its network settings can turn data off), then give the M7 1pMobile's APN in its web page: APN `data.uk`, user name `user`, password `one2one`, authentication CHAP (1pMobile's own help pages, read 2026-10-23). Once the M7 has a data service, the console says from the daemon's next poll (within a minute) that the M7 reports another SIM, or another network, than the one on record, on the overview, the SIM screen and the Exit screen: the carrier check and the cycle are still the old SIM's until steps 4 and 5 (`console.md`, "The SIM and network on record"). Two SIMs of one carrier look alike to it and raise nothing; the steps are the same.
 3. **Observe the carrier address:**
    ```
    mooringctl exit observe --interface en9
@@ -153,6 +153,8 @@ The exit is `disabled` (it starts so, and section 0.7 ends so), which is right b
    mooringctl node apply lon1 --interface en9 --engines ~/mooring-engines/out
    ```
    It is a configuration change, so the node is applied again. The SIM meter keeps its bytes per day, so no byte is lost or moved.
+
+   Recording the check (step 4) or the anchor (this step) with other values ends the console's notice: the daemon takes what the M7 reports at its next poll as the SIM on record. If neither needed other values (the new SIM's addresses are in the prefixes already recorded and its plan starts on a day a cycle already starts), the notice stays; `console.md` says how to end it.
 6. **Enable the exit:**
    ```
    mooringctl exit enable
@@ -170,6 +172,7 @@ The exit is `disabled` (it starts so, and section 0.7 ends so), which is right b
   mooringctl exit retry
   ```
   The daemon clears the latch, probes afresh, asks the nodes to clear their holds, and starts the engine if the address passes. A node halted because the egress showed its own address stays halted; resume it only after finding out why. The console says what was found, when, and what to do (`console.md`, section 3); the time is the latch's own, since the state's "Since" starts anew with the daemon and after another reason held the exit down. While another reason holds it down (a foreign network, the M7 unplugged), the state shows that reason and the overview names the latch in a second line. While a latch is set no direct probe runs, so the address shown is the one latched: after a SIM swap made with a latch set, or with the exit enabled (section 2, step 0), disable the exit and go through section 2, steps 3 to 6. `exit record-carrier --replace` is a configuration change, which clears a latch by itself.
+- **"The M7 reports another SIM (or another network) than the one on record"** (orange, on the overview, the SIM screen and the Exit screen): the M7 names another SIM or network than it did when the carrier check and the billing cycle were last recorded. It stops nothing by itself. If the SIM was changed, the check and the cycle are the old SIM's: go through section 2, steps 3 to 6 (with the exit disabled first, step 0), and the notice ends with the new records. If the SIM was not changed, the carrier renamed it or moved it to another network: nothing needs recording, and the notice ends when the M7 reports the one on record again, or by hand (`console.md`, "The SIM and network on record").
 - **SIM hard stop** (`down` with `sim_cap_reached`): the cycle's bytes reached 240 GB. The exit stays down until the next cycle starts; nothing is to be done.
 - **`the Mooring daemon is not running`** (from any `mooringctl` command that asks it): you are logged out, or the daemon was stopped from the menu. Log in, or **Start the Daemon at Login** from Mooring.app's menu; the daemon resumes the exit as it was, enabled or not.
 - **Stop the exit** at any time: `mooringctl exit disable` (the daemon stops the engine within 2 s), or stop the daemon: **Stop the Daemon** in Mooring.app's menu.

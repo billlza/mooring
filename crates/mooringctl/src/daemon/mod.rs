@@ -23,6 +23,7 @@ pub(crate) mod log;
 pub(crate) mod pending;
 pub(crate) mod radio;
 pub(crate) mod serve;
+pub(crate) mod sim_network;
 pub(crate) mod usage;
 
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};

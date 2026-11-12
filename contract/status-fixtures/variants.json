@@ -192,6 +192,11 @@
     "exact",
     "lower_bound"
   ],
+  "baseline_origin": [
+    "no_record",
+    "recorded",
+    "record_unreadable"
+  ],
   "forecast_view": [
     {
       "projected": {
