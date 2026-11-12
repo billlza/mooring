@@ -3,7 +3,7 @@
 
 This runbook is for the operator. It covers revoking a user on the Mac and the nodes, what the nightly apply job does by itself, and the steps at Stripe and the portal when a user leaves or stops paying.
 
-The rules come from design §13.5, §13.6 and §15.7, and from clauses 4 and 6 of the agreement's revision 2 (#28, not in force yet). `mooringctl user revoke` exists since 2026-11-12 (M5, on the topic branch `lza/revoke-4052c8`; not merged or installed yet). `mooringctl` is the one inside the installed app (`delivery.md`, opening).
+The rules come from design §13.5, §13.6 and §15.7, and from clauses 4 and 6 of the agreement's revision 2 (#28, not in force yet). `mooringctl user revoke` exists since 2026-11-12 (M5; not installed yet). `mooringctl` is the one inside the installed app (`delivery.md`, opening).
 
 A revocation cannot be undone. Serving the person again is a new admission: `user add` and a new acceptance (`delivery.md`, section 1).
 
