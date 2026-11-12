@@ -334,6 +334,27 @@ impl Deployment {
         })
     }
 
+    /// The revocations the nodes have committed and the state has yet to
+    /// record (design §13.5), in user, then node order: each user pending
+    /// revocation, with each node it holds credentials on that is applied
+    /// at the deployment's generation. A bundle of a generation at which a
+    /// user is pending revocation leaves the user out, and a user becomes
+    /// pending only by a configuration change, which bumps the generation,
+    /// so such a node has confirmed a bundle without the user and serves it
+    /// no longer. These are exactly the `Bookkeeping::RevocationCommitted`
+    /// records [`Deployment::record`] takes.
+    pub fn revocations_confirmed(&self) -> impl Iterator<Item = (&UserId, &NodeId)> {
+        self.users.values().flat_map(move |user| {
+            user.revocation_remaining()
+                .filter(move |node| {
+                    self.nodes
+                        .get(*node)
+                        .is_some_and(|found| at_generation(found, self.config_generation))
+                })
+                .map(move |node| (&user.id, node))
+        })
+    }
+
     /// Every secret the deployment references; anything else in the
     /// keychain is orphaned, except the M7's admin password
     /// ([`SecretRef::RouterAdmin`]) and the portal's pull token
@@ -672,7 +693,9 @@ pub enum Bookkeeping {
     },
     /// `node` committed the generation that stopped serving `user`, who is
     /// pending revocation (design §13.5 step 3); with no node left the user
-    /// becomes `Revoked` since `at`.
+    /// becomes `Revoked` since `at`. Only a node applied at the
+    /// deployment's generation has (`RevocationUnconfirmed` otherwise): its
+    /// bundle leaves the user out ([`Deployment::revocations_confirmed`]).
     RevocationCommitted {
         /// The user being revoked.
         user: UserId,
@@ -779,6 +802,11 @@ impl Deployment {
                 node.lifecycle = NodeLifecycle::Applied { site, applied };
             }
             Bookkeeping::RevocationCommitted { user, node, at } => {
+                let generation = parts.config_generation;
+                let confirmed = parts
+                    .nodes
+                    .iter()
+                    .any(|candidate| candidate.id == node && at_generation(candidate, generation));
                 let user = parts
                     .users
                     .iter_mut()
@@ -789,12 +817,20 @@ impl Deployment {
                         user: user.id.clone(),
                     });
                 }
-                if user.per_node.remove(&node).is_none() {
+                if !user.per_node.contains_key(&node) {
                     return Err(ModelError::NoCredentialsOnNode {
                         user: user.id.clone(),
                         node,
                     });
                 }
+                if !confirmed {
+                    return Err(ModelError::RevocationUnconfirmed {
+                        user: user.id.clone(),
+                        node,
+                        generation,
+                    });
+                }
+                user.per_node.remove(&node);
                 user.settle_revocation(at);
             }
             Bookkeeping::RetirementShutDown { node, at } => {
@@ -860,6 +896,14 @@ impl Deployment {
         }
         Self::try_from(parts)
     }
+}
+
+/// Whether `node` is applied at `generation`: it confirmed the bundle of
+/// that generation.
+fn at_generation(node: &Node, generation: ConfigGeneration) -> bool {
+    node.lifecycle
+        .applied()
+        .is_some_and(|applied| applied.config_generation == generation)
 }
 
 fn node_mut<'a>(parts: &'a mut DeploymentParts, id: &NodeId) -> Result<&'a mut Node, ModelError> {
@@ -1902,6 +1946,106 @@ mod tests {
                 at: AT,
             }),
             Err(ModelError::NotRevoking { user: user_id(2) })
+        );
+    }
+
+    /// Only a node applied at the deployment's generation commits a
+    /// revocation: its bundle leaves out every user pending revocation. A
+    /// node behind the generation, or one never applied, may still serve
+    /// the user, so its record is refused and nothing changes; and
+    /// `revocations_confirmed` lists exactly the records the model takes,
+    /// in user, then node order.
+    #[test]
+    fn only_a_node_at_the_generation_commits_a_revocation() {
+        let mut parts = two_node_parts();
+        parts.config_generation = ConfigGeneration::new(2).unwrap();
+        // lon1 confirmed generation 2; ams1 is behind, at 1.
+        parts.nodes[0].lifecycle = applied([45, 67, 89, 10], 2);
+        parts.users[0].status = UserStatus::RevokePending;
+        parts.users[1].status = UserStatus::RevokePending;
+        let deployment = build(parts).unwrap();
+        let commit = |deployment: &Deployment, user: u64, node: &str| {
+            deployment.clone().record(Bookkeeping::RevocationCommitted {
+                user: user_id(user),
+                node: node_id(node),
+                at: AT,
+            })
+        };
+        let confirmed = |deployment: &Deployment| -> Vec<(u64, String)> {
+            deployment
+                .revocations_confirmed()
+                .map(|(user, node)| {
+                    let number = (1..=2).find(|n| user_id(*n) == *user).unwrap();
+                    (number, node.as_str().to_owned())
+                })
+                .collect()
+        };
+        assert_eq!(
+            confirmed(&deployment),
+            [(1, "lon1".to_owned()), (2, "lon1".to_owned())]
+        );
+        assert_eq!(
+            commit(&deployment, 1, "ams1"),
+            Err(ModelError::RevocationUnconfirmed {
+                user: user_id(1),
+                node: node_id("ams1"),
+                generation: ConfigGeneration::new(2).unwrap(),
+            })
+        );
+        let one = commit(&deployment, 1, "lon1").unwrap();
+        assert_eq!(confirmed(&one), [(2, "lon1".to_owned())]);
+        let user = &one.users()[&user_id(1)];
+        assert_eq!(user.status, UserStatus::RevokePending);
+        assert_eq!(
+            user.revocation_remaining().collect::<Vec<_>>(),
+            [&node_id("ams1")]
+        );
+        // Once ams1 confirms the generation, it commits the rest.
+        let applied_ams1 = one
+            .record(Bookkeeping::Applied {
+                node: node_id("ams1"),
+                applied: AppliedConfig {
+                    config_generation: ConfigGeneration::new(2).unwrap(),
+                    digest: Sha256Digest::from_bytes([0xd2; 32]),
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            confirmed(&applied_ams1),
+            [
+                (1, "ams1".to_owned()),
+                (2, "ams1".to_owned()),
+                (2, "lon1".to_owned())
+            ]
+        );
+        let revoked = commit(&applied_ams1, 1, "ams1").unwrap();
+        assert_eq!(
+            revoked.users()[&user_id(1)].status,
+            UserStatus::Revoked { since: AT }
+        );
+        // A node adopted but never applied has confirmed no generation.
+        let mut parts = two_node_parts();
+        parts.nodes[1].lifecycle = NodeLifecycle::Adopted {
+            site: site([46, 78, 90, 12]),
+        };
+        parts.users[0].status = UserStatus::RevokePending;
+        let adopted = build(parts).unwrap();
+        assert_eq!(confirmed(&adopted), [(1, "lon1".to_owned())]);
+        assert_eq!(
+            commit(&adopted, 1, "ams1"),
+            Err(ModelError::RevocationUnconfirmed {
+                user: user_id(1),
+                node: node_id("ams1"),
+                generation: ConfigGeneration::INITIAL,
+            })
+        );
+        // No revocation pending, nothing confirmed.
+        assert!(
+            build(two_node_parts())
+                .unwrap()
+                .revocations_confirmed()
+                .next()
+                .is_none()
         );
     }
 

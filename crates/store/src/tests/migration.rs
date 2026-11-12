@@ -384,30 +384,39 @@ fn every_kind_of_write_backs_up_first() {
     .unwrap();
     backed_up(&store, V1);
 
-    // The same golden with its user pending revocation, committed by lon1.
-    let pending = String::from_utf8(V1.to_vec()).unwrap().replacen(
-        "\"status\": \"active\"",
-        "\"status\": \"revoke_pending\"",
-        1,
-    );
+    // The every-variant golden's user pending revocation, committed by
+    // lon1, here applied at the deployment's generation: only a node that
+    // confirmed it commits a revocation (`RevocationUnconfirmed`).
+    let pending = with_stop.replacen("\"config_generation\": 1,", "\"config_generation\": 2,", 1);
+    assert_ne!(pending, with_stop);
     let (_dir, store) = store_holding(pending.as_bytes());
     let state = store.load().unwrap();
     let mut secrets = InMemorySecretStore::new();
     for entry in entries_for(&state.deployment.required_secrets(), 1) {
         secrets.put(entry).unwrap();
     }
+    let revoking = UserId::from_low_bits(2);
+    assert_eq!(
+        state.deployment.users()[&revoking].status,
+        UserStatus::RevokePending
+    );
     let revoked = record_with_secrets(
         &store,
         &mut secrets,
         state.deployment.config_generation(),
         Bookkeeping::RevocationCommitted {
-            user: UserId::from_low_bits(1),
+            user: revoking.clone(),
             node: node_id("lon1"),
             at: RECORDED_AT,
         },
     )
     .unwrap();
     assert_eq!(secrets.refs(), revoked.deployment.required_secrets());
+    assert!(
+        !revoked.deployment.users()[&revoking]
+            .per_node
+            .contains_key(&node_id("lon1"))
+    );
     backed_up(&store, pending.as_bytes());
 }
 
