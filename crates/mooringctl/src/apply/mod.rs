@@ -31,6 +31,14 @@
 //!    confirmed generation is older than the deployment's, by id, through
 //!    the exit's egress as the daemon resolves it, with the engines in the
 //!    support directory; one that fails is reported, and the next one runs.
+//! 4. **Revocations** (`revocation::commit`): every revocation a node
+//!    applied at the deployment's generation settles, whether this run or
+//!    an earlier one applied it, each a bookkeeping record of its own,
+//!    after which the user's credentials on that node are deleted from the
+//!    keychain; then each user still pending, with what it waits on. A node
+//!    that cannot be reached keeps its users pending. Skipped when the clock
+//!    stepped back, as the removals are, since a record dates the
+//!    revocation by it; what waits is still reported.
 //!
 //! The report names users by id, on standard output; the log,
 //! `~/Library/Logs/Mooring/apply.log`, counts them and names none, since a
@@ -55,11 +63,13 @@ use mooring_daemon_core::apply::in_window;
 use mooring_macsys::MacsysError;
 use mooring_store::Store;
 
-use self::report::Outcome;
+use self::report::{Outcome, Revocations};
 use crate::app::{Env, support_dir};
+use crate::daemon::chain;
 use crate::daemon::log::{APPLY_LOG, ROTATE_AT_BYTES, RedirectStderr, RotatingLog, log_dir};
 use crate::daemon::{prepare_run_dir, say_as};
 use crate::error::{CommandError, LocalError};
+use crate::revocation;
 use crate::state::load;
 
 /// The job's lock, in the daemon's run directory: one run at a time.
@@ -133,11 +143,31 @@ pub(crate) fn apply(
     let nodes = nodes::apply_behind(env, sink, &store, &support, &mut |node, at| {
         say_as(&mut log, at, "apply", &node.log_line())
     })?;
+    let at = (env.clock)()?;
+    let revocations = if policy.clock_stepped_back() {
+        match revocation::waiting(&store) {
+            Ok(pending) => Revocations::Skipped { pending },
+            Err(error) => Revocations::Unread {
+                error: chain(&error),
+            },
+        }
+    } else {
+        match revocation::commit(&store, env.secrets, at, None) {
+            Ok(commits) => Revocations::Done(commits),
+            Err(error) => Revocations::Unread {
+                error: chain(&error),
+            },
+        }
+    };
+    if let Some(line) = revocations.log_line() {
+        say_as(&mut log, at, "apply", &line)?;
+    }
     let outcome = Outcome {
         at: now,
         policy,
         removals,
         nodes,
+        revocations,
     };
     let failures = outcome.failures();
     say_as(

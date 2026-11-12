@@ -549,7 +549,8 @@ fn the_json_outcome_names_each_part() {
                 "usage_behind": "ams1 may have counted traffic, but no usage ledger is given for it"
             }},
             "removals": {"done": {"removed": [], "kept_ids_dropped": false, "failed": []}},
-            "nodes": []
+            "nodes": [],
+            "revocations": {"done": {"committed": [], "failed": [], "pending": []}}
         })
     );
     assert_eq!(outcome.stdout.lines().count(), 1);

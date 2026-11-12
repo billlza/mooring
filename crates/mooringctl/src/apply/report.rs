@@ -5,7 +5,9 @@
 //! users and name none (design §15.7: a log line can outlive the 13 months
 //! the agreement keeps a user's records); and, with `--json`, one JSON line
 //! (version 1): `{"version":1,"at":<secs>,"ran":false}` for a firing outside
-//! the window, otherwise `ran: true` with `policy`, `removals` and `nodes`.
+//! the window, otherwise `ran: true` with `policy`, `removals`, `nodes` and
+//! `revocations` (2026-11-12: what the node applies settled and what still
+//! waits).
 
 use std::io::Write;
 
@@ -16,6 +18,7 @@ use serde::Serialize;
 
 use crate::error::CommandError;
 use crate::payments::notes::stamp;
+use crate::revocation::{Commits, Pending};
 use crate::state::output;
 
 /// The version of the `--json` outcome.
@@ -338,6 +341,100 @@ impl NodeOutcome {
     }
 }
 
+/// The revocations the run's node applies settled (design §13.5), and the
+/// users still being revoked after them.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Revocations {
+    /// The state could not be read after the node applies, so none was
+    /// recorded.
+    Unread {
+        /// Why.
+        error: String,
+    },
+    /// None was recorded, as no removal is made, since the run takes its
+    /// clock for one that stepped back: a record dates the revocation, and
+    /// its removal 13 months later, by that clock.
+    Skipped {
+        /// The users being revoked, as the state was read, with what each
+        /// waits on.
+        pending: Vec<Pending>,
+    },
+    /// What was recorded and what still waits.
+    Done(Commits),
+}
+
+impl Revocations {
+    /// The report's lines: each revocation recorded and each failure, then
+    /// each user still pending, with what it waits on.
+    pub(crate) fn lines(&self) -> Vec<String> {
+        let commits = match self {
+            Self::Unread { error } => {
+                return vec![format!(
+                    "revocations not recorded: the state could not be read: {error}"
+                )];
+            }
+            Self::Skipped { pending } => {
+                let mut lines = vec![CLOCK_SKIPPED.to_owned()];
+                lines.extend(pending_lines(pending));
+                return lines;
+            }
+            Self::Done(commits) => commits,
+        };
+        let mut lines = commits.lines();
+        lines.extend(pending_lines(&commits.pending));
+        lines
+    }
+
+    /// The log's line, which names no user, when there is anything to say.
+    pub(crate) fn log_line(&self) -> Option<String> {
+        match self {
+            Self::Unread { .. } => {
+                Some("revocations not recorded: the state could not be read".to_owned())
+            }
+            Self::Skipped { pending } => Some(format!(
+                "revocations not recorded: the clock stepped back; {} user(s) still pending",
+                pending.len()
+            )),
+            Self::Done(commits) => {
+                let quiet = commits.committed.is_empty()
+                    && commits.failed.is_empty()
+                    && commits.pending.is_empty();
+                (!quiet).then(|| {
+                    format!(
+                        "revocations: {} committed, {} failed, {} user(s) still pending",
+                        commits.committed.len(),
+                        commits.failed.len(),
+                        commits.pending.len()
+                    )
+                })
+            }
+        }
+    }
+
+    fn failures(&self) -> usize {
+        match self {
+            Self::Unread { .. } => 1,
+            Self::Skipped { .. } => 0,
+            Self::Done(commits) => commits.failed.len(),
+        }
+    }
+}
+
+const CLOCK_SKIPPED: &str =
+    "revocations not recorded: the clock stepped back, and a record would date a revocation by it";
+
+/// A line for each user still being revoked, with what it waits on.
+fn pending_lines(pending: &[Pending]) -> impl Iterator<Item = String> + '_ {
+    pending.iter().map(|pending| {
+        format!(
+            "revocation pending: {} waits on {}",
+            pending.user,
+            pending.nodes_text()
+        )
+    })
+}
+
 /// What one run did.
 #[derive(Debug)]
 pub(crate) struct Outcome {
@@ -349,6 +446,8 @@ pub(crate) struct Outcome {
     pub(crate) removals: Removals,
     /// The node applies.
     pub(crate) nodes: Vec<NodeOutcome>,
+    /// The revocations they settled, and what still waits.
+    pub(crate) revocations: Revocations,
 }
 
 #[derive(Serialize)]
@@ -359,6 +458,7 @@ struct Ran<'a> {
     policy: &'a PolicyOutcome,
     removals: &'a Removals,
     nodes: &'a [NodeOutcome],
+    revocations: &'a Revocations,
 }
 
 #[derive(Serialize)]
@@ -370,7 +470,10 @@ struct NotRan {
 
 impl Outcome {
     /// How many parts of the run failed: the policy step as a whole when it
-    /// was refused, each change, removal and node apply that failed.
+    /// was refused, each change, removal and node apply that failed, and
+    /// each revocation not recorded or whose keychain items were left (or
+    /// the revocations as a whole when the state could not be read). A user
+    /// still pending is no failure: the node that holds it back is reported.
     pub(crate) fn failures(&self) -> usize {
         self.policy.failures()
             + self.removals.failures()
@@ -379,6 +482,7 @@ impl Outcome {
                 .iter()
                 .filter(|node| matches!(node.result, NodeResult::Failed { .. }))
                 .count()
+            + self.revocations.failures()
     }
 
     /// Writes the end of the report: each node's line and the summary, or
@@ -394,10 +498,12 @@ impl Outcome {
                     policy: &self.policy,
                     removals: &self.removals,
                     nodes: &self.nodes,
+                    revocations: &self.revocations,
                 },
             );
         }
         let mut lines: Vec<String> = self.nodes.iter().map(NodeOutcome::log_line).collect();
+        lines.extend(self.revocations.lines());
         lines.push(self.summary());
         write_lines(out, &lines, &[])
     }
@@ -412,6 +518,18 @@ impl Outcome {
                 done.kept.len(),
             ),
         };
+        let (committed, pending) = match &self.revocations {
+            Revocations::Unread { .. } => (0, 0),
+            Revocations::Skipped { pending } => (0, pending.len()),
+            Revocations::Done(commits) => (commits.committed.len(), commits.pending.len()),
+        };
+        // Said only when the run had to do with a revocation, so that a run
+        // without one reads as it always did.
+        let revocations = if committed + pending == 0 {
+            String::new()
+        } else {
+            format!(", {committed} revocation(s) committed, {pending} still pending")
+        };
         let removed = match &self.removals {
             Removals::Skipped => 0,
             Removals::Done(done) => done.removed.len(),
@@ -422,7 +540,7 @@ impl Outcome {
             .filter(|node| node.result == NodeResult::Applied)
             .count();
         format!(
-            "apply at {}: {suspended} suspended, {resumed} resumed, {held_back} held back, {kept} kept suspended, {removed} removed, {applied} of {} node(s) behind applied; {} failure(s)",
+            "apply at {}: {suspended} suspended, {resumed} resumed, {held_back} held back, {kept} kept suspended, {removed} removed, {applied} of {} node(s) behind applied{revocations}; {} failure(s)",
             stamp(self.at),
             self.nodes.len(),
             self.failures()
