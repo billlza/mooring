@@ -25,6 +25,7 @@ use crate::allowed_networks::{
 use crate::durable::{existing_regular_file, regular_file};
 use crate::error::{IoOp, StoreError};
 use crate::latch::{LATCH_FILE, read_latch, write_latch};
+use crate::pending_applies::{PENDING_APPLIES_FILE, read_pending_applies, write_pending_applies};
 use crate::radio_history::{append_radio_line, radio_day_path, read_radio_day};
 use crate::router_pin::{ROUTER_PIN_FILE, read_router_pin, write_router_pin};
 use crate::sim_meter::{SIM_METER_FILE, USAGE_DIRECTORY, read_sim_meter, write_sim_meter};
@@ -47,9 +48,9 @@ fn day() -> CalendarDate {
 }
 
 /// Every read of a store file: the exit's latch, the router identity, the
-/// own-network declarations, the state, the SIM meter and a radio history
-/// day file.
-const READS: [Read; 6] = [
+/// own-network declarations, the state, the SIM meter, a radio history day
+/// file and the record of pending applies.
+const READS: [Read; 7] = [
     Read {
         path: |dir| dir.join(LATCH_FILE),
         write: |dir| write_latch(dir, &latch()).unwrap(),
@@ -82,6 +83,11 @@ const READS: [Read; 6] = [
         path: |dir| radio_day_path(dir, day()),
         write: |dir| append_radio_line(dir, day(), b"a\n").unwrap(),
         read: |dir| read_radio_day(dir, day()).map(|found| format!("{found:?}")),
+    },
+    Read {
+        path: |dir| dir.join(PENDING_APPLIES_FILE),
+        write: |dir| write_pending_applies(dir, b"{\"version\": 1}\n").unwrap(),
+        read: |dir| read_pending_applies(dir, 64).map(|found| format!("{found:?}")),
     },
 ];
 

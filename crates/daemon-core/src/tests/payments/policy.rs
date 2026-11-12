@@ -46,7 +46,7 @@ fn quota(bytes: u64, warn: u8, action: QuotaAction) -> UserQuota {
 /// The ledger after applying `entries` live at `at` for `users`.
 fn granted(users: &BTreeMap<UserId, User>, entries: Vec<Value>, at: UnixTime) -> PaymentLedger {
     PaymentLedger::new()
-        .apply(&live(0, entries), users, at, false)
+        .apply(&live(0, entries), users, at, false, None)
         .unwrap()
         .ledger
 }
@@ -197,9 +197,12 @@ fn a_pack_raises_the_quota_of_its_cycle_only() {
     assert_eq!(policy_of(a, None, &paid, NOW).quota, Some(with_packs));
     let entitlements = paid.user(&id("pilotusera")).unwrap();
     assert_eq!(entitlements.packs().len(), 2);
-    assert_eq!(entitlements.pack_bytes_in(cycle(NOW)), 100 * GB);
+    assert_eq!(entitlements.pack_bytes_in(cycle(NOW), NOW, 0), 100 * GB);
     let next_cycle = cycle(NOW).ends_at();
-    assert_eq!(entitlements.pack_bytes_in(cycle(next_cycle)), 0);
+    assert_eq!(
+        entitlements.pack_bytes_in(cycle(next_cycle), next_cycle, 0),
+        0
+    );
     assert_eq!(
         policy_of(a, None, &paid, next_cycle).quota,
         Some(paid_quota(NonZeroU64::new(100 * GB).unwrap()))
@@ -256,6 +259,7 @@ fn evaluate_reads_the_paid_policy() {
             &users,
             secs(now - DAY),
             false,
+            None,
         )
         .unwrap()
         .ledger;
@@ -263,9 +267,9 @@ fn evaluate_reads_the_paid_policy() {
     let usage = |served: u64| CycleUsage {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), NOW).unwrap(),
         through: NOW,
-        served: ids.iter().map(|id| (id.clone(), served)).collect(),
+        served: ids.iter().map(|id| (id.clone(), Some(served))).collect(),
     };
-    let actions = evaluate(&deployment, &paid, &usage(0), NOW).unwrap();
+    let actions = evaluate(&deployment, &paid, Some(&usage(0)), NOW).unwrap();
     let expected_first = UserAction {
         user: ids[0].clone(),
         action: PolicyAction::Suspend(mooring_model::SuspendReason::Expired),
@@ -275,7 +279,7 @@ fn evaluate_reads_the_paid_policy() {
         !actions.iter().any(|action| action.user == ids[1]),
         "{actions:?}"
     );
-    let over = evaluate(&deployment, &paid, &usage(100 * GB), NOW).unwrap();
+    let over = evaluate(&deployment, &paid, Some(&usage(100 * GB)), NOW).unwrap();
     assert!(
         over.contains(&UserAction {
             user: ids[1].clone(),
@@ -286,7 +290,7 @@ fn evaluate_reads_the_paid_policy() {
             }),
         })
     );
-    let near = evaluate(&deployment, &paid, &usage(80 * GB), NOW).unwrap();
+    let near = evaluate(&deployment, &paid, Some(&usage(80 * GB)), NOW).unwrap();
     assert!(near.contains(&UserAction {
         user: ids[1].clone(),
         action: PolicyAction::Warn(PolicyWarning::QuotaNear {
@@ -299,9 +303,9 @@ fn evaluate_reads_the_paid_policy() {
     let soon_usage = CycleUsage {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), soon).unwrap(),
         through: soon,
-        served: ids.iter().map(|id| (id.clone(), 0)).collect(),
+        served: ids.iter().map(|id| (id.clone(), Some(0))).collect(),
     };
-    let warned = evaluate(&deployment, &paid, &soon_usage, soon).unwrap();
+    let warned = evaluate(&deployment, &paid, Some(&soon_usage), soon).unwrap();
     assert!(warned.contains(&UserAction {
         user: ids[1].clone(),
         action: PolicyAction::Warn(PolicyWarning::ExpiresSoon {
@@ -323,7 +327,13 @@ fn a_dispute_never_suspends_the_user() {
     terms.user = Box::leak(ids[0].as_str().to_owned().into_boxed_str());
     let paid = granted(&users, vec![terms.grant(1)], NOW);
     let disputed = paid
-        .apply(&live(1, vec![terms.dispute(2, 800)]), &users, NOW, false)
+        .apply(
+            &live(1, vec![terms.dispute(2, 800)]),
+            &users,
+            NOW,
+            false,
+            None,
+        )
         .unwrap();
     assert_eq!(
         disputed.events,
@@ -347,9 +357,9 @@ fn a_dispute_never_suspends_the_user() {
     let usage = CycleUsage {
         cycle: BillingCycle::of_instant(deployment.exit().sim.cycle(), two_days_on).unwrap(),
         through: two_days_on,
-        served: ids.iter().map(|id| (id.clone(), 0)).collect(),
+        served: ids.iter().map(|id| (id.clone(), Some(0))).collect(),
     };
-    let actions = evaluate(&deployment, &after, &usage, two_days_on).unwrap();
+    let actions = evaluate(&deployment, &after, Some(&usage), two_days_on).unwrap();
     assert!(
         !actions.iter().any(|action| action.user == ids[0]),
         "{actions:?}"

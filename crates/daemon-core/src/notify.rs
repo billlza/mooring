@@ -291,7 +291,7 @@ fn users_line(status: &MacStatusV2) -> String {
             UserStatus::Active => active += 1,
             UserStatus::Suspended { .. } => suspended += 1,
             UserStatus::RevokePending => revoking += 1,
-            UserStatus::Revoked => {}
+            UserStatus::Revoked { .. } => {}
         }
     }
     format!("Users {active} active, {suspended} suspended, {revoking} revoking")

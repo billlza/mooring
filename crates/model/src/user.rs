@@ -84,6 +84,9 @@ pub enum SuspendReason {
 /// node (`RetirementShutDown`, `PlanCancelled`), and never goes back.
 /// Suspending and resuming change which users the nodes serve, so they are
 /// configuration changes that bump `config_generation`, never bookkeeping.
+/// A revoked user leaves the deployment only by the bookkeeping record
+/// `RevokedUserRemoved` (design §15.7): 13 months after its revocation, or
+/// at once on its request (`user forget`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum UserStatus {
@@ -104,8 +107,17 @@ pub enum UserStatus {
     /// left the user is `Revoked`. The remaining set is never stored apart
     /// from `per_node`, so the two cannot disagree.
     RevokePending,
-    /// Revoked on every node; the user holds no credentials.
-    Revoked,
+    /// Revoked on every node; the user holds no credentials. The Mac keeps
+    /// the user's records until 13 months after `since`, when the apply job
+    /// removes them, or until the user asks for them to go
+    /// (`RevokedUserRemoved`, design §15.7).
+    Revoked {
+        /// When the user became revoked: the last node committed the
+        /// revocation, or the user held credentials on none. A state of
+        /// version 2, which kept no time, lifts with the lift's time, which
+        /// can only delay the removal.
+        since: UnixTime,
+    },
 }
 
 impl UserStatus {
@@ -117,26 +129,27 @@ impl UserStatus {
     /// Nothing else: a suspension is not re-labelled in place, and a
     /// revocation settles only through bookkeeping
     /// (`Bookkeeping::RevocationCommitted`, or a record that drops the
-    /// last node it waits on) and never goes back. The store refuses any
-    /// other change (`UserStatusEdited`).
+    /// last node it waits on) and never goes back, and a revocation's time
+    /// is never edited. The store refuses any other change
+    /// (`UserStatusEdited`), and every removal: a user leaves only by the
+    /// record `RevokedUserRemoved`.
     #[must_use]
     pub fn may_change_to(self, next: Self) -> bool {
         match (self, next) {
             (from, to) if from == to => true,
             (Self::Active, Self::Suspended { .. })
             | (Self::Suspended { .. }, Self::Active)
-            | (Self::Active | Self::Suspended { .. }, Self::RevokePending | Self::Revoked) => true,
+            | (Self::Active | Self::Suspended { .. }, Self::RevokePending | Self::Revoked { .. }) => {
+                true
+            }
             _ => false,
         }
     }
 
-    /// Whether a configuration change may remove a user with this status
-    /// from the deployment: only a revoked user, who holds no credentials.
-    /// Every other user leaves through revocation, which tracks the nodes
-    /// still to commit it.
+    /// Whether the user is revoked, at any time.
     #[must_use]
-    pub const fn may_be_removed(self) -> bool {
-        matches!(self, Self::Revoked)
+    pub const fn is_revoked(self) -> bool {
+        matches!(self, Self::Revoked { .. })
     }
 }
 
@@ -382,24 +395,32 @@ impl User {
         Ok(())
     }
 
-    /// Starts revoking an active or suspended user
+    /// Starts revoking an active or suspended user at `at`
     /// (`RevocationAlreadyStarted` otherwise): `RevokePending` on the nodes
-    /// holding its credentials, or `Revoked` at once when none does.
-    pub fn revoke(&mut self) -> Result<(), ModelError> {
+    /// holding its credentials, or `Revoked` since `at` when none does.
+    pub fn revoke(&mut self, at: UnixTime) -> Result<(), ModelError> {
         match self.status {
             UserStatus::Active | UserStatus::Suspended { .. } => {}
-            UserStatus::RevokePending | UserStatus::Revoked => {
+            UserStatus::RevokePending | UserStatus::Revoked { .. } => {
                 return Err(ModelError::RevocationAlreadyStarted {
                     user: self.id.clone(),
                 });
             }
         }
         self.status = if self.per_node.is_empty() {
-            UserStatus::Revoked
+            UserStatus::Revoked { since: at }
         } else {
             UserStatus::RevokePending
         };
         Ok(())
+    }
+
+    /// A user pending revocation with no node left to commit it becomes
+    /// revoked at `at`; any other user is left as it is.
+    pub(crate) fn settle_revocation(&mut self, at: UnixTime) {
+        if self.status == UserStatus::RevokePending && self.per_node.is_empty() {
+            self.status = UserStatus::Revoked { since: at };
+        }
     }
 }
 
@@ -479,7 +500,10 @@ mod tests {
         for (status, json) in [
             (UserStatus::Active, "\"active\"".to_owned()),
             (UserStatus::RevokePending, "\"revoke_pending\"".to_owned()),
-            (UserStatus::Revoked, "\"revoked\"".to_owned()),
+            (
+                UserStatus::Revoked { since },
+                r#"{"revoked":{"since":1791417600}}"#.to_owned(),
+            ),
             (
                 UserStatus::Suspended {
                     reason: SuspendReason::Operator,
@@ -527,6 +551,11 @@ mod tests {
             r#"{"suspended":{"reason":"quota_exceeded","since":1}}"#,
             r#"{"suspended":{"reason":{"quota_exceeded":{"cycle_start":"2026-10-01","bytes":1}},"since":1}}"#,
             r#"{"suspended":{"reason":"holiday","since":1}}"#,
+            // Version 2's form, which kept no time, is a decode error: a
+            // version-2 document lifts through its own types.
+            "\"revoked\"",
+            r#"{"revoked":{}}"#,
+            r#"{"revoked":{"since":1,"by":"me"}}"#,
         ] {
             assert!(serde_json::from_str::<UserStatus>(bad).is_err(), "{bad}");
         }
@@ -564,13 +593,18 @@ mod tests {
             reason: SuspendReason::Operator,
             since: UnixTime::from_secs(since.as_secs() + 1),
         };
+        let revoked = UserStatus::Revoked { since };
+        let revoked_later = UserStatus::Revoked {
+            since: UnixTime::from_secs(since.as_secs() + 1),
+        };
         let all = [
             UserStatus::Active,
             operator,
             expired,
             later,
             UserStatus::RevokePending,
-            UserStatus::Revoked,
+            revoked,
+            revoked_later,
         ];
         let suspended = |status: UserStatus| matches!(status, UserStatus::Suspended { .. });
         for from in all {
@@ -579,15 +613,17 @@ mod tests {
                     || (from == UserStatus::Active && suspended(to))
                     || (suspended(from) && to == UserStatus::Active)
                     || ((from == UserStatus::Active || suspended(from))
-                        && matches!(to, UserStatus::RevokePending | UserStatus::Revoked));
+                        && matches!(to, UserStatus::RevokePending | UserStatus::Revoked { .. }));
                 assert_eq!(from.may_change_to(to), expected, "{from:?} -> {to:?}");
             }
             assert_eq!(
-                from.may_be_removed(),
-                from == UserStatus::Revoked,
+                from.is_revoked(),
+                matches!(from, UserStatus::Revoked { .. }),
                 "{from:?}"
             );
         }
+        // A revocation's time is never edited.
+        assert!(!revoked.may_change_to(revoked_later));
         // Every step the methods take is allowed.
         let mut held = user();
         let mut none = user();
@@ -601,13 +637,13 @@ mod tests {
             assert!(suspended.may_change_to(user.status));
             user.suspend(SuspendReason::AbuseReview, since).unwrap();
             let suspended = user.status;
-            user.revoke().unwrap();
+            user.revoke(since).unwrap();
             assert!(suspended.may_change_to(user.status));
         }
         assert_eq!(held.status, UserStatus::RevokePending);
-        assert_eq!(none.status, UserStatus::Revoked);
+        assert_eq!(none.status, UserStatus::Revoked { since });
         let mut active = user();
-        active.revoke().unwrap();
+        active.revoke(since).unwrap();
         assert!(UserStatus::Active.may_change_to(active.status));
     }
 
@@ -648,11 +684,11 @@ mod tests {
 
         // A suspended user can be revoked; revocation never goes back.
         user.suspend(SuspendReason::Expired, since).unwrap();
-        user.revoke().unwrap();
+        user.revoke(since).unwrap();
         assert_eq!(user.status, UserStatus::RevokePending);
         assert_eq!(user.per_node, held);
         assert_eq!(
-            user.clone().revoke(),
+            user.clone().revoke(since),
             Err(ModelError::RevocationAlreadyStarted {
                 user: user.id.clone()
             })
@@ -669,10 +705,21 @@ mod tests {
                 user: user.id.clone()
             })
         );
+        // The last node's commit settles the revocation at its time.
+        let settled = UnixTime::from_secs(since.as_secs() + 600);
+        user.settle_revocation(settled);
+        assert_eq!(user.status, UserStatus::RevokePending, "nodes are left");
         user.per_node.clear();
-        user.status = UserStatus::Revoked;
+        user.settle_revocation(settled);
+        assert_eq!(user.status, UserStatus::Revoked { since: settled });
+        user.settle_revocation(UnixTime::from_secs(settled.as_secs() + 1));
         assert_eq!(
-            user.clone().revoke(),
+            user.status,
+            UserStatus::Revoked { since: settled },
+            "a revoked user keeps the time it was revoked"
+        );
+        assert_eq!(
+            user.clone().revoke(since),
             Err(ModelError::RevocationAlreadyStarted {
                 user: user.id.clone()
             })
@@ -681,8 +728,13 @@ mod tests {
         // An active user holding no credentials is revoked at once.
         let mut bare = self::user();
         bare.per_node.clear();
-        bare.revoke().unwrap();
-        assert_eq!(bare.status, UserStatus::Revoked);
+        bare.revoke(settled).unwrap();
+        assert_eq!(bare.status, UserStatus::Revoked { since: settled });
+        // An active user is never settled.
+        let mut active = self::user();
+        active.per_node.clear();
+        active.settle_revocation(settled);
+        assert_eq!(active.status, UserStatus::Active);
     }
 
     #[test]

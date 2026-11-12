@@ -188,7 +188,7 @@ fn a_paid_users_row_shows_the_paid_policy() {
     });
     let page = FeedPage::decode(&serde_json::to_vec(&document).unwrap(), 0).unwrap();
     let ledger = PaymentLedger::new()
-        .apply(&page, fixture.deployment.users(), at(), false)
+        .apply(&page, fixture.deployment.users(), at(), false, None)
         .unwrap()
         .ledger;
     let paid = assembled_with(

@@ -23,24 +23,36 @@
 //!   traffic pack at `now` (design §9.6). A grant for a user the deployment
 //!   does not hold, or one being revoked, is held, not granted, and the
 //!   cursor moves past it.
-//! - **Refunds and disputes** are recorded and change nothing.
+//! - **Refunds and disputes** are recorded. The first refund in full of a
+//!   granted order takes back what the order gave that the user had not
+//!   used yet ([`super::refund`]; the operator's decision of 2026-11-12):
+//!   the ledger records what the daemon's usage report said of the user's
+//!   use of a pack it takes back, and the time taken back follows from the
+//!   grants and refunds ([`PaymentLedger::take_backs`]). Nothing else of
+//!   either changes anything.
 //! - **Test mode** (contract §5.3): a page of Stripe's test mode is applied
 //!   only while the operator rehearses ([`ApplyRefusal::TestMode`]), and its
 //!   grants count only while the rehearsal lasts ([`Entitlements`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mooring_model::date::SECS_PER_DAY;
-use mooring_model::{CalendarDate, UnixTime, User, UserId, UserStatus};
+use mooring_model::user::SuspendReason;
+use mooring_model::{CalendarDate, Deployment, UnixTime, User, UserId, UserStatus};
 use serde::{Deserialize, Serialize};
 
-use super::entitlement::{Entitlements, PaidPack, PaidPeriod};
+use super::entitlement::{Entitlements, PackRefund, PaidPack, PaidPeriod};
 use super::error::{ApplyRefusal, Contradiction, LedgerError};
 use super::feed::{EntryEvent, FeedEntry, FeedPage, OrderTerms};
 use super::ids::OrderId;
+use super::refund::{PackUse, RefundEffect, TakeBacks, pack_taken_back};
+use crate::usage::CycleUsage;
 
-/// The ledger's version.
-pub const LEDGER_VERSION: u32 = 1;
+mod v1;
+
+/// The ledger's version: 2 since refunds in full take back (2026-11-12),
+/// recording a pack's use. Version 1 is read and lifted.
+pub const LEDGER_VERSION: u32 = 2;
 
 /// The largest ledger written or read, in bytes. An order takes about
 /// 700 bytes, so this holds thousands of orders.
@@ -159,6 +171,11 @@ pub struct RefundRecord {
     pub recorded_at: UnixTime,
     /// When Mooring recorded it.
     pub applied_at: UnixTime,
+    /// On the refund that takes a granted traffic pack back (the order's
+    /// first in full), what Mooring knew of the user's use then; `None` on
+    /// every other refund. The key is required.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub pack_use: Option<PackUse>,
 }
 
 /// A dispute entry.
@@ -218,12 +235,11 @@ impl OrderRecord {
         )
     }
 
-    /// The order's period, if its grant gave one.
-    fn period(&self) -> Option<(UnixTime, UnixTime)> {
-        match self.grant?.outcome {
-            GrantOutcome::Period { from, until } => Some((from, until)),
-            GrantOutcome::Pack | GrantOutcome::Held { .. } => None,
-        }
+    /// The order's first refund in full, the one that takes back what the
+    /// order gave, if any.
+    #[must_use]
+    pub fn first_refund_in_full(&self) -> Option<&RefundRecord> {
+        self.refunds.iter().find(|refund| refund.refunded_in_full)
     }
 
     /// Whether the order counts: always when paid in live mode, and while
@@ -233,11 +249,19 @@ impl OrderRecord {
     }
 }
 
+/// The version of a document on disk, read first to choose its shape.
+#[derive(Debug, Deserialize)]
+struct Version {
+    version: u32,
+}
+
 /// The document on disk, as read.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LedgerFile {
-    version: u32,
+    /// [`LEDGER_VERSION`], read first ([`Version`]).
+    #[serde(rename = "version")]
+    _version: u32,
     cursor: u64,
     #[serde(deserialize_with = "Option::deserialize")]
     pulled_at: Option<UnixTime>,
@@ -283,8 +307,12 @@ pub enum LedgerEvent {
         outcome: GrantOutcome,
         /// Whether it was paid in Stripe's live mode.
         livemode: bool,
-        /// Whether the user is suspended, which only the operator lifts.
-        suspended: bool,
+        /// Why the user is suspended, if they are: the apply job resumes a
+        /// suspension at expiry once the user's paid time runs past its
+        /// run, and one for quota once the user's quota covers what they
+        /// used this cycle, or in the next billing cycle; only the operator
+        /// lifts the others (design §13.6).
+        suspended: Option<SuspendReason>,
     },
     /// A grant was held.
     Held {
@@ -295,18 +323,19 @@ pub enum LedgerEvent {
         /// Why.
         reason: HeldReason,
     },
-    /// A refund was recorded; it changes nothing.
+    /// A refund was recorded. The daemon's log names the order only: a
+    /// line can outlive the 13 months the agreement keeps a user's records.
     Refunded {
         /// The order.
         order: OrderId,
-        /// The user.
-        user: UserId,
         /// Everything refunded so far.
         amount_refunded: u64,
         /// Whether that is all of the payment.
         in_full: bool,
         /// Whether Mooring granted the order ([`OrderRecord::granted`]).
         granted: bool,
+        /// What it took back.
+        effect: RefundEffect,
     },
     /// A dispute was recorded; it changes nothing.
     Disputed {
@@ -337,6 +366,16 @@ pub struct Applied {
     pub events: Vec<LedgerEvent>,
 }
 
+/// What [`PaymentLedger::without_removed_users`] took out, by count: the
+/// daemon's log names no removed user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pruned {
+    /// The removed users whose orders went.
+    pub users: usize,
+    /// The orders that went.
+    pub orders: usize,
+}
+
 /// The payment ledger.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaymentLedger {
@@ -353,22 +392,29 @@ impl PaymentLedger {
         Self::default()
     }
 
-    /// Reads a ledger the daemon wrote. Besides its shape and version,
-    /// orders are in id order and each once, every recorded entry is at or
-    /// below the cursor, a grant's number is below its refunds' and
-    /// dispute's, a period ends after it starts and within the calendar, a
-    /// period or pack is of an order of its kind, and each refund's amount
-    /// and flag are recorded once.
+    /// Reads a ledger the daemon wrote, of this version or version 1,
+    /// which is lifted: its refund that takes a pack back gets a use not
+    /// known ([`PackUse::Unknown`]). Besides its shape and version, orders are
+    /// in id order and each once, every recorded entry is at or below the
+    /// cursor, a grant's number is below its refunds' and dispute's, a
+    /// period ends after it starts and within the calendar, a period or
+    /// pack is of an order of its kind, each refund's amount and flag are
+    /// recorded once, and a pack's use is recorded on the refund that takes
+    /// a granted pack back and on no other.
     pub fn decode(bytes: &[u8]) -> Result<Self, LedgerError> {
         if bytes.len() > MAX_LEDGER_BYTES {
             return Err(LedgerError::TooLarge);
         }
-        let file: LedgerFile = serde_json::from_slice(bytes).map_err(LedgerError::Decode)?;
-        if file.version != LEDGER_VERSION {
-            return Err(LedgerError::UnknownVersion {
-                found: file.version,
-            });
-        }
+        let Version { version } = serde_json::from_slice(bytes).map_err(LedgerError::Decode)?;
+        let file = match version {
+            LEDGER_VERSION => {
+                serde_json::from_slice::<LedgerFile>(bytes).map_err(LedgerError::Decode)?
+            }
+            v1::VERSION => serde_json::from_slice::<v1::LedgerFile>(bytes)
+                .map_err(LedgerError::Decode)?
+                .lift(),
+            found => return Err(LedgerError::UnknownVersion { found }),
+        };
         let mut orders = BTreeMap::new();
         for record in file.orders {
             if orders
@@ -424,6 +470,52 @@ impl PaymentLedger {
         &self.orders
     }
 
+    /// A copy without the orders of users removed from `deployment`, or
+    /// `None` when it has none (design §9.6; the agreement's clause 4: a
+    /// user's payment records go 13 months after the revocation, or at once
+    /// on the user's request). An order goes when the deployment no longer
+    /// holds its user and either keeps the user's bare id (a removal at the
+    /// user's request) or the ledger granted the order, or held it while
+    /// the user was being revoked or beyond the calendar: the user was the
+    /// deployment's then, so it has been removed since. An order held for
+    /// an id the deployment never held (`unknown_user`), or known only from
+    /// a refund or dispute, stays unless the id is kept: nothing tells it
+    /// apart from an order the portal sent for a user Mooring never had,
+    /// which the operator settles at Stripe. The cursor, the last pull and
+    /// the stop stay. Dropping an order forgets that it was granted, which
+    /// matters only if the portal sent it again, which it does only after
+    /// its journal was rewound (contract §5.1).
+    #[must_use]
+    pub fn without_removed_users(&self, deployment: &Deployment) -> Option<(Self, Pruned)> {
+        let removed = |record: &OrderRecord| {
+            let user = &record.terms.user;
+            !deployment.users().contains_key(user)
+                && (deployment.forgotten().contains_key(user)
+                    || record.grant.is_some_and(|grant| {
+                        grant.outcome
+                            != (GrantOutcome::Held {
+                                reason: HeldReason::UnknownUser,
+                            })
+                    }))
+        };
+        let gone: Vec<&OrderRecord> = self
+            .orders
+            .values()
+            .filter(|record| removed(record))
+            .collect();
+        if gone.is_empty() {
+            return None;
+        }
+        let users: BTreeSet<&UserId> = gone.iter().map(|record| &record.terms.user).collect();
+        let pruned = Pruned {
+            users: users.len(),
+            orders: gone.len(),
+        };
+        let mut next = self.clone();
+        next.orders.retain(|_, record| !removed(record));
+        Some((next, pruned))
+    }
+
     /// A copy with `stop` in force (or none), and nothing else changed.
     #[must_use]
     pub fn with_stop(&self, stop: Option<Stop>) -> Self {
@@ -435,14 +527,17 @@ impl PaymentLedger {
 
     /// Applies `page`, which follows the ledger's cursor, to a copy at
     /// `now`, for the deployment's `users`; `rehearsal` when the operator
-    /// rehearses. The copy has the page's cursor, `now` as its last pull
-    /// and no stop.
+    /// rehearses. `usage` is the daemon's report of the billing cycle at
+    /// `now`, `None` when it has none: a refund in full of a pack records
+    /// what it says of the user's use ([`PackUse`]). The copy has the
+    /// page's cursor, `now` as its last pull and no stop.
     pub fn apply(
         &self,
         page: &FeedPage,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         rehearsal: bool,
+        usage: Option<&CycleUsage>,
     ) -> Result<Applied, ApplyRefusal> {
         if !page.livemode() && !rehearsal {
             return Err(ApplyRefusal::TestMode);
@@ -457,7 +552,7 @@ impl PaymentLedger {
         let mut events = Vec::with_capacity(page.entries().len());
         for entry in page.entries() {
             let event = next
-                .apply_entry(entry, page.livemode(), users, now)
+                .apply_entry(entry, page.livemode(), users, now, usage)
                 .map_err(|contradiction| ApplyRefusal::Contradicted {
                     seq: entry.seq,
                     order: entry.order.clone(),
@@ -476,9 +571,12 @@ impl PaymentLedger {
 
     /// What the orders that count give each user: every order paid in live
     /// mode, and while the operator rehearses (`rehearsal`) those paid in
-    /// test mode too.
+    /// test mode too. A period counts as the refunds in full leave it
+    /// ([`Self::take_backs`]), and a pack refunded in full carries its
+    /// refund.
     #[must_use]
     pub fn entitlements(&self, rehearsal: bool) -> Entitlements {
+        let take_backs = self.take_backs();
         let mut entitlements = Entitlements::default();
         for record in self.orders.values() {
             if !record.counts(rehearsal) {
@@ -489,16 +587,20 @@ impl PaymentLedger {
             };
             let user = record.terms.user.clone();
             match grant.outcome {
-                GrantOutcome::Period { from, until } => entitlements.add_period(
-                    user,
-                    PaidPeriod {
-                        order: record.order.clone(),
-                        from,
-                        until,
-                        quota_bytes: record.terms.traffic_bytes,
-                        livemode: record.livemode,
-                    },
-                ),
+                GrantOutcome::Period { .. } => {
+                    if let Some((from, until)) = take_backs.period(record) {
+                        entitlements.add_period(
+                            user,
+                            PaidPeriod {
+                                order: record.order.clone(),
+                                from,
+                                until,
+                                quota_bytes: record.terms.traffic_bytes,
+                                livemode: record.livemode,
+                            },
+                        );
+                    }
+                }
                 GrantOutcome::Pack => entitlements.add_pack(
                     user,
                     PaidPack {
@@ -506,6 +608,12 @@ impl PaymentLedger {
                         granted_at: grant.applied_at,
                         bytes: record.terms.traffic_bytes,
                         livemode: record.livemode,
+                        refund: record.first_refund_in_full().and_then(|refund| {
+                            pack_taken_back(record).map(|used| PackRefund {
+                                at: refund.recorded_at,
+                                used,
+                            })
+                        }),
                     },
                 ),
                 GrantOutcome::Held { .. } => {}
@@ -514,12 +622,30 @@ impl PaymentLedger {
         entitlements
     }
 
+    /// What the refunds in full took back: each period as it counts, and
+    /// what each refund did (design §9.6).
+    #[must_use]
+    pub fn take_backs(&self) -> TakeBacks {
+        TakeBacks::of(self.orders.values())
+    }
+
+    /// [`Self::take_backs`] for `user`'s orders alone, which is all a
+    /// refund of theirs reaches: a period follows only its own user's.
+    fn take_backs_of(&self, user: &UserId) -> TakeBacks {
+        TakeBacks::of(
+            self.orders
+                .values()
+                .filter(|record| record.terms.user == *user),
+        )
+    }
+
     fn apply_entry(
         &mut self,
         entry: &FeedEntry,
         livemode: bool,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
+        usage: Option<&CycleUsage>,
     ) -> Result<LedgerEvent, Contradiction> {
         if let Some(record) = self.orders.get(&entry.order) {
             if record.terms != entry.terms {
@@ -537,8 +663,8 @@ impl PaymentLedger {
             } => {
                 let record = self.record_of(entry, livemode);
                 let granted = record.granted();
-                let user = record.terms.user.clone();
                 let order = record.order.clone();
+                let user = record.terms.user.clone();
                 let repeated = record.refunds.iter().any(|refund| {
                     refund.amount_refunded == amount_refunded && refund.refunded_in_full == in_full
                 });
@@ -548,19 +674,27 @@ impl PaymentLedger {
                         order,
                     });
                 }
+                let takes_back = in_full && record.first_refund_in_full().is_none();
+                let pack_use = match record.grant {
+                    Some(grant) if takes_back && grant.outcome == GrantOutcome::Pack => {
+                        Some(PackUse::of(usage, &record.terms.user, grant.applied_at))
+                    }
+                    _ => None,
+                };
                 record.refunds.push(RefundRecord {
                     seq: entry.seq,
                     amount_refunded,
                     refunded_in_full: in_full,
                     recorded_at: entry.recorded_at,
                     applied_at: now,
+                    pack_use,
                 });
                 Ok(LedgerEvent::Refunded {
                     order,
-                    user,
                     amount_refunded,
                     in_full,
                     granted,
+                    effect: self.take_backs_of(&user).effect(entry.seq),
                 })
             }
             EntryEvent::Dispute { amount_disputed } => {
@@ -627,19 +761,19 @@ impl PaymentLedger {
                 GrantOutcome::Held {
                     reason: HeldReason::UnknownUser,
                 },
-                false,
+                None,
             ),
             Some(user) => match user.status {
-                UserStatus::RevokePending | UserStatus::Revoked => (
+                UserStatus::RevokePending | UserStatus::Revoked { .. } => (
                     GrantOutcome::Held {
                         reason: HeldReason::UserRevoked,
                     },
-                    false,
+                    None,
                 ),
-                UserStatus::Active | UserStatus::Suspended { .. } => (
-                    self.outcome_for(user, terms, livemode, now),
-                    matches!(user.status, UserStatus::Suspended { .. }),
-                ),
+                UserStatus::Active => (self.outcome_for(user, terms, livemode, now), None),
+                UserStatus::Suspended { reason, .. } => {
+                    (self.outcome_for(user, terms, livemode, now), Some(reason))
+                }
             },
         };
         let mut record = OrderRecord::new(entry.order.clone(), terms.clone(), livemode);
@@ -697,15 +831,17 @@ impl PaymentLedger {
 
     /// The expiry a new period of `user` follows: without a period that a
     /// grant of this mode builds on, the user's own record
-    /// (`UserPolicy::expires_at`); with one, the later of its end and the
-    /// record. A live grant builds on live periods only, so a rehearsal
-    /// never moves real time; a test-mode grant builds on every period.
+    /// (`UserPolicy::expires_at`); with one, the later of its end, as the
+    /// refunds in full leave it, and the record. A live grant builds on
+    /// live periods only, so a rehearsal never moves real time; a test-mode
+    /// grant builds on every period.
     fn paid_expiry(&self, user: &User, livemode: bool) -> Option<UnixTime> {
+        let take_backs = self.take_backs_of(&user.id);
         let last_end = self
             .orders
             .values()
             .filter(|record| record.terms.user == user.id && (record.livemode || !livemode))
-            .filter_map(OrderRecord::period)
+            .filter_map(|record| take_backs.period(record))
             .map(|(_, until)| until)
             .max();
         match (last_end, user.policy.expires_at) {
@@ -751,6 +887,13 @@ fn check_record(record: &OrderRecord, cursor: u64) -> Result<(), LedgerError> {
             GrantOutcome::Pack | GrantOutcome::Held { .. } => {}
         }
     }
+    let first_in_full = record
+        .refunds
+        .iter()
+        .position(|refund| refund.refunded_in_full);
+    let pack = record
+        .grant
+        .is_some_and(|grant| grant.outcome == GrantOutcome::Pack);
     for (index, refund) in record.refunds.iter().enumerate() {
         let again = record.refunds[..index].iter().any(|earlier| {
             earlier.amount_refunded == refund.amount_refunded
@@ -758,6 +901,14 @@ fn check_record(record: &OrderRecord, cursor: u64) -> Result<(), LedgerError> {
         });
         if again {
             return Err(inconsistent("a refund is recorded twice"));
+        }
+        let takes_pack_back = pack && first_in_full == Some(index);
+        if refund.pack_use.is_some() != takes_pack_back {
+            return Err(inconsistent(if takes_pack_back {
+                "the refund that takes a pack back records no use"
+            } else {
+                "a use is recorded on a refund that takes no pack back"
+            }));
         }
     }
     Ok(())

@@ -39,6 +39,7 @@ pub mod own_network;
 pub mod portal;
 pub mod ports;
 pub mod quota;
+pub mod removal;
 pub mod secret;
 pub mod sim;
 pub mod state;
@@ -46,6 +47,7 @@ pub mod target;
 pub mod time;
 pub mod user;
 pub mod v1;
+pub mod v2;
 pub mod verdict;
 pub mod viewer;
 pub mod wg;
@@ -79,6 +81,7 @@ pub use portal::{
 };
 pub use ports::{HopInterval, Hy2Listener, Hy2Obfs, ListenerIdx, Port, PortPlan, PortRange};
 pub use quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
+pub use removal::{ForgottenUser, NODE_MONTH_TOTALS_DAYS, REVOKED_RETENTION_MONTHS};
 pub use secret::{
     MAX_ROUTER_ADMIN_PASSWORD_BYTES, PORTAL_PULL_TOKEN_CHARS, PortalPullToken, RouterAdminPassword,
     Secret, SecretEntry, SecretKind, SecretKindMismatch, SecretMaterial, SecretRef, SecretSnapshot,
@@ -88,7 +91,7 @@ pub use sim::{
     ONE_P_MOBILE_FAIR_USE_BYTES, ONE_P_MOBILE_PERIOD_DAYS, PILOT_SIM_HARD_STOP_BYTES,
     PILOT_SIM_WARN_BYTES, PeriodDays, PlanKind, SimPlan, SimPolicy, SimThresholds, StopPolicy,
 };
-pub use state::{RuntimeIntent, StateFile, StateV2, StateVersion};
+pub use state::{RuntimeIntent, StateFile, StateV3, StateVersion};
 pub use target::{TargetAttestation, TargetSpec, qualify};
 pub use time::UnixTime;
 pub use user::{

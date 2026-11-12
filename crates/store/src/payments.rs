@@ -18,13 +18,10 @@
 //! `NotRegularFile`, and nothing is read through it. A missing file is
 //! none: no pull was ever set up, or none has been recorded.
 
-use std::fs::OpenOptions;
-use std::io::Read;
 use std::path::Path;
 
 use crate::durable::{
-    LockMode, RegularFile, StateLock, existing_private_dir, existing_regular_file, private_dir,
-    write_durably,
+    LockMode, StateLock, existing_private_dir, private_dir, read_limited, write_durably,
 };
 use crate::error::{ChangeError, IoOp, StoreError};
 use crate::store::LOCK_FILE;
@@ -87,24 +84,5 @@ pub fn update_payment_pull<E>(
         return Ok(None);
     };
     write_durably(support, PAYMENT_PULL_FILE, &bytes)?;
-    Ok(Some(bytes))
-}
-
-/// The regular file at `path`, at most `limit` bytes of it, or `None` when
-/// there is none.
-fn read_limited(path: &Path, limit: usize, op: IoOp) -> Result<Option<Vec<u8>>, StoreError> {
-    let Some(RegularFile { file, .. }) =
-        existing_regular_file(path, OpenOptions::new().read(true), op)?
-    else {
-        return Ok(None);
-    };
-    let mut bytes = Vec::new();
-    file.take(u64::try_from(limit).unwrap_or(u64::MAX))
-        .read_to_end(&mut bytes)
-        .map_err(|source| StoreError::Io {
-            op,
-            path: path.to_path_buf(),
-            source,
-        })?;
     Ok(Some(bytes))
 }

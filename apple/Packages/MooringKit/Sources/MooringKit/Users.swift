@@ -123,7 +123,9 @@ public enum UserStatus: Decodable, Hashable, Sendable {
     case active
     case suspended(reason: SuspendReason, since: UnixTime)
     case revokePending
-    case revoked
+    /// Revoked on every node since `since`: the Mac removes the user's
+    /// records 13 months later, or at once on the user's request.
+    case revoked(since: UnixTime)
 
     public init(from decoder: any Decoder) throws {
         let (tag, value) = try decoder.variant()
@@ -135,7 +137,8 @@ public enum UserStatus: Decodable, Hashable, Sendable {
                 reason: try object.field(SuspendReason.self, "reason"),
                 since: try object.field(UnixTime.self, "since"))
         case ("revoke_pending", nil): self = .revokePending
-        case ("revoked", nil): self = .revoked
+        case ("revoked", let value?):
+            self = .revoked(since: try value.fields("since").field(UnixTime.self, "since"))
         default:
             throw decoder.unknownVariant(tag)
         }

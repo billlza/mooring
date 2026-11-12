@@ -22,7 +22,7 @@ struct NodesView: View {
         } else {
             Form {
                 ForEach(status.sortedNodes, id: \.id) { node in
-                    NodeSection(id: node.id, row: node.row)
+                    NodeSection(id: node.id, row: node.row, at: status.at)
                 }
             }
             .formStyle(.grouped)
@@ -33,6 +33,9 @@ struct NodesView: View {
 struct NodeSection: View {
     let id: NodeId
     let row: NodeRow
+    /// When the daemon made the status, which a pending apply's wait is
+    /// counted to.
+    let at: UnixTime
 
     var body: some View {
         Section {
@@ -59,9 +62,12 @@ struct NodeSection: View {
             applied = String(localized: "none")
         }
         if let since = row.pendingApplySince {
+            // The daemon dates a wait no later than its status (design
+            // §15.3); the wait is counted to the status, not to the clock.
+            let waited = at.seconds - min(since.seconds, at.seconds)
             return String(
                 localized:
-                    "applied \(applied), current \(row.currentGeneration); pending since \(since.text) (`mooringctl node apply`)"
+                    "applied \(applied), current \(row.currentGeneration); pending since \(since.text), \(span(waited)) ago: the nightly apply job applies it, or `mooringctl apply --now`"
             )
         }
         return String(localized: "applied \(applied), current \(row.currentGeneration)")

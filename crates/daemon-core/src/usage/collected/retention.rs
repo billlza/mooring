@@ -8,26 +8,36 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mooring_agent_proto::{Principal, StatsEmail, UsageMonth};
-use mooring_model::{CalendarDate, Deployment, UnixTime, UserId, UserStatus};
+use mooring_model::removal::{REVOKED_RETENTION_MONTHS, months_after};
+use mooring_model::{Deployment, UnixTime, UserId, UserStatus};
 
 use super::{CollectedUsage, Counters, add_counters, corrupt};
 use crate::error::UsageError;
 use crate::wire::accounting_user;
 
+/// 13 calendar months after `at` (F7's retention of the day and month
+/// records and of a revoked user's history): the model's rule, which the
+/// apply job's removal reads too.
 fn after_thirteen_months(at: UnixTime) -> Result<UnixTime, UsageError> {
-    let date = CalendarDate::utc_of(at)?;
-    let ordinal = u32::from(date.year()) * 12 + u32::from(date.month() - 1) + 13;
-    let year = u16::try_from(ordinal / 12).map_err(|_| corrupt("retention date overflows"))?;
-    let month = (ordinal % 12 + 1) as u8;
-    let day = date
-        .day()
-        .min(mooring_model::date::days_in_month(year, month));
-    let boundary = CalendarDate::new(year, month, day)?.utc_start().as_secs();
-    Ok(UnixTime::from_secs(boundary + at.as_secs() % 86_400))
+    Ok(months_after(at, REVOKED_RETENTION_MONTHS)?)
+}
+
+/// Whether `email` counts a removed user whose bare id the deployment keeps
+/// while a node may still name it.
+pub(super) fn names_forgotten(deployment: &Deployment, email: &StatsEmail) -> bool {
+    match &email.principal {
+        Principal::Probe => false,
+        Principal::User(opaque) => {
+            accounting_user(opaque).is_ok_and(|user| deployment.forgotten().contains_key(&user))
+        }
+    }
 }
 
 fn revoked(status: UserStatus) -> bool {
-    matches!(status, UserStatus::Revoked | UserStatus::RevokePending)
+    matches!(
+        status,
+        UserStatus::Revoked { .. } | UserStatus::RevokePending
+    )
 }
 
 /// When a user's retained usage goes, as the prune decides it.
@@ -70,7 +80,11 @@ impl CollectedUsage {
     }
 
     /// Removes counters whose retention has ended before comparing an
-    /// incoming snapshot with the pruned one. Unknown principals still fail.
+    /// incoming snapshot with the pruned one, and those naming a removed
+    /// user whose id the deployment keeps ([`Deployment::forgotten`]): a
+    /// node's records of a user expire on their own schedule, so its reply
+    /// can name one the Mac has deleted, which is dropped on receipt rather
+    /// than stored again. Every other unknown principal still fails.
     pub fn retain_counter_users(
         &self,
         node: &mooring_model::NodeId,
@@ -80,6 +94,10 @@ impl CollectedUsage {
     ) -> Result<(), UsageError> {
         let mut remove = Vec::new();
         for email in counters.keys() {
+            if names_forgotten(deployment, email) {
+                remove.push(email.clone());
+                continue;
+            }
             if let crate::usage::Owner::User(user) =
                 crate::usage::resolve(node, email, deployment.users())?
                 && self.erased(deployment, &user, now)?

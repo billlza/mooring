@@ -224,7 +224,7 @@ fn report_user_row(row: &UserRow) -> Option<ReportUser> {
         UserStatus::Active => ReportUserStatus::Active,
         UserStatus::Suspended { .. } => ReportUserStatus::Suspended,
         UserStatus::RevokePending => ReportUserStatus::RevokePending,
-        UserStatus::Revoked => return None,
+        UserStatus::Revoked { .. } => return None,
     };
     Some(ReportUser {
         status,

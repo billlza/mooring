@@ -508,27 +508,26 @@ pub struct CycleUsage {
     pub cycle: BillingCycle,
     /// The end of the counted time (exclusive).
     pub through: UnixTime,
-    /// Bytes served per user in `[cycle start, through)`.
-    pub served: BTreeMap<UserId, u64>,
+    /// Bytes served per user in `[cycle start, through)`, for every user of
+    /// the deployment: `None` where the figure is unknown (a node's history
+    /// does not cover the cycle, or the user's usage was erased), never
+    /// read as zero.
+    pub served: BTreeMap<UserId, Option<u64>>,
 }
 
 impl UsageReport {
-    /// The cycle's served bytes per user.
+    /// The cycle's served bytes of every user the report covers.
     #[must_use]
-    pub fn cycle_usage(&self) -> Option<CycleUsage> {
-        Some(CycleUsage {
+    pub fn cycle_usage(&self) -> CycleUsage {
+        CycleUsage {
             cycle: self.periods.cycle,
             through: self.periods.through,
             served: self
                 .users
                 .iter()
-                .map(|(user, usage)| {
-                    usage
-                        .cycle_served_bytes()
-                        .map(|bytes| (user.clone(), bytes))
-                })
-                .collect::<Option<_>>()?,
-        })
+                .map(|(user, usage)| (user.clone(), usage.cycle_served_bytes()))
+                .collect(),
+        }
     }
 }
 

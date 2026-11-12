@@ -293,6 +293,7 @@ fn payments_lists_the_pull_and_every_order() {
                 room: Some(std::time::Duration::from_secs(10)),
                 network_clear: &mut clear,
             },
+            &|| None,
         )
     });
     let listed = harness.run(&["portal", "payments"]);
@@ -305,7 +306,7 @@ fn payments_lists_the_pull_and_every_order() {
          orders: 2 (1 held, 1 refunded, 0 disputed)\n\
          \x20 aaaaaaaaaaaaaaaaaaaa user fxuseraaab plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp)\n\
          \x20   grant, entry 1, applied 2026-10-13 19:20:00 UTC: service from 2026-10-13 19:20:00 UTC until 2026-11-12 19:20:00 UTC\n\
-         \x20   refund, entry 2: 300 gbp so far; changes nothing\n\
+         \x20   refund, entry 2: 300 gbp so far; nothing is taken back\n\
          \x20 bbbbbbbbbbbbbbbbbbbb user nobodyhere plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp)\n\
          \x20   grant, entry 3, applied 2026-10-13 19:20:00 UTC: held, not granted (unknown_user): settle it at Stripe\n"
     );
@@ -346,7 +347,7 @@ fn the_portal_snapshot_carries_the_paid_policy() {
     )
     .unwrap();
     let ledger = PaymentLedger::new()
-        .apply(&page, &users, UnixTime::from_secs(NOW), false)
+        .apply(&page, &users, UnixTime::from_secs(NOW), false, None)
         .unwrap()
         .ledger;
     write_payment_ledger(&harness.support_dir(), &ledger.encode().unwrap()).unwrap();

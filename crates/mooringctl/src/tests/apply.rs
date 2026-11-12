@@ -46,6 +46,13 @@ pub(crate) fn ready(deployment: Deployment) -> (Harness, PathBuf) {
     harness.pin(PINNED);
     fill(&mut harness.secrets);
     let dir = harness.home.path().join("engines");
+    stand_in_engines(&mut harness, &dir);
+    (harness, dir)
+}
+
+/// Writes a stand-in file for every pinned engine path under `dir`, and
+/// pins those files for the harness.
+pub(crate) fn stand_in_engines(harness: &mut Harness, dir: &std::path::Path) {
     let mut pins = Vec::new();
     for (path, _) in PINS {
         let file = dir.join(path);
@@ -58,7 +65,6 @@ pub(crate) fn ready(deployment: Deployment) -> (Harness, PathBuf) {
         ));
     }
     harness.engine_pins = pins;
-    (harness, dir)
 }
 
 pub(crate) fn pin_of(harness: &Harness, path: &str) -> Sha256Hex {

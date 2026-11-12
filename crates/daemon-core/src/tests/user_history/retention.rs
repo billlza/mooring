@@ -167,7 +167,9 @@ fn revoked() -> Deployment {
     edited(|parts| {
         for user in &mut parts.users {
             if user.id == subject {
-                user.status = UserStatus::Revoked;
+                user.status = UserStatus::Revoked {
+                    since: UnixTime::from_secs(1_791_417_600),
+                };
                 user.per_node.clear();
             }
         }

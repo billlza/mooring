@@ -208,6 +208,28 @@ pub(crate) fn read_bounded(path: &Path, max: usize, op: IoOp) -> Result<Bounded,
     Ok(Bounded::Document(bytes))
 }
 
+/// The regular file at `path`, at most `limit` bytes of it (a longer file
+/// reads as its first `limit` bytes, which the caller's decoder refuses),
+/// or `None` when there is none. Anything but a regular file there, a link
+/// included, is `NotRegularFile` ([`existing_regular_file`]); any other
+/// failure is `Io{op}`.
+pub(crate) fn read_limited(
+    path: &Path,
+    limit: usize,
+    op: IoOp,
+) -> Result<Option<Vec<u8>>, StoreError> {
+    let Some(RegularFile { file, .. }) =
+        existing_regular_file(path, OpenOptions::new().read(true), op)?
+    else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(limit).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)
+        .map_err(io_error(op, path))?;
+    Ok(Some(bytes))
+}
+
 /// Reads the state file; `NotInitialized` if it does not exist. Anything
 /// but a regular file there, a link included, is `NotRegularFile`
 /// ([`existing_regular_file`]), never `NotInitialized`.

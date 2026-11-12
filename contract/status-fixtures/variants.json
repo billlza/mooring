@@ -912,7 +912,11 @@
       }
     },
     "revoke_pending",
-    "revoked"
+    {
+      "revoked": {
+        "since": 1791417600
+      }
+    }
   ],
   "suspend_reason": [
     "operator",

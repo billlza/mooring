@@ -203,7 +203,9 @@ impl NodeUsageHistory {
     }
 
     /// Validates all stored principals against the current deployment before
-    /// a collected batch is admitted. Unknown emails never become zero users.
+    /// a collected batch is admitted. Unknown emails never become zero users;
+    /// a removed user's kept id ([`Deployment::forgotten`]) is no unknown
+    /// email, since the prune deletes its counters.
     pub fn validate_users(&self, node: &NodeId, deployment: &Deployment) -> Result<(), UsageError> {
         for counters in self
             .months
@@ -214,7 +216,12 @@ impl NodeUsageHistory {
             .chain(self.hour.values())
             .chain(self.day.values())
         {
-            for email in counters.keys() {
+            // A removed user's kept id is skipped: the prune deletes its
+            // counters.
+            for email in counters
+                .keys()
+                .filter(|email| !super::retention::names_forgotten(deployment, email))
+            {
                 resolve(node, email, deployment.users())?;
             }
         }

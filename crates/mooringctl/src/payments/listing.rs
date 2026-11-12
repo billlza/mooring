@@ -5,12 +5,12 @@
 //! names users by id only, as the ledger does.
 
 use mooring_daemon_core::payments::{
-    GrantOutcome, LedgerError, OrderRecord, PaymentLedger, PullSettings, StopReason,
+    GrantOutcome, LedgerError, OrderRecord, PaymentLedger, PullSettings, StopReason, TakeBacks,
 };
 use serde::Serialize;
 
 use super::error::PaymentFileError;
-use super::notes::stamp;
+use super::notes::{stamp, taken_back};
 
 /// The text summary.
 pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedger>) -> String {
@@ -88,8 +88,9 @@ pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedge
         "orders: {} ({held} held, {refunded} refunded, {disputed} disputed)",
         orders.len()
     ));
+    let take_backs = ledger.take_backs();
     for record in orders.values() {
-        order_lines(record, &mut lines);
+        order_lines(record, &take_backs, &mut lines);
     }
     finish(lines)
 }
@@ -100,8 +101,8 @@ fn finish(lines: Vec<String>) -> String {
     text
 }
 
-/// The lines of one order.
-fn order_lines(record: &OrderRecord, lines: &mut Vec<String>) {
+/// The lines of one order, with what the refunds in full took back.
+fn order_lines(record: &OrderRecord, take_backs: &TakeBacks, lines: &mut Vec<String>) {
     let terms = &record.terms;
     lines.push(format!(
         "  {} user {} plan {} ({}, {} days, {} bytes, {} {}){}",
@@ -124,7 +125,25 @@ fn order_lines(record: &OrderRecord, lines: &mut Vec<String>) {
         Some(grant) => {
             let what = match grant.outcome {
                 GrantOutcome::Period { from, until } => {
-                    format!("service from {} until {}", stamp(from), stamp(until))
+                    let counted = match take_backs.period(record) {
+                        Some((now_from, now_until)) if (now_from, now_until) == (from, until) => {
+                            String::new()
+                        }
+                        Some((now_from, now_until)) if now_from == now_until => {
+                            "; a refund in full took all of it back".to_owned()
+                        }
+                        Some((now_from, now_until)) => format!(
+                            "; after refunds in full it counts from {} until {}",
+                            stamp(now_from),
+                            stamp(now_until)
+                        ),
+                        None => String::new(),
+                    };
+                    format!(
+                        "service from {} until {}{counted}",
+                        stamp(from),
+                        stamp(until)
+                    )
                 }
                 GrantOutcome::Pack => {
                     format!(
@@ -148,7 +167,7 @@ fn order_lines(record: &OrderRecord, lines: &mut Vec<String>) {
     }
     for refund in &record.refunds {
         lines.push(format!(
-            "    refund, entry {}: {} {} so far{}; changes nothing",
+            "    refund, entry {}: {} {} so far{}; {}",
             refund.seq,
             refund.amount_refunded,
             terms.currency,
@@ -156,7 +175,8 @@ fn order_lines(record: &OrderRecord, lines: &mut Vec<String>) {
                 ", in full"
             } else {
                 ""
-            }
+            },
+            taken_back(&take_backs.effect(refund.seq))
         ));
     }
     if let Some(dispute) = record.dispute {

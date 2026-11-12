@@ -13,7 +13,7 @@ use mooring_model::collections::NonEmpty;
 use mooring_model::counters::ConfigGeneration;
 use mooring_model::deployment::{Bookkeeping, DeploymentParts};
 use mooring_model::secret::SecretRef;
-use mooring_model::state::StateV2;
+use mooring_model::state::StateV3;
 
 use crate::error::{ChangeError, CleanupFailure, StoreError};
 use mooring_model::secret::SecretEntry;
@@ -52,7 +52,7 @@ pub fn update_config_with_secrets<S, E, F>(
     expected: ConfigGeneration,
     new_secrets: Vec<SecretEntry>,
     change: F,
-) -> Result<StateV2, ChangeError<E>>
+) -> Result<StateV3, ChangeError<E>>
 where
     S: SecretStore + ?Sized,
     F: FnOnce(DeploymentParts) -> Result<DeploymentParts, E>,
@@ -92,7 +92,7 @@ pub fn record_with_secrets<S>(
     secrets: &mut S,
     expected: ConfigGeneration,
     entry: Bookkeeping,
-) -> Result<StateV2, StoreError>
+) -> Result<StateV3, StoreError>
 where
     S: SecretStore + ?Sized,
 {

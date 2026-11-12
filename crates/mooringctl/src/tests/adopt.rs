@@ -24,6 +24,7 @@ use super::cancel::{
 use super::node::{
     ADDRESS, adopt_args, agent_file, hello, planned, root_key, script_after_bootstrap,
 };
+use super::support::NOW;
 use super::support::{
     Answered, COMMITTED, Expected, ExpectedRemote, FailingLog, Harness, MOVED, Refusals,
 };
@@ -31,6 +32,7 @@ use super::user::store;
 use crate::error::EXIT_LOCAL;
 use crate::node::NodeError;
 use crate::prompt::Answer;
+use mooring_model::UnixTime;
 
 fn lon1_lifecycle(harness: &Harness) -> NodeLifecycle {
     store(harness).load().unwrap().deployment.nodes()[&NodeId::parse("lon1").unwrap()]
@@ -579,6 +581,7 @@ fn an_adoption_answered_after_the_node_was_cancelled_opens_no_session() {
             generation,
             Bookkeeping::PlanCancelled {
                 node: NodeId::parse("lon1").unwrap(),
+                at: UnixTime::from_secs(NOW),
             },
         );
         // Its keychain is not the harness's: the commit stands.

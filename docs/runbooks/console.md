@@ -202,7 +202,7 @@ mooringctl portal connect --origin https://<the portal's name>
 mooringctl portal payments
 ```
 
-`portal payments` prints the pull's settings, the cursor, the last pull and any stop, and every order with what Mooring did: a service period, a traffic pack for that billing cycle, or why a grant was held. Refunds and disputes are listed and change nothing. A dispute never suspends the user, as you decided on 2026-11-11; answer it at Stripe. What a refund in full should take back is still yours to decide (design §9.6).
+`portal payments` prints the pull's settings, the cursor, the last pull and any stop, and every order with what Mooring did: a service period, a traffic pack for that billing cycle, or why a grant was held. Refunds and disputes are listed. A dispute changes nothing and never suspends the user, as you decided on 2026-11-11; answer it at Stripe. A refund in full takes back, from the time the portal recorded it, what the order gave that the user had not used yet, as you decided on 2026-11-12: the rest of a month (all of it if it had not begun), with any month queued after it moved as much earlier, and of a pack what the user had not used of it, by the usage the daemon had when it learned of the refund (all of the pack when that usage was not known, as while a node cannot be reached). The next nightly run suspends the user at expiry or for quota if that leaves them there. A partial refund changes nothing. `portal payments` shows under each order what each refund took back (design §9.6). A traffic pack counts only in the billing cycle it was granted in, as you decided on 2026-11-12: what the user has not used of it when that cycle ends is not carried over, and the days its plan names are only recorded.
 
 - **Rehearse first.** In Stripe's test mode the portal's journal says so, and Mooring grants nothing from it unless you rehearse: `mooringctl portal rehearsal on`, pay with Stripe's test cards, check `portal payments` and the console, then `mooringctl portal rehearsal off`, which takes the rehearsal's grants out at once, and `mooring-portal discard-test-payments` on the portal's host before real payments are taken. The cursor carries on.
 - **It pulls only while the Mac is on no foreign network** (the pull goes the Mac's own way, so never over campus Wi-Fi or eduroam). The daemon's log says when it waits.
@@ -211,6 +211,25 @@ mooringctl portal payments
 - `mooringctl portal disconnect` stops the pull and deletes the token; the ledger stays, and what it granted still counts.
 
 The daemon's log has a line for each grant, hold, refund, dispute, failure and stop, by order id and user id.
+
+The ledger keeps a user's orders only while the deployment holds the user: once the user is removed (section 7), the daemon deletes their orders at its next tick and logs how many, naming no one.
+
+## 7. The nightly apply job (2026-11-12)
+
+**Start the Daemon at Login** also registers Mooring's apply job (`com.bill.mooring.apply`), and **Stop the Daemon** unregisters it; the menu shows it as **Apply job: runs nightly at 19:20 UTC**. launchd runs `mooringctl apply --pending` from the app every hour at minute 20; the job acts only between 19:15 and 19:45 UTC (03:15 to 03:45 Beijing time, inside the 3 to 6 a.m. window the agreement and the user guide state), so once a night, in summer and winter time alike. A firing that launchd delivers late, after the Mac slept through 19:20 UTC, does nothing, and the job runs the next night (design §13.6).
+
+A run, in this order:
+1. **Suspends** each active user whose expiry has passed or who used up their quota (their own, the automatic one, or the one their paid month gives), dated at the run; and **resumes** each user whose suspension's cause has gone: suspended for quota in an earlier billing cycle; suspended for quota in this cycle and since given a pack, a paid month or a higher quota that covers what they used (only while the daemon's usage figures are current: with a node unreachable, the next cycle); or suspended at expiry and since paid (or given a later expiry). A pack too small to cover the use is reported, and the user stays suspended. Resumes go earliest suspension first, while fewer users are active than the cap allows; a user the cap holds back stays suspended and is reported, and you decide. A user you suspended yourself, or for an abuse review, is never resumed by the job.
+2. **Removes** each user revoked 13 months ago.
+3. **Applies** every node behind the deployment's generation, as `mooringctl node apply` does. A node that cannot be reached (lon1 while its SSH is down) is reported, and nothing before it waits on it.
+
+Run it at once, whatever the time, with `mooringctl apply --now` (add `--json` for one JSON line); a run already going makes another refuse. The console's Nodes screen shows each pending apply, since when and how long it has waited.
+
+Its log is `~/Library/Logs/Mooring/apply.log`: one line when a run starts, then the counts (suspended, resumed, held back, kept suspended, removed) and each node's outcome. It names no user, since a log can outlive the 13 months the agreement keeps a user's records; `apply --now` prints the users by id. The job refuses its policy step, and only that, when the payment ledger or the usage file cannot be read, or when a suspension is dated after now (a clock that stepped back): the report says why. While a node cannot be reached the daemon has no usage report, so no quota is checked that night, and the report says so; expiry suspensions and resumes still go.
+
+After a new build is installed, launchd refuses the job as it refuses the daemon (`last exit code = 78`, section 1): the same **Stop the Daemon** and **Start the Daemon at Login** that start the daemon again register the job again. Check it with `launchctl print gui/$(id -u)/com.bill.mooring.apply`.
+
+**Removing a user at their request.** `mooringctl user forget <uid>` removes a revoked user at once, with their label, alias and agreement record; the daemon then deletes their usage history and payment orders. It says what goes and asks first (`--yes` to skip the question), and cannot be undone. The bare id stays in `state.json` for a few weeks, until no node can still name it. Only a revoked user can be forgotten.
 
 ## Troubleshooting
 

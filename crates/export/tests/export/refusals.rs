@@ -59,7 +59,9 @@ fn inactive_users_are_refused() {
         parts.users[0].status = UserStatus::RevokePending;
     });
     let revoked = edited(&fixture.deployment, |parts| {
-        parts.users[0].status = UserStatus::Revoked;
+        parts.users[0].status = UserStatus::Revoked {
+            since: UnixTime::from_secs(1_791_417_600),
+        };
         parts.users[0].per_node = BTreeMap::new();
     });
     let suspended: Vec<Deployment> = [

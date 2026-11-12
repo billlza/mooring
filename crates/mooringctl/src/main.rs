@@ -91,6 +91,8 @@
 #[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
+mod apply;
+#[cfg(target_os = "macos")]
 mod backup;
 #[cfg(target_os = "macos")]
 mod cli;
@@ -133,6 +135,8 @@ mod status;
 mod tests;
 #[cfg(target_os = "macos")]
 mod user;
+#[cfg(target_os = "macos")]
+mod user_forget;
 #[cfg(target_os = "macos")]
 mod user_history;
 

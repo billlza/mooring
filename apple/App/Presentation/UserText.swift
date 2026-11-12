@@ -36,7 +36,7 @@ extension UserStatus {
         case .suspended(let reason, let since):
             String(localized: "Suspended (\(reason.text)) since \(since.text)")
         case .revokePending: String(localized: "Revocation pending")
-        case .revoked: String(localized: "Revoked")
+        case .revoked(let since): String(localized: "Revoked since \(since.text)")
         }
     }
 

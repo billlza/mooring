@@ -34,7 +34,7 @@ fn assert_complete<K: Copy + Ord + Display>(
 
 #[test]
 fn kind_lists_are_complete() {
-    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 27);
+    assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 29);
     assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 3);
     assert_complete(SnapshotReadErrorKind::ALL, SnapshotReadErrorKind::name, 2);
     assert_complete(ChangeErrorKind::ALL, ChangeErrorKind::name, 2);
@@ -62,6 +62,14 @@ fn kinds_without_a_reachable_path_still_map() {
     };
     assert_eq!(lock.kind(), StoreErrorKind::Lock);
     assert_eq!(lock.to_string(), "failed to lock /x/state.lock");
+    // Only a Mac whose clock reads before 1970 lifts a version 2 state
+    // without a time to date its revocations at.
+    let clock = StoreError::Clock { to: 3 };
+    assert_eq!(clock.kind(), StoreErrorKind::Clock);
+    assert_eq!(
+        clock.to_string(),
+        "the Mac's clock reads before 1970, so the state cannot be lifted to version 3"
+    );
 }
 
 #[test]
