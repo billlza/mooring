@@ -229,7 +229,7 @@ Its log is `~/Library/Logs/Mooring/apply.log`: one line when a run starts, then 
 
 After a new build is installed, launchd refuses the job as it refuses the daemon (`last exit code = 78`, section 1): the same **Stop the Daemon** and **Start the Daemon at Login** that start the daemon again register the job again. Check it with `launchctl print gui/$(id -u)/com.bill.mooring.apply`.
 
-**Removing a user at their request.** `mooringctl user forget <uid>` removes a revoked user at once, with their label, alias and agreement record; the daemon then deletes their usage history and payment orders. It says what goes and asks first (`--yes` to skip the question), and cannot be undone. The bare id stays in `state.json` for a few weeks, until no node can still name it. Only a revoked user can be forgotten.
+**Removing a user at their request.** `mooringctl user forget <uid>` removes a revoked user at once, with their label, alias and agreement record; the daemon then deletes their usage history and payment orders. Their abuse records stay for their 13 months (section 8). It says what goes and asks first (`--yes` to skip the question), and cannot be undone. The bare id stays in `state.json` for a few weeks, until no node can still name it. Only a revoked user can be forgotten.
 
 ## 8. Abuse cases (2026-11-11)
 
