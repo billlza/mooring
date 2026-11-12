@@ -23,6 +23,7 @@ mod portal;
 mod power;
 mod radio_history;
 mod router;
+mod served_before;
 mod sim_network;
 mod snapshot;
 mod support;

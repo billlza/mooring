@@ -49,7 +49,7 @@ use super::{
     unavailable_reason, wait_for_next_poll,
 };
 use crate::app::Env;
-use crate::daemon::usage::Pulled;
+use crate::daemon::usage::{Pulled, RefundView};
 use crate::error::{CommandError, LocalError};
 use crate::node::NodeError;
 use crate::node::session::ops_session;
@@ -491,14 +491,31 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 ),
                 network_clear: &mut clear_now,
             };
-            let collector = &self.usage;
-            let report = || collector.cycle_usage(deployment, now);
-            for note in self
-                .payments
-                .tick(env, deployment.users(), now, gate, &report)
-            {
+            for note in self.payments.tick(env, deployment.users(), now, gate) {
                 say(log, now, &note)?;
             }
+        }
+        // A refund in full of a traffic pack waits for the usage, and the
+        // use learned takes in REALITY downloads counted later until each
+        // node's Xray has started again (design §9.6): what was collected
+        // by now, and the nodes' latest statuses, may end either. It asks
+        // no node and makes no request. What this tick collected is dated
+        // by a clock read after the tick began, so the step reads the
+        // clock again, as the publishing below does.
+        let settled_at = (env.clock)()?;
+        let settled_cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), settled_at)
+            .map_err(LocalError::Cycle)?;
+        let readings = RefundView {
+            collector: &self.usage,
+            deployment,
+            now: settled_at,
+            polls: &self.polls,
+        };
+        for note in self
+            .payments
+            .settle(Instant::now(), settled_at, settled_cycle, &readings)
+        {
+            say(log, settled_at, &note)?;
         }
         note_failure(
             log,
