@@ -394,6 +394,16 @@
         }
       }
     },
+    "%@, since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@，自 %2$@ 起"
+          }
+        }
+      }
+    },
     "%@: detail through %@; monthly sample %@.": {
       "localizations": {
         "zh-Hans": {
@@ -1190,6 +1200,16 @@
         }
       }
     },
+    "First reported": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "首次报告时间"
+          }
+        }
+      }
+    },
     "Flows %@'s exit flow cap rejected: %llu": {
       "localizations": {
         "zh-Hans": {
@@ -1339,6 +1359,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "如果换了 SIM 卡，或者运营商换了地址段：登记新的地址段（`mooringctl exit record-carrier --replace`，再对每个节点运行 `mooringctl node apply`）。如果是 M7 改走了 Wi-Fi 或以太网卸载，把卸载关掉。然后运行 `mooringctl exit retry`：出口会重新探测，地址通过就恢复服务。"
+          }
+        }
+      }
+    },
+    "If the SIM was changed, both records are the old SIM's. Record them for the new one: `docs/runbooks/swap-day.md`, section 2, steps 3 to 6 (`mooringctl exit disable`, `exit observe`, `exit record-carrier --replace`, `sim set-anchor`, `node apply` for each node, `exit enable`). This notice ends once either is recorded with other values, or once the M7 reports %@ again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "如果换过 SIM 卡，这两项登记仍是旧卡的，需要为新卡重新登记：`docs/runbooks/swap-day.md` 第 2 节第 3 至 6 步（`mooringctl exit disable`、`exit observe`、`exit record-carrier --replace`、`sim set-anchor`、对每个节点运行 `node apply`、`exit enable`）。任何一项登记成别的值之后，或者 M7 重新报告“%@”之后，这条提醒就会消失。"
           }
         }
       }
@@ -1886,6 +1916,16 @@
         }
       }
     },
+    "No poll has found the M7 attached since the record began: there is nothing to compare yet.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这份记录开始以来，还没有哪次轮询见到 M7 连上移动网络，暂时没有可以比较的内容。"
+          }
+        }
+      }
+    },
     "No poll of the M7 has been reported yet.": {
       "localizations": {
         "zh-Hans": {
@@ -2052,6 +2092,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "使用电池时出口处于降级状态，Mac 可能睡眠；睡眠前会先排空各节点。"
+          }
+        }
+      }
+    },
+    "On record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登记时"
+          }
+        }
+      }
+    },
+    "On record is what the M7 reported at the first poll that found it attached after the carrier check or the billing cycle was last recorded; the daemon compares every later poll with it. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“登记时”是指上一次登记运营商地址检查或计费周期之后，第一次见到 M7 连上移动网络的那次轮询里 M7 报告的内容；守护进程把之后每次轮询的结果与它比较。守护进程只读 SIM 卡的名称和网络代码，所以同一运营商的两张卡看起来一样。"
           }
         }
       }
@@ -2419,6 +2479,16 @@
         }
       }
     },
+    "Reported now": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在报告"
+          }
+        }
+      }
+    },
     "Retired": {
       "localizations": {
         "zh-Hans": {
@@ -2525,6 +2595,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "SIM"
+          }
+        }
+      }
+    },
+    "SIM and network": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIM 卡和网络"
           }
         }
       }
@@ -2668,6 +2748,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "起始时间"
+          }
+        }
+      }
+    },
+    "Since %@ the M7 reports %@. The carrier check and the billing cycle on record go with %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %1$@ 起，M7 报告的是“%2$@”。已登记的运营商地址检查和计费周期对应的是“%3$@”。"
+          }
+        }
+      }
+    },
+    "Since %@ the M7 reports %@. The carrier check and the billing cycle on record go with %@: either the SIM was changed for another of the same name, or its carrier moved it to another network.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %1$@ 起，M7 报告的是“%2$@”。已登记的运营商地址检查和计费周期对应的是“%3$@”：要么换了一张同名的 SIM 卡，要么运营商把这张卡转到了另一个网络。"
           }
         }
       }
@@ -2932,6 +3032,26 @@
         }
       }
     },
+    "The M7 reports another SIM than the one on record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 报告的 SIM 卡与登记时的不同"
+          }
+        }
+      }
+    },
+    "The M7 reports another network than the one on record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 报告的网络与登记时的不同"
+          }
+        }
+      }
+    },
     "The M7 restarted": {
       "localizations": {
         "zh-Hans": {
@@ -3168,6 +3288,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "时钟没有经 NTP 同步"
+          }
+        }
+      }
+    },
+    "The daemon could not read its record of the SIM's network and began it again, so on record is what the M7 reported at the first poll after that, which may not be what it reported when the carrier check and the billing cycle were recorded: a SIM changed before that is not noticed. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程读不出原有的 SIM 卡网络记录，重新开始了一份，所以“登记时”是指此后第一次轮询时 M7 报告的内容，未必是登记运营商地址检查和计费周期那时报告的：在那之前换的卡不会被发现。守护进程只读 SIM 卡的名称和网络代码，所以同一运营商的两张卡看起来一样。"
+          }
+        }
+      }
+    },
+    "The daemon had no record of the SIM's network when it began this one, so on record is what the M7 reported at the first poll after that, which may not be what it reported when the carrier check and the billing cycle were recorded: a SIM changed before that is not noticed. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程开始这份记录时，之前没有留下 SIM 卡网络的记录，所以“登记时”是指此后第一次轮询时 M7 报告的内容，未必是登记运营商地址检查和计费周期那时报告的：在那之前换的卡不会被发现。守护进程只读 SIM 卡的名称和网络代码，所以同一运营商的两张卡看起来一样。"
           }
         }
       }
@@ -3941,6 +4081,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "用 `mooringctl user add` 添加第一个用户。"
+          }
+        }
+      }
+    },
+    "a SIM without a name (%@-%@)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未报告名称的 SIM 卡 (%1$@-%2$@)"
           }
         }
       }
@@ -5111,6 +5261,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "探测失败"
+          }
+        }
+      }
+    },
+    "the same": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "与登记时相同"
           }
         }
       }
