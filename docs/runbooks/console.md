@@ -212,6 +212,25 @@ mooringctl portal payments
 
 The daemon's log has a line for each grant, hold, refund, dispute, failure and stop, by order id and user id.
 
+The ledger keeps a user's orders only while the deployment holds the user: once the user is removed (section 7), the daemon deletes their orders at its next tick and logs how many, naming no one.
+
+## 7. The nightly apply job (2026-11-12)
+
+**Start the Daemon at Login** also registers Mooring's apply job (`com.bill.mooring.apply`), and **Stop the Daemon** unregisters it; the menu shows it as **Apply job: runs nightly at 19:20 UTC**. launchd runs `mooringctl apply --pending` from the app every hour at minute 20; the job acts only between 19:15 and 19:45 UTC (03:15 to 03:45 Beijing time, inside the 3 to 6 a.m. window the agreement and the user guide state), so once a night, in summer and winter time alike. A firing that launchd delivers late, after the Mac slept through 19:20 UTC, does nothing, and the job runs the next night (design §13.6).
+
+A run, in this order:
+1. **Suspends** each active user whose expiry has passed or who used up their quota (their own, the automatic one, or the one their paid month gives), dated at the run; and **resumes** each user whose suspension's cause has gone: suspended for quota in an earlier billing cycle, or suspended at expiry and since paid (or given a later expiry). Resumes go earliest suspension first, while fewer users are active than the cap allows; a user the cap holds back stays suspended and is reported, and you decide. A user you suspended yourself, or for an abuse review, is never resumed by the job.
+2. **Removes** each user revoked 13 months ago.
+3. **Applies** every node behind the deployment's generation, as `mooringctl node apply` does. A node that cannot be reached (lon1 while its SSH is down) is reported, and nothing before it waits on it.
+
+Run it at once, whatever the time, with `mooringctl apply --now` (add `--json` for one JSON line); a run already going makes another refuse. The console's Nodes screen shows each pending apply, since when and how long it has waited.
+
+Its log is `~/Library/Logs/Mooring/apply.log`: one line when a run starts, then the counts (suspended, resumed, held back, kept suspended, removed) and each node's outcome. It names no user, since a log can outlive the 13 months the agreement keeps a user's records; `apply --now` prints the users by id. The job refuses its policy step, and only that, when the payment ledger or the usage file cannot be read, or when a suspension is dated after now (a clock that stepped back): the report says why. While a node cannot be reached the daemon has no usage report, so no quota is checked that night, and the report says so; expiry suspensions and resumes still go.
+
+After a new build is installed, launchd refuses the job as it refuses the daemon (`last exit code = 78`, section 1): the same **Stop the Daemon** and **Start the Daemon at Login** that start the daemon again register the job again. Check it with `launchctl print gui/$(id -u)/com.bill.mooring.apply`.
+
+**Removing a user at their request.** `mooringctl user forget <uid>` removes a revoked user at once, with their label, alias and agreement record; the daemon then deletes their usage history and payment orders. It says what goes and asks first (`--yes` to skip the question), and cannot be undone. The bare id stays in `state.json` for a few weeks, until no node can still name it. Only a revoked user can be forgotten.
+
 ## Troubleshooting
 
 **`the Mooring daemon is not running`:** the daemon is not started, or it stopped.
