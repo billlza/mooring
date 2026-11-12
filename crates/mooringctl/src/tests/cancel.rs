@@ -450,7 +450,9 @@ fn planned_ams1_with_a_revocation_and_channels(channels: &[&str]) -> (Harness, S
         // The first user was revoked before; the third user's revocation
         // waits only on ams1, the second's on lon1 too.
         parts.users[0].per_node.clear();
-        parts.users[0].status = UserStatus::Revoked;
+        parts.users[0].status = UserStatus::Revoked {
+            since: UnixTime::from_secs(NOW),
+        };
         for (index, nodes) in [(1, &["lon1", "ams1"][..]), (2, &["ams1"][..])] {
             let user = &mut parts.users[index];
             user.per_node
@@ -1173,6 +1175,7 @@ fn an_adoption_whose_node_is_cancelled_meanwhile_stops_and_writes_nothing() {
                     generation,
                     Bookkeeping::PlanCancelled {
                         node: node_id("lon1"),
+                        at: UnixTime::from_secs(NOW),
                     },
                 );
                 // Its keychain is not this one: the commit stands.
@@ -1324,7 +1327,12 @@ fn cancel_settles_the_revocation_that_waited_only_on_the_node() {
     };
     assert_eq!(after.users()[&ids[1]].status, UserStatus::RevokePending);
     assert_eq!(held(1), ["lon1"]);
-    assert_eq!(after.users()[&ids[2]].status, UserStatus::Revoked);
+    assert_eq!(
+        after.users()[&ids[2]].status,
+        UserStatus::Revoked {
+            since: UnixTime::from_secs(NOW)
+        }
+    );
     assert!(held(2).is_empty());
     assert_eq!(after.users()[&ids[0]].status, UserStatus::Active);
     assert_eq!(held(0), ["lon1"]);
@@ -1494,6 +1502,7 @@ fn a_cancel_answered_after_another_record_is_refused() {
             Bookkeeping::RevocationCommitted {
                 user,
                 node: node_id("lon1"),
+                at: UnixTime::from_secs(NOW),
             },
         );
         // Its keychain is not the harness's: the commit stands.
@@ -1526,7 +1535,12 @@ fn a_cancel_answered_after_another_record_is_refused() {
         outcome.stdout
     );
     let after = store(&harness).load().unwrap().deployment;
-    assert_eq!(after.users()[&second].status, UserStatus::Revoked);
+    assert_eq!(
+        after.users()[&second].status,
+        UserStatus::Revoked {
+            since: UnixTime::from_secs(NOW)
+        }
+    );
 }
 
 /// `partially_adopted()` after a cancel that committed and stopped there,
@@ -1549,6 +1563,7 @@ fn cancel_and_stop(harness: &Harness) {
         generation,
         Bookkeeping::PlanCancelled {
             node: node_id("lon1"),
+            at: UnixTime::from_secs(NOW),
         },
     );
     // Its keychain is not the harness's: the commit stands, the items stay.
@@ -1781,6 +1796,7 @@ fn an_apply_recorded_after_another_node_was_cancelled_is_the_bundle_now_rendered
                 generation,
                 Bookkeeping::PlanCancelled {
                     node: node_id("ams1"),
+                    at: UnixTime::from_secs(NOW),
                 },
             );
             // Its keychain is not the harness's: the commit stands.
@@ -1821,6 +1837,7 @@ fn a_node_planned_while_another_was_cancelled_takes_the_freed_place() {
             generation,
             Bookkeeping::PlanCancelled {
                 node: node_id("par1"),
+                at: UnixTime::from_secs(NOW),
             },
         );
         // Its keychain is not the harness's: the commit stands.

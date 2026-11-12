@@ -19,7 +19,7 @@ use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::SecretEntry;
 use mooring_model::{
     AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Capability, ClientLine,
-    ClientProfile, Deployment, LocalLabel, ModelError, NodeId, StateV2, SuspendReason, User,
+    ClientProfile, Deployment, LocalLabel, ModelError, NodeId, StateV3, SuspendReason, User,
     UserId, UserNodePublic, UserPolicy, UserStatus,
 };
 use mooring_store::{Store, read_snapshot, update_config_with_secrets};
@@ -295,7 +295,7 @@ pub(crate) fn resume(
 /// [`LocalError::UserTransition`], and the cap's is the store's.
 fn change_status(
     store: &Store,
-    state: &StateV2,
+    state: &StateV3,
     user: &UserId,
     transition: impl Fn(&mut User) -> Result<(), ModelError>,
 ) -> Result<(), CommandError> {

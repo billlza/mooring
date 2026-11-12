@@ -26,6 +26,7 @@ use crate::vps::hy2::{Hy2Rule, LoopTag};
 use crate::vps::served::Identity;
 use crate::vps::testing::{digest_with, digest_with_files};
 use crate::vps::xray::{OutboundTag, XrayOutbound};
+use mooring_model::UnixTime;
 
 fn config() -> ProptestConfig {
     ProptestConfig {
@@ -75,7 +76,7 @@ proptest! {
                         .unwrap(),
                     Fate::RevokePending => user.status = UserStatus::RevokePending,
                     Fate::Revoked => {
-                        user.status = UserStatus::Revoked;
+                        user.status = UserStatus::Revoked { since: UnixTime::from_secs(1_791_417_600) };
                         user.per_node.clear();
                     }
                 }

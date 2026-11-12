@@ -496,7 +496,9 @@ lon1 (applied)
 /// The fixture with the subject revoked on every node.
 fn revoked(parts: &mut DeploymentParts) {
     let subject = &mut parts.users[0];
-    subject.status = UserStatus::Revoked;
+    subject.status = UserStatus::Revoked {
+        since: UnixTime::from_secs(NOW),
+    };
     subject.per_node.clear();
 }
 

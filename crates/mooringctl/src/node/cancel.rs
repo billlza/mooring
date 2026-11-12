@@ -65,7 +65,10 @@ pub(crate) fn cancel(
         Err(refusal) => return Err(refusal.into()),
     };
     let found = files.inspect()?;
-    let entry = Bookkeeping::PlanCancelled { node: id.clone() };
+    let entry = Bookkeeping::PlanCancelled {
+        node: id.clone(),
+        at: (env.clock)()?,
+    };
     let after = recorded(deployment, entry.clone())?;
     describe(out, deployment, &after, node, found.as_ref()).map_err(output)?;
     confirm(env, yes, "Cancel this planned node?")?;
@@ -185,7 +188,7 @@ fn describe(
         .values()
         .filter(|user| {
             user.status == UserStatus::RevokePending
-                && left(user).is_some_and(|left| left.status == UserStatus::Revoked)
+                && left(user).is_some_and(|left| left.status.is_revoked())
         })
         .map(|user| user.id.as_str())
         .collect();

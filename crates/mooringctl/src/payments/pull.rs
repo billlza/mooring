@@ -30,11 +30,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use mooring_daemon_core::payments::{
-    ApplyRefusal, Entitlements, FeedPage, MAX_LEDGER_BYTES, MAX_SETTINGS_BYTES, PaymentLedger,
-    PullSettings, Stop, StopReason,
+    ApplyRefusal, Entitlements, EntryEvent, FeedPage, MAX_LEDGER_BYTES, MAX_SETTINGS_BYTES,
+    PaymentLedger, PullSettings, Stop, StopReason,
 };
+use mooring_daemon_core::usage::CycleUsage;
 use mooring_model::secret::{SecretMaterial, SecretRef};
-use mooring_model::{PortalPullToken, UnixTime, User, UserId};
+use mooring_model::{Deployment, PortalPullToken, UnixTime, User, UserId};
 use mooring_store::{read_payment_ledger, read_payment_pull, write_payment_ledger};
 
 use super::curl::PullRequest;
@@ -93,6 +94,8 @@ pub(crate) struct Puller {
     token: Option<(u64, PortalPullToken)>,
     /// The last state logged, so that each is logged once.
     state: Option<String>,
+    /// When a prune whose write failed is tried again.
+    prune_retry: Option<Instant>,
 }
 
 /// Names the cursor and the schedule, never the token.
@@ -135,6 +138,7 @@ impl Puller {
             retry: RETRY_FIRST,
             token: None,
             state: None,
+            prune_retry: None,
         }
     }
 
@@ -156,15 +160,53 @@ impl Puller {
         self.ledger.entitlements(rehearsal)
     }
 
+    /// Deletes the orders of users removed from `deployment` (design §9.6;
+    /// the agreement's clause 4): the pruned ledger is written before it is
+    /// kept; a write that fails is said and tried again [`RETRY_FIRST`]
+    /// later. A ledger that could not be read is held as an empty one, so
+    /// nothing is pruned, and its file is left as it is. Returns the lines
+    /// to log, which count users and orders and name none.
+    pub(crate) fn prune(&mut self, deployment: &Deployment) -> Vec<String> {
+        if self.prune_retry.is_some_and(|at| Instant::now() < at) {
+            return Vec::new();
+        }
+        let Some((pruned, counts)) = self.ledger.without_removed_users(deployment) else {
+            return Vec::new();
+        };
+        match self.write(&pruned) {
+            Ok(()) => {
+                self.ledger = pruned;
+                self.prune_retry = None;
+                vec![format!(
+                    "payment ledger: deleted {} order(s) of {} removed user(s)",
+                    counts.orders, counts.users
+                )]
+            }
+            Err(error) => {
+                self.prune_retry = Some(Instant::now() + RETRY_FIRST);
+                vec![format!(
+                    "payment ledger: the orders of {} removed user(s) could not be deleted ({error}); trying again in {} s",
+                    counts.users,
+                    RETRY_FIRST.as_secs()
+                )]
+            }
+        }
+    }
+
     /// One tick of the pull: reads the settings, and when the pull is set
     /// up, not stopped, due and allowed by `gate`, makes one request at
-    /// `now` for `users`. Returns the lines to log.
+    /// `now` for `users`. `usage` makes the daemon's usage report of the
+    /// billing cycle at `now`, `None` when it has none; it is asked only
+    /// for a page that holds a refund in full, which records what the
+    /// report says of the use of a pack it takes back (design §9.6).
+    /// Returns the lines to log.
     pub(crate) fn tick(
         &mut self,
         env: &Env<'_>,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         gate: Gate<'_>,
+        usage: &dyn Fn() -> Option<CycleUsage>,
     ) -> Vec<String> {
         let mut notes = Vec::new();
         if self.fault.is_some() {
@@ -243,7 +285,14 @@ impl Puller {
                 self.state = None;
                 self.retry_later();
             }
-            Ok(answer) => self.answered(judge(answer, cursor), users, now, &settings, &mut notes),
+            Ok(answer) => self.answered(
+                judge(answer, cursor),
+                users,
+                now,
+                &settings,
+                usage,
+                &mut notes,
+            ),
         }
         notes
     }
@@ -254,10 +303,11 @@ impl Puller {
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         settings: &PullSettings,
+        usage: &dyn Fn() -> Option<CycleUsage>,
         notes: &mut Vec<String>,
     ) {
         match judged {
-            Judged::Page(page) => self.record(&page, users, now, settings, notes),
+            Judged::Page(page) => self.record(&page, users, now, settings, usage, notes),
             Judged::Refused(error) => {
                 self.failed(
                     notes,
@@ -297,16 +347,30 @@ impl Puller {
     }
 
     /// Applies `page` to a copy of the ledger, writes it, and only then
-    /// keeps it.
+    /// keeps it. The usage report is made only when the page holds a
+    /// refund in full.
     fn record(
         &mut self,
         page: &FeedPage,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         settings: &PullSettings,
+        usage: &dyn Fn() -> Option<CycleUsage>,
         notes: &mut Vec<String>,
     ) {
-        let applied = match self.ledger.apply(page, users, now, settings.rehearsal()) {
+        let report = page
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry.event, EntryEvent::Refund { in_full: true, .. }))
+            .then(usage)
+            .flatten();
+        let applied = match self.ledger.apply(
+            page,
+            users,
+            now,
+            settings.rehearsal(),
+            report.as_ref(),
+        ) {
             Ok(applied) => applied,
             Err(ApplyRefusal::TestMode) => {
                 self.say_state(

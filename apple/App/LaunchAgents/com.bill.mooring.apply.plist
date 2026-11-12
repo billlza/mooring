@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Mooring's nightly apply job (design §13.6): Mooring.app registers it
+     with SMAppService.agent(plistName:) beside the daemon, and launchd runs
+     the mooringctl inside the app's own bundle every hour at minute 20 of
+     the Mac's local time. `apply --pending` acts only between 19:15 and
+     19:45 UTC, so one firing a day acts, in BST and GMT alike, and a firing
+     launchd delivers late after a sleep does nothing. The job writes its
+     own log, so the plist names none. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.bill.mooring.apply</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.bill.mooring</string>
+	</array>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/mooringctl</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>mooringctl</string>
+		<string>apply</string>
+		<string>--pending</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Minute</key>
+		<integer>20</integer>
+	</dict>
+	<key>ProcessType</key>
+	<string>Standard</string>
+</dict>
+</plist>

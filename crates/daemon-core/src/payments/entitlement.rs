@@ -11,10 +11,14 @@ use std::num::NonZeroU64;
 use mooring_model::{UnixTime, UserId};
 
 use super::ids::OrderId;
+use super::refund::PackUse;
 use crate::period::BillingCycle;
 
 /// A service period a paid order gave: from `from` until `until`, with a
-/// quota of `quota_bytes` per billing cycle while it lasts.
+/// quota of `quota_bytes` per billing cycle while it lasts. A refund in
+/// full shortens it or moves it earlier (design §9.6); one whose time was
+/// all taken back covers no instant (`from` equals `until`), and still
+/// ends the user's paid time there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaidPeriod {
     /// The order.
@@ -40,6 +44,18 @@ pub struct PaidPack {
     pub bytes: NonZeroU64,
     /// Whether it was paid in Stripe's live mode.
     pub livemode: bool,
+    /// Its order's refund in full, if any.
+    pub refund: Option<PackRefund>,
+}
+
+/// A refund in full of a traffic pack (design §9.6): from `at` on, the
+/// pack counts only what the user had used of it, as `used` tells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackRefund {
+    /// When the portal recorded the refund.
+    pub at: UnixTime,
+    /// What Mooring knew of the user's use when it applied the refund.
+    pub used: PackUse,
 }
 
 /// The periods and packs one user's orders gave.
@@ -78,15 +94,57 @@ impl UserEntitlements {
             .max_by_key(|period| (period.livemode, period.from))
     }
 
-    /// The bytes of the packs granted within `cycle`, which raise its quota
-    /// (design §9.6: a pack is counted in the billing cycle it is granted
-    /// in, and in no other). Saturates at `u64::MAX`.
+    /// The bytes the packs granted within `cycle` add at `now` to a quota
+    /// of `base` bytes, the quota that applies without them (design §9.6,
+    /// the operator's decisions of 2026-11-12: a pack counts in the billing
+    /// cycle it is granted in, and in no other, and its order's `days` is
+    /// not applied). A pack refunded in full counts, from the refund on,
+    /// only what the user had used of it: the bytes they had used in the
+    /// cycle beyond the rest of their quota (`base` and the cycle's other
+    /// packs granted by the refund, as they counted then), at most its own:
+    /// none of it when Mooring did not know the use, and all of it when
+    /// the pack's cycle had ended before Mooring learned of the refund.
+    /// Refunds count in the order they were recorded. Saturates at
+    /// `u64::MAX`.
     #[must_use]
-    pub fn pack_bytes_in(&self, cycle: BillingCycle) -> u64 {
-        self.packs
+    pub fn pack_bytes_in(&self, cycle: BillingCycle, now: UnixTime, base: u64) -> u64 {
+        let packs: Vec<&PaidPack> = self
+            .packs
             .iter()
             .filter(|pack| cycle.contains(pack.granted_at))
-            .fold(0_u64, |total, pack| total.saturating_add(pack.bytes.get()))
+            .collect();
+        let mut counted: Vec<u64> = packs.iter().map(|pack| pack.bytes.get()).collect();
+        let mut refunded: Vec<(usize, &PaidPack, PackRefund)> = packs
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(index, pack)| {
+                pack.refund
+                    .filter(|refund| refund.at <= now)
+                    .map(|refund| (index, pack, refund))
+            })
+            .collect();
+        refunded.sort_by(|(_, left, earlier), (_, right, later)| {
+            (earlier.at, &left.order).cmp(&(later.at, &right.order))
+        });
+        for (index, pack, refund) in refunded {
+            let rest = packs
+                .iter()
+                .zip(&counted)
+                .enumerate()
+                .filter(|(other, (other_pack, _))| {
+                    *other != index && other_pack.granted_at <= refund.at
+                })
+                .fold(base, |total, (_, (_, bytes))| total.saturating_add(*bytes));
+            counted[index] = match refund.used {
+                PackUse::Served { bytes } => bytes.saturating_sub(rest).min(pack.bytes.get()),
+                PackUse::Unknown => 0,
+                PackUse::CycleEnded => pack.bytes.get(),
+            };
+        }
+        counted
+            .into_iter()
+            .fold(0_u64, |total, bytes| total.saturating_add(bytes))
     }
 }
 

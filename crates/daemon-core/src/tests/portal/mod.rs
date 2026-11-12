@@ -70,7 +70,7 @@ fn pilot(
     quota: Option<UserQuota>,
     expires_at: Option<u64>,
 ) -> User {
-    let per_node = if status == UserStatus::Revoked {
+    let per_node = if status.is_revoked() {
         BTreeMap::new()
     } else {
         ["lon1", "ams1"]
@@ -140,7 +140,14 @@ fn pilot_users() -> Vec<User> {
             Some(1_795_132_800),
         ),
         pilot(b'e', UserStatus::Active, None, None),
-        pilot(b'f', UserStatus::Revoked, None, None),
+        pilot(
+            b'f',
+            UserStatus::Revoked {
+                since: UnixTime::from_secs(1_791_417_600),
+            },
+            None,
+            None,
+        ),
         pilot(
             b'g',
             UserStatus::Suspended {

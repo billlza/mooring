@@ -27,6 +27,7 @@ mod latch;
 mod migration;
 mod ordering;
 mod payments;
+mod pending_applies;
 mod properties;
 mod radio_history;
 mod regular_files;

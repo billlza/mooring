@@ -20,6 +20,7 @@
 pub(crate) mod deployed;
 pub(crate) mod hub;
 pub(crate) mod log;
+pub(crate) mod pending;
 pub(crate) mod radio;
 pub(crate) mod serve;
 pub(crate) mod usage;
@@ -136,24 +137,10 @@ impl RunPaths {
     }
 }
 
-/// What a started daemon holds: its instance lock (released when the
-/// process ends) and its listening socket.
-#[derive(Debug)]
-pub(crate) struct Started {
-    _lock: File,
-    /// The control socket.
-    pub(crate) listener: UnixListener,
-}
-
-/// Prepares the daemon in `support_dir`, in this order, so that nothing is
-/// touched unless this process is the one daemon:
-/// 1. the support and run directories (mode 0700; a run directory that is
-///    there already must be a directory, not a link, and is set to 0700);
-/// 2. the instance lock (`DaemonAlreadyRunning` if another daemon holds it);
-/// 3. a socket left by an earlier daemon is removed (only a socket: any
-///    other file there is `SocketPathTaken` and left as it is), and the
-///    control socket is bound, then given mode 0600.
-pub(crate) fn start(support_dir: &Path) -> Result<Started, LocalError> {
+/// Makes the support and run directories (mode 0700; a run directory that
+/// is there already must be a directory, not a link, and is set to 0700),
+/// as the daemon and the apply job do before they take their locks.
+pub(crate) fn prepare_run_dir(support_dir: &Path) -> Result<RunPaths, LocalError> {
     create_support_dir(support_dir)?;
     let paths = RunPaths::under(support_dir);
     let run_dir_error = |source| LocalError::RunDir {
@@ -172,6 +159,28 @@ pub(crate) fn start(support_dir: &Path) -> Result<Started, LocalError> {
         }
         Err(source) => return Err(run_dir_error(source)),
     }
+    Ok(paths)
+}
+
+/// What a started daemon holds: its instance lock (released when the
+/// process ends) and its listening socket.
+#[derive(Debug)]
+pub(crate) struct Started {
+    _lock: File,
+    /// The control socket.
+    pub(crate) listener: UnixListener,
+}
+
+/// Prepares the daemon in `support_dir`, in this order, so that nothing is
+/// touched unless this process is the one daemon:
+/// 1. the support and run directories (mode 0700; a run directory that is
+///    there already must be a directory, not a link, and is set to 0700);
+/// 2. the instance lock (`DaemonAlreadyRunning` if another daemon holds it);
+/// 3. a socket left by an earlier daemon is removed (only a socket: any
+///    other file there is `SocketPathTaken` and left as it is), and the
+///    control socket is bound, then given mode 0600.
+pub(crate) fn start(support_dir: &Path) -> Result<Started, LocalError> {
+    let paths = prepare_run_dir(support_dir)?;
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -540,11 +549,21 @@ pub(crate) fn chain(error: &dyn std::error::Error) -> String {
     text
 }
 
-/// Writes one log line, stamped `at` in UTC.
+/// Writes one log line of the daemon's, stamped `at` in UTC.
 pub(crate) fn say(log: &mut dyn Write, at: UnixTime, text: &str) -> Result<(), CommandError> {
+    say_as(log, at, "daemon", text)
+}
+
+/// Writes one log line of `mooringctl <command>`, stamped `at` in UTC.
+pub(crate) fn say_as(
+    log: &mut dyn Write,
+    at: UnixTime,
+    command: &str,
+    text: &str,
+) -> Result<(), CommandError> {
     let stamp =
         router::output::utc_stamp(at).map_err(|_| CommandError::Local(LocalError::Clock))?;
-    writeln!(log, "{stamp} mooringctl daemon: {text}")
+    writeln!(log, "{stamp} mooringctl {command}: {text}")
         .and_then(|()| log.flush())
         .map_err(|error| CommandError::Local(LocalError::Output(error)))
 }

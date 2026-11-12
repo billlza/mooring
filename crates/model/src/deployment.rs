@@ -21,11 +21,13 @@ use crate::keys::Ed25519Pub;
 use crate::node::{AppliedConfig, Node, NodeAddress, NodeLifecycle};
 use crate::ports::PortConflict;
 use crate::quota::AutoQuotaPolicy;
+use crate::removal::{self, ForgottenUser};
 use crate::secret::SecretRef;
 use crate::sim::{
     CycleRule, ONE_P_MOBILE_PERIOD_DAYS, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES,
     PeriodDays, SimPlan, SimPolicy, StopPolicy,
 };
+use crate::time::UnixTime;
 use crate::user::{AgreementRecord, User, UserNodePublic, UserStatus};
 use crate::viewer::Viewer;
 use crate::wg::WgIndex;
@@ -152,6 +154,9 @@ pub struct DeploymentParts {
     pub nodes: Vec<Node>,
     /// Every user, including revoked ones.
     pub users: Vec<User>,
+    /// The bare ids of removed users that a node's records may still name,
+    /// each until those records have expired (`RevokedUserRemoved`).
+    pub forgotten: Vec<ForgottenUser>,
     /// The next WireGuard index to allocate; indices are never reused.
     pub next_wg_index: WgIndex,
 }
@@ -160,7 +165,9 @@ pub struct DeploymentParts {
 /// invariants checked. Built only from [`DeploymentParts`] (also when
 /// deserialised), or fresh by [`Deployment::new`]:
 ///
-/// - node and user ids and viewer keys are unique;
+/// - node and user ids and viewer keys are unique, and so are the ids of
+///   removed users still kept ([`Deployment::forgotten`]), none of which is
+///   a user's;
 /// - at most [`MAX_ACTIVE_NODES`] nodes are active;
 /// - WireGuard indices are unique and below `next_wg_index`;
 /// - live node addresses are unique;
@@ -186,6 +193,7 @@ pub struct Deployment {
     viewers: BTreeMap<Ed25519Pub, Viewer>,
     nodes: BTreeMap<NodeId, Node>,
     users: BTreeMap<UserId, User>,
+    forgotten: BTreeMap<UserId, UnixTime>,
     next_wg_index: WgIndex,
 }
 
@@ -209,6 +217,7 @@ impl Deployment {
             viewers: Vec::new(),
             nodes: Vec::new(),
             users: Vec::new(),
+            forgotten: Vec::new(),
             next_wg_index: WgIndex::FIRST,
         })
     }
@@ -265,6 +274,16 @@ impl Deployment {
     #[must_use]
     pub const fn users(&self) -> &BTreeMap<UserId, User> {
         &self.users
+    }
+
+    /// The ids of removed users that a node's records may still name, each
+    /// with the instant those records have expired by
+    /// ([`ForgottenUser::records_until`]). The Mac drops a node's entries
+    /// naming one on receipt, where an unknown user's are refused (design
+    /// §15.3, `user forget`).
+    #[must_use]
+    pub const fn forgotten(&self) -> &BTreeMap<UserId, UnixTime> {
+        &self.forgotten
     }
 
     /// The next WireGuard index to allocate.
@@ -374,6 +393,11 @@ impl Deployment {
             viewers: self.viewers.into_values().collect(),
             nodes: self.nodes.into_values().collect(),
             users: self.users.into_values().collect(),
+            forgotten: self
+                .forgotten
+                .into_iter()
+                .map(|(user, until)| ForgottenUser { user, until })
+                .collect(),
             next_wg_index: self.next_wg_index,
         }
     }
@@ -525,7 +549,7 @@ impl Entities<'_> {
                         });
                     }
                 }
-                UserStatus::Revoked => {
+                UserStatus::Revoked { .. } => {
                     if !user.per_node.is_empty() {
                         return Err(ModelError::RevokedUserHoldsCredentials {
                             user: user.id.clone(),
@@ -648,29 +672,35 @@ pub enum Bookkeeping {
     },
     /// `node` committed the generation that stopped serving `user`, who is
     /// pending revocation (design §13.5 step 3); with no node left the user
-    /// becomes `Revoked`.
+    /// becomes `Revoked` since `at`.
     RevocationCommitted {
         /// The user being revoked.
         user: UserId,
         /// The node that committed.
         node: NodeId,
+        /// When the commit was recorded.
+        at: UnixTime,
     },
     /// The retiring `node` was shut down and its Mac endpoint removed
     /// (design §13.4 step 3); a user pending revocation that held
-    /// credentials only there becomes `Revoked`, and the node's alert
-    /// channels are dropped.
+    /// credentials only there becomes `Revoked` since `at`, and the node's
+    /// alert channels are dropped.
     RetirementShutDown {
         /// The node.
         node: NodeId,
+        /// When the shutdown was recorded.
+        at: UnixTime,
     },
     /// The planned `node` was cancelled (`node cancel`, design §13.2): it
     /// leaves the deployment with every user's credentials on it and its
     /// alert channels, and a user pending revocation that held credentials
-    /// only there becomes `Revoked`. A node that is not planned is refused
-    /// (`NodeNotPlanned`).
+    /// only there becomes `Revoked` since `at`. A node that is not planned
+    /// is refused (`NodeNotPlanned`).
     PlanCancelled {
         /// The node.
         node: NodeId,
+        /// When the cancellation was recorded.
+        at: UnixTime,
     },
     /// `user` accepted the agreement revision in `record` (`user agree`,
     /// design §7). A user pending revocation or revoked is refused
@@ -691,6 +721,28 @@ pub enum Bookkeeping {
     CarrierRecorded {
         /// The carrier prefixes and pairing mode.
         check: EgressCheck,
+    },
+    /// The revoked `user` is removed at `at` with every record the state
+    /// holds of it (its label, alias, policy and agreement record), 13
+    /// months after its revocation or at once on its request (design
+    /// §15.7). A revoked user is in no bundle and no export, so nothing is
+    /// to apply. While a node's records may still name it, its bare id is
+    /// kept ([`Deployment::forgotten`]) until they have expired
+    /// ([`ForgottenUser::records_until`] of its revocation), and the ids
+    /// whose records have expired by `at` go. A user that is not revoked is
+    /// refused (`UserNotRevoked`). It is the only way a user leaves the
+    /// deployment: a configuration change removes none.
+    RevokedUserRemoved {
+        /// The user.
+        user: UserId,
+        /// When the removal is recorded.
+        at: UnixTime,
+    },
+    /// The ids of removed users whose nodes' records have expired by `at`
+    /// go ([`Deployment::forgotten`]); the others stay.
+    ForgottenExpired {
+        /// When the expiry is recorded.
+        at: UnixTime,
     },
 }
 
@@ -726,7 +778,7 @@ impl Deployment {
                 };
                 node.lifecycle = NodeLifecycle::Applied { site, applied };
             }
-            Bookkeeping::RevocationCommitted { user, node } => {
+            Bookkeeping::RevocationCommitted { user, node, at } => {
                 let user = parts
                     .users
                     .iter_mut()
@@ -743,9 +795,9 @@ impl Deployment {
                         node,
                     });
                 }
-                settle_revocation(user);
+                user.settle_revocation(at);
             }
-            Bookkeeping::RetirementShutDown { node } => {
+            Bookkeeping::RetirementShutDown { node, at } => {
                 let retiring = node_mut(&mut parts, &node)?;
                 let NodeLifecycle::Retiring { site } = &retiring.lifecycle else {
                     return Err(ModelError::NodeNotRetiring {
@@ -756,9 +808,9 @@ impl Deployment {
                 retiring.lifecycle = NodeLifecycle::RetiredPendingProviderDeletion {
                     address: site.address,
                 };
-                release_node(&mut parts, &node);
+                release_node(&mut parts, &node, at);
             }
-            Bookkeeping::PlanCancelled { node } => {
+            Bookkeeping::PlanCancelled { node, at } => {
                 let planned = node_mut(&mut parts, &node)?;
                 if planned.lifecycle != NodeLifecycle::Planned {
                     return Err(ModelError::NodeNotPlanned {
@@ -767,7 +819,7 @@ impl Deployment {
                     });
                 }
                 parts.nodes.retain(|candidate| candidate.id != node);
-                release_node(&mut parts, &node);
+                release_node(&mut parts, &node, at);
             }
             Bookkeeping::AgreementRecorded { user, record } => {
                 let user = parts
@@ -775,7 +827,10 @@ impl Deployment {
                     .iter_mut()
                     .find(|candidate| candidate.id == user)
                     .ok_or(ModelError::UnknownUser { id: user })?;
-                if matches!(user.status, UserStatus::RevokePending | UserStatus::Revoked) {
+                if matches!(
+                    user.status,
+                    UserStatus::RevokePending | UserStatus::Revoked { .. }
+                ) {
                     return Err(ModelError::RevocationAlreadyStarted {
                         user: user.id.clone(),
                     });
@@ -798,6 +853,10 @@ impl Deployment {
                 }
                 parts.exit.egress_check = Some(check);
             }
+            Bookkeeping::RevokedUserRemoved { user, at } => {
+                removal::remove_revoked(&mut parts, &user, at)?;
+            }
+            Bookkeeping::ForgottenExpired { at } => removal::expire_forgotten(&mut parts, at),
         }
         Self::try_from(parts)
     }
@@ -814,21 +873,14 @@ fn node_mut<'a>(parts: &'a mut DeploymentParts, id: &NodeId) -> Result<&'a mut N
 /// Drops every user's credentials on `node` and its alert channels, for a
 /// node that renders nothing any more (`RetirementShutDown`,
 /// `PlanCancelled`); a user pending revocation that waited only on it is
-/// revoked.
-fn release_node(parts: &mut DeploymentParts, node: &NodeId) {
+/// revoked since `at`.
+fn release_node(parts: &mut DeploymentParts, node: &NodeId, at: UnixTime) {
     for user in &mut parts.users {
         user.per_node.remove(node);
-        settle_revocation(user);
+        user.settle_revocation(at);
     }
     if let Some(alerting) = &mut parts.alerting {
         alerting.channels.remove(node);
-    }
-}
-
-/// A user pending revocation with no node left to commit it is revoked.
-fn settle_revocation(user: &mut User) {
-    if user.status == UserStatus::RevokePending && user.per_node.is_empty() {
-        user.status = UserStatus::Revoked;
     }
 }
 
@@ -872,8 +924,27 @@ impl TryFrom<DeploymentParts> for Deployment {
             )?,
             nodes: index_by_id(parts.nodes, |node: &Node| &node.id, EntityId::Node)?,
             users: index_by_id(parts.users, |user: &User| &user.id, EntityId::User)?,
+            forgotten: index_by_id(
+                parts.forgotten,
+                |kept: &ForgottenUser| &kept.user,
+                EntityId::User,
+            )?
+            .into_iter()
+            .map(|(user, kept)| (user, kept.until))
+            .collect(),
             next_wg_index: parts.next_wg_index,
         };
+        // A removed user's id is never a user's again: an id drawn anew
+        // that matches one is refused, as two users sharing it would be.
+        if let Some(user) = deployment
+            .forgotten
+            .keys()
+            .find(|user| deployment.users.contains_key(*user))
+        {
+            return Err(ModelError::DuplicateId {
+                id: EntityId::User(user.clone()),
+            });
+        }
         Entities {
             config_generation: deployment.config_generation,
             nodes: &deployment.nodes,
@@ -903,10 +974,10 @@ impl<K, V: Serialize> Serialize for Values<'_, K, V> {
 }
 
 /// Serialises exactly as [`DeploymentParts`], with viewers in key order and
-/// nodes and users in id order.
+/// nodes, users and forgotten ids in id order.
 impl Serialize for Deployment {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("Deployment", 10)?;
+        let mut state = serializer.serialize_struct("Deployment", 11)?;
         state.serialize_field("config_generation", &self.config_generation)?;
         state.serialize_field("exit", &self.exit)?;
         state.serialize_field("policy", &self.policy)?;
@@ -916,6 +987,17 @@ impl Serialize for Deployment {
         state.serialize_field("viewers", &Values(&self.viewers))?;
         state.serialize_field("nodes", &Values(&self.nodes))?;
         state.serialize_field("users", &Values(&self.users))?;
+        state.serialize_field(
+            "forgotten",
+            &self
+                .forgotten
+                .iter()
+                .map(|(user, until)| ForgottenUser {
+                    user: user.clone(),
+                    until: *until,
+                })
+                .collect::<Vec<_>>(),
+        )?;
         state.serialize_field("next_wg_index", &self.next_wg_index)?;
         state.end()
     }
@@ -924,6 +1006,9 @@ impl Serialize for Deployment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The time the tests' revocations and records are made at.
+    const AT: UnixTime = UnixTime::from_secs(1_791_417_600);
     use crate::alerting::{AlertSettings, WallClockTime, WallClockZone};
     use crate::date::CalendarDate;
     use crate::digest::Sha256Digest;
@@ -1225,6 +1310,7 @@ mod tests {
             .clone()
             .record(Bookkeeping::RetirementShutDown {
                 node: node_id("lon1"),
+                at: AT,
             })
             .unwrap();
         assert_eq!(retired.config_generation(), deployment.config_generation());
@@ -1250,6 +1336,7 @@ mod tests {
             .unwrap()
             .record(Bookkeeping::RetirementShutDown {
                 node: node_id("lon1"),
+                at: AT,
             })
             .unwrap();
         assert_eq!(alone.alerting(), channels(&[]).as_ref());
@@ -1534,7 +1621,7 @@ mod tests {
     #[test]
     fn revocation_states_are_consistent() {
         let mut parts = two_node_parts();
-        parts.users[0].status = UserStatus::Revoked;
+        parts.users[0].status = UserStatus::Revoked { since: AT };
         assert_eq!(
             build(parts.clone()),
             Err(ModelError::RevokedUserHoldsCredentials { user: user_id(1) })
@@ -1611,7 +1698,7 @@ mod tests {
         let mut parts = two_node_parts();
         parts.nodes[1].lifecycle = NodeLifecycle::Planned;
         parts.users[1].per_node.clear();
-        parts.users[1].status = UserStatus::Revoked;
+        parts.users[1].status = UserStatus::Revoked { since: AT };
         let deployment = build(parts).unwrap();
         let refs: Vec<String> = deployment
             .required_secrets()
@@ -1787,6 +1874,7 @@ mod tests {
             deployment.record(Bookkeeping::RevocationCommitted {
                 user: user_id(1),
                 node: node_id(node),
+                at: AT,
             })
         };
         let one_left = commit(deployment, "ams1").unwrap();
@@ -1803,7 +1891,7 @@ mod tests {
         );
         let revoked = commit(one_left, "lon1").unwrap();
         let user = &revoked.users()[&user_id(1)];
-        assert_eq!(user.status, UserStatus::Revoked);
+        assert_eq!(user.status, UserStatus::Revoked { since: AT });
         assert!(user.per_node.is_empty());
         assert_eq!(revoked.config_generation(), generation);
         // An active user is not being revoked.
@@ -1811,6 +1899,7 @@ mod tests {
             revoked.record(Bookkeeping::RevocationCommitted {
                 user: user_id(2),
                 node: node_id("lon1"),
+                at: AT,
             }),
             Err(ModelError::NotRevoking { user: user_id(2) })
         );
@@ -1947,7 +2036,7 @@ mod tests {
     fn only_active_and_suspended_users_record_an_agreement() {
         let mut suspended = two_node_parts();
         suspended.users[0]
-            .suspend(SuspendReason::Operator, crate::time::UnixTime::from_secs(0))
+            .suspend(SuspendReason::Operator, UnixTime::from_secs(0))
             .unwrap();
         let recorded = agree(build(suspended).unwrap(), agreement(1, "2026-10-18")).unwrap();
         assert_eq!(
@@ -1957,7 +2046,7 @@ mod tests {
         let mut revoking = two_node_parts();
         revoking.users[0].status = UserStatus::RevokePending;
         let mut revoked = two_node_parts();
-        revoked.users[0].status = UserStatus::Revoked;
+        revoked.users[0].status = UserStatus::Revoked { since: AT };
         revoked.users[0].per_node.clear();
         for parts in [revoking, revoked] {
             assert_eq!(
@@ -1989,6 +2078,7 @@ mod tests {
             .clone()
             .record(Bookkeeping::RetirementShutDown {
                 node: node_id("lon1"),
+                at: AT,
             })
             .unwrap();
         assert_eq!(retired.config_generation(), deployment.config_generation());
@@ -2006,7 +2096,10 @@ mod tests {
             .map(NodeId::as_str)
             .collect();
         assert_eq!(held, ["ams1"]);
-        assert_eq!(retired.users()[&user_id(2)].status, UserStatus::Revoked);
+        assert_eq!(
+            retired.users()[&user_id(2)].status,
+            UserStatus::Revoked { since: AT }
+        );
         assert!(
             retired
                 .required_secrets()
@@ -2016,6 +2109,7 @@ mod tests {
         assert_eq!(
             retired.record(Bookkeeping::RetirementShutDown {
                 node: node_id("ams1"),
+                at: AT,
             }),
             Err(ModelError::NodeNotRetiring {
                 node: node_id("ams1"),
@@ -2057,6 +2151,7 @@ mod tests {
             .clone()
             .record(Bookkeeping::RetirementShutDown {
                 node: node_id("lon1"),
+                at: AT,
             })
             .unwrap();
         for (before, after, to) in [
@@ -2095,7 +2190,7 @@ mod tests {
     fn suspended(reason: SuspendReason) -> UserStatus {
         UserStatus::Suspended {
             reason,
-            since: crate::time::UnixTime::from_secs(1_791_417_600),
+            since: UnixTime::from_secs(1_791_417_600),
         }
     }
 
@@ -2152,7 +2247,7 @@ mod tests {
             assert!(build(capped).is_ok(), "{status:?}");
         }
         let mut revoked = parts.clone();
-        revoked.users[1].status = UserStatus::Revoked;
+        revoked.users[1].status = UserStatus::Revoked { since: AT };
         revoked.users[1].per_node.clear();
         assert!(build(revoked).is_ok());
         // Resuming past the cap is refused when the deployment is rebuilt.
@@ -2213,10 +2308,11 @@ mod tests {
             deployment.clone().record(Bookkeeping::RevocationCommitted {
                 user: user_id(1),
                 node: node_id("lon1"),
+                at: AT,
             }),
             Err(ModelError::NotRevoking { user: user_id(1) })
         );
-        parts.users[0].revoke().unwrap();
+        parts.users[0].revoke(AT).unwrap();
         let revoking = build(parts).unwrap();
         let revoked = ["lon1", "ams1"]
             .into_iter()
@@ -2225,10 +2321,14 @@ mod tests {
                     .record(Bookkeeping::RevocationCommitted {
                         user: user_id(1),
                         node: node_id(node),
+                        at: AT,
                     })
                     .unwrap()
             });
-        assert_eq!(revoked.users()[&user_id(1)].status, UserStatus::Revoked);
+        assert_eq!(
+            revoked.users()[&user_id(1)].status,
+            UserStatus::Revoked { since: AT }
+        );
         assert_eq!(revoked.config_generation(), deployment.config_generation());
     }
 
@@ -2246,6 +2346,7 @@ mod tests {
             .unwrap()
             .record(Bookkeeping::RetirementShutDown {
                 node: node_id("lon1"),
+                at: AT,
             })
             .unwrap();
         let user = &retired.users()[&user_id(1)];
@@ -2271,7 +2372,7 @@ mod tests {
             .users
             .push(revoking(user(5, &[("lon1", 5), ("ams1", 5)])));
         let mut revoked = user(6, &[]);
-        revoked.status = UserStatus::Revoked;
+        revoked.status = UserStatus::Revoked { since: AT };
         parts.users.push(revoked);
         parts.users.push(user(7, &[("lon1", 7)]));
         parts
@@ -2287,6 +2388,7 @@ mod tests {
             .clone()
             .record(Bookkeeping::PlanCancelled {
                 node: node_id("lon1"),
+                at: AT,
             })
             .unwrap();
         let nodes: Vec<&str> = cancelled.nodes().keys().map(NodeId::as_str).collect();
@@ -2300,10 +2402,10 @@ mod tests {
         for (n, held, status) in [
             (1, &["ams1"][..], UserStatus::Active),
             (2, &["ams1"][..], suspended(SuspendReason::Operator)),
-            (3, &[][..], UserStatus::Revoked),
+            (3, &[][..], UserStatus::Revoked { since: AT }),
             (4, &["ams1"][..], UserStatus::RevokePending),
             (5, &["ams1"][..], UserStatus::RevokePending),
-            (6, &[][..], UserStatus::Revoked),
+            (6, &[][..], UserStatus::Revoked { since: AT }),
             (7, &[][..], UserStatus::Active),
         ] {
             let after = &cancelled.users()[&user_id(n)];
@@ -2363,9 +2465,10 @@ mod tests {
                 }
             }
             parts.nodes[0].lifecycle = lifecycle;
-            let cancelled = build(parts)
-                .unwrap()
-                .record(Bookkeeping::PlanCancelled { node: lon1.clone() });
+            let cancelled = build(parts).unwrap().record(Bookkeeping::PlanCancelled {
+                node: lon1.clone(),
+                at: AT,
+            });
             if stage == LifecycleStage::Planned {
                 assert!(!cancelled.unwrap().nodes().contains_key(&lon1));
             } else {
@@ -2384,6 +2487,7 @@ mod tests {
                 .unwrap()
                 .record(Bookkeeping::PlanCancelled {
                     node: node_id("par1"),
+                    at: AT,
                 }),
             Err(ModelError::UnknownNode {
                 id: node_id("par1")
@@ -2406,6 +2510,7 @@ mod tests {
                 .clone()
                 .record(Bookkeeping::PlanCancelled {
                     node: node_id("lon1"),
+                    at: AT,
                 })
                 .unwrap();
             (planned, cancelled)

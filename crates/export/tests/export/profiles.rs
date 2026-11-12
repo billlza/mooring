@@ -209,7 +209,9 @@ fn a_bundle_withholding_everyone_has_the_all_withheld_goldens_structure() {
     // revoked. The third is not named.
     let deployment = edited(&two_nodes().deployment, |parts| {
         parts.users[0].agreement = None;
-        parts.users[1].status = UserStatus::Revoked;
+        parts.users[1].status = UserStatus::Revoked {
+            since: UnixTime::from_secs(1_791_417_600),
+        };
         parts.users[1].per_node.clear();
     });
     let users = user_ids(&deployment);
@@ -344,7 +346,9 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
         parts.users[2].status = suspended(SuspendReason::Expired);
         parts.users[3].status = suspended(SuspendReason::AbuseReview);
         parts.users[4].status = UserStatus::RevokePending;
-        parts.users[5].status = UserStatus::Revoked;
+        parts.users[5].status = UserStatus::Revoked {
+            since: UnixTime::from_secs(1_791_417_600),
+        };
         parts.users[5].per_node.clear();
         parts.users[6].agreement = None;
         parts.users[7].agreement = Some(AgreementRecord {

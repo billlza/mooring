@@ -680,6 +680,36 @@
         }
       }
     },
+    "Apply job: not started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行任务：未启动"
+          }
+        }
+      }
+    },
+    "Apply job: runs nightly at 19:20 UTC": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行任务：每晚 UTC 19:20 运行"
+          }
+        }
+      }
+    },
+    "Apply job: waiting for your approval in Login Items": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行任务：等待你在“登录项”中批准"
+          }
+        }
+      }
+    },
     "As of": {
       "localizations": {
         "zh-Hans": {
@@ -2429,6 +2459,16 @@
         }
       }
     },
+    "Revoked since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %@ 起已撤销"
+          }
+        }
+      }
+    },
     "Role": {
       "localizations": {
         "zh-Hans": {
@@ -4075,12 +4115,12 @@
         }
       }
     },
-    "applied %@, current %llu; pending since %@ (`mooringctl node apply`)": {
+    "applied %@, current %llu; pending since %@, %@ ago: the nightly apply job applies it, or `mooringctl apply --now`": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已应用 %1$@，当前 %2$llu；自 %3$@ 起待应用（`mooringctl node apply`）"
+            "value": "已应用 %1$@，当前 %2$llu；自 %3$@ 起待应用，已等待 %4$@：每晚的执行任务会应用它，也可以运行 `mooringctl apply --now`"
           }
         }
       }

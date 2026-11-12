@@ -4,17 +4,21 @@
 //! when it asks, what each answer comes to, what it writes and when it
 //! stops.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::time::Duration;
 
-use mooring_daemon_core::payments::{FeedError, StopReason};
-use mooring_model::{UnixTime, User, UserId};
+use mooring_daemon_core::payments::{FeedError, OrderId, PackUse, StopReason};
+use mooring_daemon_core::period::BillingCycle;
+use mooring_daemon_core::usage::CycleUsage;
+use mooring_model::{BillDay, CycleRule, UnixTime, User, UserId};
 use mooring_store::{PAYMENT_LEDGER_FILE, PAYMENTS_DIRECTORY};
 
 use super::super::support::{Harness, NOW};
 use super::{
-    FIRST, SECOND, block_the_ledger, connect, grant, harness, ledger_on_disk, page, token,
+    FIRST, SECOND, block_the_ledger, connect, grant, harness, ledger_on_disk, pack, page,
+    refund_in_full, token,
 };
 use crate::payments::curl::{FetchFailure, PortalAnswer};
 use crate::payments::judge::{Judged, RETRY_AFTER_MOST, judge, retry_after};
@@ -70,9 +74,33 @@ fn ticked(harness: &mut Harness, puller: &mut Puller, opening: Opening) -> (Vec<
                 room: opening.room,
                 network_clear: &mut check,
             },
+            &|| None,
         )
     });
     (notes, asked)
+}
+
+/// One tick of `puller` on `harness` through an open gate, with `usage`
+/// for the daemon's usage report; the notes it logged.
+fn tick_reporting(
+    harness: &mut Harness,
+    puller: &mut Puller,
+    usage: &dyn Fn() -> Option<CycleUsage>,
+) -> Vec<String> {
+    let users = users();
+    let mut clear = || true;
+    harness.with_env(|env| {
+        puller.tick(
+            env,
+            &users,
+            UnixTime::from_secs(NOW),
+            Gate {
+                room: OPEN.room,
+                network_clear: &mut clear,
+            },
+            usage,
+        )
+    })
 }
 
 fn requests(harness: &Harness) -> Vec<String> {
@@ -731,4 +759,62 @@ fn the_end_of_a_stop_is_recorded_at_once() {
     );
     assert!(notes[1].starts_with("payment pull: no answer from the portal"));
     assert_eq!(ledger_on_disk(&harness).unwrap().stopped(), None);
+}
+
+/// The pull asks for the daemon's usage report only for a page that holds
+/// a refund in full, and the refund that takes a pack back records what the
+/// report says of the user's use (design §9.6). Its log line names the
+/// order and what was taken back, never the user.
+#[test]
+fn a_refund_in_full_asks_for_the_usage_report() {
+    let mut harness = harness();
+    connect(&mut harness, 1, false, 1);
+    let mut puller = Puller::open(&harness.support_dir());
+    let granted = pack(1, A, FIRST);
+    harness
+        .portal
+        .ok(&page(true, 0, vec![granted.clone()], true));
+    harness.portal.ok(&page(
+        true,
+        1,
+        vec![refund_in_full(&granted, 2, NOW + 60)],
+        false,
+    ));
+    let asked = Cell::new(0);
+    let report = || {
+        asked.set(asked.get() + 1);
+        Some(CycleUsage {
+            cycle: BillingCycle::of_instant(
+                CycleRule::Monthly {
+                    bill_day: BillDay::new(1).unwrap(),
+                },
+                UnixTime::from_secs(NOW),
+            )
+            .unwrap(),
+            through: UnixTime::from_secs(NOW),
+            served: BTreeMap::from([(UserId::parse(FIRST).unwrap(), Some(70_000_000_000))]),
+        })
+    };
+    tick_reporting(&mut harness, &mut puller, &report);
+    assert_eq!(
+        asked.get(),
+        0,
+        "a page without a refund in full asks nothing"
+    );
+    let notes = tick_reporting(&mut harness, &mut puller, &report);
+    assert_eq!(asked.get(), 1);
+    let ledger = ledger_on_disk(&harness).unwrap();
+    assert_eq!(
+        ledger.orders()[&OrderId::parse(A).unwrap()].refunds[0].pack_use,
+        Some(PackUse::Served {
+            bytes: 70_000_000_000
+        })
+    );
+    assert!(
+        notes.contains(&format!(
+            "payment: order {A} refunded 800 so far, in full; its pack now counts only what the user had used of it beyond the rest of their quota: 70000000000 bytes served this cycle when Mooring applied the refund"
+        )),
+        "{notes:?}"
+    );
+    assert!(notes.iter().all(|note| !note.contains(FIRST)), "{notes:?}");
 }

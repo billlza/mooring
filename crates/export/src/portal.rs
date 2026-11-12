@@ -317,7 +317,7 @@ fn withheld(user: &User, required: AgreementVersion) -> Option<Withheld> {
             ),
         UserStatus::Suspended { .. } => Some(Withheld::Suspended),
         UserStatus::RevokePending => Some(Withheld::BeingRevoked),
-        UserStatus::Revoked => Some(Withheld::Revoked),
+        UserStatus::Revoked { .. } => Some(Withheld::Revoked),
     }
 }
 

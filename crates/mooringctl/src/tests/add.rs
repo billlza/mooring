@@ -220,7 +220,10 @@ fn a_node_cancelled_while_the_label_is_typed_is_not_one_the_user_is_added_to() {
             &store,
             &mut InMemorySecretStore::new(),
             generation,
-            Bookkeeping::PlanCancelled { node: node("ams1") },
+            Bookkeeping::PlanCancelled {
+                node: node("ams1"),
+                at: UnixTime::from_secs(NOW),
+            },
         );
         // Its keychain is not this one: the commit stands.
         assert!(

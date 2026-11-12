@@ -3,19 +3,24 @@
 //! What `portal payments` prints and the lines the pull logs, for every
 //! kind of order, outcome and stop.
 
+use std::collections::BTreeMap;
+
 use mooring_daemon_core::payments::{
-    FeedPage, GrantOutcome, HeldReason, LedgerEvent, OrderId, PaymentLedger, PortalOrigin,
-    PullSettings, Stop, StopReason,
+    FeedPage, GrantOutcome, HeldReason, LedgerEvent, OrderId, PackUse, PaymentLedger, PortalOrigin,
+    PullSettings, RefundEffect, Stop, StopReason, TimeTakenBack,
 };
-use mooring_model::{UnixTime, UserId};
+use mooring_daemon_core::period::BillingCycle;
+use mooring_daemon_core::usage::CycleUsage;
+use mooring_model::user::SuspendReason;
+use mooring_model::{BillDay, CalendarDate, CycleRule, UnixTime, UserId};
 use serde_json::{Value, json};
 
 use super::super::support::NOW;
-use super::{FIRST, grant, page};
+use super::{FIRST, grant, pack, page, refund_in_full};
 use crate::payments::listing::{json_line, text};
 use crate::payments::notes::{describe, stamp};
 
-fn users() -> std::collections::BTreeMap<UserId, mooring_model::User> {
+fn users() -> BTreeMap<UserId, mooring_model::User> {
     mooring_fixtures::two_nodes_three_users()
         .unwrap()
         .deployment
@@ -26,7 +31,7 @@ fn users() -> std::collections::BTreeMap<UserId, mooring_model::User> {
 fn applied(ledger: &PaymentLedger, body: &[u8], rehearsal: bool) -> PaymentLedger {
     let page = FeedPage::decode(body, ledger.cursor()).unwrap();
     ledger
-        .apply(&page, &users(), UnixTime::from_secs(NOW), rehearsal)
+        .apply(&page, &users(), UnixTime::from_secs(NOW), rehearsal, None)
         .unwrap()
         .ledger
 }
@@ -100,7 +105,10 @@ fn every_kind() -> PaymentLedger {
     )
 }
 
-/// Every order and record is listed, the rehearsal's marked.
+/// Every order and record is listed, the rehearsal's marked, with what
+/// each refund took back: the month's refund in full, recorded before
+/// Mooring granted it, takes all of its time back, so the test-mode month
+/// granted after it starts at once.
 #[test]
 fn every_kind_of_order_is_listed() {
     let ledger = every_kind();
@@ -108,7 +116,6 @@ fn every_kind_of_order_is_listed() {
     let settings = PullSettings::connected(3, origin, true);
     let at = stamp(UnixTime::from_secs(NOW));
     let until = stamp(UnixTime::from_secs(NOW + 30 * 86_400));
-    let after = stamp(UnixTime::from_secs(NOW + 60 * 86_400));
     assert_eq!(
         text(Some(&settings), Some(&ledger)),
         format!(
@@ -117,8 +124,8 @@ fn every_kind_of_order_is_listed() {
              payment ledger: cursor 7; last pull {at}\n\
              orders: 5 (1 held, 2 refunded, 1 disputed)\n\
              \x20 aaaaaaaaaaaaaaaaaaaa user fxuseraaab plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp)\n\
-             \x20   grant, entry 1, applied {at}: service from {at} until {until}\n\
-             \x20   refund, entry 4: 800 gbp so far, in full; changes nothing\n\
+             \x20   grant, entry 1, applied {at}: service from {at} until {until}; a refund in full took all of it back\n\
+             \x20   refund, entry 4: 800 gbp so far, in full; its service from {at} until {until} is taken back\n\
              \x20   dispute, entry 5: 800 gbp; changes nothing\n\
              \x20 bbbbbbbbbbbbbbbbbbbb user fxuseraaab plan pack-50 (traffic, 30 days, 50000000000 bytes, 800 gbp)\n\
              \x20   grant, entry 2, applied {at}: traffic pack for the billing cycle of {at}\n\
@@ -126,9 +133,9 @@ fn every_kind_of_order_is_listed() {
              \x20   grant, entry 3, applied {at}: held, not granted (unknown_user): settle it at Stripe\n\
              \x20 dddddddddddddddddddd user fxuseraaab plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp)\n\
              \x20   no grant: known only from a refund or dispute\n\
-             \x20   refund, entry 6: 100 gbp so far; changes nothing\n\
+             \x20   refund, entry 6: 100 gbp so far; nothing is taken back\n\
              \x20 eeeeeeeeeeeeeeeeeeee user fxuseraaab plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp) [Stripe test mode]\n\
-             \x20   grant, entry 7, applied {at}: service from {until} until {after}\n"
+             \x20   grant, entry 7, applied {at}: service from {at} until {until}\n"
         )
     );
 }
@@ -209,7 +216,8 @@ fn the_json_line_is_the_two_files() {
     );
 }
 
-/// Each event of an applied page has its line, by order and user id.
+/// Each event of an applied page has its line, by order and user id; a
+/// refund's by order only, with what it took back.
 #[test]
 fn every_event_has_its_line() {
     let order = OrderId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
@@ -222,6 +230,13 @@ fn every_event_has_its_line() {
         livemode,
         suspended,
     };
+    let refunded = |effect| LedgerEvent::Refunded {
+        order: order.clone(),
+        amount_refunded: 800,
+        in_full: true,
+        granted: true,
+        effect,
+    };
     let lines = [
         (
             granted(
@@ -230,7 +245,7 @@ fn every_event_has_its_line() {
                     until: UnixTime::from_secs(NOW + 86_400),
                 },
                 true,
-                false,
+                None,
             ),
             format!(
                 "payment: order {order} granted user {user} service from {} until {}",
@@ -239,9 +254,33 @@ fn every_event_has_its_line() {
             ),
         ),
         (
-            granted(GrantOutcome::Pack, false, true),
+            granted(GrantOutcome::Pack, false, Some(SuspendReason::Operator)),
             format!(
                 "payment: order {order} granted user {user} a traffic pack for this billing cycle (rehearsal, Stripe test mode); the user is suspended, and only the operator resumes them"
+            ),
+        ),
+        (
+            granted(GrantOutcome::Pack, true, Some(SuspendReason::AbuseReview)),
+            format!(
+                "payment: order {order} granted user {user} a traffic pack for this billing cycle; the user is suspended, and only the operator resumes them"
+            ),
+        ),
+        (
+            granted(GrantOutcome::Pack, true, Some(SuspendReason::Expired)),
+            format!(
+                "payment: order {order} granted user {user} a traffic pack for this billing cycle; the user is suspended at expiry, and the nightly apply job resumes them once their paid time covers it, while the cap on active users leaves room"
+            ),
+        ),
+        (
+            granted(
+                GrantOutcome::Pack,
+                true,
+                Some(SuspendReason::QuotaExceeded {
+                    cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
+                }),
+            ),
+            format!(
+                "payment: order {order} granted user {user} a traffic pack for this billing cycle; the user is suspended for quota, and the nightly apply job resumes them once their quota covers what they used this cycle, or in the next billing cycle"
             ),
         ),
         (
@@ -250,7 +289,7 @@ fn every_event_has_its_line() {
                     reason: HeldReason::BeyondCalendar,
                 },
                 true,
-                false,
+                None,
             ),
             format!("payment: order {order} granted user {user} nothing (beyond_calendar)"),
         ),
@@ -267,25 +306,80 @@ fn every_event_has_its_line() {
         (
             LedgerEvent::Refunded {
                 order: order.clone(),
-                user: user.clone(),
                 amount_refunded: 800,
                 in_full: true,
                 granted: false,
+                effect: RefundEffect::Nothing,
             },
             format!(
-                "payment: order {order} of user {user} refunded 800 so far, in full (an order Mooring never granted); recorded, nothing changed"
+                "payment: order {order} refunded 800 so far, in full (an order Mooring never granted); nothing is taken back"
             ),
         ),
         (
             LedgerEvent::Refunded {
                 order: order.clone(),
-                user: user.clone(),
                 amount_refunded: 300,
                 in_full: false,
                 granted: true,
+                effect: RefundEffect::Nothing,
             },
+            format!("payment: order {order} refunded 300 so far; nothing is taken back"),
+        ),
+        (
+            refunded(RefundEffect::Time(TimeTakenBack {
+                from: at,
+                until: UnixTime::from_secs(NOW + 86_400),
+                moved: vec![
+                    OrderId::parse("bbbbbbbbbbbbbbbbbbbb").unwrap(),
+                    OrderId::parse("cccccccccccccccccccc").unwrap(),
+                ],
+            })),
             format!(
-                "payment: order {order} of user {user} refunded 300 so far; recorded, nothing changed"
+                "payment: order {order} refunded 800 so far, in full; its service from {} until {} is taken back, and the periods of orders bbbbbbbbbbbbbbbbbbbb, cccccccccccccccccccc that followed it move as much earlier",
+                stamp(at),
+                stamp(UnixTime::from_secs(NOW + 86_400))
+            ),
+        ),
+        (
+            refunded(RefundEffect::Time(TimeTakenBack {
+                from: at,
+                until: UnixTime::from_secs(NOW + 86_400),
+                moved: vec![OrderId::parse("bbbbbbbbbbbbbbbbbbbb").unwrap()],
+            })),
+            format!(
+                "payment: order {order} refunded 800 so far, in full; its service from {} until {} is taken back, and the period of order bbbbbbbbbbbbbbbbbbbb that followed it moves as much earlier",
+                stamp(at),
+                stamp(UnixTime::from_secs(NOW + 86_400))
+            ),
+        ),
+        (
+            refunded(RefundEffect::Time(TimeTakenBack {
+                from: at,
+                until: at,
+                moved: Vec::new(),
+            })),
+            format!(
+                "payment: order {order} refunded 800 so far, in full; its service had ended, so nothing is taken back"
+            ),
+        ),
+        (
+            refunded(RefundEffect::Pack(PackUse::Served {
+                bytes: 70_000_000_000,
+            })),
+            format!(
+                "payment: order {order} refunded 800 so far, in full; its pack now counts only what the user had used of it beyond the rest of their quota: 70000000000 bytes served this cycle when Mooring applied the refund"
+            ),
+        ),
+        (
+            refunded(RefundEffect::Pack(PackUse::Unknown)),
+            format!(
+                "payment: order {order} refunded 800 so far, in full; its pack is taken back whole: the user's use this cycle was not known when Mooring applied the refund"
+            ),
+        ),
+        (
+            refunded(RefundEffect::Pack(PackUse::CycleEnded)),
+            format!(
+                "payment: order {order} refunded 800 so far, in full; its pack's billing cycle had ended, so nothing is taken back"
             ),
         ),
         (
@@ -324,4 +418,72 @@ fn every_event_has_its_line() {
     // An instant past the calendar, which only a clock gone wrong gives, is
     // said in seconds.
     assert_eq!(stamp(UnixTime::from_secs(253_402_300_800)), "@253402300800");
+}
+
+/// What each refund in full took back is listed: the month cut at the
+/// refund's time, the month that followed it moved as much earlier, and the
+/// pack with the user's use when Mooring applied its refund.
+#[test]
+fn what_refunds_in_full_took_back_is_listed() {
+    let month = grant(1, "aaaaaaaaaaaaaaaaaaaa", FIRST);
+    let next = grant(2, "bbbbbbbbbbbbbbbbbbbb", FIRST);
+    let traffic = pack(3, "cccccccccccccccccccc", FIRST);
+    let day = 86_400;
+    let entries = vec![
+        month.clone(),
+        next,
+        traffic.clone(),
+        refund_in_full(&month, 4, NOW + 10 * day),
+        refund_in_full(&traffic, 5, NOW + 3600),
+    ];
+    let usage = CycleUsage {
+        cycle: BillingCycle::of_instant(
+            CycleRule::Monthly {
+                bill_day: BillDay::new(1).unwrap(),
+            },
+            UnixTime::from_secs(NOW),
+        )
+        .unwrap(),
+        through: UnixTime::from_secs(NOW),
+        served: BTreeMap::from([(UserId::parse(FIRST).unwrap(), Some(120_000_000_000))]),
+    };
+    let page = FeedPage::decode(&page(true, 0, entries, false), 0).unwrap();
+    let ledger = PaymentLedger::new()
+        .apply(
+            &page,
+            &users(),
+            UnixTime::from_secs(NOW),
+            false,
+            Some(&usage),
+        )
+        .unwrap()
+        .ledger;
+    let listed = text(None, Some(&ledger));
+    let on = |days: u64| stamp(UnixTime::from_secs(NOW + days * day));
+    for line in [
+        format!(
+            "    grant, entry 1, applied {}: service from {} until {}; after refunds in full it counts from {} until {}",
+            on(0),
+            on(0),
+            on(30),
+            on(0),
+            on(10)
+        ),
+        format!(
+            "    refund, entry 4: 800 gbp so far, in full; its service from {} until {} is taken back, and the period of order bbbbbbbbbbbbbbbbbbbb that followed it moves as much earlier",
+            on(10),
+            on(30)
+        ),
+        format!(
+            "    grant, entry 2, applied {}: service from {} until {}; after refunds in full it counts from {} until {}",
+            on(0),
+            on(30),
+            on(60),
+            on(10),
+            on(40)
+        ),
+        "    refund, entry 5: 800 gbp so far, in full; its pack now counts only what the user had used of it beyond the rest of their quota: 120000000000 bytes served this cycle when Mooring applied the refund".to_owned(),
+    ] {
+        assert!(listed.contains(&format!("{line}\n")), "{line}\n{listed}");
+    }
 }

@@ -467,7 +467,10 @@ fn a_cancelled_plan_changes_no_figure_and_its_id_is_sighted_afresh() {
     });
     let cancelled = planned
         .clone()
-        .record(Bookkeeping::PlanCancelled { node: node("ams1") })
+        .record(Bookkeeping::PlanCancelled {
+            node: node("ams1"),
+            at: UnixTime::from_secs(1_791_417_600),
+        })
         .unwrap();
     let mut collected = CollectedUsage::default();
     collected.observe_unserved(node("lon1"), at("2026-10-28", 0));

@@ -18,7 +18,7 @@ use mooring_model::node::NodeLifecycle;
 use mooring_model::target::{
     EvidenceUrl, HttpOutcome, TargetAttestation, TargetFacts, TargetRejection, TlsOutcome, qualify,
 };
-use mooring_model::{NodeId, StateV2};
+use mooring_model::{NodeId, StateV3};
 use mooring_render::target_facts;
 use mooring_store::Store;
 
@@ -169,7 +169,7 @@ pub(crate) fn set(
 fn measure(
     env: &mut Env<'_>,
     args: &TargetArgs<'_>,
-) -> Result<(StateV2, TargetFacts), CommandError> {
+) -> Result<(StateV3, TargetFacts), CommandError> {
     let host = TargetHost::new(args.host.as_str()).map_err(|_| LocalError::TargetHost {
         host: args.host.clone(),
     })?;

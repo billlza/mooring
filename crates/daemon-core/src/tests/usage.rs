@@ -212,11 +212,16 @@ fn each_period_counts_exactly_the_bins_that_start_in_it() {
         )])
     );
     // The quota input is the cycle's served bytes per user.
-    let cycle = report.cycle_usage().unwrap();
+    let cycle = report.cycle_usage();
     assert_eq!(cycle.cycle, report.periods.cycle);
     assert_eq!(cycle.through, through);
-    assert_eq!(cycle.served[u1], 493);
-    assert_eq!(cycle.served[u3], 18);
+    assert_eq!(cycle.served[u1], Some(493));
+    assert_eq!(cycle.served[u3], Some(18));
+    assert_eq!(
+        cycle.served.len(),
+        report.users.len(),
+        "every user is covered"
+    );
 }
 
 #[test]
@@ -684,7 +689,10 @@ fn a_cancelled_plan_needs_no_ledger_and_changes_no_figure() {
     });
     let cancelled = planned
         .clone()
-        .record(Bookkeeping::PlanCancelled { node: node("ams1") })
+        .record(Bookkeeping::PlanCancelled {
+            node: node("ams1"),
+            at: UnixTime::from_secs(1_791_417_600),
+        })
         .unwrap();
     let report = aggregate(&cancelled, &[lon1(u1, u2, u3)], through).unwrap();
     assert_eq!(
@@ -1076,7 +1084,9 @@ fn the_reality_caveat_marks_exactly_the_served_users() {
         .unwrap();
     assert!(!UsageAccuracy::of(suspended).reality_downlink_counted_at_close);
     let revoked = rows.next().unwrap();
-    revoked.status = UserStatus::Revoked;
+    revoked.status = UserStatus::Revoked {
+        since: UnixTime::from_secs(1_791_417_600),
+    };
     assert!(!UsageAccuracy::of(revoked).reality_downlink_counted_at_close);
     revoked.status = UserStatus::Active;
     revoked.per_node.clear();

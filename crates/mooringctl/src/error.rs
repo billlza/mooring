@@ -359,6 +359,30 @@ pub(crate) enum LocalError {
         /// The lock file.
         path: PathBuf,
     },
+    /// Another run of the apply job holds its lock.
+    #[error("another apply job is running (it holds {}); nothing was done", path.display())]
+    ApplyAlreadyRunning {
+        /// The lock file.
+        path: PathBuf,
+    },
+    /// The apply job's lock could not be opened or taken.
+    #[error("the apply job's lock {} failed", path.display())]
+    ApplyLock {
+        /// The lock file.
+        path: PathBuf,
+        /// The underlying error.
+        #[source]
+        source: io::Error,
+    },
+    /// Parts of an apply job's run failed; its report says which, and the
+    /// rest of it was done.
+    #[error(
+        "the apply job finished with {failures} failure(s); the report above and apply.log say which"
+    )]
+    ApplyFailed {
+        /// How many parts failed.
+        failures: usize,
+    },
     /// The exit site refused the interfaces resolved for it.
     #[error("the interfaces resolved for the exit were refused")]
     ExitSite(#[source] ModelError),

@@ -7,14 +7,12 @@
 use std::io::Write;
 use std::path::Path;
 
-use mooring_daemon_core::error::{UsageError, UsageErrorKind};
 use mooring_daemon_core::portal::snapshot;
-use mooring_daemon_core::usage::UsageReport;
-use mooring_model::{Deployment, UnixTime, UserId};
+use mooring_model::UserId;
 use mooring_store::Store;
 
 use crate::app::{Env, support_dir};
-use crate::collected_usage::{UsageFault, read_collected};
+use crate::collected_usage::{Usage, usage};
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
 use crate::payments::command::entitlements;
@@ -95,36 +93,4 @@ pub(crate) fn export(
         .as_bytes(),
     )
     .map_err(output)
-}
-
-/// What the daemon's collected usage gives at the export's time.
-#[derive(Debug)]
-enum Usage {
-    /// The usage report.
-    Report(UsageReport),
-    /// No report, because the collection is behind: the daemon has not
-    /// collected a serving node's usage yet (`MissingLedger`), or not within
-    /// the report's freshness bound (`NotCoveredThrough`).
-    Behind(UsageError),
-}
-
-/// The collected usage aggregated at `now`. A fault is never read as usage
-/// that is behind: that would replace every user's figures at the portal
-/// with "unknown" and hide it.
-fn usage(support: &Path, deployment: &Deployment, now: UnixTime) -> Result<Usage, UsageFault> {
-    match read_collected(support)
-        .map_err(UsageFault::Read)?
-        .aggregate(deployment, now)
-    {
-        Ok(report) => Ok(Usage::Report(report)),
-        Err(error)
-            if matches!(
-                error.kind(),
-                UsageErrorKind::MissingLedger | UsageErrorKind::NotCoveredThrough
-            ) =>
-        {
-            Ok(Usage::Behind(error))
-        }
-        Err(error) => Err(UsageFault::Inconsistent(error)),
-    }
 }

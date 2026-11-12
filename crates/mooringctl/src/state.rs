@@ -8,7 +8,7 @@ use std::convert::Infallible;
 use std::io;
 
 use mooring_model::deployment::Bookkeeping;
-use mooring_model::{Deployment, StateV2};
+use mooring_model::{Deployment, StateV3};
 use mooring_store::{ChangeError, Store, StoreError};
 
 use crate::error::{CommandError, LocalError};
@@ -20,7 +20,7 @@ pub(crate) fn state_read(error: StoreError) -> LocalError {
 /// The state, or `NoState` when this Mac has no deployment yet: no support
 /// directory (the store would fail to open its lock there) or no
 /// `state.json` in it.
-pub(crate) fn load(store: &Store) -> Result<StateV2, LocalError> {
+pub(crate) fn load(store: &Store) -> Result<StateV3, LocalError> {
     if !store.dir().is_dir() {
         return Err(LocalError::NoState {
             path: store.state_path(),

@@ -38,9 +38,15 @@ targets:
           - Info.plist
           - "*.license"
           - LaunchAgents
-      # The daemon's plist, which SMAppService registers from the bundle
-      # (design §5.1); copied as it is, never processed.
+      # The daemon's plist and the nightly apply job's, which SMAppService
+      # registers from the bundle (design §5.1, §13.6); copied as they are,
+      # never processed.
       - path: App/LaunchAgents/com.bill.mooring.daemon.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
+      - path: App/LaunchAgents/com.bill.mooring.apply.plist
         buildPhase:
           copyFiles:
             destination: wrapper

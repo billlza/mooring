@@ -45,7 +45,7 @@ fn wire(at: u64) -> mooring_agent_proto::UnixTime {
 
 /// What the daemon would have collected by `at`: each node's month so far,
 /// sampled at `at`, with `bytes` of REALITY downlink for `user` on lon1.
-fn collected(at: u64, user: &UserId, bytes: u64) -> CollectedUsage {
+pub(super) fn collected(at: u64, user: &UserId, bytes: u64) -> CollectedUsage {
     let mut collected = CollectedUsage::default();
     for name in ["lon1", "ams1"] {
         let node = NodeId::parse(name).unwrap();
@@ -80,7 +80,7 @@ fn collected(at: u64, user: &UserId, bytes: u64) -> CollectedUsage {
     collected
 }
 
-fn with_usage(harness: &Harness, collected: &CollectedUsage) {
+pub(super) fn with_usage(harness: &Harness, collected: &CollectedUsage) {
     write_user_usage(&harness.support_dir(), &collected.encode().unwrap()).unwrap();
 }
 

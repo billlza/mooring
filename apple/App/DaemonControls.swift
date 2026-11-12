@@ -3,7 +3,8 @@
 // The daemon's registration and what can be done with it (design §5.1),
 // the same in the menu bar item and in the console window's toolbar: a
 // menu bar manager can hide the item, and the window still starts and
-// stops the daemon.
+// stops the daemon. The nightly apply job's registration follows the
+// daemon's (design §13.6).
 
 import SwiftUI
 
@@ -21,6 +22,14 @@ struct DaemonControls: View {
         case .notRegistered:
             Text("Daemon: not started")
             Button("Start the Daemon at Login") { daemon.start() }
+        }
+        switch daemon.applyJob {
+        case .enabled:
+            Text("Apply job: runs nightly at 19:20 UTC")
+        case .requiresApproval:
+            Text("Apply job: waiting for your approval in Login Items")
+        case .notRegistered:
+            Text("Apply job: not started")
         }
         Toggle(
             "Open Mooring at Login",

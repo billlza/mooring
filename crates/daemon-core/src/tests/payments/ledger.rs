@@ -13,8 +13,9 @@ use super::{
 };
 use crate::payments::{
     ApplyRefusal, Contradiction, FeedPage, GrantOutcome, HeldReason, LedgerError, LedgerEvent,
-    MAX_LEDGER_BYTES, PaymentLedger, Stop, StopReason,
+    MAX_LEDGER_BYTES, PaymentLedger, RefundEffect, Stop, StopReason, TimeTakenBack,
 };
+use mooring_model::UnixTime;
 
 const A: &str = "0123456789abcdefghjk";
 const B: &str = "zzzzzzzzzzzzzzzzzzzz";
@@ -37,7 +38,7 @@ fn period(from: u64, until: u64) -> GrantOutcome {
 #[test]
 fn a_rehearsal_grants_the_pilot_golden() {
     let applied = PaymentLedger::new()
-        .apply(&pilot_page(), &pilot_users(), NOW, true)
+        .apply(&pilot_page(), &pilot_users(), NOW, true, None)
         .unwrap();
     let now = NOW.as_secs();
     assert_eq!(
@@ -48,28 +49,28 @@ fn a_rehearsal_grants_the_pilot_golden() {
                 user: id("pilotusera"),
                 outcome: period(now, now + 30 * DAY),
                 livemode: false,
-                suspended: false,
+                suspended: None,
             },
             LedgerEvent::Granted {
                 order: order(B),
                 user: id("pilotuserb"),
                 outcome: period(now, now + 30 * DAY),
                 livemode: false,
-                suspended: false,
+                suspended: None,
             },
             LedgerEvent::Refunded {
                 order: order(A),
-                user: id("pilotusera"),
                 amount_refunded: 300,
                 in_full: false,
                 granted: true,
+                effect: RefundEffect::Nothing,
             },
             LedgerEvent::Granted {
                 order: order(RENEWAL),
                 user: id("pilotuserb"),
                 outcome: period(now + 30 * DAY, now + 60 * DAY),
                 livemode: false,
-                suspended: false,
+                suspended: None,
             },
             LedgerEvent::Disputed {
                 order: order(A),
@@ -79,10 +80,14 @@ fn a_rehearsal_grants_the_pilot_golden() {
             },
             LedgerEvent::Refunded {
                 order: order(RENEWAL),
-                user: id("pilotuserb"),
                 amount_refunded: 800,
                 in_full: true,
                 granted: true,
+                effect: RefundEffect::Time(TimeTakenBack {
+                    from: secs(now + 30 * DAY),
+                    until: secs(now + 60 * DAY),
+                    moved: Vec::new(),
+                }),
             },
         ]
     );
@@ -109,7 +114,7 @@ fn a_rehearsal_grants_the_pilot_golden() {
 fn test_mode_grants_nothing_unless_rehearsing() {
     let ledger = PaymentLedger::new();
     assert_eq!(
-        ledger.apply(&pilot_page(), &pilot_users(), NOW, false),
+        ledger.apply(&pilot_page(), &pilot_users(), NOW, false, None),
         Err(ApplyRefusal::TestMode)
     );
     let mut empty_test = pilot_value();
@@ -118,12 +123,18 @@ fn test_mode_grants_nothing_unless_rehearsing() {
     empty_test["more"] = json!(false);
     let page = decode(&empty_test, 0).unwrap();
     assert_eq!(
-        ledger.apply(&page, &pilot_users(), NOW, false),
+        ledger.apply(&page, &pilot_users(), NOW, false, None),
         Err(ApplyRefusal::TestMode)
     );
     let month = Terms::month(A, "pilotusera");
     let applied = ledger
-        .apply(&live(0, vec![month.grant(1)]), &pilot_users(), NOW, false)
+        .apply(
+            &live(0, vec![month.grant(1)]),
+            &pilot_users(),
+            NOW,
+            false,
+            None,
+        )
         .unwrap();
     assert_eq!(applied.ledger.cursor(), 1);
     assert!(applied.ledger.orders()[&order(A)].livemode);
@@ -134,12 +145,24 @@ fn test_mode_grants_nothing_unless_rehearsing() {
 fn a_page_must_follow_the_cursor() {
     let month = Terms::month(A, "pilotusera");
     let ledger = PaymentLedger::new()
-        .apply(&live(0, vec![month.grant(1)]), &pilot_users(), NOW, false)
+        .apply(
+            &live(0, vec![month.grant(1)]),
+            &pilot_users(),
+            NOW,
+            false,
+            None,
+        )
         .unwrap()
         .ledger;
     let other = Terms::month(B, "pilotusera");
     assert_eq!(
-        ledger.apply(&live(3, vec![other.grant(4)]), &pilot_users(), NOW, false),
+        ledger.apply(
+            &live(3, vec![other.grant(4)]),
+            &pilot_users(),
+            NOW,
+            false,
+            None
+        ),
         Err(ApplyRefusal::CursorMoved {
             after: 3,
             cursor: 1
@@ -158,12 +181,14 @@ fn the_empty_golden_changes_nothing_but_the_time_of_the_pull() {
         entries.push(grant);
     }
     let ledger = PaymentLedger::new()
-        .apply(&live(0, entries), &pilot_users(), NOW, false)
+        .apply(&live(0, entries), &pilot_users(), NOW, false, None)
         .unwrap()
         .ledger;
     let empty = FeedPage::decode(super::EMPTY.as_bytes(), 6).unwrap();
     let later = secs(NOW.as_secs() + 300);
-    let applied = ledger.apply(&empty, &pilot_users(), later, false).unwrap();
+    let applied = ledger
+        .apply(&empty, &pilot_users(), later, false, None)
+        .unwrap();
     assert!(applied.events.is_empty());
     assert_eq!(applied.ledger.cursor(), 6);
     assert_eq!(applied.ledger.orders(), ledger.orders());
@@ -190,6 +215,7 @@ fn an_entry_again_changes_nothing() {
             &pilot_users(),
             NOW,
             false,
+            None,
         )
         .unwrap()
         .ledger;
@@ -207,6 +233,7 @@ fn an_entry_again_changes_nothing() {
             &pilot_users(),
             later,
             false,
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -250,6 +277,7 @@ fn a_refund_is_new_by_its_amount_and_flag() {
             &pilot_users(),
             NOW,
             false,
+            None,
         )
         .unwrap();
     let refunds = &applied.ledger.orders()[&order(A)].refunds;
@@ -273,6 +301,7 @@ fn a_contradiction_refuses_the_whole_page() {
             &pilot_users(),
             NOW,
             false,
+            None,
         )
         .unwrap()
         .ledger;
@@ -284,7 +313,7 @@ fn a_contradiction_refuses_the_whole_page() {
     let refused = |entries: Vec<Value>| {
         let mut all = vec![fresh.grant(3)];
         all.extend(entries);
-        ledger.apply(&live(2, all), &pilot_users(), NOW, false)
+        ledger.apply(&live(2, all), &pilot_users(), NOW, false, None)
     };
     for (entries, contradiction) in [
         (
@@ -307,7 +336,13 @@ fn a_contradiction_refuses_the_whole_page() {
     let mut rehearsal = document(false, 2, vec![month.refund(3, 1, false)], false);
     rehearsal["entries"][0]["seq"] = json!(3);
     assert_eq!(
-        ledger.apply(&decode(&rehearsal, 2).unwrap(), &pilot_users(), NOW, true),
+        ledger.apply(
+            &decode(&rehearsal, 2).unwrap(),
+            &pilot_users(),
+            NOW,
+            true,
+            None
+        ),
         Err(ApplyRefusal::Contradicted {
             seq: 3,
             order: order(A),
@@ -321,22 +356,27 @@ fn a_contradiction_refuses_the_whole_page() {
             &pilot_users(),
             NOW,
             false,
+            None,
         )
         .unwrap();
     assert_eq!(
         orphan.events,
         [LedgerEvent::Refunded {
             order: order(B),
-            user: id("pilotuserb"),
             amount_refunded: 100,
             in_full: false,
-            granted: false
+            granted: false,
+            effect: RefundEffect::Nothing,
         }]
     );
     assert_eq!(
-        orphan
-            .ledger
-            .apply(&live(1, vec![fresh.grant(2)]), &pilot_users(), NOW, false),
+        orphan.ledger.apply(
+            &live(1, vec![fresh.grant(2)]),
+            &pilot_users(),
+            NOW,
+            false,
+            None
+        ),
         Err(ApplyRefusal::Contradicted {
             seq: 2,
             order: order(B),
@@ -350,6 +390,7 @@ fn a_contradiction_refuses_the_whole_page() {
             &pilot_users(),
             NOW,
             false,
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -370,7 +411,13 @@ fn a_contradiction_refuses_the_whole_page() {
 fn grants_for_unknown_or_revoked_users_are_held() {
     let users = by_id(vec![
         user("pilotuserb", UserStatus::RevokePending, None),
-        user("pilotuserc", UserStatus::Revoked, None),
+        user(
+            "pilotuserc",
+            UserStatus::Revoked {
+                since: UnixTime::from_secs(1_791_417_600),
+            },
+            None,
+        ),
         user(
             "pilotuserd",
             UserStatus::Suspended {
@@ -394,6 +441,7 @@ fn grants_for_unknown_or_revoked_users_are_held() {
             &users,
             NOW,
             false,
+            None,
         )
         .unwrap();
     let now = NOW.as_secs();
@@ -420,7 +468,7 @@ fn grants_for_unknown_or_revoked_users_are_held() {
                 user: id("pilotuserd"),
                 outcome: period(now, now + 30 * DAY),
                 livemode: true,
-                suspended: true
+                suspended: Some(SuspendReason::Expired)
             },
         ]
     );
@@ -460,6 +508,7 @@ fn a_period_follows_the_users_expiry_or_starts_now() {
             &users,
             NOW,
             false,
+            None,
         )
         .unwrap();
     let outcome = |text| applied.ledger.orders()[&order(text)].grant.unwrap().outcome;
@@ -497,6 +546,7 @@ fn a_period_past_the_calendar_is_held() {
             &users,
             NOW,
             false,
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -522,7 +572,7 @@ fn a_period_past_the_calendar_is_held() {
 fn a_rehearsal_never_moves_real_time() {
     let now = NOW.as_secs();
     let rehearsed = PaymentLedger::new()
-        .apply(&pilot_page(), &pilot_users(), NOW, true)
+        .apply(&pilot_page(), &pilot_users(), NOW, true, None)
         .unwrap()
         .ledger;
     let later = now + DAY;
@@ -533,6 +583,7 @@ fn a_rehearsal_never_moves_real_time() {
             &pilot_users(),
             secs(later),
             false,
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -542,7 +593,7 @@ fn a_rehearsal_never_moves_real_time() {
             user: id("pilotuserb"),
             outcome: period(later, later + 30 * DAY),
             livemode: true,
-            suspended: false,
+            suspended: None,
         }
     );
     let off = applied.ledger.entitlements(false);
@@ -550,11 +601,13 @@ fn a_rehearsal_never_moves_real_time() {
     assert_eq!(b.periods().len(), 1);
     assert_eq!(b.paid_until(), Some(secs(later + 30 * DAY)));
     assert!(off.user(&id("pilotusera")).is_none());
+    // The rehearsal's renewal, refunded in full before it began, counts no
+    // time: the live month ends the paid time.
     let on = applied.ledger.entitlements(true);
     assert_eq!(on.user(&id("pilotuserb")).unwrap().periods().len(), 3);
     assert_eq!(
         on.user(&id("pilotuserb")).unwrap().paid_until(),
-        Some(secs(now + 60 * DAY))
+        Some(secs(later + 30 * DAY))
     );
     // While both count, the live period covering an instant is the one
     // that applies.
@@ -572,7 +625,7 @@ fn a_rehearsal_never_moves_real_time() {
 #[test]
 fn the_ledger_file_round_trips_and_keeps_its_rules() {
     let applied = PaymentLedger::new()
-        .apply(&pilot_page(), &pilot_users(), NOW, true)
+        .apply(&pilot_page(), &pilot_users(), NOW, true, None)
         .unwrap();
     let stopped = applied.ledger.with_stop(Some(Stop {
         reason: StopReason::Conflict,
@@ -592,12 +645,26 @@ fn the_ledger_file_round_trips_and_keeps_its_rules() {
     assert_eq!(stopped.with_stop(None), applied.ledger);
     let text = String::from_utf8(applied.ledger.encode().unwrap()).unwrap();
     assert!(
-        text.starts_with("{\n  \"version\": 1,\n  \"cursor\": 7,"),
+        text.starts_with("{\n  \"version\": 2,\n  \"cursor\": 7,"),
         "{text}"
     );
     let value: Value = serde_json::from_str(&text).unwrap();
     let edits: Vec<(&str, Edit)> = vec![
-        ("version", Box::new(|value| value["version"] = json!(2))),
+        ("version", Box::new(|value| value["version"] = json!(3))),
+        (
+            "use of a month's refund in full",
+            Box::new(|value| value["orders"][1]["refunds"][0]["pack_use"] = json!("unknown")),
+        ),
+        (
+            "use of a partial refund",
+            Box::new(|value| {
+                value["orders"][0]["refunds"][0]["pack_use"] = json!({"served": {"bytes": 5}});
+            }),
+        ),
+        (
+            "version 1 with a use",
+            Box::new(|value| value["version"] = json!(1)),
+        ),
         (
             "order",
             Box::new(|value| {
@@ -681,7 +748,7 @@ fn the_ledger_file_round_trips_and_keeps_its_rules() {
         if name == "version" {
             assert!(matches!(
                 refused,
-                Err(LedgerError::UnknownVersion { found: 2 })
+                Err(LedgerError::UnknownVersion { found: 3 })
             ));
         }
     }
@@ -716,7 +783,7 @@ fn a_ledger_too_large_to_read_back_is_not_written() {
         }
         let page = live(seq - 200, entries.clone());
         ledger = ledger
-            .apply(&page, &pilot_users(), NOW, false)
+            .apply(&page, &pilot_users(), NOW, false, None)
             .unwrap()
             .ledger;
         assert!(seq < 20_000, "the ledger never grew past its bound");
@@ -735,6 +802,7 @@ fn an_order_known_only_from_its_refund_gives_nothing() {
             &pilot_users(),
             NOW,
             false,
+            None,
         )
         .unwrap()
         .ledger;
@@ -769,6 +837,7 @@ fn a_new_period_follows_the_later_of_the_last_period_and_the_own_expiry() {
             &users,
             NOW,
             false,
+            None,
         )
         .unwrap();
     let outcome = |text| applied.ledger.orders()[&order(text)].grant.unwrap().outcome;
@@ -797,6 +866,7 @@ fn a_new_period_follows_the_later_of_the_last_period_and_the_own_expiry() {
             &later,
             NOW,
             false,
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -826,6 +896,7 @@ fn a_refund_of_a_held_order_says_it_was_never_granted() {
             &pilot_users(),
             NOW,
             false,
+            None,
         )
         .unwrap();
     assert!(!applied.ledger.orders()[&order(A)].granted());
@@ -833,10 +904,10 @@ fn a_refund_of_a_held_order_says_it_was_never_granted() {
         applied.events[1],
         LedgerEvent::Refunded {
             order: order(A),
-            user: id("pilotuserz"),
             amount_refunded: 800,
             in_full: true,
             granted: false,
+            effect: RefundEffect::Nothing,
         }
     );
     assert_eq!(
@@ -850,7 +921,13 @@ fn a_refund_of_a_held_order_says_it_was_never_granted() {
     );
     let month = Terms::month(B, "pilotusera");
     let granted = PaymentLedger::new()
-        .apply(&live(0, vec![month.grant(1)]), &pilot_users(), NOW, false)
+        .apply(
+            &live(0, vec![month.grant(1)]),
+            &pilot_users(),
+            NOW,
+            false,
+            None,
+        )
         .unwrap()
         .ledger;
     assert!(granted.orders()[&order(B)].granted());

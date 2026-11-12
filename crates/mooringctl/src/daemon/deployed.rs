@@ -44,8 +44,9 @@ use mooring_model::{Deployment, ExitSite, NodeId};
 use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
 use super::{
-    Control, Intervals, LoopState, RunPaths, Waited, chain, poll_router_on, publish,
-    radio::RadioHistoryWriter, router_after_poll, say, unavailable_reason, wait_for_next_poll,
+    Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending, poll_router_on,
+    publish, radio::RadioHistoryWriter, router_after_poll, say, unavailable_reason,
+    wait_for_next_poll,
 };
 use crate::app::Env;
 use crate::daemon::usage::Pulled;
@@ -181,6 +182,8 @@ pub(crate) struct Deployed<'e, 'a> {
     usage_failure: Option<String>,
     /// The payment pull (design §9.6).
     payments: Puller,
+    /// The record of pending applies (design §13.6, §15.3).
+    pending: Pending,
     nodes_polled: Option<Instant>,
     polls: BTreeMap<NodeId, NodePoll>,
     unreachable: BTreeMap<NodeId, NodeAgentState>,
@@ -269,6 +272,10 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if let Some(fault) = payments.fault() {
             say(log, now, &fault)?;
         }
+        let (pending, unread) = Pending::open(&run_dir);
+        if let Some(note) = unread {
+            say(log, now, &note)?;
+        }
         let mut router_failure = None;
         let router = poll_m7(
             env,
@@ -313,6 +320,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             usage: super::usage::Collector::open(support_dir, intervals.usage_pull),
             usage_failure: None,
             payments,
+            pending,
             nodes_polled: None,
             polls: BTreeMap::new(),
             unreachable: BTreeMap::new(),
@@ -414,6 +422,12 @@ impl<'e, 'a> Deployed<'e, 'a> {
             || self.published_power != Some(section.power);
         self.usage
             .maintain(deployment, now, self.intervals.usage_pull);
+        if let Some(note) = self.pending.track(deployment, now) {
+            say(log, now, &note)?;
+        }
+        for note in self.payments.prune(deployment) {
+            say(log, now, &note)?;
+        }
         let awake = self.allow_sleep.is_none() && !matches!(&section.state, ExitState::Paused);
         let mut asked_a_node = false;
         if awake
@@ -457,7 +471,12 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 ),
                 network_clear: &mut clear_now,
             };
-            for note in self.payments.tick(env, deployment.users(), now, gate) {
+            let collector = &self.usage;
+            let report = || collector.cycle_usage(deployment, now);
+            for note in self
+                .payments
+                .tick(env, deployment.users(), now, gate, &report)
+            {
                 say(log, now, &note)?;
             }
         }
@@ -505,7 +524,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 polls: &self.polls,
                 unreachable: &self.unreachable,
                 verdicts: &self.machine.verdicts(),
-                pending_apply: &BTreeMap::new(),
+                pending_apply: &self.pending.since(),
                 alerts: Vec::new(),
                 entitlements: &self.payments.entitlements(),
             })

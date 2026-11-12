@@ -12,7 +12,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
-use crate::app::{AGENT_LABEL, AppError, Capture, DITTO, Programs, Step};
+use crate::app::{AGENT_LABEL, APPLY_JOB_LABEL, AppError, Capture, DITTO, Programs, Step};
 use crate::cargo::Cargo;
 
 /// The workspace's root: the parent of xtask's manifest directory.
@@ -85,14 +85,16 @@ impl Programs for Fake {
         if step.program == Path::new(DITTO) {
             let app = PathBuf::from(&step.args[1]);
             fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-            let source = step
-                .dir
-                .join("apple/App/LaunchAgents")
-                .join(format!("{AGENT_LABEL}.plist"));
-            if let Ok(plist) = fs::read(source) {
-                let agents = app.join("Contents/Library/LaunchAgents");
-                fs::create_dir_all(&agents).unwrap();
-                fs::write(agents.join(format!("{AGENT_LABEL}.plist")), plist).unwrap();
+            for label in [AGENT_LABEL, APPLY_JOB_LABEL] {
+                let source = step
+                    .dir
+                    .join("apple/App/LaunchAgents")
+                    .join(format!("{label}.plist"));
+                if let Ok(plist) = fs::read(source) {
+                    let agents = app.join("Contents/Library/LaunchAgents");
+                    fs::create_dir_all(&agents).unwrap();
+                    fs::write(agents.join(format!("{label}.plist")), plist).unwrap();
+                }
             }
         }
         self.happened(step);
