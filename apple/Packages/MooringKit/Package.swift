@@ -5,8 +5,10 @@
 // decodes the documents `mooringctl status --follow --json` prints, refusing
 // any key or value it does not name, and runs that command; it never reads
 // a secret or a daemon file (design §5.1). It also holds the app's own
-// logic apart from AppKit, such as raising the console window
-// (ConsoleWindowFront), so that the logic is tested.
+// logic apart from AppKit and ServiceManagement, such as raising the
+// console window (ConsoleWindowFront) and carrying the start of the app's
+// two launch agents through after a new build (LaunchRound), so that the
+// logic is tested.
 //
 // MooringPower: the power helper's protocol and its logic, apart from
 // IOKit (design §5.1, §10.3); the `mooring-power` tool (apple/Power) runs
