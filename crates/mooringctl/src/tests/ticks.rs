@@ -9,7 +9,7 @@
 //! pid file, a log that cannot be written).
 
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -495,24 +495,19 @@ fn the_exit_is_served_until_the_acceptor_ends() {
         );
     }
     statuses(&harness);
-    let (retry, retries) = mpsc::channel();
-    let control = Control {
-        hub: crate::daemon::hub::Hub::default(),
-        retry,
-        deployed: AtomicBool::new(false),
-    };
+    let (control, asked) = Control::new();
     control.retry.send(()).unwrap();
     let (ended, acceptor_ended) = mpsc::channel();
     ended.send(()).unwrap();
     let log = with_exit_on(&mut harness, Intervals::DAEMON, |exit, log| {
         assert_eq!(
-            serve(exit, log, &control, &acceptor_ended, &retries).unwrap(),
+            serve(exit, log, &control, &acceptor_ended, &asked).unwrap(),
             Stopped::AcceptorEnded
         );
         lines(log)
     });
     assert!(control.deployed.load(Ordering::SeqCst));
-    assert!(retries.try_recv().is_err(), "the retry was taken");
+    assert!(asked.retries.try_recv().is_err(), "the retry was taken");
     assert!(harness.nodes.script.borrow().is_empty());
     assert_eq!(published(&control).parts().exit.state, ExitState::Starting);
     assert!(log.contains(&"serving the exit".to_owned()), "{log:?}");

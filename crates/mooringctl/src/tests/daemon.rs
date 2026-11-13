@@ -57,6 +57,7 @@ const QUICK: Limits = Limits {
     request: Duration::from_millis(300),
     write: Duration::from_secs(2),
     idle_check: Duration::from_millis(100),
+    answer: Duration::from_millis(300),
 };
 
 /// How long a test waits for a reply, a connection's end or a command. A
@@ -947,15 +948,8 @@ fn serve_pair(control: &Arc<Control>, request: &[u8]) -> (UnixStream, Running<En
 /// What the connections share, with a fresh hub, and the receiving end of
 /// its retries.
 fn control() -> (Arc<Control>, mpsc::Receiver<()>) {
-    let (retry, retries) = mpsc::channel();
-    (
-        Arc::new(Control {
-            hub: Hub::default(),
-            retry,
-            deployed: AtomicBool::new(false),
-        }),
-        retries,
-    )
+    let (control, asked) = Control::new();
+    (Arc::new(control), asked.retries)
 }
 
 #[test]
@@ -1824,7 +1818,7 @@ fn a_daemon_of_no_or_another_protocol_is_refused_before_its_replies() {
         ),
         (
             vec![b"{\"control_protocol\":1}\n".to_vec(), available_line(NOW)],
-            "mooringctl: the daemon speaks control protocol 1 and this mooringctl speaks 2: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
+            "mooringctl: the daemon speaks control protocol 1 and this mooringctl speaks 4: use the mooringctl inside Mooring.app, and after updating the app restart the daemon (Stop the Daemon, then Start the Daemon at Login, in Mooring's menu)\n",
         ),
         (
             vec![
