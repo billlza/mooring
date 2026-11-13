@@ -122,10 +122,11 @@ extension LaunchLastExit {
 
 /// What a record says of the agent's start.
 public enum LaunchCondition: Hashable, Sendable {
-    /// launchd shows its program as running. It shows a start so for a
-    /// moment before macOS refuses it, too.
+    /// launchd shows its program as running.
     case running
-    /// launchd has not started it since it was registered.
+    /// launchd has completed no start of it since it was registered: it
+    /// has not started it, or is starting it this moment for the first
+    /// time.
     case idle
     /// Its program started, and ended by itself.
     case exited(LaunchLastExit?)
@@ -146,6 +147,9 @@ extension LaunchRecord {
     static let needsConstraintUpdate = "needs LWCR update"
     /// The exit code of a start that asked macOS for the new record.
     static let configurationExit: Int32 = 78
+    /// launchd's job state for an agent none of whose starts has ended
+    /// since it was registered.
+    static let notInitialized = "uninitialized"
 
     /// What the record says of the agent's start, or `nil` for a state
     /// this build does not know, which `summary` names.
@@ -161,7 +165,11 @@ extension LaunchRecord {
         if state == "running" {
             return .running
         }
-        if runs == 0 {
+        // No start asked for yet, or the first one under way: in that
+        // moment `state` reads `xpcproxy` and `runs` 1 (read on 2026-11-13
+        // within 0.2 s of a registration and of a first start by hand; the
+        // next reading had the one running and the other refused).
+        if runs == 0 || jobState == Self.notInitialized {
             return .idle
         }
         if jobState == "exited" {

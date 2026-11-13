@@ -59,6 +59,34 @@ import Testing
         #expect(try LaunchRecord(printed: daemon).condition == .idle)
     }
 
+    /// The moment of a start, in which launchd's `state` reads `xpcproxy`
+    /// (read on 2026-11-13 with a throwaway app, at five readings a second).
+    @Test func theMomentOfAStartIsReadByWhatWentBefore() throws {
+        // 0.2 s after a registration: the first start, not yet ended.
+        let first = try LaunchRecord(
+            printed: LaunchPrintouts.printout(
+                state: "xpcproxy", runs: 1, lastExit: "(never exited)", jobState: "uninitialized",
+                properties: "\(LaunchPrintouts.daemonProperties) | has LWCR"))
+        #expect(first.runs == 1)
+        #expect(first.condition == .idle)
+        // The second start by hand of a job refused once, before its 78.
+        let again = LaunchPrintouts.printout(
+            state: "xpcproxy", runs: 2, lastExit: nil, jobState: "spawn failed",
+            properties: "\(LaunchPrintouts.jobProperties) | needs LWCR update | has LWCR")
+        #expect(try LaunchRecord(printed: again).condition == .refusedOnce)
+        // A later start of a job that has run: its last run still shows.
+        let hourly = LaunchPrintouts.printout(
+            state: "xpcproxy", runs: 17, lastExit: "0", jobState: "exited",
+            properties: "\(LaunchPrintouts.jobProperties) | has LWCR")
+        #expect(try LaunchRecord(printed: hourly).condition == .exited(.code(0)))
+        // With a job state this build does not know, the moment tells nothing.
+        let other = try LaunchRecord(
+            printed: LaunchPrintouts.printout(
+                state: "xpcproxy", runs: 3, lastExit: "0", jobState: "waiting", properties: nil))
+        #expect(other.condition == nil)
+        #expect(LaunchReading(other) == .unknown("state = xpcproxy, runs = 3, last exit code = 0, job state = waiting"))
+    }
+
     /// The blocks nested in a printout repeat `state`, `runs`, `job state`,
     /// `properties` and `last exit code` further in: the frame of
     /// `printout` has all five, and none is read.

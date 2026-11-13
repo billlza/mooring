@@ -14,7 +14,9 @@
 // daemon's record and registered again 3 s later, the daemon running at
 // once after that. Nothing here leaves what was measured: the daemon is
 // never started by hand, the job's two starts are 20 s apart, the agents
-// are registered again together, and no sooner after the replacement.
+// are registered again together, and no sooner after the replacement. The
+// round itself was then run on that app, the same day: a new build started
+// in 87 s, a refused job was repaired in 51 s (design §5.1).
 //
 // A start by hand of the apply job whose record is good runs `mooringctl
 // apply --pending`: by its own rule it does nothing outside 19:15 to
@@ -24,14 +26,15 @@
 // since the records were made; any other start by hand is of a job it has
 // seen refused, which cannot run.
 //
-// Two readings are not taken at their word. launchd gives a service its
-// pid while `xpcproxy` has yet to become the service's program, and its
-// log has a refused start run for 40 to 50 ms; what the record says in
-// that time was not captured, so a daemon shown as running counts only
-// once it has been shown so for `steady`. And a reading the round cannot
+// Two readings are not taken at their word. A daemon shown as running
+// counts only once it has been shown so for `steady`, so that a program
+// that ends at once is not taken for a started one. No refused start read
+// as running when the round was measured: the first reading after a
+// registration, within a tenth of a second, had the refusal in the record,
+// and in the moment of a start `state` reads `xpcproxy`, which
+// `LaunchRecord` reads by what went before. And a reading the round cannot
 // act on, an agent launchd does not list or a state this build does not
-// know, is taken again for `settle` before it ends the round: the moment
-// after a registration was not read either.
+// know, is taken again for `settle` before it ends the round.
 //
 // `LaunchRoundPlan` chooses each step from what launchd's records say and
 // from the time, and does nothing itself; `LaunchRound` asks the host for

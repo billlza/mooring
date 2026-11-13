@@ -213,8 +213,11 @@ final class DaemonService {
         guard reading == nil else {
             return
         }
+        // Counted here, not when the task first runs: a round that
+        // `start()` begins right after this has begun by then.
+        let began = rounds
         reading = Task {
-            let shown = await askLaunchd()
+            let shown = await askLaunchd(asOf: began)
             reading = nil
             // Something overtook it: what there is to show now is read
             // afresh, unless a round is reading.
@@ -224,12 +227,11 @@ final class DaemonService {
         }
     }
 
-    /// One reading of launchd's records of the two agents, and whether it
-    /// was shown. A round that began while `launchctl` ran has the last
-    /// word, and so has a stop or Login Items, after which the agents are
-    /// no longer both registered and allowed.
-    private func askLaunchd() async -> Bool {
-        let began = rounds
+    /// One reading of launchd's records of the two agents, asked for when
+    /// `began` rounds had begun, and whether it was shown. A round that
+    /// began since has the last word, and so has a stop or Login Items,
+    /// after which the agents are no longer both registered and allowed.
+    private func askLaunchd(asOf began: Int) async -> Bool {
         let asked: (attention: LaunchAttention, untold: [LaunchRoundFailure])
         do {
             let daemon = LaunchReading(try await launchctl.record(of: Self.label))
