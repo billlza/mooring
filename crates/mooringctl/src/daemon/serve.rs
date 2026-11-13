@@ -24,7 +24,7 @@ use mooring_daemon_core::control::{
 use mooring_daemon_core::sim_network::{NotAccepted, SimNetwork};
 
 use super::hub::{Hub, HubPoisoned};
-use super::{AcceptRequest, Control};
+use super::{AcceptRequest, Control, peer};
 
 /// The most clients served at once: the app's one subscription, a few CLI
 /// calls, and room for a stale connection that has not been noticed yet.
@@ -286,13 +286,26 @@ pub(crate) fn setsockopt_end(error: io::Error) -> End {
     }
 }
 
+/// The end for a write that failed with `kind`: the client has left when
+/// the write found it gone ([`peer::gone`]), and any other failure is the
+/// connection's I/O error.
+pub(crate) fn write_end(kind: ErrorKind) -> End {
+    if peer::gone(kind) {
+        End::ClientLeft
+    } else {
+        End::Io(kind)
+    }
+}
+
 /// Writes the refusal and reports it as the connection's end; the caller
-/// then closes the connection.
-fn refused(stream: &mut UnixStream, reason: Refusal) -> End {
+/// then closes the connection. A refusal that cannot be written ends the
+/// connection as any write that failed does ([`write_end`]): its client
+/// has left, or the failure is the connection's I/O error.
+pub(crate) fn refused(stream: &mut UnixStream, reason: Refusal) -> End {
     match encode_line(&DaemonReply::Refused { reason }, MAX_REPLY_LINE_BYTES) {
         Ok(line) => match stream.write_all(&line) {
             Ok(()) => End::Refused(reason),
-            Err(error) => End::Io(error.kind()),
+            Err(error) => write_end(error.kind()),
         },
         // A fixed refusal always encodes; were it not to, the client is
         // still not served.
@@ -360,12 +373,7 @@ fn write_before(stream: &mut UnixStream, line: &[u8], deadline: Instant) -> Resu
             Ok(written) => rest = &rest[written..],
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) if error.kind() == ErrorKind::WouldBlock => thread::sleep(WRITE_RETRY),
-            Err(error) => {
-                return Err(match error.kind() {
-                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset => End::ClientLeft,
-                    kind => End::Io(kind),
-                });
-            }
+            Err(error) => return Err(write_end(error.kind())),
         }
     }
     Ok(())

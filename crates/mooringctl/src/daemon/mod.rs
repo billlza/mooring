@@ -20,6 +20,7 @@
 pub(crate) mod deployed;
 pub(crate) mod hub;
 pub(crate) mod log;
+pub(crate) mod peer;
 pub(crate) mod pending;
 pub(crate) mod radio;
 pub(crate) mod serve;

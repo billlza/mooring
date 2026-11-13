@@ -24,7 +24,7 @@ use mooring_model::time::UnixTime;
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::app::{Env, support_dir};
-use crate::daemon::RunPaths;
+use crate::daemon::{RunPaths, peer};
 use crate::error::{CommandError, LocalError};
 use crate::router::error::reason_phrase;
 use crate::router::output::{summary, utc_stamp};
@@ -219,9 +219,10 @@ pub(crate) fn check_protocol(
 }
 
 /// Sends `request` on `stream`. A busy daemon writes its refusal and
-/// closes without reading the request, so a broken pipe here is not the
-/// answer: the refusal is still there to read, and the read that follows
-/// reports it (or the end of the stream).
+/// closes without reading the request, so a write that finds the daemon
+/// gone ([`peer::gone`]) is not the answer: the refusal is still there to
+/// read, and the read that follows reports it (or the end of the stream).
+/// Any other failure of the write is the error it is.
 pub(crate) fn send_request(
     mut stream: UnixStream,
     request: DaemonRequest,
@@ -230,14 +231,7 @@ pub(crate) fn send_request(
     let line = encode_line(&request, MAX_REQUEST_LINE_BYTES).map_err(LocalError::ClientEncode)?;
     match stream.write_all(&line) {
         Ok(()) => Ok(stream),
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::BrokenPipe | ErrorKind::ConnectionReset
-            ) =>
-        {
-            Ok(stream)
-        }
+        Err(error) if peer::gone(error.kind()) => Ok(stream),
         Err(source) => Err(LocalError::DaemonIo {
             path: socket.to_path_buf(),
             source,
