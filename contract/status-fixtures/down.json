@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 4,
   "at": 1791477900,
   "exit": {
     "state": {
@@ -105,6 +105,10 @@
       "unavailable": {
         "reason": "MissingDay"
       }
+    },
+    "network": {
+      "origin": "record_unreadable",
+      "baseline": null
     }
   },
   "router": {

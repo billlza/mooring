@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The exit screen (design §15.3): the exit's state and why, the latched
-// violations with their evidence, the egress and the carrier check, the
-// two engines, the Mac's power and any foreign network.
+// violations with their evidence, the egress and the carrier check (with
+// the notice when the M7 reports another SIM or network than the one the
+// check was recorded with), the two engines, the Mac's power and any
+// foreign network.
 
 import MooringKit
 import SwiftUI
@@ -67,6 +69,9 @@ struct ExitView: View {
                 }
             }
             Section("Carrier check") {
+                if let change = status.sim.network.change {
+                    SimNetworkNotice(change: change)
+                }
                 if let check = exit.carrierCheck {
                     LabeledContent("Carrier address", value: check.egressIp)
                     LabeledContent("In the recorded carrier prefixes") {

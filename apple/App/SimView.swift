@@ -2,8 +2,10 @@
 
 // The SIM screen (design §15.3): the billing cycle, the line's bytes
 // received and sent against the warning, the stop policy and the plan's
-// line, whether the meter is exact, and the forecast with each threshold's
-// crossing.
+// line, whether the meter is exact, the forecast with each threshold's
+// crossing, and the SIM and network on record (first reported by the M7,
+// or taken at the operator's word) against what the M7 reports now, with a
+// notice when they differ.
 
 import MooringKit
 import SwiftUI
@@ -15,8 +17,32 @@ struct SimView: View {
         let sim = status.sim
         Form {
             Section {
+                if let change = sim.network.change {
+                    SimNetworkNotice(change: change)
+                }
                 SimGauge(sim: sim)
                     .padding(.vertical, 4)
+            }
+            Section {
+                if let baseline = sim.network.baseline {
+                    LabeledContent("On record", value: baseline.network.text)
+                    LabeledContent(sim.network.origin.timeLabel, value: baseline.firstSeen.text)
+                    LabeledContent("Reported now") {
+                        if let other = baseline.other {
+                            Text(other.text)
+                                .foregroundStyle(.orange)
+                        } else {
+                            Text("the same")
+                        }
+                    }
+                } else {
+                    Text("No poll has found the M7 attached since the record began: there is nothing to compare yet.")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("SIM and network")
+            } footer: {
+                Text(sim.network.origin.note)
             }
             Section("Cycle") {
                 LabeledContent("Started", value: sim.cycle.start.display)
@@ -61,6 +87,26 @@ struct SimView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The notice that the M7 reports another SIM or network than the carrier
+/// check and the billing cycle on record go with, and what to do. The
+/// overview, the SIM screen and the Exit screen show the same one.
+struct SimNetworkNotice: View {
+    let change: SimNetworkChange
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(change.headline, systemImage: "exclamationmark.triangle.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.orange)
+            Text(change.detail)
+            Text(change.remedy)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
