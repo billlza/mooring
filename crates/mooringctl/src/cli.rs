@@ -4,6 +4,7 @@
 //! admin password is read from the terminal or stdin only.
 
 use std::net::Ipv4Addr;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -139,6 +140,26 @@ pub(crate) enum UserCommand {
         #[arg(value_name = "USER_ID")]
         user: UserId,
     },
+    /// Set the user's own quota: the traffic served to the user in one SIM
+    /// billing cycle, both directions, every node, with a warning at 80 %
+    /// of it and a suspension at all of it. It takes the place of a paid
+    /// period's quota and of the automatic one. Nothing is suspended or
+    /// resumed now: the nightly apply job reads the quota, and `apply
+    /// --now` runs that job at once. It needs no node apply.
+    #[command(group(clap::ArgGroup::new("quota").required(true).args(["bytes", "none"])))]
+    SetQuota {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// The quota in GB, a whole number from 1 (1 GB is 1,000,000,000
+        /// bytes).
+        #[arg(long = "gb", value_name = "GB", value_parser = parse_quota_gb)]
+        bytes: Option<NonZeroU64>,
+        /// Remove the user's own quota: a paid period's or the automatic
+        /// one applies, if any, and otherwise the user has no quota.
+        #[arg(long)]
+        none: bool,
+    },
     /// Write the user's file for CFM to a new file with mode 0600 (never
     /// overwritten), and deliver it as docs/runbooks/delivery.md says.
     Export {
@@ -263,6 +284,16 @@ pub(crate) enum OnOff {
 /// The portal's origin, as `PortalOrigin` accepts it.
 fn parse_origin(text: &str) -> Result<PortalOrigin, String> {
     PortalOrigin::parse(text).map_err(|error| error.to_string())
+}
+
+/// The bytes of a quota typed in GB: a whole number of GB from 1, at
+/// 1,000,000,000 bytes each, that fits the 64 bits a quota is kept in.
+fn parse_quota_gb(text: &str) -> Result<NonZeroU64, String> {
+    let gb: NonZeroU64 = text.parse().map_err(|error| format!("{error}"))?;
+    gb.get()
+        .checked_mul(crate::user_quota::BYTES_PER_GB)
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| format!("{gb} GB is more bytes than a quota can hold"))
 }
 
 /// A CFM line, as typed on the command line.

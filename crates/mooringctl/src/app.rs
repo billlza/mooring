@@ -125,6 +125,13 @@ pub(crate) fn run(
         Command::User(UserCommand::Forget { user, yes }) => {
             crate::user_forget::forget(env, out, &user, yes)
         }
+        // Exactly one of `--gb` and `--none` was given (the `quota` group),
+        // so no bytes means `--none`.
+        Command::User(UserCommand::SetQuota {
+            user,
+            bytes,
+            none: _,
+        }) => crate::user_quota::set(env, out, &user, bytes),
         Command::User(UserCommand::Export {
             user,
             format,

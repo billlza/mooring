@@ -63,4 +63,5 @@ mod upgrade;
 mod usage_collection;
 mod user;
 mod user_forget;
+mod user_quota;
 mod user_usage;

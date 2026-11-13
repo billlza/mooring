@@ -28,7 +28,7 @@ use crate::sim::{
     PeriodDays, SimPlan, SimPolicy, StopPolicy,
 };
 use crate::time::UnixTime;
-use crate::user::{AgreementRecord, User, UserNodePublic, UserStatus};
+use crate::user::{AgreementRecord, User, UserNodePublic, UserQuota, UserStatus};
 use crate::viewer::Viewer;
 use crate::wg::WgIndex;
 
@@ -656,6 +656,10 @@ impl Entities<'_> {
 ///   accepted. It is Mac-only and is never rendered, sent or exported; it
 ///   decides only whether `user export` refuses the user (decision F9,
 ///   design §9.2), so a recorded agreement needs no `node apply`.
+/// - `QuotaRecorded` sets or removes a user's own quota. The quota is a
+///   record on the Mac that the apply job reads (design §13.6): no bundle
+///   and no export carries it, and it suspends and resumes nobody by
+///   itself, so it needs no `node apply` either.
 ///
 /// Suspending or resuming a user ([`User::suspend`], [`User::resume`]) is
 /// never bookkeeping: it changes which users every node serves, so it is
@@ -712,6 +716,19 @@ pub enum Bookkeeping {
         user: UserId,
         /// The revision accepted and the day.
         record: AgreementRecord,
+    },
+    /// The operator set `user`'s own quota to `quota`, or removed it with
+    /// `None` (`user set-quota`, design §7). It replaces the one recorded,
+    /// whatever that was. A user pending revocation or revoked is refused
+    /// (`RevocationAlreadyStarted`): nothing reads their quota again. A
+    /// suspended user may be given one, since a quota that covers their
+    /// use is what lets the apply job resume a user it suspended for quota
+    /// (design §13.6).
+    QuotaRecorded {
+        /// The user.
+        user: UserId,
+        /// The user's own quota from now on, if any.
+        quota: Option<UserQuota>,
     },
     /// The line's carrier check, observed on the line and recorded for the
     /// first time (design §10.2). The check is Mac-only, so no bundle or
@@ -822,19 +839,7 @@ impl Deployment {
                 release_node(&mut parts, &node, at);
             }
             Bookkeeping::AgreementRecorded { user, record } => {
-                let user = parts
-                    .users
-                    .iter_mut()
-                    .find(|candidate| candidate.id == user)
-                    .ok_or(ModelError::UnknownUser { id: user })?;
-                if matches!(
-                    user.status,
-                    UserStatus::RevokePending | UserStatus::Revoked { .. }
-                ) {
-                    return Err(ModelError::RevocationAlreadyStarted {
-                        user: user.id.clone(),
-                    });
-                }
+                let user = unrevoked_user_mut(&mut parts, user)?;
                 match user.agreement {
                     Some(recorded) if record.version < recorded.version => {
                         return Err(ModelError::AgreementRegressed {
@@ -846,6 +851,9 @@ impl Deployment {
                     Some(recorded) if record.version == recorded.version => {}
                     Some(_) | None => user.agreement = Some(record),
                 }
+            }
+            Bookkeeping::QuotaRecorded { user, quota } => {
+                unrevoked_user_mut(&mut parts, user)?.policy.quota = quota;
             }
             Bookkeeping::CarrierRecorded { check } => {
                 if parts.exit.egress_check.is_some() {
@@ -868,6 +876,27 @@ fn node_mut<'a>(parts: &'a mut DeploymentParts, id: &NodeId) -> Result<&'a mut N
         .iter_mut()
         .find(|node| node.id == *id)
         .ok_or_else(|| ModelError::UnknownNode { id: id.clone() })
+}
+
+/// The user `id`, for a record that only a user whose revocation has not
+/// started may be given (`AgreementRecorded`, `QuotaRecorded`): an id the
+/// deployment does not hold is `UnknownUser`, and a user pending revocation
+/// or revoked is `RevocationAlreadyStarted`.
+fn unrevoked_user_mut(parts: &mut DeploymentParts, id: UserId) -> Result<&mut User, ModelError> {
+    let user = parts
+        .users
+        .iter_mut()
+        .find(|candidate| candidate.id == id)
+        .ok_or(ModelError::UnknownUser { id })?;
+    if matches!(
+        user.status,
+        UserStatus::RevokePending | UserStatus::Revoked { .. }
+    ) {
+        return Err(ModelError::RevocationAlreadyStarted {
+            user: user.id.clone(),
+        });
+    }
+    Ok(user)
 }
 
 /// Drops every user's credentials on `node` and its alert channels, for a
@@ -1005,6 +1034,8 @@ impl Serialize for Deployment {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use super::*;
 
     /// The time the tests' revocations and records are made at.
@@ -1018,7 +1049,7 @@ mod tests {
     use crate::secret::SecretKind;
     use crate::sim::SimPolicy;
     use crate::testing::{applied, exit_site, node, node_id, site, two_node_parts, user, user_id};
-    use crate::user::{AgreementVersion, SuspendReason};
+    use crate::user::{AgreementVersion, QuotaAction, SuspendReason, UserPolicy, WarnPercent};
 
     fn build(parts: DeploymentParts) -> Result<Deployment, ModelError> {
         Deployment::try_from(parts)
@@ -2063,6 +2094,129 @@ mod tests {
                 }),
             Err(ModelError::UnknownUser { id: user_id(9) })
         );
+    }
+
+    fn quota(bytes: u64, warn_percent: u8, action: QuotaAction) -> UserQuota {
+        UserQuota {
+            cycle_served_bytes: NonZeroU64::new(bytes).unwrap(),
+            warn_percent: WarnPercent::new(warn_percent).unwrap(),
+            action,
+        }
+    }
+
+    fn set_quota(
+        deployment: Deployment,
+        quota: Option<UserQuota>,
+    ) -> Result<Deployment, ModelError> {
+        deployment.record(Bookkeeping::QuotaRecorded {
+            user: user_id(1),
+            quota,
+        })
+    }
+
+    /// The deployment of `two_node_parts` with the first user's own quota
+    /// `quota` and nothing else changed: the generation, every node's
+    /// confirmation, the user's expiry and every other user stay.
+    fn with_quota(quota: Option<UserQuota>) -> Deployment {
+        let mut parts = two_node_parts();
+        parts.users[0].policy.quota = quota;
+        build(parts).unwrap()
+    }
+
+    /// A user's own quota is set, replaced by a larger one, by a smaller
+    /// one and by one that differs only in its warning share or action, and
+    /// removed; each record changes that quota and nothing else.
+    #[test]
+    fn a_recorded_quota_replaces_the_one_recorded_and_changes_nothing_else() {
+        let deployment = build(two_node_parts()).unwrap();
+        assert_eq!(deployment.users()[&user_id(1)].policy, UserPolicy::NONE);
+        let mut current = deployment;
+        for next in [
+            Some(quota(100_000_000_000, 80, QuotaAction::Suspend)),
+            Some(quota(200_000_000_000, 80, QuotaAction::Suspend)),
+            Some(quota(1, 80, QuotaAction::Suspend)),
+            Some(quota(1, 99, QuotaAction::Suspend)),
+            Some(quota(1, 99, QuotaAction::Warn)),
+            None,
+            None,
+            Some(quota(u64::MAX, 1, QuotaAction::Warn)),
+        ] {
+            current = set_quota(current, next).unwrap();
+            assert_eq!(current, with_quota(next));
+        }
+    }
+
+    /// The record leaves the user's expiry as it is: the two parts of a
+    /// policy are set apart.
+    #[test]
+    fn a_recorded_quota_keeps_the_users_expiry() {
+        let mut parts = two_node_parts();
+        parts.users[0].policy.expires_at = Some(AT);
+        let limit = Some(quota(100_000_000_000, 80, QuotaAction::Suspend));
+        let recorded = set_quota(build(parts).unwrap(), limit).unwrap();
+        assert_eq!(
+            recorded.users()[&user_id(1)].policy,
+            UserPolicy {
+                expires_at: Some(AT),
+                quota: limit,
+            }
+        );
+        let removed = set_quota(recorded, None).unwrap();
+        assert_eq!(
+            removed.users()[&user_id(1)].policy,
+            UserPolicy {
+                expires_at: Some(AT),
+                quota: None,
+            }
+        );
+    }
+
+    /// A suspended user may be given a quota, whatever the suspension is
+    /// for: a quota that covers their use is what lets the apply job
+    /// resume a user suspended for quota, and the record resumes nobody. A
+    /// revoking or revoked user may not, and an unknown user is refused.
+    #[test]
+    fn only_active_and_suspended_users_record_a_quota() {
+        let limit = Some(quota(100_000_000_000, 80, QuotaAction::Suspend));
+        for reason in [
+            SuspendReason::Operator,
+            SuspendReason::QuotaExceeded {
+                cycle_start: CalendarDate::parse("2026-11-11").unwrap(),
+            },
+            SuspendReason::Expired,
+            SuspendReason::AbuseReview,
+        ] {
+            let mut suspended = two_node_parts();
+            suspended.users[0].suspend(reason, AT).unwrap();
+            let status = suspended.users[0].status;
+            let recorded = set_quota(build(suspended).unwrap(), limit).unwrap();
+            assert_eq!(recorded.users()[&user_id(1)].policy.quota, limit);
+            assert_eq!(recorded.users()[&user_id(1)].status, status);
+        }
+        let mut revoking = two_node_parts();
+        revoking.users[0].status = UserStatus::RevokePending;
+        let mut revoked = two_node_parts();
+        revoked.users[0].status = UserStatus::Revoked { since: AT };
+        revoked.users[0].per_node.clear();
+        for parts in [revoking, revoked] {
+            for offered in [limit, None] {
+                assert_eq!(
+                    set_quota(build(parts.clone()).unwrap(), offered),
+                    Err(ModelError::RevocationAlreadyStarted { user: user_id(1) })
+                );
+            }
+        }
+        for offered in [limit, None] {
+            assert_eq!(
+                build(two_node_parts())
+                    .unwrap()
+                    .record(Bookkeeping::QuotaRecorded {
+                        user: user_id(9),
+                        quota: offered,
+                    }),
+                Err(ModelError::UnknownUser { id: user_id(9) })
+            );
+        }
     }
 
     #[test]
