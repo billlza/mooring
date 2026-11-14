@@ -502,6 +502,86 @@ fn an_answer_that_is_not_a_list_of_what_was_asked_is_refused() {
     ));
 }
 
+/// A renewal's answers are held to the same: its first order's checkouts,
+/// and its subscription's invoices, every key read required though it may
+/// be null.
+#[test]
+fn a_renewal_s_answers_that_are_not_lists_of_what_was_asked_are_refused() {
+    let read = |lookup: &Lookup, body: &[u8]| lookup.clone().read(body);
+    let subscriptions = ask(Lookup::start(renewal()));
+    assert!(matches!(
+        read(&subscriptions, b"<html>"),
+        Err(StripeAnswerError::Decode {
+            what: "checkout.session",
+            ..
+        })
+    ));
+    assert!(matches!(
+        read(&subscriptions, &list(Vec::new(), true)),
+        Err(StripeAnswerError::EmptyPage {
+            what: "checkout.session"
+        })
+    ));
+    let invoices = ask(read(
+        &subscriptions,
+        &list(vec![subscription_checkout("cs_live_1")], false),
+    )
+    .unwrap());
+    assert_eq!(invoices.url(), invoices_url(SUBSCRIPTION, None));
+    assert!(matches!(
+        read(&invoices, b"<html>"),
+        Err(StripeAnswerError::Decode {
+            what: "invoice",
+            ..
+        })
+    ));
+    for key in [
+        "id",
+        "object",
+        "status",
+        "amount_paid",
+        "currency",
+        "billing_reason",
+        "livemode",
+    ] {
+        let mut missing = invoice(INVOICE);
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            matches!(
+                read(&invoices, &list(vec![missing], false)),
+                Err(StripeAnswerError::Decode {
+                    what: "invoice",
+                    ..
+                })
+            ),
+            "{key}"
+        );
+    }
+    let mut negative = invoice(INVOICE);
+    negative["amount_paid"] = json!(-800);
+    let mut forged_id = invoice(INVOICE);
+    forged_id["id"] = json!("in_1&status=draft");
+    for bad in [negative, forged_id] {
+        assert!(matches!(
+            read(&invoices, &list(vec![bad], true)),
+            Err(StripeAnswerError::Decode {
+                what: "invoice",
+                ..
+            })
+        ));
+    }
+    let mut other_kind = invoice(INVOICE);
+    other_kind["object"] = json!("checkout.session");
+    assert!(matches!(
+        read(&invoices, &list(vec![other_kind], false)),
+        Err(StripeAnswerError::Object { what: "invoice" })
+    ));
+    assert!(matches!(
+        read(&invoices, &list(Vec::new(), true)),
+        Err(StripeAnswerError::EmptyPage { what: "invoice" })
+    ));
+}
+
 /// A renewal is looked for through its first order: every paid checkout
 /// of it that began a subscription, in the week before its payment, all
 /// pages of them; then the subscription's paid invoices, page by page, for
