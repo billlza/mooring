@@ -9,8 +9,8 @@ use mooring_model::cert::CertPins;
 use mooring_model::ports::ListenerIdx;
 use mooring_model::secret::{SecretRef, SecretSnapshot};
 use mooring_model::{
-    AgreementVersion, Deployment, Node, NodeId, NodeRole, RecordedAgreement, ShortId, UnixTime,
-    User, UserId, UserStatus,
+    AgreementVersion, Deployment, Node, NodeId, NodeRole, RecordedAgreement, ShortId,
+    SuspendReason, UnixTime, User, UserId, UserStatus,
 };
 use zeroize::Zeroizing;
 
@@ -90,19 +90,25 @@ impl fmt::Debug for ExportDocument {
 /// The file covers every node the user holds credentials on, primary nodes
 /// first, then by node id; each node contributes its REALITY outbound and
 /// then one Hysteria2 outbound per listener. The shape is selected by the
-/// user's `ClientProfile`. Refused, in this order, when the user is not
-/// active (suspended, pending revocation or revoked: `UserNotActive`), has
-/// not accepted the agreement revision this build ships
-/// (`AgreementNotAccepted`, decision F9), has a capability its CFM line does
-/// not accept, holds no credentials, or when any of those nodes has not
-/// confirmed the current generation or fails a certificate check.
+/// user's `ClientProfile`. Refused, in this order, when the user is neither
+/// active nor suspended at expiry (suspended otherwise, pending revocation
+/// or revoked: `UserNotActive`), has not accepted the agreement revision
+/// this build ships (`AgreementNotAccepted`, decision F9), has a capability
+/// its CFM line does not accept, holds no credentials, or when any of those
+/// nodes has not confirmed the current generation or fails a certificate
+/// check.
+///
+/// A user suspended at expiry is exported with exactly the file it has
+/// while active: no node serves it until a payment lifts the suspension, so
+/// a user added before their first payment (`user add --unpaid`) is given
+/// the file that serves once they have paid (the operator's decision of
+/// 2026-11-14), and a lapsed user's file serves again once they renew.
 ///
 /// Neither the day of the agreement record (a calendar day without a time
-/// zone) nor the user's policy is compared with `now`: an expired or
-/// over-quota user is refused only once an explicit operator or daemon
-/// action has moved it to `Suspended { Expired | QuotaExceeded }`, so an
-/// export never depends on the clock beyond the certificate check at
-/// `now`.
+/// zone) nor the user's policy is compared with `now`: an over-quota user
+/// is refused only once an explicit operator or daemon action has moved it
+/// to `Suspended { QuotaExceeded }`, so an export never depends on the clock
+/// beyond the certificate check at `now`.
 ///
 /// An export reads only this user's credentials, so it does not compare
 /// them with other identities'. That check belongs to rendering each
@@ -228,10 +234,24 @@ fn checked_nodes<'a>(
 ) -> Result<CheckedNodes<'a>, ExportError> {
     // Only the status decides. An expired or over-quota user is still
     // exported while `Active`: moving it to `Suspended` is an explicit
-    // operator or daemon action, never a side effect of exporting.
+    // operator or daemon action, never a side effect of exporting. A user
+    // suspended at expiry is exported too: no node serves the file until a
+    // payment lifts the suspension.
     match user.status {
-        UserStatus::Active => {}
-        UserStatus::Suspended { .. } | UserStatus::RevokePending | UserStatus::Revoked { .. } => {
+        UserStatus::Active
+        | UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            ..
+        } => {}
+        UserStatus::Suspended {
+            reason:
+                SuspendReason::Operator
+                | SuspendReason::QuotaExceeded { .. }
+                | SuspendReason::AbuseReview,
+            ..
+        }
+        | UserStatus::RevokePending
+        | UserStatus::Revoked { .. } => {
             return Err(ExportError::UserNotActive {
                 user: user.id.clone(),
             });

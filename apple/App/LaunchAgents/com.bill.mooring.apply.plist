@@ -4,10 +4,12 @@
 <!-- Mooring's nightly apply job (design §13.6): Mooring.app registers it
      with SMAppService.agent(plistName:) beside the daemon, and launchd runs
      the mooringctl inside the app's own bundle every hour at minute 20 of
-     the Mac's local time. `apply --pending` acts only between 19:15 and
-     19:45 UTC, so one firing a day acts, in BST and GMT alike, and a firing
-     launchd delivers late after a sleep does nothing. The job writes its
-     own log, so the plist names none. -->
+     the Mac's local time. `apply --pending` runs the whole job only between
+     19:15 and 19:45 UTC, so one firing a day runs it, in BST and GMT alike;
+     every other firing, one launchd delivers late after a sleep included,
+     only resumes the users whose suspension at expiry a payment has lifted
+     (design §13.6, 2026-11-14), and otherwise does nothing. The job writes
+     its own log, so the plist names none. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>

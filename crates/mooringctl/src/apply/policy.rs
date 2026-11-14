@@ -10,15 +10,21 @@
 //! the operator changed meanwhile is left alone: a suspension only of a
 //! user still active, a resume only of a user still under the suspension
 //! the plan resumes. A change that fails is reported and the next one is
-//! made.
+//! made. The night's run plans the whole step ([`Plan::Full`]); an hourly
+//! firing outside the window plans only the resumes at expiry that a
+//! payment has lifted ([`Plan::ExpiryResumes`]), and runs at all only when
+//! [`nothing_to_resume`] does not hold.
 //!
-//! The removals follow: each user whose revocation is 13 months old, then
-//! the kept ids whose records have expired, each a bookkeeping record of
-//! its own, at the run's `now`.
+//! The removals follow, in the night's run only: each user whose
+//! revocation is 13 months old, then the kept ids whose records have
+//! expired, each a bookkeeping record of its own, at the run's `now`.
 
 use std::path::Path;
 
-use mooring_daemon_core::apply::{PolicyPlan, forgotten_expired, plan_policy, removals_due};
+use mooring_daemon_core::apply::{
+    PolicyPlan, expiry_resumes_due, forgotten_expired, plan_expiry_resumes, plan_policy,
+    removals_due,
+};
 use mooring_daemon_core::error::PolicyErrorKind;
 use mooring_daemon_core::policy::{PolicyAction, PolicyWarning};
 use mooring_model::{Bookkeeping, Deployment, ModelError, UnixTime, User, UserId, UserStatus};
@@ -46,12 +52,39 @@ enum Moved {
     Model(#[from] ModelError),
 }
 
-/// Plans the policy step at `now` for `deployment` and carries it out.
+/// Which plan the policy step carries out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Plan {
+    /// The whole step (`plan_policy`): the night's run, and `--now`.
+    Full,
+    /// Only the resumes at expiry that a payment has lifted
+    /// (`plan_expiry_resumes`): an hourly firing outside the window.
+    ExpiryResumes,
+}
+
+/// Whether an hourly firing outside the window at `now` finds no
+/// suspension at expiry that a payment has lifted, and so has nothing to
+/// do. A state, payment ledger or pull settings that cannot be read, and a
+/// plan refused, are no such finding: the firing runs, and its report and
+/// log say what failed.
+pub(super) fn nothing_to_resume(store: &Store, support: &Path, now: UnixTime) -> bool {
+    let Ok(state) = store.load() else {
+        return false;
+    };
+    let Ok(paid) = entitlements(support) else {
+        return false;
+    };
+    expiry_resumes_due(&state.deployment, &paid, now).is_ok_and(|due| due.is_empty())
+}
+
+/// Plans the policy step at `now` for `deployment`, as `plan` says, and
+/// carries it out.
 pub(super) fn step(
     store: &Store,
     support: &Path,
     deployment: &Deployment,
     now: UnixTime,
+    plan: Plan,
 ) -> PolicyOutcome {
     let paid = match entitlements(support) {
         Ok(paid) => paid,
@@ -65,7 +98,11 @@ pub(super) fn step(
         Usage::Report(report) => (Some(report.cycle_usage()), None),
         Usage::Behind(error) => (None, Some(chain(error))),
     };
-    match plan_policy(deployment, &paid, cycle.as_ref(), now) {
+    let planned = match plan {
+        Plan::Full => plan_policy(deployment, &paid, cycle.as_ref(), now),
+        Plan::ExpiryResumes => plan_expiry_resumes(deployment, &paid, cycle.as_ref(), now),
+    };
+    match planned {
         Ok(plan) => PolicyOutcome::CarriedOut(Box::new(carry_out(store, &plan, behind))),
         Err(error) => {
             let kind = match error.kind() {

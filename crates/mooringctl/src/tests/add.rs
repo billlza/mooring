@@ -9,6 +9,7 @@ use std::num::NonZeroU16;
 
 use mooring_export::{ExportErrorKind, export_secret_refs};
 use mooring_model::deployment::Bookkeeping;
+use mooring_model::user::SuspendReason;
 use mooring_model::{
     Capability, ClientLine, Deployment, NodeId, NodeLifecycle, SecretRef, UnixTime, User, UserId,
     UserPolicy, UserStatus,
@@ -57,6 +58,76 @@ fn user_refs(user: &UserId, nodes: &[&str]) -> BTreeSet<SecretRef> {
             ]
         })
         .collect()
+}
+
+/// `user add --unpaid` adds the user suspended at expiry, its expiry the
+/// time it was added: it holds the credentials an active user would, no
+/// node serves it, and the generation is bumped as for any user. Once a
+/// payment lifts the suspension, the apply job resumes the user within the
+/// hour, and the file it was given serves.
+#[test]
+fn an_unpaid_user_is_added_suspended_at_expiry_from_now() {
+    let before = fixture(|_| {});
+    let mut harness = adding(before.clone(), Some(LABEL));
+    let outcome = harness.run(&["user", "add", "--unpaid"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stderr, "");
+    let after = store(&harness).load().unwrap().deployment;
+    let user = added(&before, &after);
+    let now = UnixTime::from_secs(NOW);
+    assert_eq!(
+        user.status,
+        UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: now,
+        }
+    );
+    assert_eq!(
+        user.policy,
+        UserPolicy {
+            expires_at: Some(now),
+            quota: None,
+        }
+    );
+    assert_eq!(user.label.as_str(), LABEL);
+    assert_eq!(user.client.line, ClientLine::Cfm05);
+    let held: Vec<&str> = user.per_node.keys().map(NodeId::as_str).collect();
+    assert_eq!(held, ["ams1", "lon1"]);
+    assert!(after.nodes().keys().all(|node| !user.is_served_on(node)));
+    assert_eq!(
+        harness.secrets.refs(),
+        user_refs(&user.id, &["ams1", "lon1"])
+    );
+    assert_eq!(
+        after.config_generation(),
+        before.config_generation().next().unwrap()
+    );
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "added user {id}: CFM 0.5, credentials on ams1, lon1; suspended until paid (its expiry is the time it was added)\nnext: `mooringctl user alias {id}`, then `node apply` each of those nodes (nothing restarts: no node serves the user yet), then `user agree` and `user export`; once the user's payment is granted, the apply job resumes them at its next hourly run\n",
+            id = user.id
+        )
+    );
+}
+
+/// A user added unpaid is not active, so the cap on active users does not
+/// refuse it, as it refuses an active one: the apply job holds its resume
+/// back until a place is free.
+#[test]
+fn the_cap_does_not_refuse_an_unpaid_user() {
+    let full = fixture(|parts| parts.capacity.max_active_users = NonZeroU16::new(3));
+    let mut harness = adding(full.clone(), Some(LABEL));
+    let outcome = harness.run(&["user", "add", "--unpaid"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let after = store(&harness).load().unwrap().deployment;
+    assert!(matches!(
+        added(&full, &after).status,
+        UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            ..
+        }
+    ));
 }
 
 /// The new user is active on a CFM 0.5 client, holds credentials on every
