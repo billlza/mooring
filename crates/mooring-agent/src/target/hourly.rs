@@ -3,7 +3,9 @@
 //! The hourly target check (design §11.3): `target-watch`, which
 //! `mooring-target-check.service` and its timer run as a unit of their
 //! own, because `xray tls ping` sets no time limit and a target that does
-//! not answer must not hold up the watch's loop. It probes the configured
+//! not answer must not hold up the watch's loop, and as an account of its
+//! own, because its probes read a third party's replies and must reach
+//! neither Xray's API nor the watch's files. It probes the configured
 //! address, not the first of the set the name resolves to, through the
 //! current generation's Xray and without the handshake sampler, and
 //! records its verdict, which the watch reads at every tick through
@@ -21,9 +23,9 @@ use crate::paths::Paths;
 use crate::store::{errno, read_json, write_json};
 use crate::txn::stage::{self, XRAY};
 
-/// The hourly check's latest result (`/var/lib/mooring/watch/target.json`),
-/// with the target it checked: a result about another target than the
-/// configured one says nothing.
+/// The hourly check's latest result
+/// (`/var/lib/mooring/target/reading.json`), with the target it checked: a
+/// result about another target than the configured one says nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TargetReading {

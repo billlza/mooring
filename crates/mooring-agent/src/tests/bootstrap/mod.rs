@@ -132,6 +132,7 @@ fn bootstrap_sets_the_host_up_and_returns_its_new_key() {
             "/usr/sbin/useradd",
             "/usr/sbin/groupadd",
             "/usr/sbin/useradd",
+            "/usr/sbin/useradd",
             "/usr/sbin/sshd",
             "/usr/bin/systemd-analyze",
             "/usr/bin/systemd-tmpfiles",
@@ -157,9 +158,14 @@ fn bootstrap_sets_the_host_up_and_returns_its_new_key() {
         "/usr/sbin/useradd --system --no-create-home --home-dir /nonexistent --shell /bin/sh --gid mooring mooring-view"
     );
     assert_eq!(calls[4], "/usr/sbin/groupadd --system mooring-xray");
+    // The target check's account, last, in the state group.
+    assert_eq!(
+        calls[8],
+        "/usr/sbin/useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --gid mooring mooring-target-check"
+    );
     // Only the units that need no generation are verified before there
     // is one.
-    let verify = &calls[9];
+    let verify = &calls[10];
     for unit in [
         "mooring-watch.service",
         "mooring-reflect.service",
@@ -172,7 +178,7 @@ fn bootstrap_sets_the_host_up_and_returns_its_new_key() {
     assert!(!verify.contains("mooring-xray.service"), "{verify}");
     assert!(!verify.contains("mooring-hy2.service"), "{verify}");
     assert_eq!(
-        &calls[14..20],
+        &calls[15..21],
         [
             "/usr/bin/systemctl restart mooring-watch.service",
             "/usr/bin/systemctl restart mooring-reflect.service",

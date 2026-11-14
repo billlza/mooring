@@ -230,6 +230,8 @@ pub(super) enum ToolFault {
 pub(super) struct Faults {
     /// The tunnel followed as systemd and wg-quick run it ([`Tunnel`]).
     pub(super) tunnel: Option<Tunnel>,
+    /// `useradd` fails, as with `/etc/passwd` locked.
+    pub(super) useradd_fails: bool,
     /// A `wg-quick down` of the agent's own fails in a hook.
     pub(super) wg_down_fails: bool,
     /// Validator output that fails validation (Xray's `-test`).
@@ -339,6 +341,8 @@ impl World {
         let conf = self.paths.wg_conf_link();
         let validate = self.paths.validate_dir();
         let current = self.paths.current();
+        let (passwd, group) = (self.paths.passwd(), self.paths.group());
+        let (uid, gid) = crate::tests::own_ids(&self.paths);
         FakeNode::answering(
             now,
             Box::new(move |tool, args| {
@@ -470,6 +474,16 @@ impl World {
                     }
                     (Tool::Systemctl, ["restart", "mooring-xray.service"]) => {
                         faults.xray.restart(&current);
+                        ok(b"")
+                    }
+                    // The account tools, as Debian's change the databases.
+                    (Tool::Groupadd, ["--system", name]) => {
+                        append(&group, &format!("{name}:x:{gid}:\n"));
+                        ok(b"")
+                    }
+                    (Tool::Useradd, _) if faults.useradd_fails => failed(b"useradd: cannot lock /etc/passwd; try again later.\n"),
+                    (Tool::Useradd, [.., "--home-dir", home, "--shell", shell, "--gid", _, name]) => {
+                        append(&passwd, &format!("{name}:x:{uid}:{gid}::{home}:{shell}\n"));
                         ok(b"")
                     }
                     _ => ok(b""),
@@ -612,6 +626,13 @@ impl World {
         assert_eq!(self.apply_and_run(node, header), TxnState::AwaitingConfirm);
         assert_eq!(txn::confirm(&self.paths, node, generation), Ok(generation));
     }
+}
+
+/// Appends `line` to the file at `path`.
+fn append(path: &Path, line: &str) {
+    let mut text = fs::read_to_string(path).unwrap();
+    text.push_str(line);
+    fs::write(path, text).unwrap();
 }
 
 pub(crate) fn facts() -> HostFacts {

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The host profile's accounts (design §5.2, §8.6): read from `/etc/passwd`
-//! and `/etc/group`, created and corrected by `Bootstrap` with Debian's own
-//! tools, and resolved to ids for the files and directories they own.
+//! and `/etc/group`, created and corrected with Debian's own tools by
+//! `Bootstrap` and by every transaction (which gives a node bootstrapped
+//! at an older profile the accounts a later one adds), and resolved to ids
+//! for the files and directories they own.
 
 use std::fs;
 
@@ -91,15 +93,38 @@ pub(crate) fn primary_group(paths: &Paths, account: HostAccount) -> Result<u32, 
     group_id(paths, account.group())?.ok_or(AgentError::AccountMissing { account })
 }
 
-/// Runs one of the account tools; a failure is `Bootstrap{Accounts}` with
-/// its stderr.
-fn account_tool(node: &dyn Node, tool: Tool, args: &[&str]) -> Result<(), AgentError> {
+/// The request that converges the accounts, which names their failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Converging {
+    /// `Bootstrap`: `Bootstrap{Accounts}`.
+    Bootstrap,
+    /// A transaction: `Accounts`.
+    Transaction,
+}
+
+impl Converging {
+    /// The failure, with what the tool printed or what still differs.
+    fn failed(self, stderr_tail: StderrTail) -> AgentError {
+        match self {
+            Self::Bootstrap => AgentError::Bootstrap {
+                step: BootstrapStep::Accounts,
+                stderr_tail,
+            },
+            Self::Transaction => AgentError::Accounts { stderr_tail },
+        }
+    }
+}
+
+/// Runs one of the account tools; a failure is `by`'s with its stderr.
+fn account_tool(
+    node: &dyn Node,
+    tool: Tool,
+    args: &[&str],
+    by: Converging,
+) -> Result<(), AgentError> {
     match run_ok(node, tool, args)? {
         Ok(_) => Ok(()),
-        Err(stderr) => Err(AgentError::Bootstrap {
-            step: BootstrapStep::Accounts,
-            stderr_tail: StderrTail::scrubbed(&stderr, &[]),
-        }),
+        Err(stderr) => Err(by.failed(StderrTail::scrubbed(&stderr, &[]))),
     }
 }
 
@@ -109,15 +134,17 @@ fn conforms(user: &User, account: HostAccount, gid: Option<u32>) -> bool {
     Some(user.gid) == gid && user.home == account.home() && user.shell == account.shell()
 }
 
-/// `Bootstrap`'s accounts: every profile account's primary group, then
-/// the account with that group, its home and its shell, created where
-/// missing and corrected where they differ. The databases are then read
-/// again, so an account the tools did not make as the profile says is
-/// reported, never assumed.
-pub(crate) fn converge(paths: &Paths, node: &dyn Node) -> Result<(), AgentError> {
+/// The profile's accounts: every account's primary group, then the
+/// account with that group, its home and its shell, created where missing
+/// and corrected where they differ. The databases are then read again, so
+/// an account the tools did not make as the profile says is reported,
+/// never assumed. A host that has them all as the profile says runs no
+/// tool. A tool that fails, and an account that still differs, are
+/// `by`'s failure.
+pub(crate) fn converge(paths: &Paths, node: &dyn Node, by: Converging) -> Result<(), AgentError> {
     for &account in HostAccount::ALL {
         if group_id(paths, account.group())?.is_none() {
-            account_tool(node, Tool::Groupadd, &["--system", account.group()])?;
+            account_tool(node, Tool::Groupadd, &["--system", account.group()], by)?;
         }
         let (home, shell) = (account.home(), account.shell());
         match user(paths, account.name())? {
@@ -135,6 +162,7 @@ pub(crate) fn converge(paths: &Paths, node: &dyn Node) -> Result<(), AgentError>
                     account.group(),
                     account.name(),
                 ],
+                by,
             )?,
             Some(existing) if conforms(&existing, account, group_id(paths, account.group())?) => {}
             Some(_) => account_tool(
@@ -149,23 +177,21 @@ pub(crate) fn converge(paths: &Paths, node: &dyn Node) -> Result<(), AgentError>
                     shell,
                     account.name(),
                 ],
+                by,
             )?,
         }
     }
     for &account in HostAccount::ALL {
         let user = user(paths, account.name())?.ok_or(AgentError::AccountMissing { account })?;
         if !conforms(&user, account, Some(primary_group(paths, account)?)) {
-            return Err(AgentError::Bootstrap {
-                step: BootstrapStep::Accounts,
-                stderr_tail: StderrTail::scrubbed(
-                    format!(
-                        "{} still differs from the host profile after usermod",
-                        account.name()
-                    )
-                    .as_bytes(),
-                    &[],
-                ),
-            });
+            return Err(by.failed(StderrTail::scrubbed(
+                format!(
+                    "{} still differs from the host profile after usermod",
+                    account.name()
+                )
+                .as_bytes(),
+                &[],
+            )));
         }
     }
     Ok(())

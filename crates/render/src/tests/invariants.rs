@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
 use ipnet::Ipv4Net;
-use mooring_agent_proto::{ManagedFile, StatsEmail};
+use mooring_agent_proto::{HostFile, HostProfile, ManagedFile, StatsEmail};
 use mooring_fixtures::Fixture;
 use mooring_keys::x25519::{RealityKeyPair, WgKeyPair};
 use mooring_model::exit::ProbeProtocol;
@@ -584,6 +584,49 @@ fn chain<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
         .take_while(|line| *line != "\t}")
         .map(str::trim)
         .collect()
+}
+
+/// The account a unit of the host profile runs as: its `User=` line.
+fn unit_account(file: HostFile) -> String {
+    HostProfile::CURRENT
+        .render(file)
+        .lines()
+        .find_map(|line| line.strip_prefix("User="))
+        .unwrap_or_else(|| panic!("{file:?} runs as no User="))
+        .to_owned()
+}
+
+/// Xray's API adds users (design §13.6), and the ruleset tells who may
+/// connect to it only by the connecting account. So the watch's unit runs
+/// as an account the API admits, and the hourly target check's, which
+/// reads a third party's replies, as one it refuses: no rule before the
+/// chain's last accepts that account's connections to the API, and the
+/// last rejects them.
+#[test]
+fn the_api_admits_the_watch_and_refuses_the_target_check() {
+    let watch = unit_account(HostFile::WatchUnit);
+    let check = unit_account(HostFile::TargetCheckUnit);
+    let api = "ip daddr 127.0.0.1 tcp dport 10085";
+    for fixture in fixtures() {
+        for id in fixture.deployment.nodes().keys() {
+            let bundle = vps(&fixture, id);
+            let output = chain(bundle.file(ManagedFile::Nftables).expose_text(), "output");
+            let admits = |account: &str| {
+                let rule = format!("meta skuid \"{account}\" ct direction original {api} accept");
+                output.contains(&rule.as_str())
+            };
+            assert!(admits(&watch), "{id}: the watch, {watch}, reads the API");
+            assert!(
+                !admits(&check) && check != "root",
+                "{id}: the target check's account, {check}, is admitted to the API"
+            );
+            assert_eq!(
+                output.last().copied(),
+                Some(format!("ct direction original {api} reject").as_str()),
+                "{id}: every other account's connection to the API is rejected"
+            );
+        }
+    }
 }
 
 /// Fail-closed settings of `nftables.conf` that a re-accepted golden could

@@ -23,7 +23,8 @@ use units::{
 
 use crate::vps::viewer_account;
 use crate::{
-    AGENT_CURRENT_PATH, ETC_DIR, EngineUser, ManagedFile, Role, STATE_GROUP, WATCH_ACCOUNT,
+    AGENT_CURRENT_PATH, ETC_DIR, EngineUser, ManagedFile, Role, STATE_GROUP, TARGET_CHECK_ACCOUNT,
+    WATCH_ACCOUNT,
 };
 
 /// The constant host configuration of one profile version.
@@ -48,13 +49,18 @@ pub struct HostProfile {
 }
 
 impl HostProfile {
-    /// The profile this build of the agent converges hosts to. Version 2
-    /// adds the viewer account and its sshd `Match` block (decision F5);
-    /// version 1 was never installed on a node. Version 2 also holds the
-    /// accounts ([`HostAccount`]), the directory layout and the systemd
-    /// units, all added in M4e before any node installed it.
+    /// The profile this build of the agent converges hosts to. Version 3
+    /// gives the hourly target check an account of its own
+    /// ([`HostAccount::TargetCheck`]) and a directory for its reading, so
+    /// that Xray's API refuses it (design §13.6); every transaction
+    /// converges the accounts and the layout, so a node bootstrapped at
+    /// version 2 takes them at its first transaction with this agent.
+    /// Version 2 adds the viewer account and its sshd `Match` block
+    /// (decision F5); version 1 was never installed on a node. Version 2
+    /// also holds the accounts ([`HostAccount`]), the directory layout and
+    /// the systemd units, all added in M4e before any node installed it.
     pub const CURRENT: Self = Self {
-        version: HostProfileVersion::new(2),
+        version: HostProfileVersion::new(3),
         sysctls: &[
             Sysctl {
                 key: "net.core.default_qdisc",
@@ -140,8 +146,10 @@ impl HostProfile {
         // Who writes where (design §11.3): the agent as root everywhere;
         // the watch its view, journal and usage, and the holds (a viewer's
         // stop, a drain that ended); the viewer only the stop request,
-        // which the watch removes. So the stop request has a directory of
-        // its own, and the viewer can neither write nor remove the holds.
+        // which the watch removes; the target check only its reading,
+        // which the watch reads. So the stop request and the reading have
+        // directories of their own, the viewer can neither write nor
+        // remove the holds, and the check cannot touch the watch's files.
         // The blobs hold the bundle's secrets and are root's alone.
         directories: &[
             StateDir {
@@ -183,6 +191,12 @@ impl HostProfile {
             StateDir {
                 path: "/var/lib/mooring/usage",
                 owner: WATCH_ACCOUNT,
+                group: STATE_GROUP,
+                mode: SETGID | 0o750,
+            },
+            StateDir {
+                path: "/var/lib/mooring/target",
+                owner: TARGET_CHECK_ACCOUNT,
                 group: STATE_GROUP,
                 mode: SETGID | 0o750,
             },
@@ -251,6 +265,18 @@ impl HostProfile {
                 .map(|entry| entry.path),
         );
         writable
+    }
+
+    /// The directories the target check may write: those it owns (its
+    /// unit's `ReadWritePaths`). Its group is the state group, but it
+    /// writes none of the group's directories, so its sandbox leaves
+    /// everything else read-only to it.
+    pub fn target_check_writable(&self) -> Vec<&'static str> {
+        self.directories
+            .iter()
+            .filter(|dir| dir.owner == TARGET_CHECK_ACCOUNT && dir.mode & 0o200 != 0)
+            .map(|dir| dir.path)
+            .collect()
     }
 
     /// The value the profile gives `directive`. The match names every
@@ -370,7 +396,7 @@ impl HostProfile {
             HostFile::WatchUnit => self.watch_unit(),
             HostFile::ReflectUnit => reflect_unit(),
             HostFile::RecoverUnit => recover_unit(),
-            HostFile::TargetCheckUnit => target_check_unit(),
+            HostFile::TargetCheckUnit => target_check_unit(&self.target_check_writable()),
             HostFile::TargetCheckTimer => target_check_timer(),
             HostFile::TunnelDropIn => vec![
                 "[Unit]".to_owned(),

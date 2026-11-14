@@ -7,7 +7,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
-use crate::{EngineUser, STATE_GROUP, VIEWER_ACCOUNT, WATCH_ACCOUNT};
+use crate::{EngineUser, STATE_GROUP, TARGET_CHECK_ACCOUNT, VIEWER_ACCOUNT, WATCH_ACCOUNT};
 
 use super::TUNNEL_UNIT;
 
@@ -317,7 +317,8 @@ pub const XRAY_ASSET_DIR: &str = "/opt/mooring/engines/geodata/current";
 
 closed_enum! {
     /// An account the host profile creates (design §5.2, §8.6), in the
-    /// order `Bootstrap` creates them. None has a home or a password; only
+    /// order `Bootstrap` and every transaction converge them: a later
+    /// profile's accounts come last. None has a home or a password; only
     /// the viewer has a shell, which sshd needs to run its forced command.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub enum HostAccount {
@@ -330,6 +331,9 @@ closed_enum! {
         Xray,
         /// `mooring-hy2`, Hysteria2's user.
         Hy2,
+        /// [`TARGET_CHECK_ACCOUNT`], the hourly target check's user (host
+        /// profile 3).
+        TargetCheck,
     }
 }
 
@@ -341,15 +345,17 @@ impl HostAccount {
             Self::Viewer => VIEWER_ACCOUNT,
             Self::Xray => EngineUser::Xray.name(),
             Self::Hy2 => EngineUser::Hy2.name(),
+            Self::TargetCheck => TARGET_CHECK_ACCOUNT,
         }
     }
 
-    /// The primary group: [`STATE_GROUP`] for the watch and the viewer,
-    /// which read the node's state, and a group of its own, named like
-    /// the account, for an engine, so that only it reads its configuration.
+    /// The primary group: [`STATE_GROUP`] for the watch, the viewer and
+    /// the target check, which read the node's state (the check its
+    /// target, in `watch.json`), and a group of its own, named like the
+    /// account, for an engine, so that only it reads its configuration.
     pub const fn group(self) -> &'static str {
         match self {
-            Self::Watch | Self::Viewer => STATE_GROUP,
+            Self::Watch | Self::Viewer | Self::TargetCheck => STATE_GROUP,
             Self::Xray | Self::Hy2 => self.name(),
         }
     }
@@ -365,7 +371,7 @@ impl HostAccount {
     pub const fn shell(self) -> &'static str {
         match self {
             Self::Viewer => "/bin/sh",
-            Self::Watch | Self::Xray | Self::Hy2 => "/usr/sbin/nologin",
+            Self::Watch | Self::Xray | Self::Hy2 | Self::TargetCheck => "/usr/sbin/nologin",
         }
     }
 }

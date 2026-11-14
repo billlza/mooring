@@ -4,20 +4,47 @@
 //! target: it passes a target that still answers at the configured
 //! address through the current generation's Xray, and degrades one that
 //! moved, failed the handshake, did not answer over HTTP/2 or could not
-//! be resolved; its reading is the state group's to read, and the watch
-//! reads it as its verdict on the configured target, or as unreadable.
+//! be resolved; its reading is the state group's to read, in the one
+//! directory the check's own account writes, and the watch reads it as its
+//! verdict on the configured target, or as unreadable.
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::num::NonZeroU16;
 
-use mooring_agent_proto::{Generation, UnixTime, WatchConfig, WatchTarget};
+use mooring_agent_proto::{Generation, HostProfile, UnixTime, WatchConfig, WatchTarget};
 
 use super::world::{PING_TLS13, host, node_answering};
 use crate::paths::Paths;
 use crate::store::{read_json, write_json};
 use crate::target::hourly::{TargetReading, Verdict};
 use crate::tests::{EACCES, EISDIR, ModeFault, exited, scratch};
+
+/// The reading is in the target check's own directory (host profile 3): the
+/// only one its unit may write, and one the watch's unit may not, so the
+/// check never writes where the watch keeps its own files.
+#[test]
+fn the_reading_is_in_the_only_directory_the_check_writes() {
+    let (_dir, paths) = scratch();
+    let reading = paths.target_reading();
+    let parent = reading.parent().unwrap();
+    let profile = HostProfile::CURRENT;
+    let writable: Vec<_> = profile
+        .target_check_writable()
+        .iter()
+        .map(|dir| paths.at(dir))
+        .collect();
+    assert_eq!(writable, [parent.to_path_buf()]);
+    assert_eq!(parent, paths.target_dir());
+    assert!(
+        profile
+            .watch_writable()
+            .iter()
+            .all(|dir| paths.at(dir) != parent),
+        "the watch may not write the check's directory"
+    );
+    assert_ne!(parent, paths.watch_dir());
+}
 
 /// A node with generation 1 installed, configured for `www.example.com` at
 /// 198.51.100.7.

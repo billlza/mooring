@@ -52,10 +52,19 @@ pub const VIEWER_ACCOUNT: &str = viewer_account!();
 /// opens the gate.
 pub const WATCH_ACCOUNT: &str = "mooring-watch";
 
+/// The account of `mooring-target-check.service`, the hourly check of the
+/// REALITY target (design §5.2, §11.7). Its probes read a third party's
+/// replies, so it runs apart from the watch: Xray's API, which adds users
+/// and which the ruleset opens only to root and [`WATCH_ACCOUNT`], refuses
+/// it, and it can neither signal the watch nor write the watch's files.
+/// It writes only its own reading (host profile 3).
+pub const TARGET_CHECK_ACCOUNT: &str = "mooring-target-check";
+
 /// The group that reads the node's state (the watch's view and journal,
 /// the holds, the halt marker, the transaction records, the usage files
-/// and the Mac report): the primary group of [`WATCH_ACCOUNT`] and
-/// [`VIEWER_ACCOUNT`], and of no one else.
+/// and the Mac report, and the target check's reading): the primary group
+/// of [`WATCH_ACCOUNT`], [`VIEWER_ACCOUNT`] and [`TARGET_CHECK_ACCOUNT`],
+/// and of no one else.
 pub const STATE_GROUP: &str = "mooring";
 
 closed_enum! {
@@ -153,10 +162,17 @@ mod tests {
         assert_eq!(users, ["mooring-xray", "mooring-hy2"]);
         assert_eq!(VIEWER_ACCOUNT, "mooring-view");
         assert_eq!((WATCH_ACCOUNT, STATE_GROUP), ("mooring-watch", "mooring"));
+        assert_eq!(TARGET_CHECK_ACCOUNT, "mooring-target-check");
+        assert!(UnitName::new(format!("{TARGET_CHECK_ACCOUNT}.service")).is_ok());
         let mut accounts = users.clone();
-        accounts.extend([VIEWER_ACCOUNT, WATCH_ACCOUNT, STATE_GROUP]);
+        accounts.extend([
+            VIEWER_ACCOUNT,
+            WATCH_ACCOUNT,
+            TARGET_CHECK_ACCOUNT,
+            STATE_GROUP,
+        ]);
         accounts.sort_unstable();
         accounts.dedup();
-        assert_eq!(accounts.len(), 5);
+        assert_eq!(accounts.len(), 6);
     }
 }

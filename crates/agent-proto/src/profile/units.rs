@@ -2,7 +2,9 @@
 
 //! Systemd service and timer rendering, with their shared hardening.
 
-use crate::{AGENT_CURRENT_PATH, CURRENT_DIR, EngineUser, ManagedFile, STATE_GROUP, WATCH_ACCOUNT};
+use crate::{
+    AGENT_CURRENT_PATH, CURRENT_DIR, EngineUser, ManagedFile, STATE_GROUP, TARGET_CHECK_ACCOUNT,
+};
 
 use super::XRAY_ASSET_DIR;
 
@@ -131,10 +133,11 @@ pub(super) fn reflect_unit() -> Vec<String> {
 }
 
 /// `mooring-target-check.service` (design §11.3): the hourly check of the
-/// configured target, as the watch's account with no capability, writing
-/// only the watch's directory; it runs once a generation is installed.
-/// The timer starts it, so it has no `[Install]`.
-pub(super) fn target_check_unit() -> Vec<String> {
+/// configured target, as an account of its own in the state group, which
+/// reads `watch.json`, with no capability, writing only `writable` (its
+/// reading's directory); it runs once a generation is installed. The timer
+/// starts it, so it has no `[Install]`.
+pub(super) fn target_check_unit(writable: &[&str]) -> Vec<String> {
     let mut lines = vec![
         "[Unit]".to_owned(),
         "Description=Mooring: the hourly REALITY target check".to_owned(),
@@ -145,10 +148,10 @@ pub(super) fn target_check_unit() -> Vec<String> {
         String::new(),
         "[Service]".to_owned(),
         "Type=oneshot".to_owned(),
-        format!("User={WATCH_ACCOUNT}"),
+        format!("User={TARGET_CHECK_ACCOUNT}"),
         format!("Group={STATE_GROUP}"),
         format!("ExecStart={AGENT_CURRENT_PATH} target-watch"),
-        "ReadWritePaths=/var/lib/mooring/watch".to_owned(),
+        format!("ReadWritePaths={}", writable.join(" ")),
         "CapabilityBoundingSet=".to_owned(),
     ];
     lines.extend(hardening());

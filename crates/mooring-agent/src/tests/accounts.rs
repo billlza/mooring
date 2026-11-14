@@ -95,7 +95,7 @@ fn an_account_usermod_cannot_correct_stops_bootstrap_at_its_step() {
         }),
     );
     assert_eq!(
-        accounts::converge(&paths, &node),
+        accounts::converge(&paths, &node, accounts::Converging::Bootstrap),
         Err(AgentError::Bootstrap {
             step: BootstrapStep::Accounts,
             stderr_tail: StderrTail::scrubbed(

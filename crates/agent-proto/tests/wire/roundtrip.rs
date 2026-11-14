@@ -615,6 +615,7 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
         stderr_tail().prop_map(|stderr_tail| AgentError::Apt { stderr_tail }),
         (select(BootstrapStep::ALL), stderr_tail())
             .prop_map(|(step, stderr_tail)| AgentError::Bootstrap { step, stderr_tail }),
+        stderr_tail().prop_map(|stderr_tail| AgentError::Accounts { stderr_tail }),
         select(HostAccount::ALL).prop_map(|account| AgentError::AccountMissing { account }),
         (unit_name(), select(SystemdOp::ALL))
             .prop_map(|(unit, op)| AgentError::Systemd { unit, op }),
