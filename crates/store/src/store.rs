@@ -14,7 +14,7 @@ use mooring_model::ids::{NodeId, UserId};
 use mooring_model::node::{AppliedConfig, LifecycleStage};
 use mooring_model::secret::SecretRef;
 use mooring_model::sim::SimPolicy;
-use mooring_model::state::{RuntimeIntent, StateFile, StateV3};
+use mooring_model::state::{RuntimeIntent, StateFile, StateV4};
 use mooring_model::time::UnixTime;
 use mooring_model::user::UserStatus;
 
@@ -126,7 +126,7 @@ impl Store {
     /// exit. It references no secrets. `InvalidChange` if `init` breaks a
     /// model invariant (`PlanNotRecorded` unless the exit's SIM plan is
     /// recorded), checked before anything is read or written.
-    pub fn init(&self, init: DeploymentInit) -> Result<StateV3, StoreError> {
+    pub fn init(&self, init: DeploymentInit) -> Result<StateV4, StoreError> {
         let deployment =
             Deployment::new(init).map_err(|source| StoreError::InvalidChange { source })?;
         let _lock = StateLock::acquire(&self.lock_path(), LockMode::Exclusive)?;
@@ -134,7 +134,7 @@ impl Store {
         if durable::state_exists(&path)? {
             return Err(StoreError::AlreadyInitialized { path });
         }
-        let state = StateV3 {
+        let state = StateV4 {
             deployment,
             runtime: RuntimeIntent::new(),
         };
@@ -144,7 +144,7 @@ impl Store {
 
     /// Reads the state, lifted to the newest version. Nothing is written,
     /// even when the document on disk is older.
-    pub fn load(&self) -> Result<StateV3, StoreError> {
+    pub fn load(&self) -> Result<StateV4, StoreError> {
         let _lock = StateLock::acquire(&self.lock_path(), LockMode::Shared)?;
         let path = self.state_path();
         let bytes = durable::read_state(&path)?;
@@ -184,7 +184,7 @@ impl Store {
         &self,
         expected: ConfigGeneration,
         change: F,
-    ) -> Result<StateV3, ChangeError<E>>
+    ) -> Result<StateV4, ChangeError<E>>
     where
         F: FnOnce(DeploymentParts) -> Result<DeploymentParts, E>,
     {
@@ -209,7 +209,7 @@ impl Store {
         &self,
         expected: ConfigGeneration,
         entry: Bookkeeping,
-    ) -> Result<StateV3, StoreError> {
+    ) -> Result<StateV4, StoreError> {
         let (txn, current) = self.begin()?;
         let old_refs = current.deployment.required_secrets();
         let next = record_entry(current, expected, entry)?;
@@ -225,14 +225,14 @@ impl Store {
         &self,
         expected: RuntimeRevision,
         exit_enabled: bool,
-    ) -> Result<StateV3, StoreError> {
+    ) -> Result<StateV4, StoreError> {
         let (txn, current) = self.begin()?;
         let found = current.runtime.revision;
         if found != expected {
             return Err(StoreError::RevisionConflict { expected, found });
         }
         let revision = expected.next().map_err(counter_overflow)?;
-        let next = StateV3 {
+        let next = StateV4 {
             deployment: current.deployment,
             runtime: RuntimeIntent {
                 exit_enabled,
@@ -245,7 +245,7 @@ impl Store {
 
     /// Takes the exclusive lock and reads the current state for one
     /// read-modify-write.
-    pub(crate) fn begin(&self) -> Result<(Txn<'_>, StateV3), StoreError> {
+    pub(crate) fn begin(&self) -> Result<(Txn<'_>, StateV4), StoreError> {
         let lock = StateLock::acquire(&self.lock_path(), LockMode::Exclusive)?;
         let path = self.state_path();
         let bytes = durable::read_state(&path)?;
@@ -283,7 +283,7 @@ impl Txn<'_> {
     /// older version, its original bytes are first written durably to
     /// `state.json.bak-<from>-<to>`. Returns the lock, so the caller can
     /// finish work that must precede any other writer before releasing it.
-    pub(crate) fn commit(self, state: &StateV3) -> Result<StateLock, StoreError> {
+    pub(crate) fn commit(self, state: &StateV4) -> Result<StateLock, StoreError> {
         let bytes = encode(state)?;
         let dir = &self.store.dir;
         if let Some(backup) = &self.backup {
@@ -296,7 +296,7 @@ impl Txn<'_> {
 }
 
 /// Requires the generation on disk to be `expected`.
-fn require_generation(current: &StateV3, expected: ConfigGeneration) -> Result<(), StoreError> {
+fn require_generation(current: &StateV4, expected: ConfigGeneration) -> Result<(), StoreError> {
     let found = current.deployment.config_generation();
     if found == expected {
         Ok(())
@@ -310,10 +310,10 @@ fn require_generation(current: &StateV3, expected: ConfigGeneration) -> Result<(
 /// every node's confirmed generation is the one it had before, and every
 /// node is still there, at its stage or a later one.
 pub(crate) fn change_config<E, F>(
-    current: StateV3,
+    current: StateV4,
     expected: ConfigGeneration,
     change: F,
-) -> Result<StateV3, ChangeError<E>>
+) -> Result<StateV4, ChangeError<E>>
 where
     F: FnOnce(DeploymentParts) -> Result<DeploymentParts, E>,
 {
@@ -344,7 +344,7 @@ where
         return Err(StoreError::ForgottenEdited.into());
     }
     require_recorded_plan_if_edited(&sim, &deployment)?;
-    Ok(StateV3 {
+    Ok(StateV4 {
         deployment,
         runtime: current.runtime,
     })
@@ -471,16 +471,16 @@ fn require_recorded_plan_if_edited(
 /// Checks the generation and applies a bookkeeping record, which keeps it;
 /// the result is a validated state with the same runtime intent.
 pub(crate) fn record_entry(
-    current: StateV3,
+    current: StateV4,
     expected: ConfigGeneration,
     entry: Bookkeeping,
-) -> Result<StateV3, StoreError> {
+) -> Result<StateV4, StoreError> {
     require_generation(&current, expected)?;
     let deployment = current
         .deployment
         .record(entry)
         .map_err(|source| StoreError::InvalidChange { source })?;
-    Ok(StateV3 {
+    Ok(StateV4 {
         deployment,
         runtime: current.runtime,
     })
@@ -510,7 +510,7 @@ fn backup_name(from: u32, to: u32) -> String {
 }
 
 /// The on-disk form: pretty-printed JSON with a trailing newline.
-fn encode(state: &StateV3) -> Result<Vec<u8>, StoreError> {
+fn encode(state: &StateV4) -> Result<Vec<u8>, StoreError> {
     let mut bytes =
         serde_json::to_vec_pretty(state).map_err(|source| StoreError::Encode { source })?;
     bytes.push(b'\n');

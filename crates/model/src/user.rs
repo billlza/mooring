@@ -353,6 +353,20 @@ impl User {
         self.status == UserStatus::Active && self.per_node.contains_key(node)
     }
 
+    /// Whether `node` keeps the user's credentials in the files its engines
+    /// read only at start (its REALITY short ids, and its sing-box users,
+    /// outbounds and route rules): an active or suspended user holding
+    /// credentials there. Resuming such a user then changes only Xray's
+    /// clients, which the running engine takes (design §13.6). A user
+    /// pending revocation or revoked is kept nowhere.
+    #[must_use]
+    pub fn is_kept_on(&self, node: &NodeId) -> bool {
+        matches!(
+            self.status,
+            UserStatus::Active | UserStatus::Suspended { .. }
+        ) && self.per_node.contains_key(node)
+    }
+
     /// Whether the user accepted agreement revision `required`: a record of
     /// exactly that revision (decision F9). `Err` gives what is recorded
     /// instead, for the refusal to name. A user export, the portal snapshot

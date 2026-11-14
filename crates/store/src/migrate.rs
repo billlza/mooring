@@ -11,17 +11,18 @@
 
 use std::path::Path;
 
-use mooring_model::state::{StateFile, StateHeader, StateV3, StateVersion};
+use mooring_model::state::{StateFile, StateHeader, StateV4, StateVersion};
 use mooring_model::time::UnixTime;
 use mooring_model::v1::StateV1;
 use mooring_model::v2::StateV2;
+use mooring_model::v3::StateV3;
 
 use crate::error::StoreError;
 
 /// Lifts a state document of any version this build reads to the newest
 /// version, `lifted_at` being the lift's time.
 ///
-/// The chain has two steps, whose conversions the model's `v1` and `v2`
+/// The chain's steps, whose conversions the model's `v1`, `v2` and `v3`
 /// modules document:
 ///
 /// - `V1 → V2`: the cycle day becomes the bill day, the hard stop becomes
@@ -31,15 +32,20 @@ use crate::error::StoreError;
 ///   running past the plan's line is now an explicit choice that version 1
 ///   could not express; and for a document that breaks a rule version 2
 ///   added (a cap, a unique alias).
-/// - `V2 → V3`: a revoked user is revoked since `lifted_at`, which version
+/// - `V2 → V4`: a revoked user is revoked since `lifted_at`, which version
 ///   2 kept no time for: it can only delay the user's removal 13 months on
 ///   (design §15.7). No id of a removed user is kept, as version 2 removed
-///   none a node could still name.
-pub fn migrate(file: StateFile, lifted_at: UnixTime) -> Result<StateV3, StoreError> {
+///   none a node could still name, and no spare user is added. (Version 3
+///   is version 2's lift with those two records, so version 2 lifts to the
+///   newest version in one step.)
+/// - `V3 → V4`: every field is kept, and no spare user is added: the
+///   nightly apply job draws them inside its window (design §13.6).
+pub fn migrate(file: StateFile, lifted_at: UnixTime) -> Result<StateV4, StoreError> {
     match file {
-        StateFile::V1(state) => v2_to_v3(v1_to_v2(state)?, lifted_at),
-        StateFile::V2(state) => v2_to_v3(state, lifted_at),
-        StateFile::V3(state) => Ok(state),
+        StateFile::V1(state) => v2_to_v4(v1_to_v2(state)?, lifted_at),
+        StateFile::V2(state) => v2_to_v4(state, lifted_at),
+        StateFile::V3(state) => v3_to_v4(state),
+        StateFile::V4(state) => Ok(state),
     }
 }
 
@@ -52,22 +58,31 @@ fn v1_to_v2(state: StateV1) -> Result<StateV2, StoreError> {
     })
 }
 
-/// The step `V2 → V3`, at `lifted_at`.
-fn v2_to_v3(state: StateV2, lifted_at: UnixTime) -> Result<StateV3, StoreError> {
+/// The step `V2 → V4`, at `lifted_at`.
+fn v2_to_v4(state: StateV2, lifted_at: UnixTime) -> Result<StateV4, StoreError> {
     state
         .lift(lifted_at)
         .map_err(|source| StoreError::MigrationFailed {
             from: StateV2::VERSION,
-            to: StateV3::VERSION,
+            to: StateV4::VERSION,
             source,
         })
+}
+
+/// The step `V3 → V4`.
+fn v3_to_v4(state: StateV3) -> Result<StateV4, StoreError> {
+    state.lift().map_err(|source| StoreError::MigrationFailed {
+        from: StateV3::VERSION,
+        to: StateV4::VERSION,
+        source,
+    })
 }
 
 /// A state document lifted to the newest version.
 #[derive(Debug)]
 pub(crate) struct Decoded {
     /// The lifted state.
-    pub(crate) state: StateV3,
+    pub(crate) state: StateV4,
     /// The version the document had on disk.
     pub(crate) from: u32,
 }
@@ -85,7 +100,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<StateFile, serde_json::Error> {
 
 /// Decodes the bytes of the state file at `path`: refuses a newer version
 /// before parsing it, then parses the document and lifts it, at the time
-/// `lifted_at` gives, which only an older document asks.
+/// `lifted_at` gives, which only a version-1 or version-2 document asks.
 pub(crate) fn decode(
     path: &Path,
     bytes: &[u8],
@@ -105,7 +120,9 @@ pub(crate) fn decode(
     let file = parse(bytes).map_err(corrupt)?;
     let from = file.version();
     let state = match file {
-        StateFile::V3(state) => state,
+        StateFile::V4(state) => state,
+        // Only versions 1 and 2 lift with a time, so only they read it.
+        StateFile::V3(state) => v3_to_v4(state)?,
         older => migrate(older, lifted_at()?)?,
     };
     Ok(Decoded { state, from })

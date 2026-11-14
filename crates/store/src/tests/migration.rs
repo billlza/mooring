@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The migration chain and its backups (design §7): a version-1 or
-//! version-2 document lifts to version 3 in memory only, the first write
+//! The migration chain and its backups (design §7): a version-1, version-2
+//! or version-3 document lifts to version 4 in memory only, the first write
 //! backs up the original bytes, a document the chain cannot lift is refused
 //! and left alone, and the goldens pin every version's encoding and the
 //! lifts between them. A state lifted from version 1 has no plan record,
 //! which no current API builds, so each such lift is checked against the
 //! same history built through the current API once the plan is recorded on
 //! it. A revoked user of version 2, which kept no time, is revoked since
-//! the lift's time.
+//! the lift's time. A version-3 document lifts with no spare user.
 
 use std::convert::Infallible;
 use std::fs;
@@ -38,13 +38,15 @@ use mooring_model::sim::{
     BillDay, CycleRule, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES, PeriodDays, SimPlan,
     SimPolicy, StopPolicy,
 };
-use mooring_model::state::{StateFile, StateV3};
+use mooring_model::spare::SpareUser;
+use mooring_model::state::{StateFile, StateV4};
 use mooring_model::time::UnixTime;
 use mooring_model::user::{
     AgreementRecord, AgreementVersion, Capability, ClientLine, QuotaAction, SuspendReason, User,
     UserPolicy, UserQuota, UserStatus, WarnPercent,
 };
 use mooring_model::v2::StateV2;
+use mooring_model::v3::StateV3;
 use mooring_model::viewer::Viewer;
 use mooring_model::wg::WgIndex;
 use tempfile::TempDir;
@@ -78,6 +80,11 @@ const V3: &[u8] = include_bytes!("golden/state-v3.json");
 /// Every version-3 variant one document can hold: the version-2 variants, a
 /// user revoked at [`RECORDED_AT`], and a removed user's id kept.
 const V3_EVERY_VARIANT: &[u8] = include_bytes!("golden/state-v3-every-variant.json");
+/// The version-4 form of [`V3`], exactly its lift: no spare user.
+const V4: &[u8] = include_bytes!("golden/state-v4.json");
+/// Every version-4 variant one document can hold: the version-3 variants,
+/// a spare user holding credentials and one holding none.
+const V4_EVERY_VARIANT: &[u8] = include_bytes!("golden/state-v4-every-variant.json");
 
 /// The time a store lifts older documents at in these tests: the time the
 /// version-3 goldens' revocation was made, so a lifted version-2 golden is
@@ -115,7 +122,7 @@ fn pretty(file: &StateFile) -> Vec<u8> {
 /// public API with the SMARTY plan recorded: lon1 planned then adopted at
 /// 45.67.89.10 with user 1 on it, then the exit enabled (generation 3,
 /// revision 2).
-fn built_history() -> (TempDir, Store, StateV3) {
+fn built_history() -> (TempDir, Store, StateV4) {
     let (dir, store, state) = initialised();
     let lon1 = planned_node("lon1", 1, 10);
     let mut secrets = InMemorySecretStore::new();
@@ -151,29 +158,29 @@ fn built_history() -> (TempDir, Store, StateV3) {
 
 /// `state` with the SMARTY plan recorded on its SIM policy, keeping the
 /// bill day and thresholds: what `sim set-plan` does to a lifted state.
-fn with_plan_recorded(state: StateV3) -> StateV3 {
+fn with_plan_recorded(state: StateV4) -> StateV4 {
     let mut parts = state.deployment.into_parts();
     let sim = &parts.exit.sim;
     assert_eq!(sim.plan(), None, "the plan was already recorded");
     parts.exit.sim =
         SimPolicy::new(sim.cycle(), smarty_plan(), sim.warn_bytes(), sim.stop()).unwrap();
-    StateV3 {
+    StateV4 {
         deployment: Deployment::try_from(parts).unwrap(),
         runtime: state.runtime,
     }
 }
 
 /// [`V1`] lifted, as every read of it returns it.
-fn lifted_golden() -> StateV3 {
+fn lifted_golden() -> StateV4 {
     migrate(parse(V1).unwrap(), LIFTED_AT).unwrap()
 }
 
 #[test]
-fn version_three_is_the_newest_and_lifts_unchanged() {
-    assert_eq!(StateFile::CURRENT_VERSION, 3);
+fn version_four_is_the_newest_and_lifts_unchanged() {
+    assert_eq!(StateFile::CURRENT_VERSION, 4);
     let (_dir, _store, state) = initialised();
     assert_eq!(
-        migrate(StateFile::V3(state.clone()), LIFTED_AT).unwrap(),
+        migrate(StateFile::V4(state.clone()), LIFTED_AT).unwrap(),
         state
     );
 }
@@ -186,7 +193,7 @@ fn older_documents_are_lifted_in_memory_without_writing() {
     assert_eq!(lifted.deployment.exit().sim.plan(), None);
     assert_eq!(with_plan_recorded(lifted), expected);
     assert_eq!(state_bytes(&store), V1, "a read never writes");
-    assert!(!store.backup_path(1, 3).exists());
+    assert!(!store.backup_path(1, 4).exists());
 }
 
 /// P0-1: a fresh state records the plan. An exit site cloned from a lifted
@@ -321,8 +328,8 @@ fn the_first_write_backs_up_the_original_then_writes_the_newest_version() {
         .update_config(lifted.deployment.config_generation(), Ok::<_, Infallible>)
         .unwrap();
 
-    let backup = store.backup_path(1, 3);
-    assert_eq!(backup.file_name().unwrap(), "state.json.bak-1-3");
+    let backup = store.backup_path(1, 4);
+    assert_eq!(backup.file_name().unwrap(), "state.json.bak-1-4");
     assert_eq!(
         fs::read(&backup).unwrap(),
         V1,
@@ -331,25 +338,26 @@ fn the_first_write_backs_up_the_original_then_writes_the_newest_version() {
     assert_eq!(mode_of(&backup), 0o600);
     assert!(!temp_path(&backup).exists());
 
-    // state.json is now version 3.
+    // state.json is now version 4.
     let written = parse(&state_bytes(&store)).unwrap();
-    assert_eq!(written, StateFile::V3(next.clone()));
+    assert_eq!(written, StateFile::V4(next.clone()));
     assert_eq!(Store::new(store.dir()).load().unwrap(), next);
 
-    // Later writes start from version 3 and leave the backup alone.
+    // Later writes start from version 4 and leave the backup alone.
     store
         .update_config(next.deployment.config_generation(), Ok::<_, Infallible>)
         .unwrap();
     assert_eq!(fs::read(&backup).unwrap(), V1);
-    assert!(!store.backup_path(3, 3).exists());
-    assert!(!store.backup_path(2, 3).exists());
+    assert!(!store.backup_path(4, 4).exists());
+    assert!(!store.backup_path(3, 4).exists());
+    assert!(!store.backup_path(2, 4).exists());
 }
 
 #[test]
 fn every_kind_of_write_backs_up_first() {
     let backed_up = |store: &Store, original: &[u8]| {
-        assert_eq!(fs::read(store.backup_path(1, 3)).unwrap(), original);
-        assert_eq!(parse(&state_bytes(store)).unwrap().version(), 3);
+        assert_eq!(fs::read(store.backup_path(1, 4)).unwrap(), original);
+        assert_eq!(parse(&state_bytes(store)).unwrap().version(), 4);
     };
 
     let (_dir, store) = store_holding(V1);
@@ -431,7 +439,7 @@ fn the_backup_is_durable_before_the_state_is_written() {
         "{error:?}"
     );
     assert_eq!(error.kind(), StoreErrorKind::Io);
-    assert_eq!(fs::read(store.backup_path(1, 3)).unwrap(), V1);
+    assert_eq!(fs::read(store.backup_path(1, 4)).unwrap(), V1);
     assert_eq!(state_bytes(&store), V1, "the state was not written");
 }
 
@@ -440,23 +448,23 @@ fn a_backup_left_by_an_interrupted_migration_is_replaced() {
     let (_dir, store) = store_holding(V1);
     let state = store.load().unwrap();
     // An earlier attempt backed up a document that was never migrated.
-    fs::write(store.backup_path(1, 3), b"an older version 1 document").unwrap();
+    fs::write(store.backup_path(1, 4), b"an older version 1 document").unwrap();
     store
         .update_config(state.deployment.config_generation(), Ok::<_, Infallible>)
         .unwrap();
-    assert_eq!(fs::read(store.backup_path(1, 3)).unwrap(), V1);
+    assert_eq!(fs::read(store.backup_path(1, 4)).unwrap(), V1);
 }
 
 #[test]
 fn a_newer_document_is_refused() {
-    let (_dir, store) = store_holding(br#"{"version": 4}"#);
+    let (_dir, store) = store_holding(br#"{"version": 5}"#);
     let error = store.load().unwrap_err();
     assert!(
         matches!(
             error,
             StoreError::DowngradeRefused {
-                found: 4,
-                newest: 3
+                found: 5,
+                newest: 4
             }
         ),
         "{error:?}"
@@ -511,7 +519,7 @@ fn a_document_the_chain_cannot_lift_is_refused_and_left_as_it_is() {
         assert!(unchosen(error), "{error:?}");
     }
     assert_eq!(state_bytes(&store), V1_EVERY_VARIANT);
-    assert!(!store.backup_path(1, 3).exists());
+    assert!(!store.backup_path(1, 4).exists());
 }
 
 /// Every explicit version-1 hard stop lifts as it is, at any value: with
@@ -538,7 +546,7 @@ fn every_explicit_version_one_stop_lifts_unchanged() {
             .update_config(lifted.deployment.config_generation(), Ok::<_, Infallible>)
             .unwrap();
         assert_eq!(
-            fs::read(store.backup_path(1, 3)).unwrap(),
+            fs::read(store.backup_path(1, 4)).unwrap(),
             edited.as_bytes()
         );
         assert_eq!(
@@ -551,7 +559,7 @@ fn every_explicit_version_one_stop_lifts_unchanged() {
 
 /// The version-1 golden still decodes with version 1's schema and
 /// re-encodes to the same bytes, so the version-1 format stays pinned. It
-/// lifts to exactly the version-2 golden and on to the version-3 golden,
+/// lifts to exactly the version-2 golden and on to the version-4 golden,
 /// which with the plan recorded is the same history built through the
 /// current API.
 #[test]
@@ -570,8 +578,8 @@ fn the_version_one_golden_decodes_and_lifts_to_the_version_two_golden() {
     let (_dir, _store, expected) = built_history();
     let lifted = migrate(file, LIFTED_AT).unwrap();
     assert_eq!(
-        String::from_utf8(pretty(&StateFile::V3(lifted.clone()))).unwrap(),
-        String::from_utf8(V3.to_vec()).unwrap()
+        String::from_utf8(pretty(&StateFile::V4(lifted.clone()))).unwrap(),
+        String::from_utf8(V4.to_vec()).unwrap()
     );
     assert_eq!(lifted.deployment.capacity(), CapacityPolicy::UNLIMITED);
     assert_eq!(lifted.deployment.auto_quota(), None);
@@ -580,14 +588,14 @@ fn the_version_one_golden_decodes_and_lifts_to_the_version_two_golden() {
     assert_eq!(with_plan_recorded(lifted), expected);
 }
 
-/// The version-3 golden pins the on-disk format: a model change that alters
+/// The version-4 golden pins the on-disk format: a model change that alters
 /// it must come with a new version and a migration step. The store writes
 /// it byte for byte: [`V1`] with the exit still disabled, lifted, then
-/// enabled, is exactly the golden. The version-2 golden still decodes with
-/// version 2's schema, re-encodes byte for byte, and lifts to the same
-/// state.
+/// enabled, is exactly the golden. The version-2 and version-3 goldens
+/// still decode with their own versions' schemas, re-encode byte for byte,
+/// and lift to the same state.
 #[test]
-fn the_version_three_golden_round_trips() {
+fn the_version_four_golden_round_trips() {
     let disabled = String::from_utf8(V1.to_vec()).unwrap().replacen(
         "\"exit_enabled\": true,\n    \"revision\": 2",
         "\"exit_enabled\": false,\n    \"revision\": 1",
@@ -601,17 +609,27 @@ fn the_version_three_golden_round_trips() {
         .unwrap();
     assert_eq!(
         String::from_utf8(state_bytes(&store)).unwrap(),
-        String::from_utf8(V3.to_vec()).unwrap(),
+        String::from_utf8(V4.to_vec()).unwrap(),
         "the store writes exactly the golden document"
     );
     assert_eq!(expected, lifted_golden());
-    fs::write(store.state_path(), V3).unwrap();
+    fs::write(store.state_path(), V4).unwrap();
     assert_eq!(Store::new(dir.path()).load().unwrap(), expected);
-    assert_eq!(parse(V3).unwrap(), StateFile::V3(expected.clone()));
-    assert_eq!(pretty(&parse(V3).unwrap()), V3, "byte for byte");
-    assert_eq!(parse(V2).unwrap().version(), 2);
-    assert_eq!(pretty(&parse(V2).unwrap()), V2, "version 2 byte for byte");
-    assert_eq!(migrate(parse(V2).unwrap(), LIFTED_AT).unwrap(), expected);
+    assert_eq!(parse(V4).unwrap(), StateFile::V4(expected.clone()));
+    assert_eq!(pretty(&parse(V4).unwrap()), V4, "byte for byte");
+    for (older, version) in [(V2, 2), (V3, 3)] {
+        assert_eq!(parse(older).unwrap().version(), version);
+        assert_eq!(
+            pretty(&parse(older).unwrap()),
+            older,
+            "version {version} byte for byte"
+        );
+        assert_eq!(migrate(parse(older).unwrap(), LIFTED_AT).unwrap(), expected);
+    }
+    let StateFile::V3(v3) = parse(V3).unwrap() else {
+        panic!("the golden is version 3");
+    };
+    assert_eq!(v3.lift().unwrap(), expected);
 }
 
 /// The nodes, users and exit of the version-1 every-variant golden, in
@@ -683,6 +701,7 @@ fn v1_variants(parts: DeploymentParts, sim: SimPolicy) -> DeploymentParts {
         viewers: parts.viewers,
         nodes: vec![lon1, ams1, par1, fra1],
         users: vec![active, pending, revoked],
+        spares: parts.spares,
         forgotten: parts.forgotten,
         next_wg_index: WgIndex::new(5).unwrap(),
     }
@@ -702,7 +721,7 @@ fn lon1_applied() -> Bookkeeping {
 
 /// Builds `change` on a fresh store, writing the secrets it references,
 /// then records lon1's apply; returns the store and the final state.
-fn built(change: impl Fn(DeploymentParts) -> DeploymentParts) -> (TempDir, Store, StateV3) {
+fn built(change: impl Fn(DeploymentParts) -> DeploymentParts) -> (TempDir, Store, StateV4) {
     let (dir, store, state) = initialised();
     let refs = added_refs(&state.deployment, &change);
     let mut secrets = InMemorySecretStore::new();
@@ -874,16 +893,32 @@ fn removed_user() -> User {
     user
 }
 
-/// The version-3 every-variant golden pins the encoding of every persisted
-/// variant (`state-v3-every-variant.json`): the version-2 variants with
-/// user 3 revoked at [`RECORDED_AT`], and user 8's id kept after its
-/// removal, as the record leaves it. A model change to any of them needs a
-/// new version and a migration step.
-#[test]
-fn the_version_three_every_variant_golden_round_trips() {
+/// Spare user 9, holding credentials on lon1, as a golden holds it.
+fn spare_on_lon1() -> SpareUser {
+    let held = user(9, &[("lon1", 9)]);
+    SpareUser {
+        id: held.id,
+        per_node: held.per_node,
+    }
+}
+
+/// Spare user 10, holding no credentials: drawn while no node was active.
+fn spare_on_none() -> SpareUser {
+    SpareUser {
+        id: UserId::from_low_bits(10),
+        per_node: std::collections::BTreeMap::new(),
+    }
+}
+
+/// The variants of the version-3 every-variant golden, built through the
+/// current API: the version-2 variants with user 3 revoked at
+/// [`RECORDED_AT`], and user 8's id kept after its removal, as the record
+/// leaves it; with `spares` added.
+fn v3_variants(spares: Vec<SpareUser>) -> (TempDir, Store, StateV4) {
     let (dir, store, built) = built(|parts| {
         let mut parts = v2_variants(parts);
         parts.users.push(removed_user());
+        parts.spares.clone_from(&spares);
         parts
     });
     let expected = store
@@ -899,28 +934,71 @@ fn the_version_three_every_variant_golden_round_trips() {
         expected.deployment.forgotten().keys().collect::<Vec<_>>(),
         [&UserId::from_low_bits(8)]
     );
+    (dir, store, expected)
+}
+
+/// The version-3 every-variant golden (`state-v3-every-variant.json`)
+/// still decodes with version 3's schema, re-encodes byte for byte, and
+/// lifts to the same variants built through the current API, with no
+/// spare user.
+#[test]
+fn the_version_three_every_variant_golden_decodes_and_lifts() {
+    let (_dir, _store, expected) = v3_variants(Vec::new());
+    let file = parse(V3_EVERY_VARIANT).unwrap();
+    assert_eq!(file.version(), 3);
+    assert_eq!(pretty(&file), V3_EVERY_VARIANT, "byte for byte");
+    assert_eq!(migrate(file, LIFTED_AT).unwrap(), expected);
+    let (_dir, store) = store_holding(V3_EVERY_VARIANT);
+    assert_eq!(store.load().unwrap(), expected);
+}
+
+/// A version-3 document lifts without the lift's time, which only versions
+/// 1 and 2 need: a store whose clock cannot be read still reads it.
+#[test]
+fn a_version_three_document_lifts_without_a_time() {
+    let (_dir, store) = empty_store();
+    fs::write(store.state_path(), V3).unwrap();
+    let StateFile::V3(v3) = parse(V3).unwrap() else {
+        panic!("the golden is version 3");
+    };
+    assert_eq!(store.load().unwrap(), v3.lift().unwrap());
+    let StateFile::V3(v3) = parse(V3_EVERY_VARIANT).unwrap() else {
+        panic!("the golden is version 3");
+    };
+    let lifted: StateV3 = v3;
+    assert!(lifted.lift().unwrap().deployment.spares().is_empty());
+}
+
+/// The version-4 every-variant golden pins the encoding of every persisted
+/// variant (`state-v4-every-variant.json`): the version-3 variants, a spare
+/// user holding credentials on lon1 and one holding none. A model change to
+/// any of them needs a new version and a migration step.
+#[test]
+fn the_version_four_every_variant_golden_round_trips() {
+    let (dir, store, expected) = v3_variants(vec![spare_on_lon1(), spare_on_none()]);
     assert_eq!(
         String::from_utf8(state_bytes(&store)).unwrap(),
-        String::from_utf8(V3_EVERY_VARIANT.to_vec()).unwrap(),
+        String::from_utf8(V4_EVERY_VARIANT.to_vec()).unwrap(),
         "the store writes exactly the golden document"
     );
-    // Suspended users keep their credentials, so their secrets stay referenced.
+    // Suspended users keep their credentials, so their secrets stay
+    // referenced; so do a spare's.
     let user7 = UserId::from_low_bits(7);
-    assert!(
-        expected
-            .deployment
-            .required_secrets()
-            .contains(&SecretRef::UserVlessUuid(user7.clone(), node_id("lon1")))
-    );
+    let required = expected.deployment.required_secrets();
+    assert!(required.contains(&SecretRef::UserVlessUuid(user7, node_id("lon1"))));
+    assert!(required.contains(&SecretRef::UserLoopUuid(
+        UserId::from_low_bits(9),
+        node_id("lon1")
+    )));
     assert_eq!(
         expected.deployment.served_users(&node_id("lon1")).count(),
         1
     );
-    fs::write(store.state_path(), V3_EVERY_VARIANT).unwrap();
+    fs::write(store.state_path(), V4_EVERY_VARIANT).unwrap();
     assert_eq!(Store::new(dir.path()).load().unwrap(), expected);
     assert_eq!(
-        parse(V3_EVERY_VARIANT).unwrap(),
-        StateFile::V3(expected.clone())
+        parse(V4_EVERY_VARIANT).unwrap(),
+        StateFile::V4(expected.clone())
     );
 }
 
@@ -931,7 +1009,7 @@ fn the_version_three_every_variant_golden_round_trips() {
 #[test]
 fn a_version_two_revocation_is_dated_at_the_lift() {
     let user3 = UserId::from_low_bits(3);
-    let revoked_since = |state: &StateV3| match state.deployment.users()[&user3].status {
+    let revoked_since = |state: &StateV4| match state.deployment.users()[&user3].status {
         UserStatus::Revoked { since } => since,
         other => panic!("user 3 is {other:?}"),
     };
@@ -950,7 +1028,7 @@ fn a_version_two_revocation_is_dated_at_the_lift() {
     store
         .set_exit_enabled(state.runtime.revision, true)
         .unwrap();
-    assert_eq!(fs::read(store.backup_path(2, 3)).unwrap(), V2_EVERY_VARIANT);
+    assert_eq!(fs::read(store.backup_path(2, 4)).unwrap(), V2_EVERY_VARIANT);
     assert_eq!(revoked_since(&later.load().unwrap()), first, "written once");
     // By the Mac's clock: the time of the read.
     let (dir, _store) = store_holding(V2_EVERY_VARIANT);
@@ -966,15 +1044,23 @@ fn a_version_two_revocation_is_dated_at_the_lift() {
     assert!((before..=after).contains(&since.as_secs()), "{since:?}");
 }
 
-/// Every JSON object of the version-2 and version-3 goldens refuses an
-/// unknown key, as each type's `deny_unknown_fields` promises (the
-/// every-variant goldens hold an object of every record: plans, policies,
-/// quotas, agreements, the cap, the baseline, automatic quotas, alert
-/// settings, viewers, a revocation's time and a removed user's kept id). A
-/// field this build does not know is never dropped silently.
+/// Every JSON object of the version-2, version-3 and version-4 goldens
+/// refuses an unknown key, as each type's `deny_unknown_fields` promises
+/// (the every-variant goldens hold an object of every record: plans,
+/// policies, quotas, agreements, the cap, the baseline, automatic quotas,
+/// alert settings, viewers, a revocation's time, a removed user's kept id
+/// and a spare user). A field this build does not know is never dropped
+/// silently.
 #[test]
-fn every_object_of_the_version_two_and_three_goldens_denies_unknown_keys() {
-    for golden in [V2, V2_EVERY_VARIANT, V3, V3_EVERY_VARIANT] {
+fn every_object_of_the_version_two_to_four_goldens_denies_unknown_keys() {
+    for golden in [
+        V2,
+        V2_EVERY_VARIANT,
+        V3,
+        V3_EVERY_VARIANT,
+        V4,
+        V4_EVERY_VARIANT,
+    ] {
         let json: serde_json::Value = serde_json::from_slice(golden).unwrap();
         assert!(parse(golden).is_ok());
         let mut pointers = Vec::new();

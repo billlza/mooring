@@ -38,10 +38,11 @@
 //!
 //! # Migrations
 //!
-//! `state.json` carries `{"version": N, …}`; this build writes version 2
-//! and reads versions 1 and 2. A newer version is refused
+//! `state.json` carries `{"version": N, …}`; this build writes version 4
+//! and reads versions 1 to 4. A newer version is refused
 //! (`DowngradeRefused`); an older one is lifted by
-//! [`migrate`](fn@migrate), a chain of pure functions (`V1 → V2`), and the
+//! [`migrate`](fn@migrate), a chain of pure functions (`V1 → V2 → V4`,
+//! `V3 → V4`), and the
 //! first write after lifting backs up the original document to
 //! `state.json.bak-<from>-<to>` (fsynced) before writing the new version. A
 //! document the chain cannot lift is refused (`MigrationFailed`) and left

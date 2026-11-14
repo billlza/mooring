@@ -71,7 +71,8 @@ use mooring_model::secret::{
 use mooring_model::sim::{
     BillDay, Carrier, CycleRule, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy,
 };
-use mooring_model::state::{RuntimeIntent, StateV3};
+use mooring_model::spare::SpareUser;
+use mooring_model::state::{RuntimeIntent, StateV4};
 use mooring_model::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
     TargetAttestation, TargetFacts, TargetRejected, TlsHandshake, TlsOutcome, TlsVersion, qualify,
@@ -107,8 +108,8 @@ pub struct Fixture {
 impl Fixture {
     /// The fixture as a state document, with the exit enabled.
     #[must_use]
-    pub fn state(&self) -> StateV3 {
-        StateV3 {
+    pub fn state(&self) -> StateV4 {
+        StateV4 {
             deployment: self.deployment.clone(),
             runtime: RuntimeIntent {
                 exit_enabled: true,
@@ -116,7 +117,46 @@ impl Fixture {
             },
         }
     }
+
+    /// The fixture with `count` spare users (design §13.6), each holding
+    /// credentials on every node, derived as a user's are from the numbers
+    /// [`FIRST_SPARE`] up (ids `fxuseraaga`, `fxuseraagb`, …), and their
+    /// secrets.
+    ///
+    /// # Errors
+    ///
+    /// A spare the model refuses, which means a literal is wrong.
+    pub fn with_spares(self, count: u8) -> Result<Self, FixtureError> {
+        let materials: Vec<&NodeMaterial> = [&LON1, &AMS1]
+            .into_iter()
+            .filter(|material| {
+                self.deployment
+                    .nodes()
+                    .keys()
+                    .any(|id| id.as_str() == material.id)
+            })
+            .collect();
+        let mut parts = self.deployment.into_parts();
+        let mut secrets = self.secrets;
+        for number in (0..count).map(|offset| FIRST_SPARE.saturating_add(offset)) {
+            let spare = user(number, &materials)?;
+            parts.spares.push(SpareUser {
+                id: spare.id,
+                per_node: spare.per_node,
+            });
+            insert_user_secrets(&mut secrets, number, &materials)?;
+        }
+        Ok(Self {
+            deployment: Deployment::try_from(parts)?,
+            secrets,
+            ..self
+        })
+    }
 }
+
+/// The number the first spare user's credentials derive from
+/// ([`Fixture::with_spares`]): far above any fixture's users.
+pub const FIRST_SPARE: u8 = 0xc0;
 
 /// A fixture could not be built, which means a fixture literal is wrong.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -575,6 +615,7 @@ fn build(
         viewers,
         nodes: node_list,
         users: user_list,
+        spares: Vec::new(),
         forgotten: Vec::new(),
         next_wg_index,
     })?;
@@ -603,6 +644,33 @@ mod tests {
             .map(NodeId::as_str)
             .collect();
         (nodes, fixture.deployment.users().len())
+    }
+
+    /// Spare users hold credentials on every node of the fixture, and the
+    /// secrets are still exactly those the deployment requires.
+    #[test]
+    fn spares_hold_credentials_on_every_node() {
+        for (fixture, nodes) in [
+            (one_node_one_user().unwrap(), vec!["lon1"]),
+            (two_nodes_three_users().unwrap(), vec!["ams1", "lon1"]),
+        ] {
+            let users = fixture.deployment.users().clone();
+            let with = fixture.with_spares(3).unwrap();
+            let ids: Vec<&str> = with
+                .deployment
+                .spares()
+                .keys()
+                .map(UserId::as_str)
+                .collect();
+            assert_eq!(ids, ["fxuseraaga", "fxuseraagb", "fxuseraagc"]);
+            for spare in with.deployment.spares().values() {
+                let held: Vec<&str> = spare.per_node.keys().map(NodeId::as_str).collect();
+                assert_eq!(held, nodes);
+            }
+            assert_eq!(with.deployment.users(), &users);
+            let refs: BTreeSet<_> = with.secrets.refs().into_iter().collect();
+            assert_eq!(refs, with.deployment.required_secrets());
+        }
     }
 
     #[test]

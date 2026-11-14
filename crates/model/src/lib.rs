@@ -42,12 +42,14 @@ pub mod quota;
 pub mod removal;
 pub mod secret;
 pub mod sim;
+pub mod spare;
 pub mod state;
 pub mod target;
 pub mod time;
 pub mod user;
 pub mod v1;
 pub mod v2;
+pub mod v3;
 pub mod verdict;
 pub mod viewer;
 pub mod wg;
@@ -91,7 +93,8 @@ pub use sim::{
     ONE_P_MOBILE_FAIR_USE_BYTES, ONE_P_MOBILE_PERIOD_DAYS, PILOT_SIM_HARD_STOP_BYTES,
     PILOT_SIM_WARN_BYTES, PeriodDays, PlanKind, SimPlan, SimPolicy, SimThresholds, StopPolicy,
 };
-pub use state::{RuntimeIntent, StateFile, StateV3, StateVersion};
+pub use spare::{SPARE_USERS, SpareUser};
+pub use state::{RuntimeIntent, StateFile, StateV4, StateVersion};
 pub use target::{TargetAttestation, TargetSpec, qualify};
 pub use time::UnixTime;
 pub use user::{

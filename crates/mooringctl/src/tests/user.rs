@@ -10,7 +10,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 
 use mooring_model::{
     AgreementRecord, AgreementVersion, CalendarDate, Deployment, DeploymentParts, RuntimeIntent,
-    StateV3, UnixTime, UserId, UserStatus,
+    StateV4, UnixTime, UserId, UserStatus,
 };
 use mooring_store::Store;
 
@@ -27,7 +27,7 @@ pub(crate) fn harness_with(deployment: Deployment) -> Harness {
         .mode(0o700)
         .create(&dir)
         .unwrap();
-    let state = StateV3 {
+    let state = StateV4 {
         deployment,
         runtime: RuntimeIntent::new(),
     };

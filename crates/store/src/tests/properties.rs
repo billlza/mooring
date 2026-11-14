@@ -48,7 +48,7 @@ proptest! {
     #[test]
     fn decoding_classifies_any_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
         match decode(Path::new("state.json"), &bytes, || Ok(LIFTED_AT)) {
-            Ok(decoded) => prop_assert!(matches!(decoded.from, 1..=3)),
+            Ok(decoded) => prop_assert!(matches!(decoded.from, 1..=4)),
             Err(error) => prop_assert!(
                 matches!(
                     error.kind(),
@@ -66,9 +66,9 @@ proptest! {
         let bytes = format!(r#"{{"version": {version}, "unknown": true}}"#);
         let result = decode(Path::new("state.json"), bytes.as_bytes(), || Ok(LIFTED_AT));
         let error = result.unwrap_err();
-        if version > 3 {
+        if version > 4 {
             prop_assert!(
-                matches!(error, StoreError::DowngradeRefused { found, newest: 3 } if found == version),
+                matches!(error, StoreError::DowngradeRefused { found, newest: 4 } if found == version),
                 "{:?}", error
             );
         } else {

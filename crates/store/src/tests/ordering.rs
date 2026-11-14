@@ -14,7 +14,7 @@ use mooring_model::error::ModelError;
 use mooring_model::node::NodeLifecycle;
 use mooring_model::ports::ListenerIdx;
 use mooring_model::secret::{SecretEntry, SecretMaterial, SecretRef};
-use mooring_model::state::StateV3;
+use mooring_model::state::StateV4;
 
 use super::builders::{
     RECORDED_AT, added_refs, adopted, entries_for, initialised, node_id, planned_node, site, user,
@@ -143,7 +143,7 @@ fn add_lon1(parts: DeploymentParts) -> Result<DeploymentParts, Infallible> {
 }
 
 /// An initialised store with the planned node lon1 and its secrets.
-fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV3) {
+fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV4) {
     let (dir, store, state) = initialised();
     let mut secrets = Observer::new(&store);
     let next = update_config_with_secrets(
@@ -160,7 +160,7 @@ fn with_planned_lon1() -> (tempfile::TempDir, Store, Observer, StateV3) {
 
 /// Adopts lon1 at its site from `from`, then starts retiring it: the state
 /// a record of its shutdown starts from.
-fn retiring_lon1(store: &Store, secrets: &mut Observer, from: &StateV3) -> StateV3 {
+fn retiring_lon1(store: &Store, secrets: &mut Observer, from: &StateV4) -> StateV4 {
     let adopted_state = update_config_with_secrets(
         store,
         secrets,
@@ -183,7 +183,7 @@ fn retiring_lon1(store: &Store, secrets: &mut Observer, from: &StateV3) -> State
 }
 
 /// Every secret the state references is readable from `secrets`.
-fn assert_references_resolve(state: &StateV3, secrets: &impl SecretStore) {
+fn assert_references_resolve(state: &StateV4, secrets: &impl SecretStore) {
     for secret_ref in state.deployment.required_secrets() {
         let material = secrets.get(&secret_ref).unwrap();
         assert_eq!(material.kind(), secret_ref.kind());
@@ -738,7 +738,7 @@ fn alert_channel_secrets_follow_their_node() {
 
 /// Planned lon1 and ams1 with their secrets, and lon1's alert channels set
 /// up: the topic and lon1's checks written before the state names them.
-fn with_lon1_channels_and_planned_ams1() -> (tempfile::TempDir, Store, Observer, StateV3) {
+fn with_lon1_channels_and_planned_ams1() -> (tempfile::TempDir, Store, Observer, StateV4) {
     let (dir, store, mut secrets, state) = with_planned_lon1();
     let two = update_config_with_secrets(
         &store,

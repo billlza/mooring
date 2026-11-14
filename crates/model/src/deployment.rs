@@ -27,6 +27,7 @@ use crate::sim::{
     CycleRule, ONE_P_MOBILE_PERIOD_DAYS, PILOT_SIM_HARD_STOP_BYTES, PILOT_SIM_WARN_BYTES,
     PeriodDays, SimPlan, SimPolicy, StopPolicy,
 };
+use crate::spare::SpareUser;
 use crate::time::UnixTime;
 use crate::user::{AgreementRecord, User, UserNodePublic, UserStatus};
 use crate::viewer::Viewer;
@@ -154,6 +155,9 @@ pub struct DeploymentParts {
     pub nodes: Vec<Node>,
     /// Every user, including revoked ones.
     pub users: Vec<User>,
+    /// The spare users: user ids drawn ahead of need, with their
+    /// credentials, which `user add` takes (design §13.6).
+    pub spares: Vec<SpareUser>,
     /// The bare ids of removed users that a node's records may still name,
     /// each until those records have expired (`RevokedUserRemoved`).
     pub forgotten: Vec<ForgottenUser>,
@@ -161,13 +165,28 @@ pub struct DeploymentParts {
     pub next_wg_index: WgIndex,
 }
 
+impl DeploymentParts {
+    /// Removes the spare user `id` and returns it, for `user add` to give
+    /// its id and credentials to the user it adds (`UnknownSpare` when no
+    /// spare has that id).
+    pub fn take_spare(&mut self, id: &UserId) -> Result<SpareUser, ModelError> {
+        let at = self
+            .spares
+            .iter()
+            .position(|spare| spare.id == *id)
+            .ok_or_else(|| ModelError::UnknownSpare { id: id.clone() })?;
+        Ok(self.spares.remove(at))
+    }
+}
+
 /// Every node, user and viewer of the one exit, with all cross-entity
 /// invariants checked. Built only from [`DeploymentParts`] (also when
 /// deserialised), or fresh by [`Deployment::new`]:
 ///
 /// - node and user ids and viewer keys are unique, and so are the ids of
-///   removed users still kept ([`Deployment::forgotten`]), none of which is
-///   a user's;
+///   removed users still kept ([`Deployment::forgotten`]) and of spare
+///   users ([`Deployment::spares`]), none of which is a user's, and no
+///   spare's a kept id;
 /// - at most [`MAX_ACTIVE_NODES`] nodes are active;
 /// - WireGuard indices are unique and below `next_wg_index`;
 /// - live node addresses are unique;
@@ -175,7 +194,8 @@ pub struct DeploymentParts {
 /// - an applied node has a target and a generation no newer than the deployment's;
 /// - users hold credentials only on active nodes, revoked users on none, and
 ///   a user pending revocation on at least one (the nodes still to commit);
-/// - REALITY short ids are unique per node, probe included;
+///   spare users hold them only on active nodes;
+/// - REALITY short ids are unique per node, probe and spares included;
 /// - public aliases are unique among users;
 /// - at most `capacity.max_active_users` users are active;
 /// - the digest goes out no earlier than its zone's earliest daily time
@@ -193,6 +213,7 @@ pub struct Deployment {
     viewers: BTreeMap<Ed25519Pub, Viewer>,
     nodes: BTreeMap<NodeId, Node>,
     users: BTreeMap<UserId, User>,
+    spares: BTreeMap<UserId, SpareUser>,
     forgotten: BTreeMap<UserId, UnixTime>,
     next_wg_index: WgIndex,
 }
@@ -217,6 +238,7 @@ impl Deployment {
             viewers: Vec::new(),
             nodes: Vec::new(),
             users: Vec::new(),
+            spares: Vec::new(),
             forgotten: Vec::new(),
             next_wg_index: WgIndex::FIRST,
         })
@@ -274,6 +296,12 @@ impl Deployment {
     #[must_use]
     pub const fn users(&self) -> &BTreeMap<UserId, User> {
         &self.users
+    }
+
+    /// The spare users by id (design §13.6).
+    #[must_use]
+    pub const fn spares(&self) -> &BTreeMap<UserId, SpareUser> {
+        &self.spares
     }
 
     /// The ids of removed users that a node's records may still name, each
@@ -370,11 +398,20 @@ impl Deployment {
                 refs.insert(SecretRef::NodeMacAliveCheck(node.clone()));
             }
         }
-        for user in self.users.values() {
-            for node in user.per_node.keys() {
-                refs.insert(SecretRef::UserVlessUuid(user.id.clone(), node.clone()));
-                refs.insert(SecretRef::UserHy2Password(user.id.clone(), node.clone()));
-                refs.insert(SecretRef::UserLoopUuid(user.id.clone(), node.clone()));
+        let holders = self
+            .users
+            .values()
+            .map(|user| (&user.id, &user.per_node))
+            .chain(
+                self.spares
+                    .values()
+                    .map(|spare| (&spare.id, &spare.per_node)),
+            );
+        for (id, per_node) in holders {
+            for node in per_node.keys() {
+                refs.insert(SecretRef::UserVlessUuid(id.clone(), node.clone()));
+                refs.insert(SecretRef::UserHy2Password(id.clone(), node.clone()));
+                refs.insert(SecretRef::UserLoopUuid(id.clone(), node.clone()));
             }
         }
         refs
@@ -393,6 +430,7 @@ impl Deployment {
             viewers: self.viewers.into_values().collect(),
             nodes: self.nodes.into_values().collect(),
             users: self.users.into_values().collect(),
+            spares: self.spares.into_values().collect(),
             forgotten: self
                 .forgotten
                 .into_iter()
@@ -419,6 +457,7 @@ pub(crate) struct Entities<'a> {
     pub(crate) config_generation: ConfigGeneration,
     pub(crate) nodes: &'a BTreeMap<NodeId, Node>,
     pub(crate) users: &'a BTreeMap<UserId, User>,
+    pub(crate) spares: &'a BTreeMap<UserId, SpareUser>,
     pub(crate) next_wg_index: WgIndex,
     pub(crate) capacity: CapacityPolicy,
     pub(crate) alerting: Option<&'a AlertSettings>,
@@ -427,9 +466,11 @@ pub(crate) struct Entities<'a> {
 impl Entities<'_> {
     /// Checks every invariant listed on [`Deployment`] after unique ids:
     /// the version-1 rules, then unique public aliases, the cap on active
-    /// users, the digest time and the alert channels' nodes (version 2).
+    /// users, the digest time and the alert channels' nodes (version 2),
+    /// and where spare users hold credentials (version 4).
     pub(crate) fn check(&self) -> Result<(), ModelError> {
         self.check_version_1()?;
+        self.check_spares()?;
         self.check_aliases()?;
         self.check_capacity()?;
         self.check_digest_time()?;
@@ -555,6 +596,49 @@ impl Entities<'_> {
                             user: user.id.clone(),
                         });
                     }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Spare users hold credentials only on active nodes, and their short
+    /// ids are unique on each node, the probe's and the users' included
+    /// (which [`Self::check_credentials`] has found unique among
+    /// themselves).
+    fn check_spares(&self) -> Result<(), ModelError> {
+        let mut short_ids: BTreeMap<&NodeId, BTreeSet<ShortId>> = self
+            .nodes
+            .values()
+            .map(|node| (&node.id, BTreeSet::from([node.reality.probe_short_id])))
+            .collect();
+        for user in self.users.values() {
+            for (node, public) in &user.per_node {
+                short_ids.entry(node).or_default().insert(public.short_id);
+            }
+        }
+        for spare in self.spares.values() {
+            for (node_id, public) in &spare.per_node {
+                let node = self
+                    .nodes
+                    .get(node_id)
+                    .ok_or_else(|| ModelError::UnknownNode {
+                        id: node_id.clone(),
+                    })?;
+                if !node.lifecycle.is_active() {
+                    return Err(ModelError::CredentialsOnInactiveNode {
+                        user: spare.id.clone(),
+                        node: node_id.clone(),
+                    });
+                }
+                if !short_ids
+                    .entry(&node.id)
+                    .or_default()
+                    .insert(public.short_id)
+                {
+                    return Err(ModelError::DuplicateShortId {
+                        node: node_id.clone(),
+                    });
                 }
             }
         }
@@ -870,14 +954,17 @@ fn node_mut<'a>(parts: &'a mut DeploymentParts, id: &NodeId) -> Result<&'a mut N
         .ok_or_else(|| ModelError::UnknownNode { id: id.clone() })
 }
 
-/// Drops every user's credentials on `node` and its alert channels, for a
-/// node that renders nothing any more (`RetirementShutDown`,
+/// Drops every user's and spare user's credentials on `node` and its alert
+/// channels, for a node that renders nothing any more (`RetirementShutDown`,
 /// `PlanCancelled`); a user pending revocation that waited only on it is
 /// revoked since `at`.
 fn release_node(parts: &mut DeploymentParts, node: &NodeId, at: UnixTime) {
     for user in &mut parts.users {
         user.per_node.remove(node);
         user.settle_revocation(at);
+    }
+    for spare in &mut parts.spares {
+        spare.per_node.remove(node);
     }
     if let Some(alerting) = &mut parts.alerting {
         alerting.channels.remove(node);
@@ -924,6 +1011,7 @@ impl TryFrom<DeploymentParts> for Deployment {
             )?,
             nodes: index_by_id(parts.nodes, |node: &Node| &node.id, EntityId::Node)?,
             users: index_by_id(parts.users, |user: &User| &user.id, EntityId::User)?,
+            spares: index_by_id(parts.spares, |spare: &SpareUser| &spare.id, EntityId::User)?,
             forgotten: index_by_id(
                 parts.forgotten,
                 |kept: &ForgottenUser| &kept.user,
@@ -935,11 +1023,19 @@ impl TryFrom<DeploymentParts> for Deployment {
             next_wg_index: parts.next_wg_index,
         };
         // A removed user's id is never a user's again: an id drawn anew
-        // that matches one is refused, as two users sharing it would be.
+        // that matches one is refused, as two users sharing it would be. A
+        // spare's id is a user's to come, so it may be neither.
         if let Some(user) = deployment
             .forgotten
             .keys()
+            .chain(deployment.spares.keys())
             .find(|user| deployment.users.contains_key(*user))
+            .or_else(|| {
+                deployment
+                    .spares
+                    .keys()
+                    .find(|spare| deployment.forgotten.contains_key(*spare))
+            })
         {
             return Err(ModelError::DuplicateId {
                 id: EntityId::User(user.clone()),
@@ -949,6 +1045,7 @@ impl TryFrom<DeploymentParts> for Deployment {
             config_generation: deployment.config_generation,
             nodes: &deployment.nodes,
             users: &deployment.users,
+            spares: &deployment.spares,
             next_wg_index: deployment.next_wg_index,
             capacity: deployment.capacity,
             alerting: deployment.alerting.as_ref(),
@@ -977,7 +1074,7 @@ impl<K, V: Serialize> Serialize for Values<'_, K, V> {
 /// nodes, users and forgotten ids in id order.
 impl Serialize for Deployment {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("Deployment", 11)?;
+        let mut state = serializer.serialize_struct("Deployment", 12)?;
         state.serialize_field("config_generation", &self.config_generation)?;
         state.serialize_field("exit", &self.exit)?;
         state.serialize_field("policy", &self.policy)?;
@@ -987,6 +1084,7 @@ impl Serialize for Deployment {
         state.serialize_field("viewers", &Values(&self.viewers))?;
         state.serialize_field("nodes", &Values(&self.nodes))?;
         state.serialize_field("users", &Values(&self.users))?;
+        state.serialize_field("spares", &Values(&self.spares))?;
         state.serialize_field(
             "forgotten",
             &self

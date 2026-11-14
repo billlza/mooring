@@ -34,7 +34,7 @@ use mooring_model::secret::{
 use mooring_model::sim::{
     BillDay, Carrier, CycleRule, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy,
 };
-use mooring_model::state::StateV3;
+use mooring_model::state::StateV4;
 use mooring_model::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
     TargetAttestation, TargetFacts, TargetSpec, TlsHandshake, TlsOutcome, TlsVersion, qualify,
@@ -126,7 +126,7 @@ pub(crate) fn deployment_init() -> DeploymentInit {
 }
 
 /// A store initialised with an empty deployment.
-pub(crate) fn initialised() -> (TempDir, Store, StateV3) {
+pub(crate) fn initialised() -> (TempDir, Store, StateV4) {
     let (dir, store) = empty_store();
     let state = store.init(deployment_init()).unwrap();
     (dir, store, state)
@@ -315,7 +315,7 @@ pub(crate) fn target() -> TargetSpec {
 /// A store whose deployment holds `lon1`, adopted at 45.67.89.10 with a
 /// REALITY target, and user 1 on it, with every secret written; the
 /// deployment is at generation 3.
-pub(crate) fn adopted_store() -> (TempDir, Store, StateV3, InMemorySecretStore) {
+pub(crate) fn adopted_store() -> (TempDir, Store, StateV4, InMemorySecretStore) {
     let (dir, store, state) = initialised();
     let mut secrets = InMemorySecretStore::new();
     let add = |parts| with_node(parts, planned_node("lon1", 1, 10));
