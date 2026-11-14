@@ -148,6 +148,25 @@ fn the_target_check_writes_only_its_reading() {
     );
 }
 
+/// The run directory holds the gate's lock, which the state group may
+/// open: the check, in that group, could hold the watch's gating up by
+/// taking it. Its unit hides the directory, and with it every entry
+/// `tmpfiles.d` makes.
+#[test]
+fn the_target_check_cannot_reach_the_run_directory() {
+    let hidden = PROFILE.target_check_hidden();
+    assert_eq!(hidden, ["/run/mooring"]);
+    for entry in PROFILE.tmpfiles {
+        assert!(
+            hidden
+                .iter()
+                .any(|dir| entry.path == *dir || entry.path.starts_with(&format!("{dir}/"))),
+            "{} is not hidden from the check",
+            entry.path
+        );
+    }
+}
+
 #[test]
 fn the_watch_writes_only_its_own_directories_and_the_lock() {
     assert_eq!(
@@ -315,6 +334,7 @@ fn the_watch_reflector_and_recovery_units_have_their_fixed_text() {
                  Group=mooring\n\
                  ExecStart=/usr/local/lib/mooring/agent/current target-watch\n\
                  ReadWritePaths=/var/lib/mooring/target\n\
+                 InaccessiblePaths=-/run/mooring\n\
                  CapabilityBoundingSet=\n\
                  {sandbox}"
         )

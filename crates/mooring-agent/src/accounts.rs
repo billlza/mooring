@@ -2,7 +2,8 @@
 
 //! The host profile's accounts (design §5.2, §8.6): read from `/etc/passwd`
 //! and `/etc/group`, created and corrected with Debian's own tools by
-//! `Bootstrap` and by every transaction (which gives a node bootstrapped
+//! `Bootstrap`, and by a transaction on a host whose installed profile is
+//! older than the agent's or not recorded (which gives a node bootstrapped
 //! at an older profile the accounts a later one adds), and resolved to ids
 //! for the files and directories they own.
 

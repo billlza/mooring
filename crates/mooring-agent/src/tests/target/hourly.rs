@@ -6,7 +6,8 @@
 //! moved, failed the handshake, did not answer over HTTP/2 or could not
 //! be resolved; its reading is the state group's to read, in the one
 //! directory the check's own account writes, and the watch reads it as its
-//! verdict on the configured target, or as unreadable.
+//! verdict on the configured target, or as unreadable, never following a
+//! link, waiting on a FIFO or reading more than 64 KiB of it.
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
@@ -22,7 +23,9 @@ use crate::tests::{EACCES, EISDIR, ModeFault, exited, scratch};
 
 /// The reading is in the target check's own directory (host profile 3): the
 /// only one its unit may write, and one the watch's unit may not, so the
-/// check never writes where the watch keeps its own files.
+/// check never writes where the watch keeps its own files. The directory
+/// that holds the agent's locks is hidden from the check's unit, so that
+/// it cannot take them.
 #[test]
 fn the_reading_is_in_the_only_directory_the_check_writes() {
     let (_dir, paths) = scratch();
@@ -44,6 +47,18 @@ fn the_reading_is_in_the_only_directory_the_check_writes() {
         "the watch may not write the check's directory"
     );
     assert_ne!(parent, paths.watch_dir());
+    let hidden: Vec<_> = profile
+        .target_check_hidden()
+        .iter()
+        .map(|dir| paths.at(dir))
+        .collect();
+    for lock in [paths.gate_lock(), paths.txn_lock()] {
+        assert!(
+            hidden.iter().any(|dir| lock.starts_with(dir)),
+            "{} is not hidden from the check",
+            lock.display()
+        );
+    }
 }
 
 /// A node with generation 1 installed, configured for `www.example.com` at
@@ -205,5 +220,66 @@ fn the_watch_reads_each_result_as_its_verdict_or_as_unreadable() {
         Verdict::Unreadable {
             errno: Some(EISDIR)
         }
+    );
+}
+
+/// The reading is the check's, an account the watch does not trust, so the
+/// watch opens it without waiting for a writer or following a link, and
+/// reads at most 64 KiB of it. A FIFO in its place, which would otherwise
+/// hold the watch's tick until something opened its other end, a link,
+/// even to a reading of the target that passed, and a longer file hold no
+/// verdict.
+#[test]
+fn the_watch_neither_waits_on_nor_follows_nor_reads_past_the_reading() {
+    let (_dir, paths) = configured();
+    let reading = paths.target_reading();
+    std::fs::create_dir_all(paths.target_dir()).unwrap();
+    let passed = TargetReading {
+        at: UnixTime::from_secs(1000),
+        target: target(),
+        degraded: false,
+    };
+
+    let made = std::process::Command::new("mkfifo")
+        .arg(&reading)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let (sent, received) = std::sync::mpsc::channel();
+    let reader = paths.clone();
+    // On a thread of its own, so that a read held up fails the test
+    // instead of hanging it.
+    std::thread::spawn(move || {
+        let _ended = sent.send(crate::target::hourly::verdict(&reader, &target()));
+    });
+    assert_eq!(
+        received.recv_timeout(std::time::Duration::from_secs(10)),
+        Ok(Verdict::Unreadable { errno: None }),
+        "a FIFO with no writer holds nothing"
+    );
+    std::fs::remove_file(&reading).unwrap();
+
+    let verdict = || crate::target::hourly::verdict(&paths, &target());
+    let elsewhere = paths.target_dir().join("elsewhere.json");
+    write_json(&elsewhere, &passed, 0o640).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &reading).unwrap();
+    assert_eq!(
+        verdict(),
+        Verdict::Unreadable {
+            errno: Some(libc::ELOOP)
+        }
+    );
+    std::fs::remove_file(&reading).unwrap();
+
+    let mut bytes = serde_json::to_vec(&passed).unwrap();
+    bytes.resize(64 * 1024, b' ');
+    std::fs::write(&reading, &bytes).unwrap();
+    assert_eq!(verdict(), Verdict::Passed, "64 KiB is read");
+    bytes.push(b' ');
+    std::fs::write(&reading, &bytes).unwrap();
+    assert_eq!(
+        verdict(),
+        Verdict::Unreadable { errno: None },
+        "a byte more is not"
     );
 }

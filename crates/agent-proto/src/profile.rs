@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The host profile (design §8.6): constant host configuration, versioned,
-//! compiled into the agent and converged in every transaction. The data and
-//! the exact file text live here, once, for the agent and the renderer.
+//! The host profile (design §8.6): constant host configuration, versioned
+//! and compiled into the agent. Every transaction converges its files; its
+//! accounts and directories are converged by `Bootstrap`, and by a
+//! transaction on a host whose installed profile is older or not recorded.
+//! The data and the exact file text live here, once, for the agent and the
+//! renderer.
 
 mod types;
 mod units;
@@ -52,9 +55,12 @@ impl HostProfile {
     /// The profile this build of the agent converges hosts to. Version 3
     /// gives the hourly target check an account of its own
     /// ([`HostAccount::TargetCheck`]) and a directory for its reading, so
-    /// that Xray's API refuses it (design §13.6); every transaction
-    /// converges the accounts and the layout, so a node bootstrapped at
-    /// version 2 takes them at its first transaction with this agent.
+    /// that Xray's API refuses it (design §13.6). A transaction on a host
+    /// whose installed profile is older, or not recorded, converges the
+    /// accounts and the layout first, so a node bootstrapped at version 2
+    /// takes them at its first transaction with this agent; an agent built
+    /// for version 2 refuses this profile's bundles
+    /// (`HostProfileUnsupported`).
     /// Version 2 adds the viewer account and its sshd `Match` block
     /// (decision F5); version 1 was never installed on a node. Version 2
     /// also holds the accounts ([`HostAccount`]), the directory layout and
@@ -279,6 +285,19 @@ impl HostProfile {
             .collect()
     }
 
+    /// The directories the target check's unit hides from it
+    /// (`InaccessiblePaths`): the run directories, which hold the gate's
+    /// and the transactions' locks. The state group may open the gate's
+    /// lock, and the check, in that group, could hold the watch's gating up
+    /// by taking it; it needs nothing there.
+    pub fn target_check_hidden(&self) -> Vec<&'static str> {
+        self.tmpfiles
+            .iter()
+            .filter(|entry| entry.kind == TmpfilesType::Directory)
+            .map(|entry| entry.path)
+            .collect()
+    }
+
     /// The value the profile gives `directive`. The match names every
     /// directive, so the drop-in cannot omit one. `AllowUsers` admits
     /// `root` (the bootstrap and ops keys) and [`crate::VIEWER_ACCOUNT`].
@@ -396,7 +415,9 @@ impl HostProfile {
             HostFile::WatchUnit => self.watch_unit(),
             HostFile::ReflectUnit => reflect_unit(),
             HostFile::RecoverUnit => recover_unit(),
-            HostFile::TargetCheckUnit => target_check_unit(&self.target_check_writable()),
+            HostFile::TargetCheckUnit => {
+                target_check_unit(&self.target_check_writable(), &self.target_check_hidden())
+            }
             HostFile::TargetCheckTimer => target_check_timer(),
             HostFile::TunnelDropIn => vec![
                 "[Unit]".to_owned(),

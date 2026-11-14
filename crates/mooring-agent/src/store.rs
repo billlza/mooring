@@ -6,7 +6,7 @@
 //! default), and serialised by advisory locks.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -45,6 +45,39 @@ pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, A
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(io_error(IoOp::ReadState, &error)),
     }
+}
+
+/// The value in `path`, which an account the agent does not trust wrote
+/// (the target check's reading, design §11.3), or `None` when there is no
+/// such file. Unlike [`read_json`], the file is opened without following a
+/// link (`ELOOP`) and without waiting for a writer, so a FIFO put in its
+/// place gives at once what it holds, and at most `limit` bytes of it are
+/// read: a longer file holds no value this agent reads.
+pub(crate) fn read_foreign_json<T: DeserializeOwned>(
+    path: &Path,
+    limit: usize,
+) -> Result<Option<T>, AgentError> {
+    let failed = |error: io::Error| io_error(IoOp::ReadState, &error);
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(failed(error)),
+    };
+    // A byte past the limit tells a longer file from one at it.
+    let mut bytes = Vec::new();
+    file.take((limit as u64).saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    if bytes.len() > limit {
+        return Err(malformed(IoOp::ReadState));
+    }
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|_| malformed(IoOp::ReadState))
 }
 
 /// Writes `value` to `path` atomically with `mode`, creating the directory

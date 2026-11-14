@@ -599,32 +599,54 @@ fn unit_account(file: HostFile) -> String {
 /// Xray's API adds users (design §13.6), and the ruleset tells who may
 /// connect to it only by the connecting account. So the watch's unit runs
 /// as an account the API admits, and the hourly target check's, which
-/// reads a third party's replies, as one it refuses: no rule before the
-/// chain's last accepts that account's connections to the API, and the
-/// last rejects them.
+/// reads a third party's replies, as one it refuses. The output chain's
+/// last rule rejects every connection to the API, one rule before it admits
+/// the watch's, and every rule before it that could let a connection
+/// through (`accept`, `jump`, `goto` or `return`) keys on an account other
+/// than the check's: a rule keyed on none would pass the check's too.
 #[test]
 fn the_api_admits_the_watch_and_refuses_the_target_check() {
     let watch = unit_account(HostFile::WatchUnit);
     let check = unit_account(HostFile::TargetCheckUnit);
+    assert_ne!(
+        check, "root",
+        "the agent runs as root, which the API admits"
+    );
     let api = "ip daddr 127.0.0.1 tcp dport 10085";
     for fixture in fixtures() {
         for id in fixture.deployment.nodes().keys() {
             let bundle = vps(&fixture, id);
             let output = chain(bundle.file(ManagedFile::Nftables).expose_text(), "output");
-            let admits = |account: &str| {
-                let rule = format!("meta skuid \"{account}\" ct direction original {api} accept");
-                output.contains(&rule.as_str())
-            };
-            assert!(admits(&watch), "{id}: the watch, {watch}, reads the API");
-            assert!(
-                !admits(&check) && check != "root",
-                "{id}: the target check's account, {check}, is admitted to the API"
-            );
+            let (last, before) = output
+                .split_last()
+                .unwrap_or_else(|| panic!("{id}: the output chain is empty"));
             assert_eq!(
-                output.last().copied(),
-                Some(format!("ct direction original {api} reject").as_str()),
+                *last,
+                format!("ct direction original {api} reject"),
                 "{id}: every other account's connection to the API is rejected"
             );
+            let admitted = format!("meta skuid \"{watch}\" ct direction original {api} accept");
+            assert!(
+                before.contains(&admitted.as_str()),
+                "{id}: the watch, {watch}, reads the API"
+            );
+            for rule in before {
+                let passes = rule.ends_with(" accept")
+                    || rule.ends_with(" return")
+                    || rule.contains(" jump ")
+                    || rule.contains(" goto ");
+                if !passes {
+                    continue;
+                }
+                let account = rule
+                    .strip_prefix("meta skuid \"")
+                    .and_then(|rest| rest.split_once('"'))
+                    .map(|(account, _)| account);
+                assert!(
+                    account.is_some_and(|account| account != check),
+                    "{id}: `{rule}` can let the target check's account, {check}, through to the API"
+                );
+            }
         }
     }
 }

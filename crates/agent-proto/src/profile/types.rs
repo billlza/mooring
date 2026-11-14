@@ -317,8 +317,9 @@ pub const XRAY_ASSET_DIR: &str = "/opt/mooring/engines/geodata/current";
 
 closed_enum! {
     /// An account the host profile creates (design §5.2, §8.6), in the
-    /// order `Bootstrap` and every transaction converge them: a later
-    /// profile's accounts come last. None has a home or a password; only
+    /// order `Bootstrap` converges them, as does a transaction on a host
+    /// whose installed profile is older or not recorded: a later profile's
+    /// accounts come last. None has a home or a password; only
     /// the viewer has a shell, which sshd needs to run its forced command.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub enum HostAccount {
