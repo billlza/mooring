@@ -1077,7 +1077,7 @@ fn any_attached() -> impl Strategy<Value = SampledAttachment> {
         )
 }
 
-fn any_sample() -> impl Strategy<Value = RadioSample> {
+pub(super) fn any_sample() -> impl Strategy<Value = RadioSample> {
     let read = (
         any::<u64>(),
         -40_i16..=125,

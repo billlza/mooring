@@ -1,0 +1,11 @@
+at_unix,at_utc,event,reason,from,to
+1791918060,2026-10-13T19:01:00Z,poll_failed,unreachable,,
+1791918120,2026-10-13T19:02:00Z,poll_recovered,,,
+1791918120,2026-10-13T19:02:00Z,network_service_changed,,nr5g,lte
+1791918120,2026-10-13T19:02:00Z,data_service_changed,,nr_sub6,lte_plus
+1791918180,2026-10-13T19:03:00Z,band_changed,,B3,B20
+1791918240,2026-10-13T19:04:00Z,service_lost,,,
+1791918300,2026-10-13T19:05:00Z,service_regained,,,
+1791918360,2026-10-13T19:06:00Z,session_restarted,,,
+1791918420,2026-10-13T19:07:00Z,plmn_changed,,234-30,234-20
+1791918480,2026-10-13T19:08:00Z,router_rebooted,,,

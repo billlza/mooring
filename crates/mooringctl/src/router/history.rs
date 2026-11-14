@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `router history` (design §15.6 rule 11, §15.7): the samples the daemon
-//! recorded, one per poll of the M7, read from the day files
+//! `router history` (design §15.6 rules 11 and 13, §15.7): the samples the
+//! daemon recorded, one per poll of the M7, read from the day files
 //! `mooring-store` keeps and printed as the document Mooring.app reads
-//! (`--json`, one line) or as a summary: a header per day, the events the
-//! samples show, and the hourly statistics.
+//! (`--json`, one line), as a table of the samples or of the events they
+//! show (`--csv`, `daemon-core`'s `radio_table`), or as a summary: a
+//! header per day, the events the samples show, and the hourly statistics.
 //!
 //! The command reads and never writes: a torn last line is reported as an
-//! incomplete day, not cut (the daemon's next append does that). It reads
+//! incomplete day, not cut (the daemon's next append does that). A table
+//! has a row for every whole line and none for a torn one, and has no
+//! place to name the day, which the document and the summary do. It reads
 //! the days of its range one at a time; a line the decoder refuses ends it
 //! with an error naming the file and the line, never the bytes. The range
 //! is at most the days the daemon keeps; the default is yesterday and
@@ -19,15 +22,40 @@ use std::path::Path;
 use mooring_daemon_core::radio_history::{
     HourBin, RadioEventKind, RadioHistory, RadioPoll, RadioSample, Stats, decode_line, hourly,
 };
+use mooring_daemon_core::radio_table::{events_table, samples_table};
 use mooring_model::CalendarDate;
 use mooring_model::error::ModelError;
 use mooring_store::{RadioDay, radio_day_path, read_radio_day};
 
 use crate::app::{Env, support_dir};
+use crate::cli::HistoryTableArg;
 use crate::daemon::radio::RADIO_HISTORY_DAYS;
 use crate::error::{CommandError, LocalError};
 use crate::router::error::reason_phrase;
 use crate::router::output::{Tenths, hour_stamp, json_line, utc_stamp};
+
+/// The form `router history` prints the range in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Form {
+    /// The summary.
+    Summary,
+    /// The document Mooring.app reads, as one JSON line.
+    Json,
+    /// A table of the samples or of the events.
+    Table(HistoryTableArg),
+}
+
+impl Form {
+    /// The form `--json` and `--csv` ask for; the command line takes at
+    /// most one of the two.
+    pub(crate) const fn of(json: bool, csv: Option<HistoryTableArg>) -> Self {
+        match (csv, json) {
+            (Some(table), _) => Self::Table(table),
+            (None, true) => Self::Json,
+            (None, false) => Self::Summary,
+        }
+    }
+}
 
 /// One day of the range as read.
 struct Day {
@@ -41,13 +69,14 @@ fn output(error: io::Error) -> CommandError {
     CommandError::Local(LocalError::Output(error))
 }
 
-/// `router history [--since <date>] [--until <date>] [--json]`.
+/// `router history [--since <date>] [--until <date>] [--json | --csv
+/// <samples|events>]`.
 pub(crate) fn history(
     env: &Env<'_>,
     out: &mut dyn Write,
     since: Option<CalendarDate>,
     until: Option<CalendarDate>,
-    json: bool,
+    form: Form,
 ) -> Result<(), CommandError> {
     let today = CalendarDate::utc_of((env.clock)()?).map_err(|_| LocalError::Clock)?;
     let (since, until) = range(today, since, until)?;
@@ -63,10 +92,15 @@ pub(crate) fn history(
         .map(|day| day.date)
         .collect();
     let history = RadioHistory::new(since, until, samples, incomplete);
-    let text = if json {
-        json_line(&history).map_err(|error| output(io::Error::other(error)))?
-    } else {
-        summary(&history, &days).map_err(|_| LocalError::Clock)?
+    let text = match form {
+        Form::Json => json_line(&history).map_err(|error| output(io::Error::other(error)))?,
+        Form::Summary => summary(&history, &days).map_err(|_| LocalError::Clock)?,
+        Form::Table(HistoryTableArg::Samples) => {
+            samples_table(history.samples()).map_err(|_| LocalError::Clock)?
+        }
+        Form::Table(HistoryTableArg::Events) => {
+            events_table(history.events()).map_err(|_| LocalError::Clock)?
+        }
     };
     out.write_all(text.as_bytes()).map_err(output)
 }
