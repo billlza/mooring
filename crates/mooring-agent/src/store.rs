@@ -59,7 +59,8 @@ pub(crate) fn write_json<T: Serialize>(
     write_atomic(path, &bytes, mode).map_err(|error| io_error(IoOp::WriteState, &error))
 }
 
-/// Writes `bytes` to `path` atomically with `mode`.
+/// Writes `bytes` to `path` atomically with `mode`, creating the directory
+/// (mode 0750) if needed.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
     let dir = parent_of(path)?;
     ensure_dir(dir)?;
@@ -116,9 +117,12 @@ pub(crate) struct Scratch {
 }
 
 impl Scratch {
-    /// Writes `bytes` to `path` atomically with mode 0600. The file is
-    /// removed when the returned value is dropped, and at once if the write
-    /// fails after its rename.
+    /// Writes `bytes` to `path` atomically with mode 0600, creating the
+    /// directory (mode 0750) if needed: after a reboot has emptied `/run`,
+    /// a rollback's stripped tunnel configuration is the first file written
+    /// into the validators' directory. The file is removed when the
+    /// returned value is dropped, and at once if the write fails after its
+    /// rename.
     pub(crate) fn write(path: PathBuf, bytes: &[u8]) -> io::Result<Self> {
         let scratch = Self { path };
         write_atomic(&scratch.path, bytes, 0o600)?;
