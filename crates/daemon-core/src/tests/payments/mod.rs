@@ -2,7 +2,7 @@
 
 //! Payments (design §9.6): the portal's document and its goldens, the
 //! payment ledger and its rules, what paid orders give users, the pull's
-//! settings, and the check against Stripe.
+//! settings, the check against Stripe, and the plans on the Mac.
 //!
 //! The goldens in `contract/portal-fixtures/entitlements-v1/` are copies of
 //! the portal repository's `contract/fixtures/entitlements-v1/` at its
@@ -23,6 +23,7 @@ mod check;
 mod feed;
 mod ledger;
 mod open_downloads;
+mod plans;
 mod policy;
 mod refunds;
 mod retention;

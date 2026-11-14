@@ -866,7 +866,7 @@ fn earlier_versions_of_the_ledger_are_lifted() {
         assert_eq!(uses(&lifted, B), [None]);
         assert_eq!(counted(&lifted, B), span(now, now + DAY));
         let written = String::from_utf8(lifted.encode().unwrap()).unwrap();
-        assert!(written.starts_with("{\n  \"version\": 4,"), "{written}");
+        assert!(written.starts_with("{\n  \"version\": 5,"), "{written}");
         assert_eq!(PaymentLedger::decode(written.as_bytes()).unwrap(), lifted);
     }
     // A refund the portal dated after Mooring applied it: the use counts
@@ -888,11 +888,16 @@ fn earlier_versions_of_the_ledger_are_lifted() {
             "{pack_use}"
         );
     }
-    let mut version_5 = current;
-    version_5["version"] = json!(5);
+    // Version 4, from before the plans on the Mac, is read as it is (the
+    // plan tests refuse one holding a grant for a plan).
+    let mut version_4 = current.clone();
+    version_4["version"] = json!(4);
+    assert_eq!(read(&version_4).unwrap(), ledger);
+    let mut version_6 = current;
+    version_6["version"] = json!(6);
     assert!(matches!(
-        read(&version_5),
-        Err(LedgerError::UnknownVersion { found: 5 })
+        read(&version_6),
+        Err(LedgerError::UnknownVersion { found: 6 })
     ));
 }
 

@@ -9,13 +9,17 @@
 //!   before anything of it is used.
 //! - [`PaymentLedger`]: `payments/ledger.json`, the cursor and every order
 //!   the portal named with what Mooring did about it; a page is applied to
-//!   a copy ([`PaymentLedger::apply`]), which the daemon writes before it
-//!   keeps it, so the cursor and the grants are one write.
+//!   a copy ([`PaymentLedger::apply_planned`]), which the daemon writes
+//!   before it keeps it, so the cursor and the grants are one write.
 //! - [`Entitlements`]: the service periods and traffic packs of the orders
 //!   that count, which `policy::effective_policy` combines with each
 //!   user's own record.
 //! - [`PullSettings`]: `payment-pull.json`, where to pull from, whether
-//!   the operator rehearses, and whether the check against Stripe is on.
+//!   the operator rehearses, whether the check against Stripe is on, and
+//!   the plans the Mac knows.
+//! - [`PlanBook`]: the plans on the Mac, which the operator stores from
+//!   the portal's plan file ([`PlanFile`]): while it knows any, a live
+//!   grant at terms none of them sells is held.
 //! - [`Lookup`]: the check against Stripe (contract §5.5), while it is on:
 //!   what to ask Stripe about a grant that [`PaymentLedger::apply_checked`]
 //!   names, and what its answers come to, a [`Verdict`] that the grant is
@@ -39,6 +43,7 @@ mod error;
 mod feed;
 mod ids;
 mod ledger;
+mod plans;
 mod refund;
 mod settings;
 mod stripe;
@@ -56,6 +61,11 @@ pub use ledger::{
     Applied, Checked, Closed, DisputeRecord, GrantOutcome, GrantRecord, HeldReason, LEDGER_VERSION,
     LedgerEvent, MAX_LEDGER_BYTES, OrderRecord, PaymentLedger, Pruned, RefundRecord, Settlement,
     Stop, StopReason, Verdicts,
+};
+pub use plans::{
+    GB, LinkTaken, MAX_FILE_PLANS, MAX_PLAN_FILE_BYTES, MAX_STORED_PLANS, PLAN_FILE_FORMAT,
+    PLAN_FILE_VERSION, PlanBook, PlanBookError, PlanFile, PlanFileError, PlanVerdict, Stored,
+    StoredPlan,
 };
 pub use refund::{PackUse, RefundEffect, RefundUsage, RunBegan, TakeBacks, TimeTakenBack};
 pub use settings::{

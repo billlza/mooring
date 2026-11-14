@@ -1,0 +1,36 @@
+{
+  "format": "mooring-portal-payments",
+  "version": 1,
+  "livemode": false,
+  "currency": "gbp",
+  "plans": [
+    {
+      "id": "month-100",
+      "kind": "month",
+      "days": 30,
+      "traffic_gb": 100,
+      "amount": 800,
+      "payment_link": "https://buy.stripe.com/test_SynthMonth",
+      "payment_link_id": "plink_1SynthMonth"
+    },
+    {
+      "id": "month-100-auto",
+      "kind": "month_auto",
+      "days": 30,
+      "traffic_gb": 100,
+      "amount": 800,
+      "payment_link": "https://buy.stripe.com/test_SynthAuto",
+      "payment_link_id": "plink_1SynthAuto"
+    },
+    {
+      "id": "pack-50",
+      "kind": "traffic",
+      "days": 90,
+      "traffic_gb": 50,
+      "amount": 300,
+      "payment_link": "https://buy.stripe.com/test_SynthPack",
+      "payment_link_id": "plink_1SynthPack"
+    }
+  ],
+  "manage_subscription_url": "https://billing.stripe.com/p/login/test_SynthManage"
+}

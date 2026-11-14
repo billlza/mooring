@@ -164,7 +164,8 @@ pub(super) fn change_settings(
 }
 
 /// `portal connect --origin <https://host[:port]> [--stdin]`: stores the
-/// token and points the pull at `origin`, keeping the rehearsal as it is.
+/// token and points the pull at `origin`, keeping the rehearsal, the check
+/// against Stripe and the plans as they are.
 pub(crate) fn connect(
     env: &mut Env<'_>,
     out: &mut dyn Write,
@@ -188,28 +189,30 @@ pub(crate) fn connect(
         .put(SecretEntry::PortalPullToken(token))
         .map_err(|error| CommandError::Local(LocalError::Keychain(error)))?;
     // What the change wrote, for the summary: a successful change ran it.
-    let mut written = (0, false, false);
+    let mut written = PullSettings::connected(0, origin.clone(), false, false);
     change_settings(&support, |current, revision| {
-        let rehearsal = current.as_ref().is_some_and(PullSettings::rehearsal);
-        let stripe_check = current.as_ref().is_some_and(PullSettings::stripe_check);
-        written = (revision, rehearsal, stripe_check);
-        Ok(Some(PullSettings::connected(
-            revision,
-            origin.clone(),
-            rehearsal,
-            stripe_check,
-        )))
+        written = match current {
+            Some(current) => current.connecting(revision, origin.clone()),
+            None => PullSettings::connected(revision, origin.clone(), false, false),
+        };
+        Ok(Some(written.clone()))
     })
     .map_err(files)?;
-    let (revision, rehearsal, stripe_check) = written;
+    let revision = written.revision();
     writeln!(
         out,
         "the payment pull reads {origin} with the token stored as {} (settings revision {revision}); the daemon asks within five minutes, while the Mac is on no foreign network",
         SecretRef::PortalPullToken,
     )
     .map_err(output)?;
-    writeln!(out, "{}", rehearsal_line(rehearsal)).map_err(output)?;
-    writeln!(out, "{}", super::stripe_check::check_line(stripe_check)).map_err(output)
+    writeln!(out, "{}", rehearsal_line(written.rehearsal())).map_err(output)?;
+    writeln!(
+        out,
+        "{}",
+        super::stripe_check::check_line(written.stripe_check())
+    )
+    .map_err(output)?;
+    writeln!(out, "{}", super::plans::plans_line(written.plans())).map_err(output)
 }
 
 /// What a rehearsal being on or off means.
@@ -250,11 +253,12 @@ pub(crate) fn rehearsal(
 pub(crate) fn disconnect(env: &mut Env<'_>, out: &mut dyn Write) -> Result<(), CommandError> {
     let support = support_dir(env)?;
     // Settings already without an origin are kept as they are; the check
-    // against Stripe stays as it is, for when the pull is connected again.
+    // against Stripe and the plans stay as they are, for when the pull is
+    // connected again.
     change_settings(&support, |current, revision| {
         Ok(current
             .filter(|current| current.origin().is_some())
-            .map(|current| PullSettings::disconnected(revision, current.stripe_check())))
+            .map(|current| current.disconnecting(revision)))
     })
     .map_err(files)?;
     match env.secrets.delete(&SecretRef::PortalPullToken) {

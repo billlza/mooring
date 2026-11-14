@@ -3,14 +3,15 @@
 //! The lines the payment pull and `portal payments` write: instants in UTC
 //! and each event of an applied page, by order id and user id (both
 //! opaque), never with the token, Stripe's read key or a label. A grant's
-//! line says when Stripe confirmed its payment, and a grant held for what
-//! Stripe said says what that was. A refund's line names the order only,
+//! line says when Stripe confirmed its payment, a grant held for what
+//! Stripe said says what that was, and one held for the plans kept on the
+//! Mac says which way it is not theirs. A refund's line names the order only,
 //! with what it took back or that it waits for the usage; so do the line
 //! that ends such a wait and the lines that say which nodes no longer hold
 //! a download that was open at the refund.
 
 use mooring_daemon_core::payments::{
-    Closed, GrantOutcome, LedgerEvent, OrderId, PackUse, RefundEffect, TimeTakenBack,
+    Closed, GrantOutcome, HeldReason, LedgerEvent, OrderId, PackUse, RefundEffect, TimeTakenBack,
 };
 use mooring_model::user::SuspendReason;
 use mooring_model::{NodeId, UnixTime};
@@ -21,6 +22,27 @@ use crate::router::output::utc_stamp;
 /// calendar, which only a clock gone wrong gives.
 pub(crate) fn stamp(at: UnixTime) -> String {
     utc_stamp(at).unwrap_or_else(|_| at.to_string())
+}
+
+/// What a grant held for `reason` comes to, after the reason, when the
+/// reason is the plans kept on the Mac; nothing for the others, which
+/// need no more or come with what Stripe said.
+pub(crate) const fn held_meaning(reason: HeldReason) -> &'static str {
+    match reason {
+        HeldReason::PlanUnknown => {
+            ": the plans kept on the Mac have none of its plan's id; if the portal sells it, keep the portal's plan file first (`mooringctl portal plans set`)"
+        }
+        HeldReason::PlanDiffers => {
+            ": no plan kept on the Mac of its plan's id is at its kind, days, traffic, amount and currency"
+        }
+        HeldReason::UnknownUser
+        | HeldReason::UserRevoked
+        | HeldReason::BeyondCalendar
+        | HeldReason::StripeNoPayment
+        | HeldReason::StripeNoFirstOrder
+        | HeldReason::StripeUnpaid
+        | HeldReason::StripeDiffers => "",
+    }
 }
 
 /// One event of an applied page, as the daemon logs it.
@@ -71,8 +93,9 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
             reason,
             refusal,
         } => format!(
-            "payment: order {order} for user {user} is held, not granted ({}{}); settle it at Stripe",
+            "payment: order {order} for user {user} is held, not granted ({}{}{}); settle it at Stripe",
             reason.as_str(),
+            held_meaning(*reason),
             refusal
                 .as_ref()
                 .map_or_else(String::new, |refusal| format!(": {refusal}"))

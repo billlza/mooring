@@ -63,7 +63,11 @@ fn on_stores_the_key_then_turns_the_check_on_and_the_pull_keeps_it() {
     harness.stdin = Cursor::new(token(3).expose_str().as_bytes().to_vec());
     let connected = harness.run(&["portal", "connect", "--origin", ORIGIN, "--stdin"]);
     assert_eq!(connected.code, 0, "{}", connected.stderr);
-    assert!(connected.stdout.ends_with(ON), "{}", connected.stdout);
+    assert!(
+        connected.stdout.ends_with(&format!("{ON}plans kept: none: grants are applied at the terms the portal lists (`mooringctl portal plans set <file>` keeps the portal's live plan file)\n")),
+        "{}",
+        connected.stdout
+    );
     let origin = PortalOrigin::parse(ORIGIN).unwrap();
     assert_eq!(
         settings(&harness),

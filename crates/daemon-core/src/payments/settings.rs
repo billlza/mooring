@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The pull's settings (design §9.6): `payment-pull.json`, which
-//! `mooringctl portal connect | rehearsal | stripe-check | disconnect`
-//! write and the daemon reads. The token and Stripe's read key are not
-//! here: they are keychain items (`SecretRef::PortalPullToken`,
+//! `mooringctl portal connect | rehearsal | stripe-check | plans |
+//! disconnect` write and the daemon reads, the plans on the Mac among them
+//! ([`PlanBook`]). The token and Stripe's read key are not here: they are
+//! keychain items (`SecretRef::PortalPullToken`,
 //! `SecretRef::StripeReadKey`).
 //!
 //! Every change raises the revision, and the file is kept when the pull is
@@ -16,16 +17,23 @@ use mooring_model::dns::DnsName;
 use serde::{Deserialize, Serialize};
 
 use super::ledger::Stop;
+use super::plans::PlanBook;
 
-/// The settings' version: 2 since the check against Stripe (2026-11-14).
-/// Version 1, which had no check, is read with the check off.
-pub const SETTINGS_VERSION: u32 = 2;
+/// The settings' version: 3 since the plans on the Mac (2026-11-14).
+/// Version 2, which had the check against Stripe and no plans, is read
+/// with none; version 1, which had neither, with the check off too.
+pub const SETTINGS_VERSION: u32 = 3;
+
+/// The version before the plans on the Mac.
+const SETTINGS_VERSION_2: u32 = 2;
 
 /// The version before the check against Stripe.
 const SETTINGS_VERSION_1: u32 = 1;
 
-/// The largest settings file read, in bytes.
-pub const MAX_SETTINGS_BYTES: usize = 4096;
+/// The largest settings file read, in bytes: the most plans kept, each as
+/// long as the portal lets a plan be, take 36 280 bytes with the longest
+/// origin.
+pub const MAX_SETTINGS_BYTES: usize = 64 * 1024;
 
 /// The path of the portal's answer to a pull.
 pub const ENTITLEMENTS_PATH: &str = "/api/mooring/entitlements";
@@ -139,6 +147,7 @@ pub struct PullSettings {
     origin: Option<PortalOrigin>,
     rehearsal: bool,
     stripe_check: bool,
+    plans: PlanBook,
 }
 
 /// The version of a document on disk, read first to choose its shape.
@@ -152,6 +161,21 @@ struct Version {
 #[serde(deny_unknown_fields)]
 struct SettingsFile {
     /// [`SETTINGS_VERSION`], read first ([`Version`]).
+    #[serde(rename = "version")]
+    _version: u32,
+    revision: u64,
+    #[serde(deserialize_with = "Option::deserialize")]
+    origin: Option<PortalOrigin>,
+    rehearsal: bool,
+    stripe_check: bool,
+    plans: PlanBook,
+}
+
+/// A version-2 document, from before the plans on the Mac.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsFileV2 {
+    /// [`SETTINGS_VERSION_2`], read first ([`Version`]).
     #[serde(rename = "version")]
     _version: u32,
     revision: u64,
@@ -182,6 +206,7 @@ struct SettingsFileRef<'a> {
     origin: Option<&'a PortalOrigin>,
     rehearsal: bool,
     stripe_check: bool,
+    plans: &'a PlanBook,
 }
 
 /// The settings as their file holds them.
@@ -193,6 +218,7 @@ impl Serialize for PullSettings {
             origin: self.origin.as_ref(),
             rehearsal: self.rehearsal,
             stripe_check: self.stripe_check,
+            plans: &self.plans,
         }
         .serialize(serializer)
     }
@@ -210,9 +236,9 @@ impl PullSettings {
     }
 
     /// Settings that pull from `origin`, in rehearsal or not, with the
-    /// check against Stripe on or off, at `revision`.
+    /// check against Stripe on or off, and no plans, at `revision`.
     #[must_use]
-    pub const fn connected(
+    pub fn connected(
         revision: u64,
         origin: PortalOrigin,
         rehearsal: bool,
@@ -223,18 +249,56 @@ impl PullSettings {
             origin: Some(origin),
             rehearsal,
             stripe_check,
+            plans: PlanBook::default(),
         }
     }
 
     /// Settings that pull from nowhere, with the check against Stripe on or
-    /// off for when the pull is connected again, at `revision`.
+    /// off for when the pull is connected again, and no plans, at
+    /// `revision`.
     #[must_use]
-    pub const fn disconnected(revision: u64, stripe_check: bool) -> Self {
+    pub fn disconnected(revision: u64, stripe_check: bool) -> Self {
         Self {
             revision,
             origin: None,
             rehearsal: false,
             stripe_check,
+            plans: PlanBook::default(),
+        }
+    }
+
+    /// These settings pulling from `origin`, at `revision`: the rehearsal,
+    /// the check against Stripe and the plans as they were.
+    #[must_use]
+    pub fn connecting(&self, revision: u64, origin: PortalOrigin) -> Self {
+        Self {
+            revision,
+            origin: Some(origin),
+            ..self.clone()
+        }
+    }
+
+    /// These settings pulling from nowhere, at `revision`: the rehearsal
+    /// off, and the check against Stripe and the plans kept for when the
+    /// pull is connected again.
+    #[must_use]
+    pub fn disconnecting(&self, revision: u64) -> Self {
+        Self {
+            revision,
+            origin: None,
+            rehearsal: false,
+            ..self.clone()
+        }
+    }
+
+    /// These settings with the plans `plans` (none: the plan check off),
+    /// at `revision`.
+    #[must_use]
+    pub fn planning(&self, revision: u64, plans: PlanBook) -> Self {
+        Self {
+            revision,
+            plans,
+            ..self.clone()
         }
     }
 
@@ -286,8 +350,17 @@ impl PullSettings {
         self.stripe_check
     }
 
-    /// Reads the settings file, of this version or version 1, which is read
-    /// with the check against Stripe off.
+    /// The plans the Mac knows (design §9.6): while there are any, a live
+    /// grant that would give a period or a pack is granted only at the
+    /// terms of one of them.
+    #[must_use]
+    pub const fn plans(&self) -> &PlanBook {
+        &self.plans
+    }
+
+    /// Reads the settings file, of this version, of version 2, which is
+    /// read with no plans, or of version 1, which is read with the check
+    /// against Stripe off too.
     pub fn decode(bytes: &[u8]) -> Result<Self, SettingsError> {
         if bytes.len() > MAX_SETTINGS_BYTES {
             return Err(SettingsError::TooLarge);
@@ -302,6 +375,18 @@ impl PullSettings {
                     origin: file.origin,
                     rehearsal: file.rehearsal,
                     stripe_check: file.stripe_check,
+                    plans: file.plans,
+                })
+            }
+            SETTINGS_VERSION_2 => {
+                let file: SettingsFileV2 =
+                    serde_json::from_slice(bytes).map_err(SettingsError::Decode)?;
+                Ok(Self {
+                    revision: file.revision,
+                    origin: file.origin,
+                    rehearsal: file.rehearsal,
+                    stripe_check: file.stripe_check,
+                    plans: PlanBook::default(),
                 })
             }
             SETTINGS_VERSION_1 => {
@@ -312,6 +397,7 @@ impl PullSettings {
                     origin: file.origin,
                     rehearsal: file.rehearsal,
                     stripe_check: false,
+                    plans: PlanBook::default(),
                 })
             }
             found => Err(SettingsError::UnknownVersion { found }),

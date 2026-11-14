@@ -284,6 +284,44 @@ pub(crate) enum LocalError {
     /// The payment pull's files could not be read or written.
     #[error("the payment pull's files failed")]
     PaymentFiles(#[source] Box<crate::payments::PaymentFileError>),
+    /// The plan file given to `portal plans set` could not be read.
+    #[error("cannot read the plan file {}", path.display())]
+    PlanFileRead {
+        /// The file.
+        path: PathBuf,
+        /// The operating system's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The plan file's path is not a regular file: a directory, a FIFO or
+    /// a device.
+    #[error("{} is not a regular file, so no plans were read from it", path.display())]
+    PlanFileNotAFile {
+        /// The path.
+        path: PathBuf,
+    },
+    /// The plan file is not one the Mac keeps; the error says why.
+    #[error("{} is not a live plan file the portal would read", path.display())]
+    PlanFile {
+        /// The file.
+        path: PathBuf,
+        /// Why.
+        #[source]
+        source: mooring_daemon_core::payments::PlanFileError,
+    },
+    /// The plan file lists a plan on the Payment Link of a plan kept at
+    /// other terms; the error says which.
+    #[error(
+        "{} puts a plan on the Payment Link of a plan kept at other terms",
+        path.display()
+    )]
+    PlanLinkTaken {
+        /// The file.
+        path: PathBuf,
+        /// The file's plan, its link and the plan kept on it.
+        #[source]
+        source: mooring_daemon_core::payments::LinkTaken,
+    },
     /// `portal rehearsal` before `portal connect`.
     #[error("the payment pull is not connected: `mooringctl portal connect` first")]
     PaymentPullNotConnected,

@@ -27,8 +27,8 @@ use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, wr
 
 use crate::backup::BackupCheck;
 use crate::cli::{
-    Command, ExitCommand, NodeCommand, OnOff, PortalCommand, RouterCommand, SimCommand,
-    StripeCheckCommand, TargetCommand, UserCommand,
+    Command, ExitCommand, NodeCommand, OnOff, PlansCommand, PortalCommand, RouterCommand,
+    SimCommand, StripeCheckCommand, TargetCommand, UserCommand,
 };
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::paths;
@@ -169,6 +169,12 @@ pub(crate) fn run(
         }
         Command::Portal(PortalCommand::StripeCheck(StripeCheckCommand::Off)) => {
             crate::payments::stripe_check::off(env, out)
+        }
+        Command::Portal(PortalCommand::Plans(PlansCommand::Set { file })) => {
+            crate::payments::plans::set(env, out, &file)
+        }
+        Command::Portal(PortalCommand::Plans(PlansCommand::Off)) => {
+            crate::payments::plans::off(env, out)
         }
         Command::Portal(PortalCommand::Disconnect) => {
             crate::payments::command::disconnect(env, out)

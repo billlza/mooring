@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use mooring_daemon_core::payments::{
     Closed, FeedPage, GrantOutcome, HeldReason, LedgerEvent, OrderId, PackUse, PaymentLedger,
-    PortalOrigin, PullSettings, RefundEffect, RefundUsage, RunBegan, Stop, StopReason,
+    PlanBook, PortalOrigin, PullSettings, RefundEffect, RefundUsage, RunBegan, Stop, StopReason,
     TimeTakenBack,
 };
 use mooring_daemon_core::period::BillingCycle;
@@ -61,7 +61,13 @@ impl RefundUsage for Shown {
 fn applied(ledger: &PaymentLedger, body: &[u8], rehearsal: bool) -> PaymentLedger {
     let page = FeedPage::decode(body, ledger.cursor()).unwrap();
     ledger
-        .apply(&page, &users(), UnixTime::from_secs(NOW), rehearsal)
+        .apply_planned(
+            &page,
+            &users(),
+            UnixTime::from_secs(NOW),
+            rehearsal,
+            &PlanBook::default(),
+        )
         .unwrap()
         .ledger
 }
@@ -152,6 +158,7 @@ fn every_kind_of_order_is_listed() {
             "payment pull: https://portal.example.org (settings revision 3)\n\
              \x20 rehearsal: on: Stripe test-mode payments are granted and count\n\
              \x20 check against Stripe: off: payments are granted as the portal lists them\n\
+             \x20 plans kept: none: grants are applied at the terms the portal lists (`mooringctl portal plans set <file>` keeps the portal's live plan file)\n\
              payment ledger: cursor 7; last pull {at}\n\
              orders: 5 (1 held, 2 refunded, 1 disputed)\n\
              \x20 aaaaaaaaaaaaaaaaaaaa user fxuseraaab plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp)\n\
@@ -177,11 +184,11 @@ fn every_kind_of_order_is_listed() {
 fn the_settings_and_every_stop_are_said() {
     assert_eq!(
         text(Some(&PullSettings::disconnected(4, false)), None),
-        "payment pull: disconnected (settings revision 4)\n  rehearsal: off\n  check against Stripe: off: payments are granted as the portal lists them\npayment ledger: none yet; nothing has been pulled\n"
+        "payment pull: disconnected (settings revision 4)\n  rehearsal: off\n  check against Stripe: off: payments are granted as the portal lists them\n  plans kept: none: grants are applied at the terms the portal lists (`mooringctl portal plans set <file>` keeps the portal's live plan file)\npayment ledger: none yet; nothing has been pulled\n"
     );
     assert_eq!(
         text(Some(&PullSettings::disconnected(5, true)), None),
-        "payment pull: disconnected (settings revision 5)\n  rehearsal: off\n  check against Stripe: on: each live payment is confirmed at Stripe before it is granted\npayment ledger: none yet; nothing has been pulled\n"
+        "payment pull: disconnected (settings revision 5)\n  rehearsal: off\n  check against Stripe: on: each live payment is confirmed at Stripe before it is granted\n  plans kept: none: grants are applied at the terms the portal lists (`mooringctl portal plans set <file>` keeps the portal's live plan file)\npayment ledger: none yet; nothing has been pulled\n"
     );
     assert_eq!(
         text(None, Some(&PaymentLedger::new())),
@@ -560,7 +567,13 @@ fn what_refunds_in_full_took_back_is_listed() {
     };
     let page = FeedPage::decode(&page(true, 0, entries, false), 0).unwrap();
     let waiting = PaymentLedger::new()
-        .apply(&page, &users(), UnixTime::from_secs(NOW), false)
+        .apply_planned(
+            &page,
+            &users(),
+            UnixTime::from_secs(NOW),
+            false,
+            &PlanBook::default(),
+        )
         .unwrap()
         .ledger;
     let summary = "  1 refund(s) in full of traffic packs wait for the usage: the daemon records the user's use at the refund once the usage collected covers its time\n";
