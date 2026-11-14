@@ -34,8 +34,11 @@
 //! is still refused, before anything is built, while the daemon runs from
 //! the build it would replace, as one started from the build does, or
 //! cannot be placed ([`crate::agent`]): the operator stops it from the
-//! app's menu, builds, installs, starts it from the installed app, and once
-//! that start has failed with 78, stops and starts it once more.
+//! app's menu, builds, installs and starts it from the installed app. That
+//! start fails with 78, and the daemon runs once it is registered again:
+//! an app built since 2026-11-13 does that itself (design §5.1, "The app
+//! carries a start through"), and with an earlier one the operator stops
+//! and starts it once more.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};

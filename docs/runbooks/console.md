@@ -43,13 +43,24 @@ The app, `mooringctl` and the helper are each signed ad hoc with the hardened ru
 
 **Open only the installed app.** macOS records the daemon, and **Open Mooring at Login**, for the path of the app they are chosen in (design §5.1). An app under `target/` (the build's, between `app` and `install`, or Xcode's own product under `target/apple/`) would record them for the target directory.
 
-`install` is refused while the daemon is registered (section 2), and while Mooring.app is open or a `mooringctl` command started from it still runs (**Quit Mooring** in its menu). launchd starts only the `mooringctl` the daemon was registered with (an ad-hoc signature is pinned by its cdhash), so one installed over it would not start. To install a new build, run `cargo xtask app` first, while the daemon still serves; then choose **Stop the Daemon**, quit the app, run `cargo xtask install`, open the installed app and choose **Start the Daemon at Login**. If the daemon was registered from another build, that first start fails: macOS keeps the stopped daemon's record, with the earlier build's launch constraint, and kills the new `mooringctl`. `launchctl print gui/$(id -u)/com.bill.mooring.daemon` shows `job state = spawn failed`, and about a minute later, once launchd has had the record replaced, `last exit code = 78: EX_CONFIG`. Then choose **Stop the Daemon** and **Start the Daemon at Login** again: the daemon starts, and macOS asks again for the keychain (section 2, question 1) and may ask for local network access.
+`install` is refused while the daemon is registered (section 2), and while Mooring.app is open or a `mooringctl` command started from it still runs (**Quit Mooring** in its menu). launchd starts only the `mooringctl` the daemon was registered with (an ad-hoc signature is pinned by its cdhash), so one installed over it would not start. To install a new build, run `cargo xtask app` first, while the daemon still serves; then choose **Stop the Daemon**, quit the app, run `cargo xtask install`, open the installed app and choose **Start the Daemon at Login**. If the daemon was registered from another build, macOS refuses that first start: it keeps the stopped daemon's record, with the earlier build's launch constraint, and kills the new `mooringctl`. The same holds for the apply job, at its own first start (section 7).
+
+**An app built since 2026-11-13 carries the start through by itself** (design §5.1, "The app carries a start through"; not deployed when this was written; its round was run on 2026-11-13 on a throwaway app, where a new build started in about 87 s each of three times, and on Mooring's own agents only where it reads, so watch the first start of the first build that carries it, with the steps by hand below at hand). The banner above the console says **Starting a new build of Mooring**, and the menu **Daemon: a new build; waiting for macOS, about a minute and a half**. The app waits for launchd's second start of the daemon, a minute after the first, starts the apply job by hand meanwhile, 5 s and 25 s after the click, then, 20 s after macOS has replaced the daemon's record, unregisters and registers both, and the banner goes once the daemon has run for 2 s: about a minute and a half in all. Leave it alone: **Stop the Daemon** ends the round where it is, and nothing is registered after it. Do not install a new build between 19:15 and 19:45 UTC: a job that macOS does not refuse runs when the app starts it, which inside that window is the night's run, made while the daemon is still refused (section 7). The round does not register again under a running job: it waits for the job to end, and gives up after 240 s in all. macOS asks again for the keychain (section 2, question 1) and may ask for local network access. Then check both:
+
+```
+launchctl print gui/$(id -u)/com.bill.mooring.daemon | grep -E '^\s(state|runs|last exit code|job state) ='
+launchctl print gui/$(id -u)/com.bill.mooring.apply | grep -E '^\s(state|runs|last exit code|job state) ='
+```
+
+The daemon shows `state = running`. The job shows `runs = 0` and `last exit code = (never exited)` until its first minute 20, and `last exit code = 0` after it.
+
+**If the banner says "The start of the daemon and the apply job was not completed"**, it gives the reason, and **Try Again** runs the round again from what launchd shows. The steps by hand, which every build before needed, still work: `launchctl print gui/$(id -u)/com.bill.mooring.daemon` shows `job state = spawn failed`, and about a minute after the start, once launchd has had the record replaced, `last exit code = 78: EX_CONFIG`. During that minute, start the apply job by hand twice, about 20 s apart: `launchctl kickstart gui/$(id -u)/com.bill.mooring.apply`. The command prints nothing; launchd refuses both starts, the second with exit code 78, and has the job's record replaced as well (measured on 2026-11-13 with a throwaway app, not yet with Mooring's own job: section 7). Without them the job stops running after a new build. Then, once `launchctl print` shows `last exit code = 78: EX_CONFIG` for the daemon and for the job, choose **Stop the Daemon** and **Start the Daemon at Login** again: the daemon starts.
 
 **A daemon started from the build** runs from `target/app/Mooring.app`, where every daemon was started from until `cargo xtask install` existed (2026-11-10). While it does, `cargo xtask app` and `cargo xtask clean` are refused, as they were, and a plain `cargo clean` would delete the app under it. Move it over once:
 
 1. In the app that is open, the build's: switch **Open Mooring at Login** off if it is on, choose **Stop the Daemon**, and quit the app.
 2. Run `cargo xtask install`: the app in the target directory is the build that was running. To install a newer build, run `cargo xtask app` first; it is no longer refused once the daemon is stopped.
-3. `open ~/Applications/Mooring.app` and choose **Start the Daemon at Login**. If `launchctl print` shows `last exit code = 78: EX_CONFIG` about a minute later, as after a change of build, choose **Stop the Daemon** and **Start the Daemon at Login** once more. Then switch **Open Mooring at Login** on again if it was on.
+3. `open ~/Applications/Mooring.app` and choose **Start the Daemon at Login**. As after a change of build, an app built since 2026-11-13 carries the start through in about a minute and a half (above). With an earlier one, once `launchctl print` shows `last exit code = 78: EX_CONFIG` about a minute later, choose **Stop the Daemon** and **Start the Daemon at Login** once more. Then switch **Open Mooring at Login** on again if it was on.
 4. Check where the daemon runs from. The second command must name `~/Applications/Mooring.app/Contents/MacOS/mooringctl`:
 
    ```
@@ -57,7 +68,7 @@ The app, `mooringctl` and the helper are each signed ad hoc with the hardened ru
    codesign -dv +<pid> 2>&1 | grep '^Executable='
    ```
 
-This first start from another place than the build has not been measured (design §5.1). If the daemon still has no process after the second **Start the Daemon at Login**, keep what `launchctl print` shows and the last lines for `com.bill.mooring.daemon` in `/var/log/com.apple.xpc.launchd/launchd.log`, and go back: **Stop the Daemon**, quit the app, run `cargo xtask app`, `open target/app/Mooring.app`, and start the daemon there, as before.
+This first start from another place than the build was made once, on 2026-11-13 (design §5.1), and went as a change of build does: the first **Start the Daemon at Login** was refused, `last exit code = 78: EX_CONFIG` showed a minute later, and the next **Stop the Daemon** and **Start the Daemon at Login** ran the daemon from the installed app. **Open Mooring at Login** had moved to the installed app by itself when that app was first opened. A **Stop the Daemon** before the 78 loses the round: nothing is registered after it, and nothing more happens until the next **Start the Daemon at Login**. If the daemon still has no process after the second **Start the Daemon at Login**, keep what `launchctl print` shows and the last lines for `com.bill.mooring.daemon` in `/var/log/com.apple.xpc.launchd/launchd.log`, and go back: **Stop the Daemon**, quit the app, run `cargo xtask app`, `open target/app/Mooring.app`, and start the daemon there, as before.
 
 The app's language follows macOS.
 
@@ -67,7 +78,7 @@ The app's language follows macOS.
 open ~/Applications/Mooring.app
 ```
 
-The app's menu (the antenna in the menu bar), the **Daemon** menu in the console window's toolbar, and the banner above the console while the daemon is not started, offer **Start the Daemon at Login**. The two menus hold the same items, so a menu bar manager that hides the antenna hides nothing the console window lacks. The app registers the daemon its bundle carries with macOS (`SMAppService`): launchd starts `mooringctl daemon` from the app at once and at every login, and keeps it running, until **Stop the Daemon** in either menu. macOS notifies that a background item was added; System Settings › General › Login Items lists it under Mooring. If macOS asks for approval first, the banner says so, and **Open Login Items…** opens that page: turn Mooring on there.
+The app's menu (the antenna in the menu bar), the **Daemon** menu in the console window's toolbar, and the banner above the console while the daemon is not started, offer **Start the Daemon at Login**. The two menus hold the same items, so a menu bar manager that hides the antenna hides nothing the console window lacks. The app registers the daemon its bundle carries with macOS (`SMAppService`): launchd starts `mooringctl daemon` from the app at once and at every login, and keeps it running, until **Stop the Daemon** in either menu. macOS notifies that a background item was added; System Settings › General › Login Items lists it under Mooring. If macOS asks for approval first, the banner says so, and **Open Login Items…** opens that page: turn Mooring on there. An app built since 2026-11-13 then reads launchd's records until the daemon has run for 2 s, and its banner says what it waits for; after a new build that takes about a minute and a half (section 1).
 
 The daemon polls the M7 every 60 s on the interface the pin records (section 0). Its log is `~/Library/Logs/Mooring/daemon.log`, one line when it starts and one each time the poll's outcome changes; at 5 MiB it is renamed `daemon.log.1` (replacing the one before) and a new file begun. The daemon's last error, when it stops, is the log's last line.
 
@@ -112,9 +123,9 @@ The app lives in the menu bar (an antenna symbol); its menu opens the console wi
 The colours on RSRP and SINR are rules of thumb for placing the antenna, not limits.
 
 **Once a deployment exists** every screen fills in from the deployment's status (design §15.3):
-- **Overview:** the exit's state and why, the open alerts (critical first), each node's gate and latest REALITY and Hysteria2 verdicts, the SIM gauge with the billing cycle it covers, and the router.
-- **Exit:** the state since when, latched violations with their evidence, the egress interface and link, the carrier check, `mooring-exit` and `mooring-probe`, the Mac's power and any foreign network.
-- **SIM:** the billing cycle, bytes received and sent, the meter's accuracy, the warning, the stop policy and the plan's line, and the forecast with each threshold's crossing.
+- **Overview:** the exit's state and why, the open alerts (critical first), each node's gate and latest REALITY and Hysteria2 verdicts, the SIM gauge with the billing cycle it covers, above it the notice when the M7 reports another SIM or network than the one on record, and the router.
+- **Exit:** the state since when, latched violations with their evidence, the egress interface and link, the carrier check (with that notice above it), `mooring-exit` and `mooring-probe`, the Mac's power and any foreign network.
+- **SIM:** the SIM and network on record against what the M7 reports now (with that notice when they differ), the billing cycle, bytes received and sent, the meter's accuracy, the warning, the stop policy and the plan's line, and the forecast with each threshold's crossing.
 - **Nodes:** per node, its role, stage and generation, the in-chain verdicts, and its agent's report (gate, holds, halt, handshake and watch ages, conditions, engines, host and this month's transfer), or why it could not be polled.
 - **Users:** one row per opaque id and alias; select a row for its figures, quota and expiry. A daemon built since 2026-11-05 reads the nodes' usage. When it has no usage report, the screen says "Usage unavailable" with its reason, never zeros. A daemon built before reads none, so the screen says so and the figures say "not read". Status, activity and last seen are live either way.
 - **Capacity:** the egress rates, the uplink's use against its baseline, the loaded latency and saturation.
@@ -130,6 +141,47 @@ While a latch is set the daemon runs no direct probe, so the address shown is th
 **A latch behind another reason.** The daemon looks at a latch only after it has found the exit enabled, the SIM's plan recorded and its use under the stop, the egress interface there, no foreign network and a carrier check recorded (design §10.2), and a sleeping Mac's exit is paused whatever is latched. While one of those holds the exit down, the state names that reason and not the latch. The overview then says in a second line, in orange, that a violation found at the latch's time is latched as well and will keep the exit down once the reason above is gone; the Exit screen lists it under "Latched violations" with what to do. `mooringctl exit retry` clears a latch whatever the state shows, so the cause can be dealt with before the other reason is gone. Until 2026-11-12 the overview named only the reason in front: from 2026-11-10 22:45 UTC it showed a foreign network for a day and a half, over a latch written a minute before.
 
 **The SIM gauge**, on the overview and on the SIM screen, names the first day of the cycle its figure covers and of the next one (UTC). The meter counts this Mac's traffic through the M7, whichever SIM is in it. After a SIM change the figure therefore still holds what the old SIM carried, until `mooringctl sim set-anchor` moves the cycle to the day the new plan started (`swap-day.md`, section 2, step 5).
+
+**The SIM and network on record** (design §10.2). The carrier check and the billing cycle are records about one SIM, and nothing in the deployment ties them to it. So the daemon keeps its own record of what the M7 reported, the SIM's name (or that it has none) and the network's codes, at the first poll that found it attached after either was last recorded, and compares every later poll with it. The SIM screen shows it under "SIM and network": what is on record, when the M7 first reported it (or, after `mooringctl sim accept-network`, when it was taken), and what it reports now.
+
+While the M7 reports something else, the overview's SIM card, the SIM screen and the Exit screen's carrier check show one notice in orange:
+- "The M7 reports another SIM than the one on record" when the SIM's name differs (a name where there was none counts), or "another network" when the name is the same, or absent both times, and only the network's codes differ. The second also happens when a carrier moves one SIM to another of its networks, and the text says so;
+- what the M7 reports and since when, and what the check and the cycle on record go with;
+- what to do if the SIM was changed: both records are the old SIM's, so record them for the new one (`swap-day.md`, section 2, steps 3 to 6: `exit disable`, `exit observe`, `exit record-carrier --replace`, `sim set-anchor`, `node apply` for each node, `exit enable`);
+- the command for when both records are right for the SIM now in the M7 (`mooringctl sim accept-network`, below), and what ends the notice.
+
+The notice changes nothing by itself: the exit is not stopped or degraded for it. It ends when the carrier check or the cycle is recorded with other values (the daemon then takes what the M7 reports at its next attached poll as the one on record), or when the M7 reports the one on record again. Recording the same prefixes and pairing again, or an anchor on which a cycle already starts, does not end it; the command below does.
+
+**Taking the network the M7 reports as the one on record** (2026-11-12). If the SIM was changed and neither record needs other values (two brands on one network's address pool, with the same bill day), or a carrier renamed the SIM or moved it to another network for good, both records are right as they are. Say so in Terminal:
+```
+mooringctl sim accept-network
+```
+It prints what the daemon holds and asks, for example:
+```
+on record: a SIM without a name (234-20), first reported 2026-10-30 09:12:00 UTC
+the M7 reports: 1p (234-30), at the daemon's poll of 2026-11-12 19:31:00 UTC
+another network than the one on record since 2026-11-11 18:40:00 UTC
+Take 1p (234-30) as the SIM's network on record? The carrier check and the billing cycle stay as they are. [y/N]
+```
+Check the second line against the SIM that is in the M7, then answer `y` (`--yes` skips the question). The daemon takes that network and no other: if the M7 reports something else by then, or the daemon's latest poll did not find it attached, it refuses and says which. Its answer starts `taken: 1p (234-30) is the SIM's network on record now`; the notice ends with the daemon's next status, within about 10 s, and the SIM screen then shows the time under "Taken on record" and says that the check and the cycle were not recorded again for it.
+
+The command changes the daemon's record of the SIM's network and nothing else: not the carrier check, the billing cycle, a latch or the exit's state, and the exit serves through it. It is not the step to take when the SIM was changed and either record is the old SIM's: record them then (`swap-day.md`, section 2). When it takes nothing it says why and exits 1:
+- `no network was taken: there is no network other than the one on record`: the M7 reports the one on record, or no poll has found it attached since the record began. There is no notice to end;
+- `no network was taken: the latest poll of the M7 did not find it attached`: wait until the M7 has a data service again (`mooringctl router status`), then run it again;
+- `the daemon refused the request: the M7 no longer reports the network that was to be taken`: its report changed between the lines above and your answer. Run it again and read the lines anew;
+- `the daemon refused the request: its loop did not come to the request in time; nothing was changed, try again`: the daemon's loop was held up, as it is while it polls a node or waits at a keychain prompt;
+- `there is no deployment yet …`, or `the Mooring daemon is not running`: there is no record to change, or no daemon to change it.
+
+The first two are the command's own reading of the status it printed. When the daemon finds the same after your answer, the sentence starts `the daemon refused the request:` and ends in the same words.
+
+Before this command the only way was to stop the daemon and remove `~/Library/Application Support/Mooring/run/sim-network.json`, which stopped the exit for that long; it is no longer needed.
+
+What it cannot see:
+- two SIMs of one carrier report the same name and codes, and raise nothing. The daemon never reads the card's number (ICCID) or the subscriber's (IMSI);
+- a SIM changed before the record began. The SIM screen says under "SIM and network" where the record began: at the first attached poll after the check or the cycle was last recorded; or at your word, with `sim accept-network`; or after the daemon started without a record, which is the first run of a build that keeps one (2026-11-12); or after a record it could not read, which it says in its log and begins again. In the last two, what is on record is the SIM that was in the M7 then, whichever SIM the check and the cycle were recorded for. The swap of 2026-11-11 is such a case: the build that first keeps the record takes the new SIM as the one on record and shows no notice, though the check and the cycle were still the old SIM's;
+- a SIM without a data session: the M7 names no network then, and nothing is compared until it attaches.
+
+The daemon's log (`~/Library/Logs/Mooring/daemon.log`) has a line starting `sim network:` for each change: the record begun, the network taken as the one on record (at a poll, or at the operator's word with `sim accept-network`, which names the network it replaced), another network reported, the one on record reported again, a record that could not be read or written.
 
 The app only shows: every change (`exit enable`, `node apply`, `user …`, `sim …`) is a `mooringctl` command in Terminal.
 
@@ -163,6 +215,23 @@ latched violation (the exit down for an address outside the carrier prefixes,
 found 36 hours before the state's "Since") and a latch behind another reason
 (the same latch, with the exit down for a foreign network on en0). For those
 two, check the overview's exit card and the Exit screen.
+Four more show the SIM's network: **SIM changed** (the M7 reports a SIM
+named 1p on 234-30 where a SIM without a name on 234-20 is on record),
+**Network changed, same SIM name** (a SIM without a name on 234-10), **No
+network on record yet** (a record begun again after one that could not be
+read) and **Network taken at the operator's word** (the fixture's network,
+taken with `sim accept-network` ten minutes before the status). For the
+first two, check the notice on the overview's SIM card, on the SIM screen
+and above the Exit screen's carrier check; for all four, the "SIM and
+network" section of the SIM screen and its footnote, and for the last the
+time's label, "Taken on record".
+A second picker, **Daemon**, shows the banner above the screens and the
+Daemon menu for each state of the daemon's registration and start: not
+started, waiting for approval, the apply job not started beside a started
+daemon, a start waiting for launchd, the round of a new build, the apply
+job's repair, a refused daemon, a refused apply job, a start that was not
+completed, and records that tell nothing. The preview registers nothing and
+runs no `launchctl`.
 Check the column titles and first row on screen, select a user, switch pages,
 and change to **No users** while its inspector is open. The inspector must
 close, and restoring the users must not restore a stale selection. Check both
@@ -231,7 +300,7 @@ The ledger keeps a user's orders only while the deployment holds the user: once 
 
 ## 7. The nightly apply job (2026-11-12)
 
-**Start the Daemon at Login** also registers Mooring's apply job (`com.bill.mooring.apply`), and **Stop the Daemon** unregisters it; the menu shows it as **Apply job: runs nightly at 19:20 UTC**. launchd runs `mooringctl apply --pending` from the app every hour at minute 20; the job acts only between 19:15 and 19:45 UTC (03:15 to 03:45 Beijing time, inside the 3 to 6 a.m. window the agreement and the user guide state), so once a night, in summer and winter time alike. A firing that launchd delivers late, after the Mac slept through 19:20 UTC, does nothing, and the job runs the next night (design §13.6).
+**Start the Daemon at Login** also registers Mooring's apply job (`com.bill.mooring.apply`), and **Stop the Daemon** unregisters it; the menu shows it as **Apply job: runs nightly at 19:20 UTC** (an app built since 2026-11-13 says **Apply job: macOS refuses its start, so it does not run** while launchd's record shows that, below). launchd runs `mooringctl apply --pending` from the app every hour at minute 20; the job acts only between 19:15 and 19:45 UTC (03:15 to 03:45 Beijing time, inside the 3 to 6 a.m. window the agreement and the user guide state), so once a night, in summer and winter time alike. A firing that launchd delivers late, after the Mac slept through 19:20 UTC, does nothing, and the job runs the next night (design §13.6).
 
 A run, in this order:
 1. **Suspends** each active user whose expiry has passed or who used up their quota (their own, the automatic one, or the one their paid month gives), dated at the run; and **resumes** each user whose suspension's cause has gone: suspended for quota in an earlier billing cycle; suspended for quota in this cycle and since given a pack, a paid month or a higher quota that covers what they used (only while the daemon's usage figures are current: with a node unreachable, the next cycle); or suspended at expiry and since paid (or given a later expiry). A pack too small to cover the use is reported, and the user stays suspended. Resumes go earliest suspension first, while fewer users are active than the cap allows; a user the cap holds back stays suspended and is reported, and you decide. A user you suspended yourself, or for an abuse review, is never resumed by the job. Then (2026-11-12) it **revokes** each user suspended at expiry whose service expired three months before and was not renewed, once the agreement they accepted provides for it and, while the payment pull is set up, once a pull has succeeded since; it reports the others (`revoke.md`, section 4).
@@ -243,7 +312,11 @@ Run it at once, whatever the time, with `mooringctl apply --now` (add `--json` f
 
 Its log is `~/Library/Logs/Mooring/apply.log`: one line when a run starts, then the counts (suspended, resumed, held back, kept suspended, revoked at expiry, removed), each node's outcome, and the revocations recorded and still pending. It names no user, since a log can outlive the 13 months the agreement keeps a user's records; `apply --now` prints the users by id. The job refuses its policy step, and only that, when the payment ledger or the usage file cannot be read, or when a suspension is dated after now (a clock that stepped back): the report says why. With a clock that stepped back it also removes no user and records no revocation. While a node cannot be reached the daemon has no usage report, so no quota is checked that night, and the report says so; expiry suspensions and resumes still go.
 
-After a new build is installed, launchd refuses the job as it refuses the daemon (`last exit code = 78`, section 1): the same **Stop the Daemon** and **Start the Daemon at Login** that start the daemon again register the job again. Check it with `launchctl print gui/$(id -u)/com.bill.mooring.apply`.
+After a new build is installed, launchd refuses the job as it refuses the daemon, but only when it starts the job, which is at minute 20: a stop and start that bring the daemon back do not repair the job. Measured on 2026-11-13 with a throwaway app (design §5.1): left alone, the job is refused at its first firing after the install, ends with `last exit code = 78` at the next, and does not run until a **Stop the Daemon** and **Start the Daemon at Login** made after that, while an app built before that day still shows it as registered.
+
+An app built since 2026-11-13 repairs the job in the round that starts a new build, by starting it twice itself (section 1; on the throwaway app the job then ran at its next calendar firing). It also reads launchd's record of the job when it opens, when the console comes to the front and every five minutes. If macOS refuses the job while the daemon runs, a banner says **The nightly apply job does not run** and offers **Repair the Apply Job**: the app starts the job once more if it was refused only once, then unregisters and registers both the daemon and the job, which takes up to a minute and stops the daemon for a few seconds, so the exit restarts with it (51 s and about 3 s on the throwaway app). Until the repair the night's run does not happen, and a night already missed is not made up: run `mooringctl apply --now` if it should not wait for the next. If the daemon is registered and the job is not (its registration failed; the menu gives the reason after "Could not change it"), the banner says **The nightly apply job is not started** and offers **Start the Apply Job**, which registers it and carries the start through.
+
+By hand, with any build: start the job twice, about 20 s apart, in the minute you wait for the daemon's 78 (section 1): `launchctl kickstart gui/$(id -u)/com.bill.mooring.apply`. The command prints nothing; `launchctl print gui/$(id -u)/com.bill.mooring.apply` shows `job state = spawn failed` after the first and `last exit code = 78: EX_CONFIG` after the second, and the **Stop the Daemon** and **Start the Daemon at Login** that follow bring the job back with the daemon. Check it after the next minute 20 with the same `launchctl print`: `last exit code = 0`, and `runs` one more each hour. `job state = spawn failed` or `last exit code = 78` there means that the job does not run: start it by hand until it shows 78, then choose **Stop the Daemon** and **Start the Daemon at Login** once more. A start by hand of a job that is not refused runs it, and outside its window it does nothing: do not install a new build between 19:15 and 19:45 UTC. Mooring's own job has not been through this: at the deployment of 2026-11-13 its record was new, the build before having carried no job, and launchd ran it from its first firing.
 
 **Removing a user at their request.** `mooringctl user forget <uid>` removes a revoked user at once, with their label, alias and agreement record; the daemon then deletes their usage history and payment orders. It says what goes and asks first (`--yes` to skip the question), and cannot be undone. The bare id stays in `state.json` for a few weeks, until no node can still name it. Only a revoked user can be forgotten.
 
@@ -254,7 +327,7 @@ After a new build is installed, launchd refuses the job as it refuses the daemon
 **`the Mooring daemon is not running`:** the daemon is not started, or it stopped.
 - Start it from the app's menu (section 2).
 - Run `launchctl print gui/$(id -u)/com.bill.mooring.daemon` to see its state and last exit, and read the last lines of `~/Library/Logs/Mooring/daemon.log`.
-- `job state = spawn failed` with `last exit code = 78: EX_CONFIG`, and no new line in the log, means launchd refused the app's `mooringctl` under another build's launch constraint, as it does at the first start after every new build is installed (section 1). **Stop the Daemon**, then **Start the Daemon at Login**; macOS asks again for the keychain and may ask for local network access. With `job state = spawn failed` but no 78 yet, wait for the 78 first: launchd has the record replaced only after its second failed start.
+- `job state = spawn failed` with `last exit code = 78: EX_CONFIG`, and no new line in the log, means launchd refused the app's `mooringctl` under another build's launch constraint, as it does at the first start after every new build is installed (section 1). An app built since 2026-11-13 says so in its banner, "macOS refuses the daemon's start", and **Finish Starting** there carries the start through. By hand: **Stop the Daemon**, then **Start the Daemon at Login**. Either way macOS asks again for the keychain and may ask for local network access. With `job state = spawn failed` but no 78 yet, wait for the 78 first: launchd has the record replaced only after its second failed start.
 
 **The exit is `Degraded` with `PowerHelperExited`:** the power helper ended, so nothing keeps the Mac awake. The daemon's log says why and how it ended ("the power helper ended: … (exit status …)"), and the daemon starts it again a minute later ("the power helper started again").
 

@@ -16,6 +16,7 @@ use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::MeterError;
 use mooring_daemon_core::router::RouterUnavailableReason;
+use mooring_daemon_core::sim_network::NotAccepted;
 use mooring_daemon_core::snapshot::SnapshotError;
 use mooring_export::{ExportError, ProfilesError};
 use mooring_keys::{KeysError, SshPublicKey};
@@ -827,6 +828,16 @@ pub(crate) enum LocalError {
     /// The SIM policy the change would record was not accepted.
     #[error("the SIM policy was not accepted")]
     SimChange(#[source] ModelError),
+    /// `sim accept-network` with no deployment on this Mac: the daemon
+    /// keeps no record of a SIM's network then.
+    #[error(
+        "there is no deployment yet (`exit init` creates it), so no SIM's network is on record"
+    )]
+    SimNetworkWithoutDeployment,
+    /// `sim accept-network` found no network to take, in the status the
+    /// daemon gave it.
+    #[error("no network was taken: {0}")]
+    SimNetworkNotTaken(NotAccepted),
     /// A node with this id exists already.
     #[error("node {node} exists already")]
     NodeExists {
@@ -1185,6 +1196,14 @@ pub(crate) const fn refusal_text(reason: Refusal) -> &'static str {
         Refusal::BadRequest => "the request was malformed",
         Refusal::NoStatusYet => "its first poll of the M7 has not finished yet",
         Refusal::NotDeployed => "there is no deployment yet (`exit init` creates it)",
+        Refusal::NoOtherSimNetwork => "there is no network other than the one on record",
+        Refusal::M7NotAttached => "the latest poll of the M7 did not find it attached",
+        Refusal::SimNetworkReportChanged => {
+            "the M7 no longer reports the network that was to be taken"
+        }
+        Refusal::LoopBusy => {
+            "its loop did not come to the request in time; nothing was changed, try again"
+        }
     }
 }
 

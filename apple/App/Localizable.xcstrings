@@ -394,6 +394,16 @@
         }
       }
     },
+    "%@, since %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@，自 %2$@ 起"
+          }
+        }
+      }
+    },
     "%@: detail through %@; monthly sample %@.": {
       "localizations": {
         "zh-Hans": {
@@ -690,6 +700,26 @@
         }
       }
     },
+    "Apply job: being repaired, up to a minute": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行任务：正在修复，最多一分钟"
+          }
+        }
+      }
+    },
+    "Apply job: macOS refuses its start, so it does not run": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行任务：macOS 拒绝它启动，所以它没有在运行"
+          }
+        }
+      }
+    },
     "Apply job: not started": {
       "localizations": {
         "zh-Hans": {
@@ -830,6 +860,16 @@
         }
       }
     },
+    "Check Again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再检查一次"
+          }
+        }
+      }
+    },
     "Checked": {
       "localizations": {
         "zh-Hans": {
@@ -940,12 +980,52 @@
         }
       }
     },
+    "Daemon: a new build; waiting for macOS, about a minute and a half": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：新版本，正在等 macOS，约一分半钟"
+          }
+        }
+      }
+    },
+    "Daemon: being registered again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：正在重新登记"
+          }
+        }
+      }
+    },
+    "Daemon: macOS refuses its start": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：macOS 拒绝它启动"
+          }
+        }
+      }
+    },
     "Daemon: not started": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "守护进程：未启动"
+          }
+        }
+      }
+    },
+    "Daemon: starting…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：正在启动…"
           }
         }
       }
@@ -1180,12 +1260,42 @@
         }
       }
     },
+    "Finish Starting": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完成启动"
+          }
+        }
+      }
+    },
+    "Finish Starting the Daemon": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完成守护进程的启动"
+          }
+        }
+      }
+    },
     "Firmware": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "固件"
+          }
+        }
+      }
+    },
+    "First reported": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "首次报告时间"
           }
         }
       }
@@ -1343,6 +1453,16 @@
         }
       }
     },
+    "If the SIM was changed, both records are the old SIM's. Record them for the new one: `docs/runbooks/swap-day.md`, section 2, steps 3 to 6 (`mooringctl exit disable`, `exit observe`, `exit record-carrier --replace`, `sim set-anchor`, `node apply` for each node, `exit enable`). If both records are right for the SIM now in the M7, `mooringctl sim accept-network` in Terminal takes %@ as the one on record and changes neither record. This notice ends once either is recorded with other values, once that command takes the network, or once the M7 reports %@ again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "如果换过 SIM 卡，这两项登记仍是旧卡的，需要为新卡重新登记：`docs/runbooks/swap-day.md` 第 2 节第 3 至 6 步（`mooringctl exit disable`、`exit observe`、`exit record-carrier --replace`、`sim set-anchor`、对每个节点运行 `node apply`、`exit enable`）。如果这两项登记对 M7 里现在这张卡都是对的，在终端里运行 `mooringctl sim accept-network`，它会把“%1$@”记为登记时的网络，两项登记都不改动。任何一项登记成别的值之后、这条命令记下这个网络之后，或者 M7 重新报告“%2$@”之后，这条提醒就会消失。"
+          }
+        }
+      }
+    },
     "In the recorded carrier prefixes": {
       "localizations": {
         "zh-Hans": {
@@ -1373,12 +1493,32 @@
         }
       }
     },
+    "It does so after a new build is installed, until its record of the registration is replaced. Finishing the start takes up to a minute and a half: the app waits for the daemon's second start, starts the nightly apply job twice, and registers both again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "装上新版本后都会这样，直到 macOS 为这项登记留的记录被换掉。完成启动最多需要一分半钟：应用等守护进程第二次启动，把每晚的执行任务启动两次，再把两者重新登记一遍。"
+          }
+        }
+      }
+    },
     "It reads the M7 and runs the exit. Started here, it runs at every login until stopped from the menu.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "它负责读取 M7 并运行出口。在这里启动后，每次登录都会运行，直到从菜单中停止。"
+          }
+        }
+      }
+    },
+    "It took longer than %lld s.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "超过了 %lld 秒。"
           }
         }
       }
@@ -1886,6 +2026,16 @@
         }
       }
     },
+    "No poll has found the M7 attached since the record began: there is nothing to compare yet.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这份记录开始以来，还没有哪次轮询见到 M7 连上移动网络，暂时没有可以比较的内容。"
+          }
+        }
+      }
+    },
     "No poll of the M7 has been reported yet.": {
       "localizations": {
         "zh-Hans": {
@@ -1996,6 +2146,26 @@
         }
       }
     },
+    "Not checked whether macOS lets the daemon and the apply job start": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能检查 macOS 是否允许守护进程和执行任务启动"
+          }
+        }
+      }
+    },
+    "Not checked: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未能检查：%@"
+          }
+        }
+      }
+    },
     "Not live: mooringctl stopped": {
       "localizations": {
         "zh-Hans": {
@@ -2052,6 +2222,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "使用电池时出口处于降级状态，Mac 可能睡眠；睡眠前会先排空各节点。"
+          }
+        }
+      }
+    },
+    "On record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登记时"
+          }
+        }
+      }
+    },
+    "On record is the network the M7 reported when `mooringctl sim accept-network` took it at the operator's word; the daemon compares every later poll with it. The carrier check and the billing cycle were not recorded again for it. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“登记时”是指在终端里运行 `mooringctl sim accept-network`、由操作者认可时 M7 报告的网络；守护进程把之后每次轮询的结果与它比较。运营商地址检查和计费周期当时没有为它重新登记。守护进程只读 SIM 卡的名称和网络代码，所以同一运营商的两张卡看起来一样。"
+          }
+        }
+      }
+    },
+    "On record is what the M7 reported at the first poll that found it attached after the carrier check or the billing cycle was last recorded; the daemon compares every later poll with it. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“登记时”是指上一次登记运营商地址检查或计费周期之后，第一次见到 M7 连上移动网络的那次轮询里 M7 报告的内容；守护进程把之后每次轮询的结果与它比较。守护进程只读 SIM 卡的名称和网络代码，所以同一运营商的两张卡看起来一样。"
           }
         }
       }
@@ -2399,6 +2599,16 @@
         }
       }
     },
+    "Registered again. Waiting for launchd to start the daemon.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已重新登记。正在等 launchd 启动守护进程。"
+          }
+        }
+      }
+    },
     "Reload": {
       "localizations": {
         "zh-Hans": {
@@ -2409,12 +2619,42 @@
         }
       }
     },
+    "Repair the Apply Job": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修复执行任务"
+          }
+        }
+      }
+    },
+    "Repairing the nightly apply job": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在修复每晚的执行任务"
+          }
+        }
+      }
+    },
     "Reported": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "报告时间"
+          }
+        }
+      }
+    },
+    "Reported now": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在报告"
           }
         }
       }
@@ -2525,6 +2765,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "SIM"
+          }
+        }
+      }
+    },
+    "SIM and network": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIM 卡和网络"
           }
         }
       }
@@ -2672,6 +2922,26 @@
         }
       }
     },
+    "Since %@ the M7 reports %@. The carrier check and the billing cycle on record go with %@.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %1$@ 起，M7 报告的是“%2$@”。已登记的运营商地址检查和计费周期对应的是“%3$@”。"
+          }
+        }
+      }
+    },
+    "Since %@ the M7 reports %@. The carrier check and the billing cycle on record go with %@: either the SIM was changed for another of the same name, or its carrier moved it to another network.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自 %1$@ 起，M7 报告的是“%2$@”。已登记的运营商地址检查和计费周期对应的是“%3$@”：要么换了一张同名的 SIM 卡，要么运营商把这张卡转到了另一个网络。"
+          }
+        }
+      }
+    },
     "Since %@.": {
       "localizations": {
         "zh-Hans": {
@@ -2732,6 +3002,16 @@
         }
       }
     },
+    "Start the Apply Job": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启动执行任务"
+          }
+        }
+      }
+    },
     "Start the Daemon at Login": {
       "localizations": {
         "zh-Hans": {
@@ -2748,6 +3028,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "开始"
+          }
+        }
+      }
+    },
+    "Starting Mooring's daemon": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在启动 Mooring 守护进程"
+          }
+        }
+      }
+    },
+    "Starting a new build of Mooring": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在启动新版本的 Mooring"
           }
         }
       }
@@ -2828,6 +3128,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "自 %2$@ 起暂停（%1$@）"
+          }
+        }
+      }
+    },
+    "Taken on record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接受时间"
           }
         }
       }
@@ -2928,6 +3238,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "M7 拒绝了登录"
+          }
+        }
+      }
+    },
+    "The M7 reports another SIM than the one on record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 报告的 SIM 卡与登记时的不同"
+          }
+        }
+      }
+    },
+    "The M7 reports another network than the one on record": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "M7 报告的网络与登记时的不同"
           }
         }
       }
@@ -3172,12 +3502,52 @@
         }
       }
     },
+    "The daemon and the apply job could not be registered again: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能重新登记守护进程和执行任务：%@"
+          }
+        }
+      }
+    },
+    "The daemon could not read its record of the SIM's network and began it again, so on record is what the M7 reported at the first poll after that, which may not be what it reported when the carrier check and the billing cycle were recorded: a SIM changed before that is not noticed. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程读不出原有的 SIM 卡网络记录，重新开始了一份，所以“登记时”是指此后第一次轮询时 M7 报告的内容，未必是登记运营商地址检查和计费周期那时报告的：在那之前换的卡不会被发现。守护进程只读 SIM 卡的名称和网络代码，所以同一运营商的两张卡看起来一样。"
+          }
+        }
+      }
+    },
+    "The daemon had no record of the SIM's network when it began this one, so on record is what the M7 reported at the first poll after that, which may not be what it reported when the carrier check and the billing cycle were recorded: a SIM changed before that is not noticed. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程开始这份记录时，之前没有留下 SIM 卡网络的记录，所以“登记时”是指此后第一次轮询时 M7 报告的内容，未必是登记运营商地址检查和计费周期那时报告的：在那之前换的卡不会被发现。守护进程只读 SIM 卡的名称和网络代码，所以同一运营商的两张卡看起来一样。"
+          }
+        }
+      }
+    },
     "The daemon has not reported a poll of the M7 yet.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "守护进程还没有报告读取 M7 的结果。"
+          }
+        }
+      }
+    },
+    "The daemon is registered and the job is not, so the night's suspensions, resumes and node applies do not happen.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程已登记，执行任务没有登记，所以夜里该做的暂停、恢复和节点应用都不会发生。"
           }
         }
       }
@@ -3198,6 +3568,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "出口运行后，守护进程才会对出口采样。"
+          }
+        }
+      }
+    },
+    "The daemon started and ended by itself with exit code %d; its log (~/Library/Logs/Mooring/daemon.log) says why.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程启动后自己退出了，退出码 %d；原因见它的日志（~/Library/Logs/Mooring/daemon.log）。"
+          }
+        }
+      }
+    },
+    "The daemon started and ended by itself; its log (~/Library/Logs/Mooring/daemon.log) says why.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程启动后自己退出了；原因见它的日志（~/Library/Logs/Mooring/daemon.log）。"
           }
         }
       }
@@ -3372,6 +3762,26 @@
         }
       }
     },
+    "The nightly apply job does not run": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每晚的执行任务没有在运行"
+          }
+        }
+      }
+    },
+    "The nightly apply job is not started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每晚的执行任务未启动"
+          }
+        }
+      }
+    },
     "The own-network declarations cannot be read; no declared network matches.": {
       "localizations": {
         "zh-Hans": {
@@ -3402,6 +3812,26 @@
         }
       }
     },
+    "The record launchctl printed for %@ has a line this build cannot read: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchctl 为 %@ 打印的记录里有一行这个版本读不了：%@"
+          }
+        }
+      }
+    },
+    "The record launchctl printed for %@ has no “%@” line.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchctl 为 %@ 打印的记录里没有“%@”这一行。"
+          }
+        }
+      }
+    },
     "The router adapter is not set up": {
       "localizations": {
         "zh-Hans": {
@@ -3428,6 +3858,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "独立上行链路就是出口接口。"
+          }
+        }
+      }
+    },
+    "The start of the daemon and the apply job was not completed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程和执行任务的启动没有完成"
+          }
+        }
+      }
+    },
+    "The start was not completed: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启动没有完成：%@"
+          }
+        }
+      }
+    },
+    "The steps by hand are in `docs/runbooks/console.md`, sections 1 and 7.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手动步骤见 `docs/runbooks/console.md` 第 1 节和第 7 节。"
           }
         }
       }
@@ -3548,6 +4008,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ 的流量"
+          }
+        }
+      }
+    },
+    "Try Again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重试"
           }
         }
       }
@@ -3752,6 +4222,16 @@
         }
       }
     },
+    "Waiting for launchd to start it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等 launchd 启动它。"
+          }
+        }
+      }
+    },
     "Waiting for the Mooring daemon…": {
       "localizations": {
         "zh-Hans": {
@@ -3808,6 +4288,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "网页程序版本"
+          }
+        }
+      }
+    },
+    "What launchctl printed for %@ is not a record this build reads. It begins: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchctl 为 %@ 打印的内容不是这个版本能读的记录。开头是：%@"
           }
         }
       }
@@ -3905,6 +4395,46 @@
         }
       }
     },
+    "`launchctl %@` exited with code %d.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "`launchctl %@` 已退出，退出码 %d。"
+          }
+        }
+      }
+    },
+    "`launchctl %@` had not ended after %lld s, so the app ended it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "`launchctl %@` 过了 %lld 秒仍未结束，应用已将它终止。"
+          }
+        }
+      }
+    },
+    "`launchctl %@` printed more than %lld KiB, so the app stopped reading it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "`launchctl %@` 的输出超过了 %lld KiB，应用已停止读取。"
+          }
+        }
+      }
+    },
+    "`launchctl %@` was ended by signal %d.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "`launchctl %@` 被信号 %d 终止。"
+          }
+        }
+      }
+    },
     "`mooringctl exit enable`, `disable` and `retry` change it from Terminal; the console only shows it.": {
       "localizations": {
         "zh-Hans": {
@@ -3941,6 +4471,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "用 `mooringctl user add` 添加第一个用户。"
+          }
+        }
+      }
+    },
+    "a SIM without a name (%@-%@)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未报告名称的 SIM 卡 (%1$@-%2$@)"
           }
         }
       }
@@ -4415,6 +4955,76 @@
         }
       }
     },
+    "launchctl could not be started: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法启动 launchctl：%@"
+          }
+        }
+      }
+    },
+    "launchd did not start the daemon within %lld s.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 在 %lld 秒内没有启动守护进程。"
+          }
+        }
+      }
+    },
+    "launchd does not list the apply job.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 里没有执行任务。"
+          }
+        }
+      }
+    },
+    "launchd does not list the daemon.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 里没有守护进程。"
+          }
+        }
+      }
+    },
+    "launchd was asked to start the apply job, and its record of the job did not change.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已请 launchd 启动执行任务，但它对这个任务的记录没有变化。"
+          }
+        }
+      }
+    },
+    "launchd's record of the apply job is in a state this build does not know: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 对执行任务的记录处于这个版本不认识的状态：%@"
+          }
+        }
+      }
+    },
+    "launchd's record of the daemon is in a state this build does not know: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 对守护进程的记录处于这个版本不认识的状态：%@"
+          }
+        }
+      }
+    },
     "level 2": {
       "localizations": {
         "zh-Hans": {
@@ -4435,12 +5045,102 @@
         }
       }
     },
+    "macOS has replaced its records. Registering the daemon and the apply job again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 已经换掉了记录。正在重新登记守护进程和执行任务。"
+          }
+        }
+      }
+    },
     "macOS lists it under System Settings › General › Login Items; turn it on there.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "它在“系统设置 › 通用 › 登录项”中列出，请在那里打开。"
+          }
+        }
+      }
+    },
+    "macOS refused the apply job at %lld starts by hand and did not replace its record of it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手动启动了 %lld 次执行任务，macOS 都拒绝了，也没有换掉它的记录。"
+          }
+        }
+      }
+    },
+    "macOS refused the daemon and did not replace its record of it within %lld s.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 拒绝了守护进程，并且在 %lld 秒内没有换掉它的记录。"
+          }
+        }
+      }
+    },
+    "macOS refused the start, as it does after a new build is installed until its record of the registration is replaced. That happens at the daemon's second start, which launchd makes a minute after the first; meanwhile the app starts the nightly apply job twice, for the same reason. Then, 20 s later, it registers both again: about a minute and a half in all. Nothing needs doing.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 拒绝了这次启动：装上新版本后都会这样，直到它为这项登记留的记录被换掉。记录要到守护进程第二次启动时才换，launchd 会在第一次之后一分钟自己再启动一次；这期间应用会把每晚的执行任务也启动两次，道理相同。再过 20 秒，应用把两者重新登记一遍：前后大约一分半钟。你什么都不用做。"
+          }
+        }
+      }
+    },
+    "macOS refuses its start, as it does after a new build until the job is registered again, so the night's suspensions, resumes and node applies do not happen. The repair takes up to a minute; it stops the daemon for a few seconds and restarts the exit with it, because both are registered again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 拒绝它启动：装上新版本后都会这样，直到这个任务被重新登记，所以夜里该做的暂停、恢复和节点应用都不会发生。修复最多需要一分钟；守护进程会停几秒，出口也跟着重启，因为两者要一起重新登记。"
+          }
+        }
+      }
+    },
+    "macOS refuses the daemon's start": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 拒绝守护进程启动"
+          }
+        }
+      }
+    },
+    "macOS replaces its record of the job at the job's second refused start, which the app makes about 20 s after it saw the first. Then, 20 s later, it registers the daemon and the job again, which stops the daemon for a few seconds and restarts the exit with it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 要到执行任务第二次被拒绝启动时才换掉它的记录，应用在看到第一次被拒绝约 20 秒后把它启动一次。再过 20 秒，应用把守护进程和执行任务重新登记一遍，守护进程会因此停几秒，出口也跟着重启。"
+          }
+        }
+      }
+    },
+    "macOS still refuses the apply job after it was registered again %lld times.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新登记了 %lld 次之后，macOS 仍然拒绝执行任务。"
+          }
+        }
+      }
+    },
+    "macOS still refuses the daemon after it was registered again %lld times.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新登记了 %lld 次之后，macOS 仍然拒绝守护进程。"
           }
         }
       }
@@ -5111,6 +5811,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "探测失败"
+          }
+        }
+      }
+    },
+    "the same": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "与登记时相同"
           }
         }
       }

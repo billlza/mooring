@@ -9,6 +9,9 @@
 //! - [`meter`]: the SIM meter, the line's bytes per UTC day from the
 //!   egress interface's counters.
 //! - [`forecast`]: the SIM forecast from the meter's daily bins.
+//! - [`sim_network`]: what the M7 reported of the SIM and its network
+//!   when the carrier check and the billing cycle were recorded, and
+//!   whether it reports something else now.
 //! - [`capacity`]: whether the uplink over the mobile line is saturated.
 //! - [`usage`]: per-user usage from the agents' usage series, and activity.
 //! - [`alert`]: alert conditions and the alert state machine.
@@ -82,6 +85,7 @@ pub mod radio_history;
 pub mod report;
 pub mod router;
 pub mod share;
+pub mod sim_network;
 pub mod snapshot;
 pub mod status;
 pub mod usage;

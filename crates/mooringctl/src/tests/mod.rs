@@ -49,6 +49,8 @@ mod repin;
 mod revocations;
 mod router;
 mod runtime;
+mod sim_accept;
+mod sim_network;
 mod sockopt;
 mod ssh;
 mod status;

@@ -231,7 +231,7 @@ pub(crate) fn place(
     })?;
     say!(
         out,
-        "install: {} is installed, signed ad hoc as {APP_IDENTIFIER}, and the build's app is gone from {}; open it and choose Start the Daemon at Login. If the daemon was registered from another build, macOS refuses that first start under that build's launch constraint: once `launchctl print gui/$(id -u)/{AGENT_LABEL}` shows `last exit code = 78: EX_CONFIG` (about a minute later), choose Stop the Daemon, then Start the Daemon at Login again. Run the deployment's commands with {}, the build the daemon runs",
+        "install: {} is installed, signed ad hoc as {APP_IDENTIFIER}, and the build's app is gone from {}; open it and choose Start the Daemon at Login. If the daemon was registered from another build, macOS refuses that first start under that build's launch constraint, and the app carries the start through by itself in about a minute and a half: leave it until the console's banner is gone (`launchctl print gui/$(id -u)/{AGENT_LABEL}` then shows `state = running`). If the banner says that the start was not completed, docs/runbooks/console.md, section 1, has the steps by hand. Run the deployment's commands with {}, the build the daemon runs",
         placed.app.display(),
         built.app.display(),
         placed.embedded.display()
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).unwrap(),
             format!(
-                "install: {} is installed, signed ad hoc as com.bill.mooring, and the build's app is gone from {app}; open it and choose Start the Daemon at Login. If the daemon was registered from another build, macOS refuses that first start under that build's launch constraint: once `launchctl print gui/$(id -u)/{AGENT_LABEL}` shows `last exit code = 78: EX_CONFIG` (about a minute later), choose Stop the Daemon, then Start the Daemon at Login again. Run the deployment's commands with {}, the build the daemon runs\n",
+                "install: {} is installed, signed ad hoc as com.bill.mooring, and the build's app is gone from {app}; open it and choose Start the Daemon at Login. If the daemon was registered from another build, macOS refuses that first start under that build's launch constraint, and the app carries the start through by itself in about a minute and a half: leave it until the console's banner is gone (`launchctl print gui/$(id -u)/{AGENT_LABEL}` then shows `state = running`). If the banner says that the start was not completed, docs/runbooks/console.md, section 1, has the steps by hand. Run the deployment's commands with {}, the build the daemon runs\n",
                 installed.app.display(),
                 placed.embedded.display()
             )

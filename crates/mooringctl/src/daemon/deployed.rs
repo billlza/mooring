@@ -44,9 +44,9 @@ use mooring_model::{Deployment, ExitSite, NodeId};
 use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
 use super::{
-    Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending, poll_router_on,
-    publish, radio::RadioHistoryWriter, router_after_poll, say, unavailable_reason,
-    wait_for_next_poll,
+    AcceptRequest, Asked, Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending,
+    poll_router_on, publish, radio::RadioHistoryWriter, router_after_poll, say,
+    sim_network::NetworkWatch, unavailable_reason, wait_for_next_poll,
 };
 use crate::app::Env;
 use crate::daemon::usage::{Pulled, RefundView};
@@ -151,6 +151,13 @@ pub(crate) struct Deployed<'e, 'a> {
     router: RouterReading,
     router_failure: Option<String>,
     router_polled: Option<Instant>,
+    /// Whether the panel holds a poll the record of the SIM's network has
+    /// not seen. The latest poll is set against the record once, by the
+    /// tick that made it, which read the state before it polled; the poll
+    /// made at the start is set against it by the first tick.
+    router_unseen: bool,
+    /// The record of the SIM's network (design §10.2, §15.3).
+    sim_network: NetworkWatch,
     /// The radio history's writer, carried over from the router console.
     history: RadioHistoryWriter,
     /// The power helper while it runs.
@@ -276,6 +283,10 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if let Some(note) = unread {
             say(log, now, &note)?;
         }
+        let (sim_network, begun) = NetworkWatch::open(&run_dir, state.deployment.exit());
+        if let Some(note) = begun {
+            say(log, now, &note)?;
+        }
         let mut router_failure = None;
         let router = poll_m7(
             env,
@@ -300,6 +311,8 @@ impl<'e, 'a> Deployed<'e, 'a> {
             router,
             router_failure,
             router_polled: Some(Instant::now()),
+            router_unseen: true,
+            sim_network,
             history,
             helper: Some(helper),
             helper_lost: None,
@@ -425,6 +438,13 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if let Some(note) = self.pending.track(deployment, now) {
             say(log, now, &note)?;
         }
+        let polled = std::mem::take(&mut self.router_unseen).then_some(&self.router);
+        for note in self
+            .sim_network
+            .track(deployment.exit(), polled, Instant::now())
+        {
+            say(log, now, &note)?;
+        }
         for note in self.payments.prune(deployment) {
             say(log, now, &note)?;
         }
@@ -534,6 +554,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                         .map_err(|error| LocalError::Meter(Box::new(error)))?,
                     accuracy: accuracy(bytes, &router),
                 },
+                sim_network: self.sim_network.status(),
                 router,
                 capacity: None,
                 ledgers: self.usage.ledgers(),
@@ -561,6 +582,34 @@ impl<'e, 'a> Deployed<'e, 'a> {
         }
         self.tell_helper(log, now, state.runtime.exit_enabled)?;
         Ok(section.state)
+    }
+
+    /// Answers each request to take a network as the SIM's network on
+    /// record (`sim accept-network`, design §10.2). It runs right after a
+    /// tick, when the record has been set against the latest poll of the
+    /// M7: the network is taken while the record and that poll say the M7
+    /// reports it, and the connection that asked is still waiting for the
+    /// answer. It changes the record of the SIM's network and nothing
+    /// else: no state, no latch, and nothing of the exit.
+    pub(crate) fn accept_networks(
+        &mut self,
+        log: &mut dyn Write,
+        asked: &mpsc::Receiver<AcceptRequest>,
+    ) -> Result<(), CommandError> {
+        for request in asked.try_iter() {
+            let now = (self.env.clock)()?;
+            let notes = self.sim_network.accept(
+                &request.network,
+                &self.router,
+                now,
+                Instant::now(),
+                |answer| request.answer.send(answer).is_ok(),
+            );
+            for note in notes {
+                say(log, now, &note)?;
+            }
+        }
+        Ok(())
     }
 
     /// Takes the power helper's events: the source, the assertions it
@@ -834,6 +883,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             &mut self.history,
             egress,
         )?;
+        self.router_unseen = true;
         Ok(())
     }
 
@@ -1053,20 +1103,22 @@ pub(crate) fn poll_m7(
 
 /// Serves the opened exit until the acceptor ends or the daemon fails: a
 /// tick every `intervals.tick`, with a retry when the operator asked for
-/// one since the last.
+/// one since the last, and after each tick an answer to every request to
+/// take a network as the SIM's network on record.
 pub(crate) fn serve(
     exit: &mut Deployed<'_, '_>,
     log: &mut dyn Write,
     control: &Control,
     acceptor_ended: &mpsc::Receiver<()>,
-    retries: &mpsc::Receiver<()>,
+    asked: &Asked,
 ) -> Result<Stopped, CommandError> {
     control.deployed.store(true, Ordering::SeqCst);
     say(log, (exit.env.clock)()?, "serving the exit")?;
     loop {
         let next = Instant::now() + exit.intervals.tick;
-        let retry = retries.try_iter().count() > 0;
+        let retry = asked.retries.try_iter().count() > 0;
         exit.tick(control, log, retry)?;
+        exit.accept_networks(log, &asked.acceptances)?;
         if wait_for_next_poll(next, acceptor_ended) == Waited::AcceptorEnded {
             return Ok(Stopped::AcceptorEnded);
         }
