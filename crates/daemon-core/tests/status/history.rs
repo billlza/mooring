@@ -4,9 +4,12 @@
 //! decodes from `mooringctl router history --json`, generated here and
 //! pinned byte for byte like the status fixtures. Its nine samples show
 //! every kind of event once, so the Codable mirror has a fixture for each.
+//! The same samples and events as the tables `--csv` prints
+//! (`radio-samples.csv`, `radio-events.csv`; design §15.6 rule 13) are
+//! pinned beside it: the MATLAB package's tests read those two files.
 //!
 //! To change it, change the builder, write [`encode`]'s output over the
-//! file, and review the diff.
+//! file and the tables over theirs, and review the diff.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -16,6 +19,7 @@ use mooring_daemon_core::radio_history::{
     RadioEventKind, RadioHistory, RadioPoll, RadioReading, RadioSample, SampledAttachment,
     SampledRadio,
 };
+use mooring_daemon_core::radio_table::{events_table, samples_table};
 use mooring_daemon_core::router::{
     Band, BandNumber, Celsius, DataService, LteSignal, Mcc, Mnc, NetworkService, NrSignal, Plmn,
     RouterUnavailableReason, Rsrp, Rsrq, Rssi, Sinr, ThermalState,
@@ -25,6 +29,12 @@ use serde_json::Value;
 use crate::support::{at, date};
 
 const FIXTURE: &[u8] = include_bytes!("../../../../contract/history-fixtures/radio.json");
+
+/// The fixture's samples as the table `--csv samples` prints.
+const SAMPLES_TABLE: &str = include_str!("../../../../contract/history-fixtures/radio-samples.csv");
+
+/// The fixture's events as the table `--csv events` prints.
+const EVENTS_TABLE: &str = include_str!("../../../../contract/history-fixtures/radio-events.csv");
 
 /// A fixture file's content: the pretty-printed document and a newline.
 fn encode(history: &RadioHistory) -> String {
@@ -223,6 +233,27 @@ fn the_fixture_is_what_its_builder_generates() {
     );
 }
 
+/// The two tables are what `radio_table` makes of the fixture's samples
+/// and events, byte for byte, so a reader tested against these files is
+/// tested against what the command prints.
+#[test]
+fn the_tables_are_what_the_builder_generates() {
+    let history = history();
+    let samples = samples_table(history.samples()).unwrap();
+    assert!(
+        samples == SAMPLES_TABLE,
+        "contract/history-fixtures/radio-samples.csv is not what its builder generates:\n{samples}"
+    );
+    let events = events_table(history.events()).unwrap();
+    assert!(
+        events == EVENTS_TABLE,
+        "contract/history-fixtures/radio-events.csv is not what its builder generates:\n{events}"
+    );
+    // One row per sample and per event, after the header.
+    assert_eq!(SAMPLES_TABLE.lines().count(), history.samples().len() + 1);
+    assert_eq!(EVENTS_TABLE.lines().count(), history.events().len() + 1);
+}
+
 #[test]
 fn the_fixture_round_trips_byte_for_byte() {
     let history: RadioHistory = serde_json::from_slice(FIXTURE).unwrap();
@@ -322,7 +353,8 @@ fn object_paths(value: &Value, path: Vec<Step>) -> Vec<Vec<Step>> {
     }
 }
 
-/// The directory holds exactly the fixture and its licence sidecar.
+/// The directory holds exactly the fixture, its two tables and their
+/// licence sidecars.
 #[test]
 fn the_fixture_directory_holds_exactly_the_fixture() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contract/history-fixtures");
@@ -330,13 +362,17 @@ fn the_fixture_directory_holds_exactly_the_fixture() {
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
-    let expected: BTreeSet<String> = ["radio.json", "radio.json.license"]
-        .into_iter()
-        .map(str::to_owned)
+    let files = ["radio.json", "radio-samples.csv", "radio-events.csv"];
+    let expected: BTreeSet<String> = files
+        .iter()
+        .flat_map(|file| [(*file).to_owned(), format!("{file}.license")])
         .collect();
     assert_eq!(found, expected);
-    assert_eq!(
-        fs::read_to_string(directory.join("radio.json.license")).unwrap(),
-        "SPDX-License-Identifier: GPL-3.0-or-later\n"
-    );
+    for file in files {
+        assert_eq!(
+            fs::read_to_string(directory.join(format!("{file}.license"))).unwrap(),
+            "SPDX-License-Identifier: GPL-3.0-or-later\n",
+            "{file}"
+        );
+    }
 }

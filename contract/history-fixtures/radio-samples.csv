@@ -1,0 +1,10 @@
+at_unix,at_utc,outcome,failure,uptime_secs,temperature_c,thermal,service,network_service,data_service,band,ca_secondary_count,lte_rsrp_dbm,lte_rsrq_db,lte_sinr_db,lte_rssi_dbm,nr_rsrp_dbm,nr_rsrq_db,nr_sinr_db,plmn,session_secs
+1791918000,2026-10-13T19:00:00Z,read,,523014,44,normal,attached,nr5g,nr_sub6,B3,0,-100.0,-12.0,2.0,-69.0,-90.5,-10.5,15.5,234-30,86400
+1791918060,2026-10-13T19:01:00Z,failed,unreachable,,,,,,,,,,,,,,,,,
+1791918120,2026-10-13T19:02:00Z,read,,523134,44,normal,attached,lte,lte_plus,B3,0,-100.0,-12.0,2.0,-69.0,,,,234-30,86520
+1791918180,2026-10-13T19:03:00Z,read,,523194,44,normal,attached,lte,lte_plus,B20,0,-100.0,-12.0,2.0,-69.0,,,,234-30,86580
+1791918240,2026-10-13T19:04:00Z,read,,523254,44,normal,no_service,,,,,,,,,,,,,
+1791918300,2026-10-13T19:05:00Z,read,,523314,44,normal,attached,lte,lte_plus,B20,0,-100.0,-12.0,2.0,-69.0,,,,234-30,30
+1791918360,2026-10-13T19:06:00Z,read,,523374,44,normal,attached,lte,lte_plus,B20,0,-100.0,-12.0,2.0,-69.0,,,,234-30,20
+1791918420,2026-10-13T19:07:00Z,read,,523434,44,normal,attached,lte,lte_plus,B20,0,-100.0,-12.0,2.0,-69.0,,,,234-20,80
+1791918480,2026-10-13T19:08:00Z,read,,40,44,normal,attached,lte,lte_plus,B20,0,-100.0,-12.0,2.0,-69.0,,,,234-20,20
