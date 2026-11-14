@@ -25,7 +25,8 @@ classdef RadioHistoryTest < matlab.unittest.TestCase
             % A program named mooringctl that runs the lines.
             program = fullfile(testCase.Folder, "mooringctl");
             writeText(program, join(["#!/bin/sh"; lines], newline) + newline);
-            testCase.assertTrue(fileattrib(char(program), '+x'));
+            [status, said] = system("chmod +x " + shellWord(program));
+            testCase.assertEqual(status, 0, "chmod said: " + said);
         end
 
         function program = printsTheGoldenTables(testCase)
@@ -76,27 +77,29 @@ classdef RadioHistoryTest < matlab.unittest.TestCase
             program = testCase.printsTheGoldenTables();
             % Midnight may pass between the two readings of the clock.
             day = @(back) string(datetime("now", "TimeZone", "UTC") - days(back), "uuuu-MM-dd");
-            before = [day(0), day(6)];
+            before = [day(0), day(6), day(89)];
             mooring.radioHistory(Mooringctl=program, Days=1);
             mooring.radioHistory(Mooringctl=program, Days=7);
-            after = [day(0), day(6)];
+            mooring.radioHistory(Mooringctl=program, Days=90);
+            after = [day(0), day(6), day(89)];
 
             asked = testCase.calls();
             testCase.verifyTrue(ismember(asked(1), "router history --since " + [before(1), after(1)] + " --csv samples"), asked(1));
             testCase.verifyTrue(ismember(asked(3), "router history --since " + [before(2), after(2)] + " --csv samples"), asked(3));
-            testCase.verifyNumElements(asked, 4);
+            testCase.verifyTrue(ismember(asked(5), "router history --since " + [before(3), after(3)] + " --csv samples"), asked(5));
+            testCase.verifyNumElements(asked, 6);
 
             both = "mooring:radio:DaysAndRange";
             testCase.verifyError(@() mooring.radioHistory(Mooringctl=program, Days=7, Since="2026-10-12"), both);
             testCase.verifyError(@() mooring.radioHistory(Mooringctl=program, Days=7, Until="2026-10-13"), both);
             testCase.verifyError(@() mooring.radioHistory(Mooringctl=program, Days=0), ...
-                "MATLAB:validators:mustBeInRange");
+                "MATLAB:validators:mustBePositive");
             testCase.verifyError(@() mooring.radioHistory(Mooringctl=program, Days=91), ...
-                "MATLAB:validators:mustBeInRange");
+                "MATLAB:validators:mustBeLessThanOrEqual");
             testCase.verifyError(@() mooring.radioHistory(Mooringctl=program, Days=1.5), ...
                 "MATLAB:validators:mustBeInteger");
             % None of the refused calls ran the command.
-            testCase.verifyNumElements(testCase.calls(), 4);
+            testCase.verifyNumElements(testCase.calls(), 6);
         end
 
         function aDayInAnotherFormNeverReachesTheCommandLine(testCase)
@@ -146,4 +149,9 @@ classdef RadioHistoryTest < matlab.unittest.TestCase
             end
         end
     end
+end
+
+function word = shellWord(text)
+% One word for the shell, whatever the text holds.
+    word = "'" + replace(text, "'", "'\''") + "'";
 end

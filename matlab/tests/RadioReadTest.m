@@ -187,7 +187,8 @@ classdef RadioReadTest < matlab.unittest.TestCase
             testCase.verifyRefused(@mooring.readRadioSamples, ...
                 replace(samples, "lte_rsrp_dbm", "lte_rsrp"), unknown, "lte_rsrp,");
             testCase.verifyRefused(@mooring.readRadioSamples, ...
-                replace(samples, "plmn,session_secs", "plmn,session_secs,cell"), unknown, "cell");
+                replace(samples, "plmn,session_secs", "plmn,session_secs,cell"), unknown, ...
+                "plmn,session_secs,cell" + newline);
             testCase.verifyRefused(@mooring.readRadioSamples, ...
                 extractAfter(samples, newline), unknown, "1791918000,");
             testCase.verifyRefused(@mooring.readRadioEvents, ...
@@ -195,15 +196,27 @@ classdef RadioReadTest < matlab.unittest.TestCase
             testCase.verifyRefused(@mooring.readRadioSamples, newline, unknown, "found:");
         end
 
-        function aLongFirstLineIsShownShortened(testCase)
-            file = testCase.plant(string(repmat('x', 1, 5000)) + newline);
-            try
-                mooring.readRadioSamples(file);
-                testCase.verifyFail("The file was read.");
-            catch failure
-                testCase.verifyEqual(string(failure.identifier), "mooring:radio:UnknownHeader");
-                testCase.verifySubstring(failure.message, string(repmat('x', 1, 200)) + "...");
-                testCase.verifyLessThan(strlength(failure.message), 1000);
+        function aLongFirstLineIsShownAsFarAsAHeaderWithColumnsAddedReaches(testCase)
+            % The header's own length and 80 characters more: 307 for the
+            % samples, whose header has 227, and 115 for the events.
+            found = @(count) "found:    " + string(repmat('x', 1, count));
+            cases = { ...
+                @mooring.readRadioSamples, 5000, found(307) + "..." + newline; ...
+                @mooring.readRadioSamples, 308, found(307) + "..." + newline; ...
+                @mooring.readRadioSamples, 307, found(307) + newline; ...
+                @mooring.readRadioEvents, 5000, found(115) + "..." + newline; ...
+                @mooring.readRadioEvents, 115, found(115) + newline};
+            for index = 1:size(cases, 1)
+                read = cases{index, 1};
+                file = testCase.plant(string(repmat('x', 1, cases{index, 2})) + newline);
+                try
+                    read(file);
+                    testCase.verifyFail("The file was read.");
+                catch failure
+                    testCase.verifyEqual(string(failure.identifier), "mooring:radio:UnknownHeader");
+                    testCase.verifySubstring(failure.message, cases{index, 3});
+                    testCase.verifyLessThan(strlength(failure.message), 1000);
+                end
             end
         end
 
@@ -299,7 +312,8 @@ classdef RadioReadTest < matlab.unittest.TestCase
             testCase.verifyEqual(quantiles(7, [0 0.3 1]), [7 7 7]);
             testCase.verifyEqual(quantiles([NaN NaN], [0.1 0.9]), [NaN NaN]);
             testCase.verifyEqual(quantiles(zeros(0, 1), 0.5), NaN);
-            testCase.verifyError(@() quantiles([1 2], 1.5), "MATLAB:validators:mustBeInRange");
+            testCase.verifyError(@() quantiles([1 2], 1.5), "MATLAB:validators:mustBeLessThanOrEqual");
+            testCase.verifyError(@() quantiles([1 2], -0.5), "MATLAB:validators:mustBeNonnegative");
         end
     end
 end

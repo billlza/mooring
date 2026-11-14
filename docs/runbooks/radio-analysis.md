@@ -143,7 +143,7 @@ Every refusal is an error with an identifier; nothing is guessed and nothing hal
 |---|---|---|
 | `mooring:radio:NoFile` | There is no such file | Check the path |
 | `mooring:radio:Incomplete` | The file is empty or does not end with a line end | The export or the transfer was cut short: export again |
-| `mooring:radio:UnknownHeader` | The first line is not the header this package reads | The events table was given for the samples or the other way round; or `mooringctl` and the package are of different builds: take both from one commit |
+| `mooring:radio:UnknownHeader` | The first line is not the header this package reads; the message shows the line found and the header expected | The events table was given for the samples or the other way round; or `mooringctl` and the package are of different builds: take both from one commit |
 | `mooring:radio:BadRow` | A line is not a row of the table; the message gives its number | The file was edited or damaged: export again |
 | `mooring:radio:TimeMismatch` | A row's two times differ | As above |
 | `mooring:radio:NotSamples` | The timetable is not one `readRadioSamples` returned | Pass the samples, not the events or the hourly table |

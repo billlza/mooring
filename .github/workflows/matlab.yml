@@ -74,7 +74,8 @@ jobs:
               total += len(lines)
               covered += hit
           if total == 0:
-              sys.exit("the report names no line of the package")
+              named = sorted(found.get("filename") for found in classes)
+              sys.exit(f"the report names no line of the package; it names {named}")
           print(f"{covered} of {total} lines, {covered / total:.2%}")
           sys.exit(0 if covered >= 0.95 * total else "under 95 %")
           PY

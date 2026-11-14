@@ -15,7 +15,8 @@ function slope = seasonalSlope(offset, values)
         offset (:,1) double
         values (:,1) double
     end
-    [earlier, later] = find(triu(true(numel(offset)), 1));
+    count = numel(offset);
+    [earlier, later] = find(triu(true(count, count), 1));
     apart = offset(later) - offset(earlier);
     sameHour = mod(apart, 24) == 0;
     slope = median((values(later(sameHour)) - values(earlier(sameHour))) ./ apart(sameHour));

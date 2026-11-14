@@ -29,9 +29,13 @@ function columns = readCsv(file, layout)
     end
     lines = split(string(text(1:end - 1)), newline);
     if lines(1) ~= layout.header
+        % The line is shown as far as the header reaches and 80 characters
+        % more: a header with columns added is seen with them, and a line
+        % that is no header at all is not shown whole.
         found = lines(1);
-        if strlength(found) > 200
-            found = extractBefore(found, 201) + "...";
+        shown = strlength(layout.header) + 80;
+        if strlength(found) > shown
+            found = extractBefore(found, shown + 1) + "...";
         end
         error("mooring:radio:UnknownHeader", ...
             "The first line of %s is not the header this package reads.\n  found:    %s\n  expected: %s", ...

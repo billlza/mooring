@@ -10,7 +10,7 @@ function q = quantiles(values, p)
 
     arguments
         values double
-        p double {mustBeInRange(p, 0, 1)}
+        p double {mustBeNonnegative, mustBeLessThanOrEqual(p, 1)}
     end
     sorted = sort(values(~isnan(values)));
     sorted = sorted(:);

@@ -35,7 +35,7 @@ function [samples, events] = radioHistory(options)
 % SPDX-License-Identifier: GPL-3.0-or-later
 
     arguments
-        options.Days (1,1) double {mustBeInteger, mustBeInRange(options.Days, 1, 90)}
+        options.Days (1,1) double {mustBeInteger, mustBePositive, mustBeLessThanOrEqual(options.Days, 90)}
         options.Since (1,1) string = ""
         options.Until (1,1) string = ""
         options.Mooringctl (1,1) string = fullfile(getenv("HOME"), "Applications", ...
