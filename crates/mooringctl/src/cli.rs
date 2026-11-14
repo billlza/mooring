@@ -629,6 +629,15 @@ pub(crate) enum SimCommand {
     },
 }
 
+/// A table of the radio history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum HistoryTableArg {
+    /// One row per poll of the M7.
+    Samples,
+    /// One row per change between polls.
+    Events,
+}
+
 /// A router command.
 #[derive(Debug, Subcommand)]
 pub(crate) enum RouterCommand {
@@ -664,8 +673,9 @@ pub(crate) enum RouterCommand {
     },
     /// Print the radio samples the daemon recorded, one per poll of the M7
     /// (UTC day files under the support directory): a summary of each
-    /// day's polls, the changes between them and the hourly signal, or the
-    /// document Mooring.app reads. Yesterday and today by default.
+    /// day's polls, the changes between them and the hourly signal, the
+    /// document Mooring.app reads, or a table for tools that read
+    /// columns. Yesterday and today by default.
     History {
         /// The first UTC day (YYYY-MM-DD); the day before --until by
         /// default.
@@ -678,6 +688,11 @@ pub(crate) enum RouterCommand {
         /// summary.
         #[arg(long)]
         json: bool,
+        /// Print a table instead of a summary: a header line, then one
+        /// line per poll (samples) or per change between polls (events),
+        /// the cells separated by commas.
+        #[arg(long, value_enum, value_name = "TABLE", conflicts_with = "json")]
+        csv: Option<HistoryTableArg>,
     },
     /// Write the M7's status document, redacted through the allowlist, to a
     /// new file. There is no raw option.
