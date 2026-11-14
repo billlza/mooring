@@ -794,13 +794,14 @@ fn the_use_is_recorded_on_the_refund_that_takes_a_pack_back_and_no_other() {
     }
 }
 
-/// A ledger of version 1 or 2 is read, and written as version 3. Version 1
-/// recorded no use, and version 2 took a pack back whole when the usage
-/// could not tell: both such refunds wait for the usage, so their packs
-/// count in full again. A use version 2 recorded was learned when its
+/// A ledger of version 1, 2 or 3 is read, and written as version 4.
+/// Version 1 recorded no use, and version 2 took a pack back whole when the
+/// usage could not tell: both such refunds wait for the usage, so their
+/// packs count in full again. A use version 2 recorded was learned when its
 /// refund was applied, or at the refund's own time were that later; a cycle
 /// that had ended stays so. Refunds in full of periods take back what they
-/// do now. No other version is read.
+/// do now. No grant of versions 1 to 3 was confirmed at Stripe, and none of
+/// them records it. No other version is read.
 #[test]
 fn earlier_versions_of_the_ledger_are_lifted() {
     let now = NOW.as_secs();
@@ -821,8 +822,21 @@ fn earlier_versions_of_the_ledger_are_lifted() {
     );
     let current: Value = serde_json::from_slice(&ledger.encode().unwrap()).unwrap();
     let read = |value: &Value| PaymentLedger::decode(&serde_json::to_vec(value).unwrap());
-    // The same ledger as version 1 wrote it: no use anywhere.
-    let mut version_1 = current.clone();
+    // Versions 1 to 3 record nothing of Stripe on a grant.
+    let mut unconfirmed = current.clone();
+    for record in unconfirmed["orders"].as_array_mut().unwrap() {
+        let grant = record["grant"].as_object_mut().unwrap();
+        assert_eq!(grant.remove("confirmed"), Some(json!(false)));
+    }
+    // The same ledger as version 3 wrote it.
+    let mut version_3 = unconfirmed.clone();
+    version_3["version"] = json!(3);
+    assert_eq!(read(&version_3).unwrap(), ledger);
+    let mut confirmed_in_3 = current.clone();
+    confirmed_in_3["version"] = json!(3);
+    assert!(matches!(read(&confirmed_in_3), Err(LedgerError::Decode(_))));
+    // As version 1 wrote it: no use anywhere.
+    let mut version_1 = unconfirmed.clone();
     version_1["version"] = json!(1);
     for record in version_1["orders"].as_array_mut().unwrap() {
         for refund in record["refunds"].as_array_mut().unwrap() {
@@ -836,7 +850,7 @@ fn earlier_versions_of_the_ledger_are_lifted() {
     assert_eq!(counted(&lifted, B), span(now, now + DAY));
     assert_eq!(quota_at(&lifted, now + 2 * HOUR), 150);
     // And as version 2 wrote it, with each use it could record.
-    let mut version_2 = current.clone();
+    let mut version_2 = unconfirmed;
     version_2["version"] = json!(2);
     for (recorded_use, lifted_use) in [
         (json!("unknown"), PackUse::Awaiting),
@@ -852,7 +866,7 @@ fn earlier_versions_of_the_ledger_are_lifted() {
         assert_eq!(uses(&lifted, B), [None]);
         assert_eq!(counted(&lifted, B), span(now, now + DAY));
         let written = String::from_utf8(lifted.encode().unwrap()).unwrap();
-        assert!(written.starts_with("{\n  \"version\": 3,"), "{written}");
+        assert!(written.starts_with("{\n  \"version\": 4,"), "{written}");
         assert_eq!(PaymentLedger::decode(written.as_bytes()).unwrap(), lifted);
     }
     // A refund the portal dated after Mooring applied it: the use counts
@@ -874,11 +888,11 @@ fn earlier_versions_of_the_ledger_are_lifted() {
             "{pack_use}"
         );
     }
-    let mut version_4 = current;
-    version_4["version"] = json!(4);
+    let mut version_5 = current;
+    version_5["version"] = json!(5);
     assert!(matches!(
-        read(&version_4),
-        Err(LedgerError::UnknownVersion { found: 4 })
+        read(&version_5),
+        Err(LedgerError::UnknownVersion { found: 5 })
     ));
 }
 

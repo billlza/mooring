@@ -16,7 +16,8 @@ use mooring_model::UnixTime;
 use serde::Deserialize;
 
 use super::v2::{self, PackUse};
-use super::{DisputeRecord, GrantOutcome, GrantRecord, OrderTerms, Stop};
+use super::v3::GrantRecord;
+use super::{DisputeRecord, GrantOutcome, OrderTerms, Stop};
 use crate::payments::ids::OrderId;
 
 /// The version this module reads.

@@ -996,19 +996,22 @@ pub(crate) struct Harness {
     pub(crate) clock_step: Cell<u64>,
 }
 
-/// One request the payment pull made, as the portal saw it.
+/// One request the payment pull made, as the portal or Stripe saw it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PortalRequest {
     /// The address.
     pub(crate) url: String,
-    /// The bearer token.
+    /// The bearer token or key.
     pub(crate) token: String,
+    /// Whom it asked (`Credential::peer`).
+    pub(crate) peer: &'static str,
     /// The request's limit.
     pub(crate) within: Duration,
 }
 
-/// A scripted portal: each request takes the next answer; with none left,
-/// the request fails as a refused connection would.
+/// A scripted portal, which answers Stripe's requests too: each request
+/// takes the next answer; with none left, the request fails as a refused
+/// connection would.
 #[derive(Debug, Default)]
 pub(crate) struct FakePortal {
     pub(crate) answers: RefCell<VecDeque<Result<PortalAnswer, FetchFailure>>>,
@@ -1035,13 +1038,15 @@ impl PortalLink for FakePortal {
     fn fetch(&self, request: &PullRequest<'_>) -> Result<PortalAnswer, FetchFailure> {
         self.requests.borrow_mut().push(PortalRequest {
             url: request.url.clone(),
-            token: request.token.expose_str().to_owned(),
+            token: request.credential.secret().to_owned(),
+            peer: request.credential.peer(),
             within: request.within,
         });
         self.answers
             .borrow_mut()
             .pop_front()
             .unwrap_or(Err(FetchFailure::Curl {
+                peer: request.credential.peer(),
                 code: Some(7),
                 message: "nothing scripted".to_owned(),
             }))

@@ -65,6 +65,10 @@ mooring-macsys = { path = "crates/macsys" }
 
 # One generation of each crypto/encoding crate (deny.toml multiple-versions = "deny").
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
+# daemon-core only: the portal's renewal order ids, which are BLAKE2s-256 of
+# the invoice that paid them (design §9.6). 0.11.0 (2026-08-26) is on the
+# digest 0.11.3 that sha2 already brings.
+blake2 = "0.11.0"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
 getrandom = { version = "0.4.3", default-features = false, features = ["std"] }
 ipnet = { version = "2.12.2", features = ["serde"] }

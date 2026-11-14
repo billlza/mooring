@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The pull's settings (design §9.6): `payment-pull.json`, which
-//! `mooringctl portal connect | rehearsal | disconnect` write and the
-//! daemon reads. The token is not here: it is a keychain item
-//! (`SecretRef::PortalPullToken`).
+//! `mooringctl portal connect | rehearsal | stripe-check | disconnect`
+//! write and the daemon reads. The token and Stripe's read key are not
+//! here: they are keychain items (`SecretRef::PortalPullToken`,
+//! `SecretRef::StripeReadKey`).
 //!
 //! Every change raises the revision, and the file is kept when the pull is
 //! disconnected, so a revision is never used twice: a stop records the
@@ -16,8 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use super::ledger::Stop;
 
-/// The settings' version.
-pub const SETTINGS_VERSION: u32 = 1;
+/// The settings' version: 2 since the check against Stripe (2026-11-14).
+/// Version 1, which had no check, is read with the check off.
+pub const SETTINGS_VERSION: u32 = 2;
+
+/// The version before the check against Stripe.
+const SETTINGS_VERSION_1: u32 = 1;
 
 /// The largest settings file read, in bytes.
 pub const MAX_SETTINGS_BYTES: usize = 4096;
@@ -116,7 +121,7 @@ pub enum SettingsError {
     Decode(#[source] serde_json::Error),
     /// Of another version.
     #[error(
-        "the payment pull's settings are of version {found}, and this build reads version {SETTINGS_VERSION}"
+        "the payment pull's settings are of version {found}, and this build reads versions 1 to {SETTINGS_VERSION}"
     )]
     UnknownVersion {
         /// The version written.
@@ -133,13 +138,36 @@ pub struct PullSettings {
     revision: u64,
     origin: Option<PortalOrigin>,
     rehearsal: bool,
+    stripe_check: bool,
+}
+
+/// The version of a document on disk, read first to choose its shape.
+#[derive(Debug, Deserialize)]
+struct Version {
+    version: u32,
 }
 
 /// The document on disk, as read.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SettingsFile {
-    version: u32,
+    /// [`SETTINGS_VERSION`], read first ([`Version`]).
+    #[serde(rename = "version")]
+    _version: u32,
+    revision: u64,
+    #[serde(deserialize_with = "Option::deserialize")]
+    origin: Option<PortalOrigin>,
+    rehearsal: bool,
+    stripe_check: bool,
+}
+
+/// A version-1 document, from before the check against Stripe.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsFileV1 {
+    /// [`SETTINGS_VERSION_1`], read first ([`Version`]).
+    #[serde(rename = "version")]
+    _version: u32,
     revision: u64,
     #[serde(deserialize_with = "Option::deserialize")]
     origin: Option<PortalOrigin>,
@@ -153,6 +181,7 @@ struct SettingsFileRef<'a> {
     revision: u64,
     origin: Option<&'a PortalOrigin>,
     rehearsal: bool,
+    stripe_check: bool,
 }
 
 /// The settings as their file holds them.
@@ -163,6 +192,7 @@ impl Serialize for PullSettings {
             revision: self.revision,
             origin: self.origin.as_ref(),
             rehearsal: self.rehearsal,
+            stripe_check: self.stripe_check,
         }
         .serialize(serializer)
     }
@@ -179,23 +209,32 @@ impl PullSettings {
         settings.max(stopped).saturating_add(1)
     }
 
-    /// Settings that pull from `origin`, in rehearsal or not, at `revision`.
+    /// Settings that pull from `origin`, in rehearsal or not, with the
+    /// check against Stripe on or off, at `revision`.
     #[must_use]
-    pub const fn connected(revision: u64, origin: PortalOrigin, rehearsal: bool) -> Self {
+    pub const fn connected(
+        revision: u64,
+        origin: PortalOrigin,
+        rehearsal: bool,
+        stripe_check: bool,
+    ) -> Self {
         Self {
             revision,
             origin: Some(origin),
             rehearsal,
+            stripe_check,
         }
     }
 
-    /// Settings that pull from nowhere, at `revision`.
+    /// Settings that pull from nowhere, with the check against Stripe on or
+    /// off for when the pull is connected again, at `revision`.
     #[must_use]
-    pub const fn disconnected(revision: u64) -> Self {
+    pub const fn disconnected(revision: u64, stripe_check: bool) -> Self {
         Self {
             revision,
             origin: None,
             rehearsal: false,
+            stripe_check,
         }
     }
 
@@ -204,8 +243,19 @@ impl PullSettings {
     pub fn rehearsing(&self, revision: u64, rehearsal: bool) -> Self {
         Self {
             revision,
-            origin: self.origin.clone(),
             rehearsal,
+            ..self.clone()
+        }
+    }
+
+    /// These settings with the check against Stripe on or off, at
+    /// `revision`.
+    #[must_use]
+    pub fn checking(&self, revision: u64, stripe_check: bool) -> Self {
+        Self {
+            revision,
+            stripe_check,
+            ..self.clone()
         }
     }
 
@@ -228,22 +278,44 @@ impl PullSettings {
         self.rehearsal
     }
 
-    /// Reads the settings file.
+    /// Whether the check against Stripe is on (design §9.6): each live
+    /// grant that would give a period or a pack waits until Stripe confirms
+    /// its payment, and is held when Stripe does not.
+    #[must_use]
+    pub const fn stripe_check(&self) -> bool {
+        self.stripe_check
+    }
+
+    /// Reads the settings file, of this version or version 1, which is read
+    /// with the check against Stripe off.
     pub fn decode(bytes: &[u8]) -> Result<Self, SettingsError> {
         if bytes.len() > MAX_SETTINGS_BYTES {
             return Err(SettingsError::TooLarge);
         }
-        let file: SettingsFile = serde_json::from_slice(bytes).map_err(SettingsError::Decode)?;
-        if file.version != SETTINGS_VERSION {
-            return Err(SettingsError::UnknownVersion {
-                found: file.version,
-            });
+        let Version { version } = serde_json::from_slice(bytes).map_err(SettingsError::Decode)?;
+        match version {
+            SETTINGS_VERSION => {
+                let file: SettingsFile =
+                    serde_json::from_slice(bytes).map_err(SettingsError::Decode)?;
+                Ok(Self {
+                    revision: file.revision,
+                    origin: file.origin,
+                    rehearsal: file.rehearsal,
+                    stripe_check: file.stripe_check,
+                })
+            }
+            SETTINGS_VERSION_1 => {
+                let file: SettingsFileV1 =
+                    serde_json::from_slice(bytes).map_err(SettingsError::Decode)?;
+                Ok(Self {
+                    revision: file.revision,
+                    origin: file.origin,
+                    rehearsal: file.rehearsal,
+                    stripe_check: false,
+                })
+            }
+            found => Err(SettingsError::UnknownVersion { found }),
         }
-        Ok(Self {
-            revision: file.revision,
-            origin: file.origin,
-            rehearsal: file.rehearsal,
-        })
     }
 
     /// The file: pretty-printed JSON with a trailing newline.

@@ -2,10 +2,12 @@
 
 //! The lines the payment pull and `portal payments` write: instants in UTC
 //! and each event of an applied page, by order id and user id (both
-//! opaque), never with the token or a label. A refund's line names the
-//! order only, with what it took back or that it waits for the usage; so
-//! do the line that ends such a wait and the lines that say which nodes
-//! no longer hold a download that was open at the refund.
+//! opaque), never with the token, Stripe's read key or a label. A grant's
+//! line says when Stripe confirmed its payment, and a grant held for what
+//! Stripe said says what that was. A refund's line names the order only,
+//! with what it took back or that it waits for the usage; so do the line
+//! that ends such a wait and the lines that say which nodes no longer hold
+//! a download that was open at the refund.
 
 use mooring_daemon_core::payments::{
     Closed, GrantOutcome, LedgerEvent, OrderId, PackUse, RefundEffect, TimeTakenBack,
@@ -30,6 +32,7 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
             outcome,
             livemode,
             suspended,
+            confirmed,
         } => {
             let what = match outcome {
                 GrantOutcome::Period { from, until } => {
@@ -55,15 +58,24 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
                     "; the user is suspended, and only the operator resumes them"
                 }
             };
-            format!("payment: order {order} granted user {user} {what}{mode}{suspended}")
+            let confirmed = if *confirmed {
+                "; Stripe confirmed its payment"
+            } else {
+                ""
+            };
+            format!("payment: order {order} granted user {user} {what}{mode}{confirmed}{suspended}")
         }
         LedgerEvent::Held {
             order,
             user,
             reason,
+            refusal,
         } => format!(
-            "payment: order {order} for user {user} is held, not granted ({}); settle it at Stripe",
-            reason.as_str()
+            "payment: order {order} for user {user} is held, not granted ({}{}); settle it at Stripe",
+            reason.as_str(),
+            refusal
+                .as_ref()
+                .map_or_else(String::new, |refusal| format!(": {refusal}"))
         ),
         LedgerEvent::Refunded {
             order,

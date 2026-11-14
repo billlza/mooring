@@ -26,7 +26,7 @@ const C: &str = "cccccccccccccccccccc";
 
 /// A tick on which the request may be made: room for it and no foreign
 /// network.
-const OPEN: Opening = Opening {
+pub(super) const OPEN: Opening = Opening {
     room: Some(Duration::from_secs(10)),
     clear: true,
 };
@@ -34,12 +34,12 @@ const OPEN: Opening = Opening {
 /// What a tick's [`Gate`] says: the room, and what the network check
 /// answers right before the request.
 #[derive(Debug, Clone, Copy)]
-struct Opening {
-    room: Option<Duration>,
-    clear: bool,
+pub(super) struct Opening {
+    pub(super) room: Option<Duration>,
+    pub(super) clear: bool,
 }
 
-fn users() -> BTreeMap<UserId, User> {
+pub(super) fn users() -> BTreeMap<UserId, User> {
     mooring_fixtures::two_nodes_three_users()
         .unwrap()
         .deployment
@@ -49,13 +49,27 @@ fn users() -> BTreeMap<UserId, User> {
 
 /// One tick of `puller` on `harness` through `opening`; the notes it
 /// logged.
-fn tick(harness: &mut Harness, puller: &mut Puller, opening: Opening) -> Vec<String> {
-    ticked(harness, puller, opening).0
+pub(super) fn tick(harness: &mut Harness, puller: &mut Puller, opening: Opening) -> Vec<String> {
+    tick_for(harness, puller, opening, &users())
 }
 
-/// [`tick`], and how many times the network check was asked.
-fn ticked(harness: &mut Harness, puller: &mut Puller, opening: Opening) -> (Vec<String>, u32) {
-    let users = users();
+/// [`tick`] with the deployment's users as `users`.
+pub(super) fn tick_for(
+    harness: &mut Harness,
+    puller: &mut Puller,
+    opening: Opening,
+    users: &BTreeMap<UserId, User>,
+) -> Vec<String> {
+    ticked(harness, puller, opening, users).0
+}
+
+/// [`tick_for`], and how many times the network check was asked.
+fn ticked(
+    harness: &mut Harness,
+    puller: &mut Puller,
+    opening: Opening,
+    users: &BTreeMap<UserId, User>,
+) -> (Vec<String>, u32) {
     let mut asked = 0;
     let mut check = || {
         asked += 1;
@@ -64,7 +78,7 @@ fn ticked(harness: &mut Harness, puller: &mut Puller, opening: Opening) -> (Vec<
     let notes = harness.with_env(|env| {
         puller.tick(
             env,
-            &users,
+            users,
             UnixTime::from_secs(NOW),
             Gate {
                 room: opening.room,
@@ -75,7 +89,7 @@ fn ticked(harness: &mut Harness, puller: &mut Puller, opening: Opening) -> (Vec<
     (notes, asked)
 }
 
-fn requests(harness: &Harness) -> Vec<String> {
+pub(super) fn requests(harness: &Harness) -> Vec<String> {
     harness
         .portal
         .requests
@@ -85,7 +99,7 @@ fn requests(harness: &Harness) -> Vec<String> {
         .collect()
 }
 
-fn answer(harness: &Harness, status: u16, retry_after: Option<&str>, body: &[u8]) {
+pub(super) fn answer(harness: &Harness, status: u16, retry_after: Option<&str>, body: &[u8]) {
     harness.portal.answer(Ok(PortalAnswer {
         status,
         retry_after: retry_after.map(str::to_owned),
@@ -93,7 +107,7 @@ fn answer(harness: &Harness, status: u16, retry_after: Option<&str>, body: &[u8]
     }));
 }
 
-const URL: &str = "https://portal.example.org/api/mooring/entitlements?after=";
+pub(super) const URL: &str = "https://portal.example.org/api/mooring/entitlements?after=";
 
 /// Nothing is asked until the pull is connected; a disconnected pull asks
 /// nothing either, and says so once.
@@ -106,7 +120,7 @@ fn nothing_is_asked_until_the_pull_is_connected() {
     let support = harness.support_dir();
     mooring_store::update_payment_pull::<()>(&support, 4096, |_| {
         Ok(Some(
-            mooring_daemon_core::payments::PullSettings::disconnected(3)
+            mooring_daemon_core::payments::PullSettings::disconnected(3, false)
                 .encode()
                 .unwrap(),
         ))
@@ -678,17 +692,20 @@ fn a_stop_that_cannot_be_recorded_still_holds() {
 fn the_network_is_checked_right_before_the_request_only() {
     let mut harness = harness();
     let mut puller = Puller::open(&harness.support_dir());
-    assert_eq!(ticked(&mut harness, &mut puller, OPEN), (Vec::new(), 0));
+    assert_eq!(
+        ticked(&mut harness, &mut puller, OPEN, &users()),
+        (Vec::new(), 0)
+    );
     connect(&mut harness, 1, false, 1);
     let no_room = Opening {
         room: None,
         clear: true,
     };
-    assert_eq!(ticked(&mut harness, &mut puller, no_room).1, 0);
+    assert_eq!(ticked(&mut harness, &mut puller, no_room, &users()).1, 0);
     harness.portal.ok(&page(true, 0, Vec::new(), false));
-    assert_eq!(ticked(&mut harness, &mut puller, OPEN).1, 1);
+    assert_eq!(ticked(&mut harness, &mut puller, OPEN, &users()).1, 1);
     // Not due for five minutes.
-    assert_eq!(ticked(&mut harness, &mut puller, OPEN).1, 0);
+    assert_eq!(ticked(&mut harness, &mut puller, OPEN, &users()).1, 0);
     assert_eq!(requests(&harness).len(), 1);
 }
 

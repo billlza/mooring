@@ -83,8 +83,10 @@ pub use ports::{HopInterval, Hy2Listener, Hy2Obfs, ListenerIdx, Port, PortPlan, 
 pub use quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
 pub use removal::{ForgottenUser, NODE_MONTH_TOTALS_DAYS, REVOKED_RETENTION_MONTHS};
 pub use secret::{
-    MAX_ROUTER_ADMIN_PASSWORD_BYTES, PORTAL_PULL_TOKEN_CHARS, PortalPullToken, RouterAdminPassword,
-    Secret, SecretEntry, SecretKind, SecretKindMismatch, SecretMaterial, SecretRef, SecretSnapshot,
+    MAX_ROUTER_ADMIN_PASSWORD_BYTES, MAX_STRIPE_READ_KEY_BODY, MIN_STRIPE_READ_KEY_BODY,
+    PORTAL_PULL_TOKEN_CHARS, PortalPullToken, RouterAdminPassword, STRIPE_READ_KEY_PREFIX, Secret,
+    SecretEntry, SecretKind, SecretKindMismatch, SecretMaterial, SecretRef, SecretSnapshot,
+    StripeKeyError, StripeReadKey,
 };
 pub use sim::{
     AfterAllowance, BillDay, Carrier, CycleRule, EvidenceRef, FairUseWindow,

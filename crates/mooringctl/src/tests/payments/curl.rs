@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mooring_daemon_core::payments::MAX_FEED_BYTES;
-use mooring_model::PortalPullToken;
+use mooring_daemon_core::payments::{MAX_FEED_BYTES, MAX_STRIPE_ID_CHARS};
+use mooring_model::{MAX_STRIPE_READ_KEY_BODY, PortalPullToken, StripeReadKey};
 
 use crate::payments::PortalLink;
 use crate::payments::curl::{
-    CURL, Curl, FetchFailure, PortalAnswer, PullRequest, grace, split_status,
+    CURL, Credential, Curl, FetchFailure, PortalAnswer, PullRequest, grace, split_status,
 };
 
 fn token() -> PortalPullToken {
@@ -68,7 +68,7 @@ fn fetch(addr: SocketAddr, within: Duration) -> Result<PortalAnswer, FetchFailur
     let token = token();
     Curl::plain_http(PathBuf::from(CURL)).fetch(&PullRequest {
         url: format!("http://{addr}/api/mooring/entitlements?after=7"),
-        token: &token,
+        credential: Credential::Portal(&token),
         within,
     })
 }
@@ -82,7 +82,7 @@ fn every_option_and_the_token_are_on_curls_standard_input() {
     let token = token();
     let request = PullRequest {
         url: "https://portal.example.org/api/mooring/entitlements?after=7".to_owned(),
-        token: &token,
+        credential: Credential::Portal(&token),
         within: Duration::from_millis(12_345),
     };
     let config = Curl::system().config(&request);
@@ -122,7 +122,7 @@ fn every_option_and_the_token_are_on_curls_standard_input() {
             "a".repeat(240),
             u64::MAX
         ),
-        token: &token,
+        credential: Credential::Portal(&token),
         within: Duration::from_secs(15),
     });
     assert!(
@@ -130,6 +130,99 @@ fn every_option_and_the_token_are_on_curls_standard_input() {
         "{}",
         long.len()
     );
+}
+
+/// A request to Stripe carries the read key as its bearer and names the
+/// API release it reads; the longest such configuration fits the buffer.
+#[test]
+fn a_request_to_stripe_carries_the_key_and_the_api_release() {
+    let key = StripeReadKey::parse(&format!("rk_live_{}", "Z".repeat(99))).unwrap();
+    let request = PullRequest {
+        url: "https://api.stripe.com/v1/invoices?subscription=sub_1&status=paid&limit=20"
+            .to_owned(),
+        credential: Credential::Stripe(&key),
+        within: Duration::from_secs(10),
+    };
+    assert_eq!(request.credential.peer(), "Stripe");
+    let config = Curl::system().config(&request);
+    assert!(
+        config.starts_with(&format!(
+            "url = \"https://api.stripe.com/v1/invoices?subscription=sub_1&status=paid&limit=20\"\n\
+             header = \"Authorization: Bearer rk_live_{}\"\n\
+             proto = \"=https\"\n",
+            "Z".repeat(99)
+        )),
+        "{}",
+        config.as_str()
+    );
+    assert!(
+        config.ends_with("header = \"Stripe-Version: 2026-10-28.endive\"\n"),
+        "{}",
+        config.as_str()
+    );
+    let token = token();
+    let portal = Curl::system().config(&PullRequest {
+        url: "https://portal.example.org/api/mooring/entitlements?after=7".to_owned(),
+        credential: Credential::Portal(&token),
+        within: Duration::from_secs(10),
+    });
+    assert!(!portal.contains("Stripe-Version"));
+    // The longest key and the longest page of Stripe's.
+    let longest =
+        StripeReadKey::parse(&format!("rk_live_{}", "Z".repeat(MAX_STRIPE_READ_KEY_BODY))).unwrap();
+    let long = Curl::system().config(&PullRequest {
+        url: format!(
+            "https://api.stripe.com/v1/checkout/sessions?status=complete&created%5Bgte%5D={0}&created%5Blte%5D={0}&limit=20&starting_after={1}",
+            u64::MAX,
+            "a".repeat(MAX_STRIPE_ID_CHARS)
+        ),
+        credential: Credential::Stripe(&longest),
+        within: Duration::from_secs(15),
+    });
+    assert!(
+        long.capacity() == 4096 && long.len() < 2048,
+        "{}",
+        long.len()
+    );
+}
+
+/// curl's failures of a request to Stripe name Stripe, and the key, were
+/// curl ever to print it, is cut out.
+#[test]
+fn curl_s_failures_name_stripe_and_never_the_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StripeReadKey::parse(&format!("rk_live_{}", "Q".repeat(40))).unwrap();
+    let leaky = Curl::plain_http(stand_in(
+        dir.path(),
+        "leaky-stripe",
+        &format!(
+            "/bin/cat > /dev/null\necho 'Authorization: Bearer {}' >&2\nexit 7",
+            key.expose_str()
+        ),
+    ));
+    let failure = leaky
+        .fetch(&PullRequest {
+            url: "http://127.0.0.1:9/v1/invoices".to_owned(),
+            credential: Credential::Stripe(&key),
+            within: Duration::from_secs(5),
+        })
+        .unwrap_err();
+    assert_eq!(
+        failure.to_string(),
+        "Stripe did not accept the connection: Authorization: Bearer <redacted>"
+    );
+    for (code, text) in [
+        (6, "Stripe's name did not resolve"),
+        (35, "the TLS handshake with Stripe failed"),
+        (60, "Stripe's certificate was not trusted"),
+    ] {
+        let failure = FetchFailure::Curl {
+            peer: "Stripe",
+            code: Some(code),
+            message: String::new(),
+        };
+        assert_eq!(failure.to_string(), text);
+    }
 }
 
 /// The status line is found among curl's other error text; a status of
@@ -281,7 +374,7 @@ fn curl_gets_no_environment_and_the_token_only_on_its_standard_input() {
     let curl = Curl::plain_http(program);
     let request = PullRequest {
         url: "http://127.0.0.1:9/api/mooring/entitlements?after=0".to_owned(),
-        token: &token,
+        credential: Credential::Portal(&token),
         within: Duration::from_secs(5),
     };
     let answer = curl.fetch(&request).unwrap();
@@ -312,7 +405,7 @@ fn a_stand_in_that_hangs_or_misbehaves_is_named() {
     let token = token();
     let request = |within| PullRequest {
         url: "http://127.0.0.1:9/".to_owned(),
-        token: &token,
+        credential: Credential::Portal(&token),
         within,
     };
     let hanging = Curl::plain_http(stand_in(
@@ -335,7 +428,7 @@ fn a_stand_in_that_hangs_or_misbehaves_is_named() {
         ),
     ));
     let failure = leaky.fetch(&request(Duration::from_secs(5))).unwrap_err();
-    let FetchFailure::Curl { code, message } = &failure else {
+    let FetchFailure::Curl { code, message, .. } = &failure else {
         panic!("{failure:?}")
     };
     assert_eq!(*code, Some(2));
@@ -381,6 +474,7 @@ fn a_stand_in_that_hangs_or_misbehaves_is_named() {
         (22, "curl exited with 22"),
     ] {
         let failure = FetchFailure::Curl {
+            peer: "the portal",
             code: Some(code),
             message: String::new(),
         };

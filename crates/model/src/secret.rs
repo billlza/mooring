@@ -85,6 +85,8 @@ kinds! {
         RouterAdminPassword,
         /// The token Mooring bears when it pulls the portal's payments.
         PortalPullToken,
+        /// The restricted key with which Mooring reads payments at Stripe.
+        StripeReadKey,
     }
 }
 
@@ -277,6 +279,75 @@ impl PortalPullToken {
     }
 }
 
+/// The prefix of a restricted Stripe key of live mode.
+pub const STRIPE_READ_KEY_PREFIX: &str = "rk_live_";
+
+/// The fewest letters and digits after [`STRIPE_READ_KEY_PREFIX`].
+pub const MIN_STRIPE_READ_KEY_BODY: usize = 16;
+
+/// The most letters and digits after [`STRIPE_READ_KEY_PREFIX`].
+pub const MAX_STRIPE_READ_KEY_BODY: usize = 200;
+
+/// Why a text is not a Stripe read key. The text is never echoed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum StripeKeyError {
+    /// A secret key (`sk_…`), which can move money.
+    #[error(
+        "this is a secret key (sk_...), which can move money: make a restricted key that may only read Checkout Sessions and Invoices"
+    )]
+    SecretKey,
+    /// A restricted key of Stripe's test mode, which cannot read live
+    /// payments.
+    #[error(
+        "this is a test-mode key (rk_test_...), which cannot read live payments: make the restricted key in live mode"
+    )]
+    TestMode,
+    /// Anything else.
+    #[error(
+        "not a restricted live key: rk_live_ and {MIN_STRIPE_READ_KEY_BODY} to {MAX_STRIPE_READ_KEY_BODY} letters and digits"
+    )]
+    NotRestrictedLive,
+}
+
+/// The restricted Stripe key with which the daemon confirms a payment at
+/// Stripe before it grants it (design §9.6): `rk_live_` and 16 to 200
+/// ASCII letters and digits, as Stripe's dashboard shows it once. It
+/// needs only to read Checkout Sessions and Invoices; whoever holds it
+/// reads every payment, the payer's details included, but cannot move
+/// money. A secret key, a test-mode key and anything else are refused,
+/// each with its own reason ([`StripeKeyError`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StripeReadKey(Secret<String>);
+
+impl StripeReadKey {
+    /// Accepts `rk_live_` and 16 to 200 of `0-9`, `A-Z` and `a-z`.
+    pub fn parse(text: &str) -> Result<Self, StripeKeyError> {
+        if text.starts_with("sk_") {
+            return Err(StripeKeyError::SecretKey);
+        }
+        if text.starts_with("rk_test_") {
+            return Err(StripeKeyError::TestMode);
+        }
+        let body = text
+            .strip_prefix(STRIPE_READ_KEY_PREFIX)
+            .ok_or(StripeKeyError::NotRestrictedLive)?;
+        let valid = (MIN_STRIPE_READ_KEY_BODY..=MAX_STRIPE_READ_KEY_BODY).contains(&body.len())
+            && body.bytes().all(|byte| byte.is_ascii_alphanumeric());
+        if valid {
+            Ok(Self(Secret::new(text.to_owned())))
+        } else {
+            Err(StripeKeyError::NotRestrictedLive)
+        }
+    }
+
+    /// Borrows the key, for the `Authorization` header of a request to
+    /// Stripe only.
+    #[must_use]
+    pub fn expose_str(&self) -> &str {
+        self.0.expose_secret()
+    }
+}
+
 /// One piece of secret material of any kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecretMaterial {
@@ -296,6 +367,8 @@ pub enum SecretMaterial {
     RouterAdminPassword(RouterAdminPassword),
     /// See [`PortalPullToken`].
     PortalPullToken(PortalPullToken),
+    /// See [`StripeReadKey`].
+    StripeReadKey(StripeReadKey),
 }
 
 impl SecretMaterial {
@@ -311,6 +384,7 @@ impl SecretMaterial {
             Self::Ed25519Seed(_) => SecretKind::Ed25519Seed,
             Self::RouterAdminPassword(_) => SecretKind::RouterAdminPassword,
             Self::PortalPullToken(_) => SecretKind::PortalPullToken,
+            Self::StripeReadKey(_) => SecretKind::StripeReadKey,
         }
     }
 
@@ -331,6 +405,9 @@ impl SecretMaterial {
                 Self::RouterAdminPassword(RouterAdminPassword::parse(text)?)
             }
             SecretKind::PortalPullToken => Self::PortalPullToken(PortalPullToken::parse(text)?),
+            SecretKind::StripeReadKey => Self::StripeReadKey(
+                StripeReadKey::parse(text).map_err(|_| invalid(SecretKind::StripeReadKey))?,
+            ),
         })
     }
 
@@ -346,6 +423,7 @@ impl SecretMaterial {
             Self::Ed25519Seed(seed) => seed.expose_text(),
             Self::RouterAdminPassword(password) => Zeroizing::new(password.expose_str().to_owned()),
             Self::PortalPullToken(token) => Zeroizing::new(token.expose_str().to_owned()),
+            Self::StripeReadKey(key) => Zeroizing::new(key.expose_str().to_owned()),
         }
     }
 
@@ -361,14 +439,16 @@ impl SecretMaterial {
             | Self::Uuid(_)
             | Self::Ed25519Seed(_)
             | Self::RouterAdminPassword(_)
-            | Self::PortalPullToken(_) => vec![self.encode()],
+            | Self::PortalPullToken(_)
+            | Self::StripeReadKey(_) => vec![self.encode()],
         }
     }
 }
 
-/// Names one keychain item (design §7). Every reference but three belongs
+/// Names one keychain item (design §7). Every reference but four belongs
 /// to a node ([`SecretRef::node`]); the deployment's ntfy topic, the M7's
-/// admin password and the portal's pull token belong to no node.
+/// admin password, the portal's pull token and the Stripe read key belong
+/// to no node.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SecretRef {
     /// The deployment's one ntfy topic (design §15.8, decision F6): the
@@ -393,6 +473,12 @@ pub enum SecretRef {
     /// no deployment references it: `mooringctl portal connect` stores it,
     /// `portal disconnect` deletes it, and the daemon's pull reads it.
     PortalPullToken,
+    /// The restricted key with which the daemon confirms payments at Stripe
+    /// (design §9.6), account `stripe/read-key`. Like the pull token, no
+    /// deployment references it: `mooringctl portal stripe-check on` stores
+    /// it, `portal stripe-check off` deletes it, and the daemon's pull
+    /// reads it while the check is on.
+    StripeReadKey,
     /// The node's REALITY private key.
     NodeRealityPrivate(NodeId),
     /// The VPS side of the node's WireGuard tunnel.
@@ -442,6 +528,7 @@ impl SecretRef {
             Self::NodeSshBootstrapPrivate(_) => SecretKind::Ed25519Seed,
             Self::RouterAdmin => SecretKind::RouterAdminPassword,
             Self::PortalPullToken => SecretKind::PortalPullToken,
+            Self::StripeReadKey => SecretKind::StripeReadKey,
             Self::NodeDeadManCheck(_)
             | Self::NodeMacAliveCheck(_)
             | Self::UserVlessUuid(..)
@@ -451,15 +538,18 @@ impl SecretRef {
         }
     }
 
-    /// The node this secret belongs to, or `None` for the three that
+    /// The node this secret belongs to, or `None` for the four that
     /// belong to no node: the deployment's ntfy topic
     /// ([`SecretRef::AlertTopic`]), the M7's admin password
-    /// ([`SecretRef::RouterAdmin`]) and the portal's pull token
-    /// ([`SecretRef::PortalPullToken`]).
+    /// ([`SecretRef::RouterAdmin`]), the portal's pull token
+    /// ([`SecretRef::PortalPullToken`]) and the Stripe read key
+    /// ([`SecretRef::StripeReadKey`]).
     #[must_use]
     pub const fn node(&self) -> Option<&NodeId> {
         match self {
-            Self::AlertTopic | Self::RouterAdmin | Self::PortalPullToken => None,
+            Self::AlertTopic | Self::RouterAdmin | Self::PortalPullToken | Self::StripeReadKey => {
+                None
+            }
             Self::NodeRealityPrivate(node)
             | Self::NodeWgVpsPrivate(node)
             | Self::NodeWgMacPrivate(node)
@@ -481,6 +571,7 @@ impl SecretRef {
 /// The stable text form, used as the keychain account name:
 /// `alert/topic` for the deployment's ntfy topic, `router/admin` for the
 /// M7's admin password, `portal/pull-token` for the portal's pull token,
+/// `stripe/read-key` for the Stripe read key,
 /// `node/<node>/<item>`
 /// (a channel node's checks included: `node/<node>/dead-man-check`,
 /// `node/<node>/mac-alive-check`), `node/<node>/hy2-obfs/<listener>`,
@@ -491,6 +582,7 @@ impl fmt::Display for SecretRef {
             Self::AlertTopic => f.write_str("alert/topic"),
             Self::RouterAdmin => f.write_str("router/admin"),
             Self::PortalPullToken => f.write_str("portal/pull-token"),
+            Self::StripeReadKey => f.write_str("stripe/read-key"),
             Self::NodeRealityPrivate(node) => write!(f, "node/{node}/reality-private"),
             Self::NodeWgVpsPrivate(node) => write!(f, "node/{node}/wg-vps-private"),
             Self::NodeWgMacPrivate(node) => write!(f, "node/{node}/wg-mac-private"),
@@ -520,6 +612,7 @@ impl FromStr for SecretRef {
             ["alert", "topic"] => Ok(Self::AlertTopic),
             ["router", "admin"] => Ok(Self::RouterAdmin),
             ["portal", "pull-token"] => Ok(Self::PortalPullToken),
+            ["stripe", "read-key"] => Ok(Self::StripeReadKey),
             ["node", n, "reality-private"] => Ok(Self::NodeRealityPrivate(node(n)?)),
             ["node", n, "wg-vps-private"] => Ok(Self::NodeWgVpsPrivate(node(n)?)),
             ["node", n, "wg-mac-private"] => Ok(Self::NodeWgMacPrivate(node(n)?)),
@@ -568,6 +661,8 @@ pub enum SecretEntry {
     RouterAdmin(RouterAdminPassword),
     /// See [`SecretRef::PortalPullToken`].
     PortalPullToken(PortalPullToken),
+    /// See [`SecretRef::StripeReadKey`].
+    StripeReadKey(StripeReadKey),
     /// See [`SecretRef::NodeRealityPrivate`].
     NodeRealityPrivate(NodeId, RealityPrivateKey),
     /// See [`SecretRef::NodeWgVpsPrivate`].
@@ -613,6 +708,7 @@ impl SecretEntry {
             (R::AlertTopic, M::Password(topic)) => Self::AlertTopic(topic),
             (R::RouterAdmin, M::RouterAdminPassword(password)) => Self::RouterAdmin(password),
             (R::PortalPullToken, M::PortalPullToken(token)) => Self::PortalPullToken(token),
+            (R::StripeReadKey, M::StripeReadKey(key)) => Self::StripeReadKey(key),
             (R::NodeRealityPrivate(node), M::RealityPrivateKey(key)) => {
                 Self::NodeRealityPrivate(node, key)
             }
@@ -654,6 +750,7 @@ impl SecretEntry {
             Self::AlertTopic(_) => SecretRef::AlertTopic,
             Self::RouterAdmin(_) => SecretRef::RouterAdmin,
             Self::PortalPullToken(_) => SecretRef::PortalPullToken,
+            Self::StripeReadKey(_) => SecretRef::StripeReadKey,
             Self::NodeRealityPrivate(node, _) => SecretRef::NodeRealityPrivate(node.clone()),
             Self::NodeWgVpsPrivate(node, _) => SecretRef::NodeWgVpsPrivate(node.clone()),
             Self::NodeWgMacPrivate(node, _) => SecretRef::NodeWgMacPrivate(node.clone()),
@@ -696,6 +793,7 @@ impl SecretEntry {
             Self::NodeSshBootstrapPrivate(_, seed) => SecretMaterial::Ed25519Seed(seed),
             Self::RouterAdmin(password) => SecretMaterial::RouterAdminPassword(password),
             Self::PortalPullToken(token) => SecretMaterial::PortalPullToken(token),
+            Self::StripeReadKey(key) => SecretMaterial::StripeReadKey(key),
             Self::NodeDeadManCheck(_, uuid)
             | Self::NodeMacAliveCheck(_, uuid)
             | Self::UserVlessUuid(_, _, uuid)
@@ -809,6 +907,7 @@ pub struct SecretSnapshot {
     alert_topic: Option<Password>,
     router_admin: Option<RouterAdminPassword>,
     portal_pull_token: Option<PortalPullToken>,
+    stripe_read_key: Option<StripeReadKey>,
     reality: BTreeMap<NodeId, RealityPrivateKey>,
     wg_vps: BTreeMap<NodeId, WgPrivateKey>,
     wg_mac: BTreeMap<NodeId, WgPrivateKey>,
@@ -840,6 +939,7 @@ impl SecretSnapshot {
             E::AlertTopic(topic) => insert_once(&mut self.alert_topic, topic, reference),
             E::RouterAdmin(password) => insert_once(&mut self.router_admin, password, reference),
             E::PortalPullToken(token) => insert_once(&mut self.portal_pull_token, token, reference),
+            E::StripeReadKey(key) => insert_once(&mut self.stripe_read_key, key, reference),
             E::NodeRealityPrivate(node, key) => insert_new(&mut self.reality, node, key, reference),
             E::NodeWgVpsPrivate(node, key) => insert_new(&mut self.wg_vps, node, key, reference),
             E::NodeWgMacPrivate(node, key) => insert_new(&mut self.wg_mac, node, key, reference),
@@ -949,6 +1049,15 @@ impl SecretSnapshot {
             })
     }
 
+    /// The Stripe read key.
+    pub fn stripe_read_key(&self) -> Result<&StripeReadKey, SecretSnapshotError> {
+        self.stripe_read_key
+            .as_ref()
+            .ok_or(SecretSnapshotError::Missing {
+                secret_ref: SecretRef::StripeReadKey,
+            })
+    }
+
     /// The UUID of the node's own Healthchecks check.
     pub fn dead_man_check(&self, node: &NodeId) -> Result<&Secret<Uuid>, SecretSnapshotError> {
         lookup(&self.dead_man_check, node, || {
@@ -1026,6 +1135,7 @@ impl SecretSnapshot {
             R::AlertTopic => M::Password(self.alert_topic()?.clone()),
             R::RouterAdmin => M::RouterAdminPassword(self.router_admin()?.clone()),
             R::PortalPullToken => M::PortalPullToken(self.portal_pull_token()?.clone()),
+            R::StripeReadKey => M::StripeReadKey(self.stripe_read_key()?.clone()),
             R::NodeRealityPrivate(node) => {
                 M::RealityPrivateKey(self.reality_private(node)?.clone())
             }
@@ -1057,6 +1167,11 @@ impl SecretSnapshot {
             self.portal_pull_token
                 .iter()
                 .map(|_| SecretRef::PortalPullToken),
+        );
+        refs.extend(
+            self.stripe_read_key
+                .iter()
+                .map(|_| SecretRef::StripeReadKey),
         );
         refs.extend(
             self.reality
@@ -1133,6 +1248,7 @@ impl SecretSnapshot {
         usize::from(self.alert_topic.is_some())
             + usize::from(self.router_admin.is_some())
             + usize::from(self.portal_pull_token.is_some())
+            + usize::from(self.stripe_read_key.is_some())
             + self.reality.len()
             + self.wg_vps.len()
             + self.wg_mac.len()
@@ -1180,6 +1296,11 @@ impl SecretSnapshot {
                     .iter()
                     .map(|token| Zeroizing::new(token.expose_str().to_owned())),
             )
+            .chain(
+                self.stripe_read_key
+                    .iter()
+                    .map(|key| Zeroizing::new(key.expose_str().to_owned())),
+            )
             .chain(self.user_hy2.values().map(Password::expose_text))
             .chain(self.probe_hy2.values().map(Password::expose_text))
             .chain(
@@ -1208,6 +1329,11 @@ impl SecretSnapshot {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// The body of the tests' synthetic Stripe keys. A key is put together
+    /// at run time, never written whole: GitHub's push protection refuses a
+    /// literal of a live key's shape, synthetic or not.
+    const SYNTHETIC_KEY_BODY: &str = "51SynthAbcdefXYZ0123456789";
 
     fn node(text: &str) -> NodeId {
         NodeId::parse(text).unwrap()
@@ -1246,6 +1372,7 @@ mod tests {
             SecretRef::NodeMacAliveCheck(n),
             SecretRef::RouterAdmin,
             SecretRef::PortalPullToken,
+            SecretRef::StripeReadKey,
         ]
     }
 
@@ -1270,6 +1397,10 @@ mod tests {
             ),
             SecretKind::PortalPullToken => SecretMaterial::PortalPullToken(
                 PortalPullToken::parse(&format!("{byte:02x}").repeat(32)).unwrap(),
+            ),
+            SecretKind::StripeReadKey => SecretMaterial::StripeReadKey(
+                StripeReadKey::parse(&format!("rk_live_{}", format!("{byte:02X}").repeat(12)))
+                    .unwrap(),
             ),
         }
     }
@@ -1301,6 +1432,10 @@ mod tests {
             SecretMaterial::PortalPullToken(token.clone())
         );
         assert!(!shown.contains("abab"), "{shown}");
+        assert!(shown.contains("<redacted>"));
+        let key = StripeReadKey::parse(&format!("rk_live_{SYNTHETIC_KEY_BODY}")).unwrap();
+        let shown = format!("{key:?} {:?}", SecretMaterial::StripeReadKey(key.clone()));
+        assert!(!shown.contains("Synth"), "{shown}");
         assert!(shown.contains("<redacted>"));
     }
 
@@ -1344,6 +1479,89 @@ mod tests {
             if !bad.is_empty() {
                 assert!(!refused.to_string().contains(bad), "{refused}");
                 assert!(!format!("{refused:?}").contains(bad));
+            }
+        }
+    }
+
+    /// The Stripe read key is a restricted live key, `rk_live_` and 16 to
+    /// 200 letters and digits. A secret key and a test-mode key are refused
+    /// each with its own reason, anything else as not a restricted live
+    /// key; the keychain's decoding refuses them all as `InvalidSecret`.
+    /// No refusal echoes the text.
+    #[test]
+    fn stripe_read_keys_are_restricted_live_keys() {
+        let shortest = format!("rk_live_{}", "a".repeat(MIN_STRIPE_READ_KEY_BODY));
+        let longest = format!("rk_live_{}", "Z9".repeat(MAX_STRIPE_READ_KEY_BODY / 2));
+        let mixed = format!("rk_live_{SYNTHETIC_KEY_BODY}");
+        for good in [shortest.as_str(), longest.as_str(), mixed.as_str()] {
+            let key = StripeReadKey::parse(good).unwrap();
+            assert_eq!(key.expose_str(), good);
+            let material = SecretMaterial::decode(SecretKind::StripeReadKey, good).unwrap();
+            assert_eq!(material.kind(), SecretKind::StripeReadKey);
+            assert_eq!(material.encode().as_str(), good);
+            assert_eq!(material.needles(), vec![Zeroizing::new(good.to_owned())]);
+        }
+        assert_eq!(
+            (
+                STRIPE_READ_KEY_PREFIX,
+                MIN_STRIPE_READ_KEY_BODY,
+                MAX_STRIPE_READ_KEY_BODY
+            ),
+            ("rk_live_", 16, 200)
+        );
+        let body = SYNTHETIC_KEY_BODY;
+        let short = format!("rk_live_{}", "a".repeat(MIN_STRIPE_READ_KEY_BODY - 1));
+        let long = format!("rk_live_{}", "a".repeat(MAX_STRIPE_READ_KEY_BODY + 1));
+        let cases = [
+            (format!("sk_live_{body}"), StripeKeyError::SecretKey),
+            (format!("sk_test_{body}"), StripeKeyError::SecretKey),
+            (format!("rk_test_{body}"), StripeKeyError::TestMode),
+            (String::new(), StripeKeyError::NotRestrictedLive),
+            ("rk_live_".to_owned(), StripeKeyError::NotRestrictedLive),
+            (short, StripeKeyError::NotRestrictedLive),
+            (long, StripeKeyError::NotRestrictedLive),
+            (format!("pk_live_{body}"), StripeKeyError::NotRestrictedLive),
+            (format!("RK_LIVE_{body}"), StripeKeyError::NotRestrictedLive),
+            (
+                format!(" rk_live_{body}"),
+                StripeKeyError::NotRestrictedLive,
+            ),
+            (
+                format!("rk_live_{body}\n"),
+                StripeKeyError::NotRestrictedLive,
+            ),
+            (
+                format!("rk_live_{body}_x"),
+                StripeKeyError::NotRestrictedLive,
+            ),
+            (
+                format!("rk_live_{body}-x"),
+                StripeKeyError::NotRestrictedLive,
+            ),
+            (
+                format!("rk_live_{body} x"),
+                StripeKeyError::NotRestrictedLive,
+            ),
+            (
+                format!("rk_live_{body}\u{e9}"),
+                StripeKeyError::NotRestrictedLive,
+            ),
+        ];
+        for (bad, why) in cases {
+            let refused = StripeReadKey::parse(&bad).unwrap_err();
+            assert_eq!(refused, why, "{bad:?}");
+            assert_eq!(
+                SecretMaterial::decode(SecretKind::StripeReadKey, &bad),
+                Err(ModelError::InvalidSecret {
+                    kind: SecretKind::StripeReadKey
+                }),
+                "{bad:?}"
+            );
+            // The message names the prefix it wants, so only a text longer
+            // than the prefix can be echoed.
+            if bad.trim().len() > STRIPE_READ_KEY_PREFIX.len() {
+                assert!(!refused.to_string().contains(bad.trim()), "{refused}");
+                assert!(!format!("{refused:?}").contains(bad.trim()));
             }
         }
     }
@@ -1413,6 +1631,11 @@ mod tests {
                 SecretKind::PortalPullToken,
             ),
             (
+                SecretRef::StripeReadKey,
+                "stripe/read-key",
+                SecretKind::StripeReadKey,
+            ),
+            (
                 SecretRef::NodeDeadManCheck(node("lon1")),
                 "node/lon1/dead-man-check",
                 SecretKind::Uuid,
@@ -1465,6 +1688,15 @@ mod tests {
             "portal/pull_token",
             "portal/pull-token/lon1",
             "node/lon1/pull-token",
+            "stripe",
+            "stripe/",
+            "stripe/read-key/",
+            "stripe/Read-key",
+            "Stripe/read-key",
+            "stripe/read_key",
+            "stripe/read-key/lon1",
+            "node/lon1/read-key",
+            "portal/read-key",
         ] {
             assert_eq!(
                 bad.parse::<SecretRef>(),
@@ -1499,16 +1731,17 @@ mod tests {
             .collect()
     }
 
-    /// The ntfy topic, the M7's admin password and the portal's pull
-    /// token are the deployment's, not a node's: they are the only
-    /// references without a node, and every other names the node it
-    /// belongs to in its text.
+    /// The ntfy topic, the M7's admin password, the portal's pull token
+    /// and the Stripe read key are the deployment's, not a node's: they
+    /// are the only references without a node, and every other names the
+    /// node it belongs to in its text.
     #[test]
     fn only_deployment_wide_references_belong_to_no_node() {
         let deployment_wide = [
             SecretRef::AlertTopic,
             SecretRef::RouterAdmin,
             SecretRef::PortalPullToken,
+            SecretRef::StripeReadKey,
         ];
         for reference in every_ref() {
             match reference.node() {
@@ -1548,7 +1781,7 @@ mod tests {
     #[test]
     fn insert_and_typed_lookup() {
         let snapshot = full_snapshot();
-        assert_eq!(snapshot.len(), 17);
+        assert_eq!(snapshot.len(), 18);
         assert_eq!(snapshot.refs(), {
             let mut all = every_ref();
             all.sort();

@@ -143,7 +143,7 @@ fn every_kind() -> PaymentLedger {
 fn every_kind_of_order_is_listed() {
     let ledger = every_kind();
     let origin = PortalOrigin::parse("https://portal.example.org").unwrap();
-    let settings = PullSettings::connected(3, origin, true);
+    let settings = PullSettings::connected(3, origin, true, false);
     let at = stamp(UnixTime::from_secs(NOW));
     let until = stamp(UnixTime::from_secs(NOW + 30 * 86_400));
     assert_eq!(
@@ -151,6 +151,7 @@ fn every_kind_of_order_is_listed() {
         format!(
             "payment pull: https://portal.example.org (settings revision 3)\n\
              \x20 rehearsal: on: Stripe test-mode payments are granted and count\n\
+             \x20 check against Stripe: off: payments are granted as the portal lists them\n\
              payment ledger: cursor 7; last pull {at}\n\
              orders: 5 (1 held, 2 refunded, 1 disputed)\n\
              \x20 aaaaaaaaaaaaaaaaaaaa user fxuseraaab plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp)\n\
@@ -175,8 +176,12 @@ fn every_kind_of_order_is_listed() {
 #[test]
 fn the_settings_and_every_stop_are_said() {
     assert_eq!(
-        text(Some(&PullSettings::disconnected(4)), None),
-        "payment pull: disconnected (settings revision 4)\n  rehearsal: off\npayment ledger: none yet; nothing has been pulled\n"
+        text(Some(&PullSettings::disconnected(4, false)), None),
+        "payment pull: disconnected (settings revision 4)\n  rehearsal: off\n  check against Stripe: off: payments are granted as the portal lists them\npayment ledger: none yet; nothing has been pulled\n"
+    );
+    assert_eq!(
+        text(Some(&PullSettings::disconnected(5, true)), None),
+        "payment pull: disconnected (settings revision 5)\n  rehearsal: off\n  check against Stripe: on: each live payment is confirmed at Stripe before it is granted\npayment ledger: none yet; nothing has been pulled\n"
     );
     assert_eq!(
         text(None, Some(&PaymentLedger::new())),
@@ -194,6 +199,18 @@ fn the_settings_and_every_stop_are_said() {
             "400, the portal refused the request",
         ),
         (StopReason::Inconsistent, "a page did not fit the ledger"),
+        (
+            StopReason::StripeUnauthorized,
+            "Stripe's 401, the read key was refused",
+        ),
+        (
+            StopReason::StripeForbidden,
+            "Stripe's 403, the read key may not read checkouts or invoices",
+        ),
+        (
+            StopReason::StripeBadRequest,
+            "Stripe's 400 or 404, Stripe refused the request",
+        ),
     ] {
         let stopped = PaymentLedger::new().with_stop(Some(Stop {
             reason,
@@ -210,12 +227,12 @@ fn the_settings_and_every_stop_are_said() {
         );
         // Settings changed since the stop: it is over, and the listing says
         // so before the daemon has recorded its end.
-        let changed = text(Some(&PullSettings::disconnected(3)), Some(&stopped));
+        let changed = text(Some(&PullSettings::disconnected(3, false)), Some(&stopped));
         assert!(
             changed.contains("under settings revision 2: the settings have changed since, and the daemon pulls again at its next tick\n"),
             "{changed}"
         );
-        let same = text(Some(&PullSettings::disconnected(2)), Some(&stopped));
+        let same = text(Some(&PullSettings::disconnected(2, false)), Some(&stopped));
         assert!(
             same.contains("it pulls again once the settings change"),
             "{same}"
@@ -227,7 +244,7 @@ fn the_settings_and_every_stop_are_said() {
 #[test]
 fn the_json_line_is_the_two_files() {
     let ledger = every_kind();
-    let settings = PullSettings::disconnected(4);
+    let settings = PullSettings::disconnected(4, false);
     let line = json_line(Some(&settings), Some(&ledger)).unwrap();
     assert!(line.ends_with("}\n"));
     assert_eq!(line.lines().count(), 1);
@@ -259,6 +276,7 @@ fn every_event_has_its_line() {
         outcome,
         livemode,
         suspended,
+        confirmed: false,
     };
     let refunded = |effect| LedgerEvent::Refunded {
         order: order.clone(),
@@ -328,6 +346,7 @@ fn every_event_has_its_line() {
                 order: order.clone(),
                 user: user.clone(),
                 reason: HeldReason::UserRevoked,
+                refusal: None,
             },
             format!(
                 "payment: order {order} for user {user} is held, not granted (user_revoked); settle it at Stripe"

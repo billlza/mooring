@@ -14,8 +14,12 @@
 //! - [`Entitlements`]: the service periods and traffic packs of the orders
 //!   that count, which `policy::effective_policy` combines with each
 //!   user's own record.
-//! - [`PullSettings`]: `payment-pull.json`, where to pull from and
-//!   whether the operator rehearses.
+//! - [`PullSettings`]: `payment-pull.json`, where to pull from, whether
+//!   the operator rehearses, and whether the check against Stripe is on.
+//! - [`Lookup`]: the check against Stripe (contract §5.5), while it is on:
+//!   what to ask Stripe about a grant that [`PaymentLedger::apply_checked`]
+//!   names, and what its answers come to, a [`Verdict`] that the grant is
+//!   then applied by.
 //!
 //! Nothing here reads a clock or does I/O: the daemon passes `now`, the
 //! deployment's users and the bytes it read, and writes what comes back.
@@ -37,6 +41,7 @@ mod ids;
 mod ledger;
 mod refund;
 mod settings;
+mod stripe;
 
 pub use entitlement::{Entitlements, PackRefund, PaidPack, PaidPeriod, UserEntitlements};
 pub use error::{
@@ -48,12 +53,17 @@ pub use feed::{
 };
 pub use ids::{Currency, IdError, MAX_PLAN_ID_CHARS, ORDER_ID_CHARS, OrderId, PlanId};
 pub use ledger::{
-    Applied, Closed, DisputeRecord, GrantOutcome, GrantRecord, HeldReason, LEDGER_VERSION,
+    Applied, Checked, Closed, DisputeRecord, GrantOutcome, GrantRecord, HeldReason, LEDGER_VERSION,
     LedgerEvent, MAX_LEDGER_BYTES, OrderRecord, PaymentLedger, Pruned, RefundRecord, Settlement,
-    Stop, StopReason,
+    Stop, StopReason, Verdicts,
 };
 pub use refund::{PackUse, RefundEffect, RefundUsage, RunBegan, TakeBacks, TimeTakenBack};
 pub use settings::{
     ENTITLEMENTS_PATH, MAX_SETTINGS_BYTES, OriginError, PortalOrigin, PullSettings,
     SETTINGS_VERSION, SettingsError,
+};
+pub use stripe::{
+    CHECKOUT_AFTER, CHECKOUT_BEFORE, Confirmable, Difference, Lookup, MAX_PAGES,
+    MAX_STRIPE_ID_CHARS, Next, NotAStripeId, PAGE_LIMIT, Refusal, STRIPE_API, STRIPE_VERSION,
+    StripeAnswerError, StripeId, Verdict,
 };

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The pull's one request (design §9.6), made by `/usr/bin/curl`, which
-//! does the name lookup, TLS with the system's trust store, and HTTP.
+//! does the name lookup, TLS with the system's trust store, and HTTP: to
+//! the portal with its pull token, or, for the check against Stripe, to
+//! Stripe's API with the read key and the API release it is read at.
 //!
 //! - **Nothing secret in an argument or the environment.** curl is started
 //!   as `curl -q --config -`: `-q` first, so no `.curlrc` is read, and every
@@ -14,13 +16,13 @@
 //!   slot the daemon gives the request, and a curl still running at the
 //!   slot's end is killed, so the request never runs into the probe's
 //!   reserve. The connection has at most 10 s of it.
-//! - **The token is written once.** The configuration is built in a
+//! - **The secret is written once.** The configuration is built in a
 //!   zeroizing buffer large enough never to grow, so no copy of the token
-//!   is left behind by a reallocation.
+//!   or key is left behind by a reallocation.
 //! - **What comes back.** The status and the `Retry-After` header, which
 //!   curl writes on its standard error after a marker, and the body; or
 //!   curl's own failure with its exit code and message. Every text kept is
-//!   escaped and bounded, and the token, were curl ever to print it, is
+//!   escaped and bounded, and the secret, were curl ever to print it, is
 //!   cut out first.
 
 use std::fmt::Write as _;
@@ -30,8 +32,8 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mooring_daemon_core::payments::{MAX_FEED_BYTES, printable};
-use mooring_model::PortalPullToken;
+use mooring_daemon_core::payments::{MAX_FEED_BYTES, STRIPE_VERSION, printable};
+use mooring_model::{PortalPullToken, StripeReadKey};
 use zeroize::Zeroizing;
 
 /// The system's curl.
@@ -45,8 +47,8 @@ pub(crate) const CONNECT_LIMIT: Duration = Duration::from_secs(10);
 pub(crate) const GRACE: Duration = Duration::from_secs(2);
 
 /// The configuration's buffer: far more than the longest configuration
-/// (an address of at most about 330 bytes, the token, and the options),
-/// so that it never grows.
+/// (an address of at most about 400 bytes, a token or key of at most 208,
+/// and the options), so that it never grows.
 const CONFIG_CAPACITY: usize = 4096;
 
 /// The most bytes of curl's standard error kept.
@@ -58,16 +60,45 @@ const STATUS_MARK: &str = "mooring-pull-status ";
 /// How often a running curl is looked at.
 const WAIT_STEP: Duration = Duration::from_millis(20);
 
-/// One pull: the address of the entries after the cursor, the token, and
-/// how long the whole request may take.
+/// One request of the pull: the address, the secret it carries, and how
+/// long the whole request may take.
 #[derive(Debug)]
 pub(crate) struct PullRequest<'a> {
-    /// `https://<host>/api/mooring/entitlements?after=<cursor>`.
+    /// The portal's `https://<host>/api/mooring/entitlements?after=<cursor>`,
+    /// or a list on Stripe's API.
     pub(crate) url: String,
-    /// The bearer token.
-    pub(crate) token: &'a PortalPullToken,
+    /// Whom it asks, with what.
+    pub(crate) credential: Credential<'a>,
     /// The whole request's limit.
     pub(crate) within: Duration,
+}
+
+/// Whom a request asks, and the bearer secret it carries.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Credential<'a> {
+    /// The portal, with the pull token.
+    Portal(&'a PortalPullToken),
+    /// Stripe's API, with the read key; the request names the API release
+    /// the check reads ([`STRIPE_VERSION`]).
+    Stripe(&'a StripeReadKey),
+}
+
+impl Credential<'_> {
+    /// The bearer secret.
+    pub(crate) fn secret(&self) -> &str {
+        match self {
+            Self::Portal(token) => token.expose_str(),
+            Self::Stripe(key) => key.expose_str(),
+        }
+    }
+
+    /// Whom it asks, as a failure names them.
+    pub(crate) const fn peer(&self) -> &'static str {
+        match self {
+            Self::Portal(_) => "the portal",
+            Self::Stripe(_) => "Stripe",
+        }
+    }
 }
 
 /// What the portal answered.
@@ -92,8 +123,10 @@ pub(crate) enum FetchFailure {
     #[error("curl's output could not be read")]
     Io(#[source] io::Error),
     /// curl failed: its exit code and what it said, escaped.
-    #[error("{}", curl_failure(*code, message))]
+    #[error("{}", curl_failure(peer, *code, message))]
     Curl {
+        /// Whom the request asked ([`Credential::peer`]).
+        peer: &'static str,
         /// Its exit code; `None` when a signal ended it.
         code: Option<i32>,
         /// Its message.
@@ -102,7 +135,8 @@ pub(crate) enum FetchFailure {
     /// It ran past its limit and was killed.
     #[error("the request took longer than its slot")]
     TimedOut,
-    /// The body was larger than the portal ever sends.
+    /// The body was larger than the portal or a page of Stripe's ever
+    /// is.
     #[error("the answer was larger than {MAX_FEED_BYTES} bytes")]
     TooLarge,
     /// curl ended well without saying what the status was.
@@ -113,14 +147,15 @@ pub(crate) enum FetchFailure {
     },
 }
 
-/// curl's failure, by its exit code where the code says enough.
-fn curl_failure(code: Option<i32>, message: &str) -> String {
+/// curl's failure of a request to `peer`, by its exit code where the code
+/// says enough.
+fn curl_failure(peer: &str, code: Option<i32>, message: &str) -> String {
     let what = match code {
-        Some(6) => "the portal's name did not resolve".to_owned(),
-        Some(7) => "the portal did not accept the connection".to_owned(),
+        Some(6) => format!("{peer}'s name did not resolve"),
+        Some(7) => format!("{peer} did not accept the connection"),
         Some(28) => "the request timed out".to_owned(),
-        Some(35) => "the TLS handshake with the portal failed".to_owned(),
-        Some(60) => "the portal's certificate was not trusted".to_owned(),
+        Some(35) => format!("the TLS handshake with {peer} failed"),
+        Some(60) => format!("{peer}'s certificate was not trusted"),
         Some(code) => format!("curl exited with {code}"),
         None => "curl was ended by a signal".to_owned(),
     };
@@ -131,8 +166,8 @@ fn curl_failure(code: Option<i32>, message: &str) -> String {
     }
 }
 
-/// How a pull reaches the portal (`/usr/bin/curl` in the binary; a script
-/// in tests).
+/// How a pull reaches the portal and Stripe (`/usr/bin/curl` in the
+/// binary; a script in tests).
 pub(crate) trait PortalLink {
     /// Makes `request`.
     fn fetch(&self, request: &PullRequest<'_>) -> Result<PortalAnswer, FetchFailure>;
@@ -180,7 +215,7 @@ impl Curl {
         let _ = write!(
             config,
             "url = \"{url}\"\n\
-             header = \"Authorization: Bearer {token}\"\n\
+             header = \"Authorization: Bearer {secret}\"\n\
              proto = \"{protocols}\"\n\
              proto-redir = \"{protocols}\"\n\
              tlsv1.2\n\
@@ -193,11 +228,14 @@ impl Curl {
              max-filesize = \"{MAX_FEED_BYTES}\"\n\
              write-out = \"%{{stderr}}{STATUS_MARK}%{{response_code}} %header{{retry-after}}\\n\"\n",
             url = request.url,
-            token = request.token.expose_str(),
+            secret = request.credential.secret(),
             protocols = self.protocols,
             max = seconds(max),
             connect = seconds(connect),
         );
+        if let Credential::Stripe(_) = request.credential {
+            let _ = writeln!(config, "header = \"Stripe-Version: {STRIPE_VERSION}\"");
+        }
         config
     }
 }
@@ -257,8 +295,15 @@ impl PortalLink for Curl {
             };
             let (body, overflowed) = body.map_err(FetchFailure::Io)?;
             let (errors, _) = errors.map_err(FetchFailure::Io)?;
-            let errors = scrubbed(&errors, request.token);
-            finish(status, written, body, overflowed, &errors)
+            let errors = scrubbed(&errors, request.credential.secret());
+            finish(
+                request.credential.peer(),
+                status,
+                written,
+                body,
+                overflowed,
+                &errors,
+            )
         })
     }
 }
@@ -276,8 +321,10 @@ fn panicked(what: &str) -> FetchFailure {
     FetchFailure::Io(io::Error::other(format!("curl's {what} panicked")))
 }
 
-/// What curl's end, output and error text come to.
+/// What curl's end, output and error text come to, for a request to
+/// `peer`.
 fn finish(
+    peer: &'static str,
     status: ExitStatus,
     written: io::Result<()>,
     body: Vec<u8>,
@@ -290,6 +337,7 @@ fn finish(
     }
     if !status.success() {
         return Err(FetchFailure::Curl {
+            peer,
             code: status.code(),
             message,
         });
@@ -334,9 +382,9 @@ pub(crate) fn split_status(errors: &str) -> (Option<(u16, Option<String>)>, Stri
     (status, printable(&rest.join(" / ")))
 }
 
-/// `bytes` as text with the token cut out, were curl ever to print it.
-fn scrubbed(bytes: &[u8], token: &PortalPullToken) -> String {
-    String::from_utf8_lossy(bytes).replace(token.expose_str(), "<redacted>")
+/// `bytes` as text with `secret` cut out, were curl ever to print it.
+fn scrubbed(bytes: &[u8], secret: &str) -> String {
+    String::from_utf8_lossy(bytes).replace(secret, "<redacted>")
 }
 
 /// Reads `reader` to its end, keeping at most `bound` bytes; says whether
