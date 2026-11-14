@@ -235,6 +235,66 @@ fn off_turns_the_check_off_then_deletes_the_key() {
     assert_eq!(stored_key(&harness), None);
 }
 
+/// A key the keychain will not store turns nothing on: the settings stay
+/// as they were.
+#[test]
+fn a_key_the_keychain_will_not_store_turns_nothing_on() {
+    let mut harness = harness();
+    harness.keychain.lock().unwrap().put = Some(-25_293);
+    let outcome = on_with_stdin(&mut harness, key('A').as_bytes());
+    assert_eq!(outcome.code, 1);
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: the keychain failed\n"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.stdout, "");
+    assert_eq!(settings(&harness), None);
+}
+
+/// A key the keychain will not delete is named, after the check is off.
+#[test]
+fn a_key_the_keychain_keeps_is_named_after_the_check_is_off() {
+    let mut harness = harness();
+    assert_eq!(on_with_stdin(&mut harness, key('A').as_bytes()).code, 0);
+    harness.keychain.lock().unwrap().delete = Some(-25_293);
+    let outcome = harness.run(&["portal", "stripe-check", "off"]);
+    assert_eq!(outcome.code, 1);
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: the keychain failed\n"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(
+        settings(&harness),
+        Some(PullSettings::disconnected(2, false))
+    );
+    harness.keychain.lock().unwrap().delete = None;
+    assert_eq!(stored_key(&harness), Some(key('A')));
+}
+
+/// Without a terminal and without `--stdin` the key is not asked, and
+/// nothing is stored.
+#[test]
+fn without_a_terminal_nothing_is_stored() {
+    let mut harness = harness();
+    let outcome = harness.run(&["portal", "stripe-check", "on"]);
+    assert_eq!(outcome.code, 1);
+    assert!(
+        outcome
+            .stderr
+            .starts_with("mooringctl: no terminal to ask for the password (use --stdin)"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(stored_key(&harness), None);
+    assert_eq!(settings(&harness), None);
+}
+
 /// Files that cannot be read are reported before the key is asked for,
 /// and nothing is stored; `off` reads no key, and `on` or `off` must be
 /// named.

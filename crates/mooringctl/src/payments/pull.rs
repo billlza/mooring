@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 
 use mooring_daemon_core::error::UsageErrorKind;
 use mooring_daemon_core::payments::{
-    Applied, ApplyRefusal, Entitlements, FeedPage, MAX_LEDGER_BYTES, MAX_SETTINGS_BYTES,
+    Applied, ApplyRefusal, Entitlements, FeedPage, Lookup, MAX_LEDGER_BYTES, MAX_SETTINGS_BYTES,
     PaymentLedger, PullSettings, RefundUsage, RunBegan, Stop, StopReason,
 };
 use mooring_daemon_core::period::BillingCycle;
@@ -240,6 +240,13 @@ impl Puller {
     #[cfg(test)]
     pub(crate) fn due_now(&mut self) {
         self.next = None;
+    }
+
+    /// How long the pull waits before its next request, if it waits.
+    #[cfg(test)]
+    pub(crate) fn due_in(&self) -> Option<Duration> {
+        self.next
+            .map(|at| at.saturating_duration_since(Instant::now()))
     }
 
     /// Why the ledger could not be read at the start, if it could not.
@@ -516,34 +523,45 @@ impl Puller {
     }
 
     /// Moves the page that waits for the check as far as it goes without
-    /// a request: it is applied once Stripe has said what it knows of each
-    /// grant that needs it, refused as without the check, or kept for the
-    /// lookup that asks Stripe on a later tick.
+    /// a request: it is recorded once it needs nothing more of Stripe, or
+    /// kept for the lookup that asks Stripe on a later tick.
     fn confirm(&mut self, mut pending: Pending, at: Applying<'_>, notes: &mut Vec<String>) {
+        let Some((lookup, left)) = self.lookup_next(&mut pending, at, notes) else {
+            return;
+        };
+        self.say_state(
+            notes,
+            &format!(
+                "payment pull: asking Stripe about the payment of order {} ({left} grant(s) of the page wait for the check against Stripe)",
+                lookup.target().order
+            ),
+        );
+        self.pending = Some(pending);
+        self.retry = RETRY_FIRST;
+        self.next = None;
+    }
+
+    /// The lookup the page that waits asks Stripe with next, and how many
+    /// of its grants wait; none once the page needs nothing more of
+    /// Stripe, which is then recorded, applied as Stripe said or refused
+    /// as without the check.
+    fn lookup_next(
+        &mut self,
+        pending: &mut Pending,
+        at: Applying<'_>,
+        notes: &mut Vec<String>,
+    ) -> Option<(Lookup, usize)> {
         let Applying {
             users,
             now,
             settings,
         } = at;
         match pending.wanted(&self.ledger, users, now, settings.rehearsal()) {
-            Wanted::Apply(applied) => {
-                self.record(pending.page(), Ok(applied), now, settings, notes)
+            Wanted::Done(applied) => {
+                self.record(pending.page(), applied, now, settings, notes);
+                None
             }
-            Wanted::Refused(refusal) => {
-                self.record(pending.page(), Err(refusal), now, settings, notes);
-            }
-            Wanted::Ask { lookup, left } => {
-                self.say_state(
-                    notes,
-                    &format!(
-                        "payment pull: asking Stripe about the payment of order {} ({left} grant(s) of the page wait for the check against Stripe)",
-                        lookup.target().order
-                    ),
-                );
-                self.pending = Some(pending);
-                self.retry = RETRY_FIRST;
-                self.next = None;
-            }
+            Wanted::Ask { lookup, left } => Some((lookup, left)),
         }
     }
 
@@ -557,20 +575,10 @@ impl Puller {
         room: Duration,
         notes: &mut Vec<String>,
     ) {
-        let Applying {
-            users,
-            now,
-            settings,
-        } = at;
-        let lookup = match pending.wanted(&self.ledger, users, now, settings.rehearsal()) {
-            Wanted::Apply(applied) => {
-                return self.record(pending.page(), Ok(applied), now, settings, notes);
-            }
-            Wanted::Refused(refusal) => {
-                return self.record(pending.page(), Err(refusal), now, settings, notes);
-            }
-            Wanted::Ask { lookup, .. } => lookup,
+        let Some((lookup, _)) = self.lookup_next(&mut pending, at, notes) else {
+            return;
         };
+        let Applying { now, settings, .. } = at;
         let key = match self.stripe_key(env, settings.revision()) {
             Ok(key) => key,
             Err(why) => {
@@ -735,16 +743,9 @@ impl Puller {
             | StopReason::BadRequest
             | StopReason::Inconsistent => "`mooringctl portal connect` or `portal rehearsal`",
         };
-        match reason {
-            StopReason::Unauthorized => self.token = None,
-            StopReason::StripeUnauthorized | StopReason::StripeForbidden => self.stripe_key = None,
-            StopReason::Conflict
-            | StopReason::BadRequest
-            | StopReason::Inconsistent
-            | StopReason::StripeBadRequest => {}
+        if reason == StopReason::Unauthorized {
+            self.token = None;
         }
-        // A page that waits is fetched again once the pull goes on.
-        self.pending = None;
         self.ledger = self.ledger.with_stop(Some(Stop {
             reason,
             at: now,

@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The check against Stripe (design §9.6; contract §5.7): before the daemon
+//! The check against Stripe (design §9.6; contract §5.5): before the daemon
 //! applies a live grant that would give a period or a pack, it looks up at
 //! Stripe the payment that paid it, and a grant Stripe does not confirm is
-//! held.
+//! held. It proves that the order was paid as listed, not whom it was for
+//! or what it buys: Stripe knows neither Mooring's users nor the plans.
 //!
 //! - **A first order** (`month`, `traffic`, and a `month_auto` order that
 //!   begins a subscription) is found among the completed checkouts created
 //!   from [`CHECKOUT_BEFORE`] before its `paid_at` to [`CHECKOUT_AFTER`]
 //!   after it, by its id, which is its checkout's `client_reference_id`.
-//! - **A renewal** is found among the paid invoices of the subscription
-//!   that its first order's checkout began, by its id, which the portal
-//!   works out from the invoice's ([`OrderId::for_renewal`]).
+//! - **A renewal** is found among the paid invoices of the subscriptions
+//!   that its first order's paid checkouts began (two when that order was
+//!   paid twice), by its id, which the portal works out from the invoice's
+//!   ([`OrderId::for_renewal`]).
 //!
 //! Nothing here does I/O. A [`Lookup`] says what to ask ([`Lookup::url`])
 //! and reads Stripe's answer ([`Lookup::read`]), page by page, until it has
@@ -136,7 +138,8 @@ pub enum Refusal {
     /// No paid checkout of a renewal's first order began a subscription.
     #[error("no paid checkout of its first order began a subscription at Stripe")]
     NoSubscription,
-    /// No paid invoice of the first order's subscription is the renewal's.
+    /// No paid invoice of the subscriptions the first order began is the
+    /// renewal's.
     #[error("no paid invoice of its subscription at Stripe is the renewal's")]
     NoInvoice,
     /// The checkouts or the invoice that name the order were not paid.
@@ -152,9 +155,10 @@ impl Refusal {
     #[must_use]
     pub const fn held_reason(&self) -> HeldReason {
         match self {
-            Self::NoCheckout | Self::NoFirstOrder | Self::NoSubscription | Self::NoInvoice => {
+            Self::NoCheckout | Self::NoSubscription | Self::NoInvoice => {
                 HeldReason::StripeNoPayment
             }
+            Self::NoFirstOrder => HeldReason::StripeNoFirstOrder,
             Self::Unpaid => HeldReason::StripeUnpaid,
             Self::Differs(_) => HeldReason::StripeDiffers,
         }
@@ -285,12 +289,11 @@ pub struct Lookup {
     pages: u32,
 }
 
-/// What a lookup lists.
+/// What a lookup lists. `after` is the last object of the page before.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
-    /// The completed checkouts created from `from` to `until` that name
-    /// `name`: the order, or a renewal's first order. `after` is the last
-    /// checkout of the page before; `best` the closest refusal so far.
+    /// The completed checkouts created from `from` to `until`, for those
+    /// that name the order `name`: `best` is the closest refusal so far.
     Checkouts {
         name: OrderId,
         from: u64,
@@ -298,25 +301,49 @@ enum Step {
         after: Option<StripeId>,
         best: Option<Refusal>,
     },
-    /// The paid invoices of `subscription`, after `after`.
+    /// The same of a renewal's first order `name`, every page of them, for
+    /// the subscriptions its paid checkouts began: `began`, in the order
+    /// listed. An order is paid twice when its buyer finishes two checkouts
+    /// of it; the portal keeps one subscription and the operator refunds
+    /// the other, so either may be the renewal's.
+    Subscriptions {
+        name: OrderId,
+        from: u64,
+        until: u64,
+        after: Option<StripeId>,
+        began: Vec<StripeId>,
+    },
+    /// The paid invoices of `subscription`; then those of `rest`, the other
+    /// subscriptions the first order began.
     Invoices {
         subscription: StripeId,
         after: Option<StripeId>,
+        rest: Vec<StripeId>,
     },
 }
 
 impl Step {
-    /// The checkouts of the order `name` paid at `paid_at`.
-    fn checkouts(name: OrderId, paid_at: UnixTime) -> Self {
-        let paid_at = paid_at.as_secs();
-        Self::Checkouts {
-            name,
-            from: paid_at.saturating_sub(CHECKOUT_BEFORE),
-            until: paid_at.saturating_add(CHECKOUT_AFTER),
+    /// The invoices of the first of `subscriptions`, then of the others;
+    /// none when there are none.
+    fn invoices(subscriptions: Vec<StripeId>) -> Option<Self> {
+        let mut subscriptions = subscriptions.into_iter();
+        let subscription = subscriptions.next()?;
+        Some(Self::Invoices {
+            subscription,
             after: None,
-            best: None,
-        }
+            rest: subscriptions.collect(),
+        })
     }
+}
+
+/// When the checkouts of an order paid at `paid_at` were created: from
+/// [`CHECKOUT_BEFORE`] before it to [`CHECKOUT_AFTER`] after it.
+fn window(paid_at: UnixTime) -> (u64, u64) {
+    let paid_at = paid_at.as_secs();
+    (
+        paid_at.saturating_sub(CHECKOUT_BEFORE),
+        paid_at.saturating_add(CHECKOUT_AFTER),
+    )
 }
 
 /// Where a lookup stands.
@@ -335,8 +362,26 @@ impl Lookup {
     #[must_use]
     pub fn start(target: Confirmable) -> Next {
         let step = match (&target.terms.renewal_of, &target.first) {
-            (None, _) => Step::checkouts(target.order.clone(), target.terms.paid_at),
-            (Some(first), Some(terms)) => Step::checkouts(first.clone(), terms.paid_at),
+            (None, _) => {
+                let (from, until) = window(target.terms.paid_at);
+                Step::Checkouts {
+                    name: target.order.clone(),
+                    from,
+                    until,
+                    after: None,
+                    best: None,
+                }
+            }
+            (Some(first), Some(terms)) => {
+                let (from, until) = window(terms.paid_at);
+                Step::Subscriptions {
+                    name: first.clone(),
+                    from,
+                    until,
+                    after: None,
+                    began: Vec::new(),
+                }
+            }
             (Some(_), None) => return Next::Done(Verdict::Refused(Refusal::NoFirstOrder)),
         };
         Next::Ask(Self {
@@ -366,6 +411,12 @@ impl Lookup {
                 until,
                 after: last,
                 ..
+            }
+            | Step::Subscriptions {
+                from,
+                until,
+                after: last,
+                ..
             } => format!(
                 "{STRIPE_API}/v1/checkout/sessions?status=complete&created%5Bgte%5D={from}&created%5Blte%5D={until}&limit={PAGE_LIMIT}{}",
                 after(last)
@@ -373,6 +424,7 @@ impl Lookup {
             Step::Invoices {
                 subscription,
                 after: last,
+                ..
             } => format!(
                 "{STRIPE_API}/v1/invoices?subscription={}&status=paid&limit={PAGE_LIMIT}{}",
                 subscription.as_str(),
@@ -382,7 +434,8 @@ impl Lookup {
     }
 
     /// Reads Stripe's answer to [`Self::url`]: what to ask next, or the
-    /// verdict.
+    /// verdict. Once a lookup has read [`MAX_PAGES`] pages it is over with
+    /// what it found.
     pub fn read(self, body: &[u8]) -> Result<Next, StripeAnswerError> {
         let Self {
             target,
@@ -390,7 +443,7 @@ impl Lookup {
             pages,
         } = self;
         let pages = pages.saturating_add(1);
-        match step {
+        let (step, over) = match step {
             Step::Checkouts {
                 name,
                 from,
@@ -400,54 +453,59 @@ impl Lookup {
             } => {
                 let list: List<Checkout> = decode(body, "checkout.session")?;
                 let page = Page::of(&list, "checkout.session")?;
-                let naming = list.data.iter().filter(|checkout| {
-                    checkout.client_reference_id.as_deref() == Some(name.as_str())
-                });
                 let mut best = best;
-                if target.terms.renewal_of.is_none() {
-                    for checkout in naming {
-                        match judge_checkout(checkout, &target.terms) {
-                            Ok(()) => return Ok(Next::Done(Verdict::Confirmed)),
-                            Err(refusal) => best = Some(closer(best, refusal)),
-                        }
+                for checkout in naming(&list, &name) {
+                    match judge_checkout(checkout, &target.terms) {
+                        Ok(()) => return Ok(Next::Done(Verdict::Confirmed)),
+                        Err(refusal) => best = Some(closer(best, refusal)),
                     }
-                    let over = || Verdict::Refused(best.clone().unwrap_or(Refusal::NoCheckout));
-                    return Ok(page.go_on(pages, over, |after| Self {
-                        step: Step::Checkouts {
-                            name: name.clone(),
-                            from,
-                            until,
-                            after: Some(after),
-                            best: best.clone(),
-                        },
-                        target: target.clone(),
-                        pages,
-                    }));
                 }
-                if let Some(subscription) = naming.filter_map(began_subscription).next() {
-                    return Ok(Next::Ask(Self {
-                        target,
-                        step: Step::Invoices {
-                            subscription: subscription.clone(),
-                            after: None,
-                        },
-                        pages,
-                    }));
-                }
-                let over = || Verdict::Refused(Refusal::NoSubscription);
-                Ok(page.go_on(pages, over, |after| Self {
-                    step: Step::Checkouts {
-                        name: name.clone(),
+                let over = Verdict::Refused(best.clone().unwrap_or(Refusal::NoCheckout));
+                let Some(after) = page.more_after else {
+                    return Ok(Next::Done(over));
+                };
+                let step = Step::Checkouts {
+                    name,
+                    from,
+                    until,
+                    after: Some(after),
+                    best,
+                };
+                (step, over)
+            }
+            Step::Subscriptions {
+                name,
+                from,
+                until,
+                mut began,
+                ..
+            } => {
+                let list: List<Checkout> = decode(body, "checkout.session")?;
+                let page = Page::of(&list, "checkout.session")?;
+                began.extend(naming(&list, &name).filter_map(began_subscription).cloned());
+                let over = Verdict::Refused(if began.is_empty() {
+                    Refusal::NoSubscription
+                } else {
+                    Refusal::NoInvoice
+                });
+                let step = match page.more_after {
+                    Some(after) => Step::Subscriptions {
+                        name,
                         from,
                         until,
                         after: Some(after),
-                        best: None,
+                        began,
                     },
-                    target: target.clone(),
-                    pages,
-                }))
+                    None => match Step::invoices(began) {
+                        Some(step) => step,
+                        None => return Ok(Next::Done(over)),
+                    },
+                };
+                (step, over)
             }
-            Step::Invoices { subscription, .. } => {
+            Step::Invoices {
+                subscription, rest, ..
+            } => {
                 let list: List<Invoice> = decode(body, "invoice")?;
                 let page = Page::of(&list, "invoice")?;
                 if let Some(invoice) = list
@@ -460,17 +518,30 @@ impl Lookup {
                         Err(refusal) => Verdict::Refused(refusal),
                     }));
                 }
-                let over = || Verdict::Refused(Refusal::NoInvoice);
-                Ok(page.go_on(pages, over, |after| Self {
-                    step: Step::Invoices {
-                        subscription: subscription.clone(),
+                let over = Verdict::Refused(Refusal::NoInvoice);
+                let step = match page.more_after {
+                    Some(after) => Step::Invoices {
+                        subscription,
                         after: Some(after),
+                        rest,
                     },
-                    target: target.clone(),
-                    pages,
-                }))
+                    None => match Step::invoices(rest) {
+                        Some(step) => step,
+                        None => return Ok(Next::Done(over)),
+                    },
+                };
+                (step, over)
             }
-        }
+        };
+        Ok(if pages < MAX_PAGES {
+            Next::Ask(Self {
+                target,
+                step,
+                pages,
+            })
+        } else {
+            Next::Done(over)
+        })
     }
 }
 
@@ -498,21 +569,13 @@ impl Page {
             more_after: Some(last.id().clone()),
         })
     }
+}
 
-    /// The next page of the lookup, which `next` makes from the last id,
-    /// while Stripe has more and [`MAX_PAGES`] are not read; else the
-    /// lookup is `over`.
-    fn go_on(
-        self,
-        pages: u32,
-        over: impl FnOnce() -> Verdict,
-        next: impl FnOnce(StripeId) -> Lookup,
-    ) -> Next {
-        match self.more_after {
-            Some(after) if pages < MAX_PAGES => Next::Ask(next(after)),
-            _ => Next::Done(over()),
-        }
-    }
+/// The checkouts of `list` that name the order `name`.
+fn naming<'a>(list: &'a List<Checkout>, name: &'a OrderId) -> impl Iterator<Item = &'a Checkout> {
+    list.data
+        .iter()
+        .filter(move |checkout| checkout.client_reference_id.as_deref() == Some(name.as_str()))
 }
 
 /// An object of a list: its kind (`object`) and its id.

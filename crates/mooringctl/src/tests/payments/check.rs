@@ -7,6 +7,7 @@
 //! `portal payments` say of it. Every object of Stripe's here is
 //! synthetic.
 
+use std::fs;
 use std::time::Duration;
 
 use mooring_daemon_core::payments::{
@@ -15,7 +16,7 @@ use mooring_daemon_core::payments::{
 };
 use mooring_model::secret::SecretEntry;
 use mooring_model::{StripeReadKey, UserId, UserStatus};
-use mooring_store::{SecretStore, update_payment_pull};
+use mooring_store::{PAYMENT_PULL_FILE, SecretStore, update_payment_pull};
 use serde_json::{Value, json};
 
 use super::super::support::{Harness, NOW};
@@ -23,7 +24,7 @@ use super::pull::{OPEN, Opening, URL, answer, requests, tick, tick_for, users};
 use super::{FIRST, SECOND, connect, grant, harness, ledger_on_disk, page};
 use crate::payments::curl::{FetchFailure, PortalAnswer};
 use crate::payments::judge::{PULL_EVERY, StripeJudged, judge_stripe};
-use crate::payments::pull::Puller;
+use crate::payments::pull::{Puller, RETRY_FIRST};
 
 const A: &str = "aaaaaaaaaaaaaaaaaaaa";
 const B: &str = "bbbbbbbbbbbbbbbbbbbb";
@@ -250,6 +251,57 @@ fn a_lookup_goes_page_by_page_one_request_a_tick() {
     assert_eq!(ledger_on_disk(&harness).unwrap().cursor(), 2);
 }
 
+/// A page refused without the check is refused the same with it, and
+/// Stripe is not asked: a page of Stripe's test mode while no rehearsal is
+/// on.
+#[test]
+fn a_page_refused_without_the_check_is_refused_with_it() {
+    let mut harness = harness();
+    check_on(&mut harness, 2, Some('K'));
+    let mut puller = Puller::open(&harness.support_dir());
+    harness
+        .portal
+        .ok(&page(false, 0, vec![grant(1, A, FIRST)], false));
+    assert_eq!(
+        tick(&mut harness, &mut puller, OPEN),
+        [
+            "payment pull: the portal's payments are of Stripe's test mode and no rehearsal is on; nothing is granted and the cursor stays"
+        ]
+    );
+    assert_eq!(requests(&harness), [format!("{URL}0")]);
+    assert_eq!(ledger_on_disk(&harness), None);
+    assert!(format!("{puller:?}").contains("waits_for_stripe: false"));
+}
+
+/// A page whose last grant waiting for Stripe needs it no more, its user
+/// revoked meanwhile, is applied at the next tick without asking.
+#[test]
+fn a_page_that_needs_stripe_no_more_is_applied_without_asking() {
+    let mut harness = harness();
+    check_on(&mut harness, 2, Some('K'));
+    let mut puller = Puller::open(&harness.support_dir());
+    harness
+        .portal
+        .ok(&page(true, 0, vec![grant(1, A, FIRST)], false));
+    assert_eq!(tick(&mut harness, &mut puller, OPEN), [asking(A, 1)]);
+    let mut users = users();
+    users
+        .get_mut(&UserId::parse(FIRST).unwrap())
+        .unwrap()
+        .status = UserStatus::RevokePending;
+    assert_eq!(
+        tick_for(&mut harness, &mut puller, OPEN, &users),
+        [
+            format!(
+                "payment: order {A} for user {FIRST} is held, not granted (user_revoked); settle it at Stripe"
+            ),
+            "payment pull: pulling; the cursor is at 1".to_owned(),
+        ]
+    );
+    assert_eq!(requests(&harness), [format!("{URL}0")]);
+    assert_eq!(ledger_on_disk(&harness).unwrap().cursor(), 1);
+}
+
 /// What to ask is worked out again each tick: a user revoked while
 /// Stripe's pages are read for their grant is held without asking Stripe
 /// more of it, and the lookup goes on to the page's next grant.
@@ -377,7 +429,7 @@ fn a_page_that_needs_nothing_of_stripe_is_applied_at_once() {
                 "payment: order {A} for user nobodyhere is held, not granted (unknown_user); settle it at Stripe"
             ),
             format!(
-                "payment: order {B} for user {SECOND} is held, not granted (stripe_no_payment: Mooring holds no record of the order whose subscription it renews); settle it at Stripe"
+                "payment: order {B} for user {SECOND} is held, not granted (stripe_no_first_order: Mooring holds no record of the order whose subscription it renews); settle it at Stripe"
             ),
             "payment pull: pulling; the cursor is at 2".to_owned(),
         ]
@@ -527,11 +579,12 @@ fn stripe_s_refusals_stop_the_pull_until_the_settings_change() {
 }
 
 /// Stripe's 429 waits for its `Retry-After`; its other failures, an
-/// answer that cannot be read and no answer wait as the portal's do. The
-/// page waits with them, and Stripe is asked the same again.
+/// answer that cannot be read and no answer wait as the portal's do, a
+/// minute at first. The page waits with them, and Stripe is asked the same
+/// again.
 #[test]
 fn stripe_s_failures_wait_and_the_page_waits_with_them() {
-    let failures: Vec<(Result<PortalAnswer, FetchFailure>, &str)> = vec![
+    let failures: Vec<(Result<PortalAnswer, FetchFailure>, &str, Duration)> = vec![
         (
             Ok(PortalAnswer {
                 status: 429,
@@ -539,6 +592,7 @@ fn stripe_s_failures_wait_and_the_page_waits_with_them() {
                 body: Vec::new(),
             }),
             "payment pull: Stripe answered 429 (Retry-After: 30); asking again in 30 s",
+            Duration::from_secs(30),
         ),
         (
             Ok(PortalAnswer {
@@ -547,6 +601,7 @@ fn stripe_s_failures_wait_and_the_page_waits_with_them() {
                 body: br#"{"error": {"type": "api_error"}}"#.to_vec(),
             }),
             "payment pull: Stripe answered 500 (api_error); the page waits, and Stripe is asked again",
+            RETRY_FIRST,
         ),
         (
             Ok(PortalAnswer {
@@ -555,6 +610,7 @@ fn stripe_s_failures_wait_and_the_page_waits_with_them() {
                 body: b"payment required\n".to_vec(),
             }),
             "payment pull: Stripe answered 402 (an answer of 17 bytes that is not Stripe's error document); the page waits, and Stripe is asked again",
+            RETRY_FIRST,
         ),
         (
             Ok(PortalAnswer {
@@ -563,13 +619,15 @@ fn stripe_s_failures_wait_and_the_page_waits_with_them() {
                 body: b"<html>".to_vec(),
             }),
             "payment pull: Stripe's answer does not decode as a list of checkout.session; the page waits, and Stripe is asked again",
+            RETRY_FIRST,
         ),
         (
             Err(FetchFailure::TimedOut),
             "payment pull: no answer from Stripe: the request took longer than its slot",
+            RETRY_FIRST,
         ),
     ];
-    for (failure, expected) in failures {
+    for (failure, expected, wait) in failures {
         let mut harness = harness();
         check_on(&mut harness, 2, Some('K'));
         let mut puller = Puller::open(&harness.support_dir());
@@ -582,7 +640,12 @@ fn stripe_s_failures_wait_and_the_page_waits_with_them() {
             .ok(&stripe_page(vec![checkout("cs_live_1", A)], false));
         tick(&mut harness, &mut puller, OPEN);
         assert_eq!(tick(&mut harness, &mut puller, OPEN), [expected]);
-        // It waits.
+        // It waits, as long as said.
+        let due_in = puller.due_in().unwrap();
+        assert!(
+            due_in <= wait && due_in + Duration::from_secs(5) > wait,
+            "{expected}: {due_in:?}"
+        );
         assert!(tick(&mut harness, &mut puller, OPEN).is_empty());
         assert_eq!(requests(&harness).len(), 2);
         assert_eq!(ledger_on_disk(&harness), None);
@@ -632,6 +695,43 @@ fn a_key_that_cannot_be_read_holds_the_page() {
         harness.portal.requests.borrow()[1].token,
         key('L').expose_str()
     );
+    assert_eq!(ledger_on_disk(&harness).unwrap().cursor(), 1);
+}
+
+/// The read key is kept for the settings' revision, and read again when
+/// that revision comes back after the settings file was lost.
+#[test]
+fn the_key_is_read_again_when_its_revision_comes_back() {
+    let mut harness = harness();
+    check_on(&mut harness, 2, Some('K'));
+    let mut puller = Puller::open(&harness.support_dir());
+    harness
+        .portal
+        .ok(&page(true, 0, vec![grant(1, A, FIRST)], false));
+    answer(&harness, 500, None, br#"{"error": {"type": "api_error"}}"#);
+    tick(&mut harness, &mut puller, OPEN);
+    tick(&mut harness, &mut puller, OPEN);
+    assert_eq!(requests(&harness).len(), 2);
+    // The file goes, and comes back at the same revision with another key.
+    fs::remove_file(harness.support_dir().join(PAYMENT_PULL_FILE)).unwrap();
+    assert!(tick(&mut harness, &mut puller, OPEN).is_empty());
+    harness
+        .secrets
+        .put(SecretEntry::StripeReadKey(key('M')))
+        .unwrap();
+    write_settings(&harness, &with_check(2, true));
+    harness
+        .portal
+        .ok(&page(true, 0, vec![grant(1, A, FIRST)], false));
+    harness
+        .portal
+        .ok(&stripe_page(vec![checkout("cs_live_1", A)], false));
+    assert_eq!(tick(&mut harness, &mut puller, OPEN), [asking(A, 1)]);
+    tick(&mut harness, &mut puller, OPEN);
+    let made = harness.portal.requests.borrow().clone();
+    assert_eq!(made.len(), 4);
+    assert_eq!(made[1].token, key('K').expose_str());
+    assert_eq!(made[3].token, key('M').expose_str());
     assert_eq!(ledger_on_disk(&harness).unwrap().cursor(), 1);
 }
 

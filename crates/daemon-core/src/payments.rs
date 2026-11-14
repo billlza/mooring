@@ -16,7 +16,7 @@
 //!   user's own record.
 //! - [`PullSettings`]: `payment-pull.json`, where to pull from, whether
 //!   the operator rehearses, and whether the check against Stripe is on.
-//! - [`Lookup`]: the check against Stripe (contract §5.7), while it is on:
+//! - [`Lookup`]: the check against Stripe (contract §5.5), while it is on:
 //!   what to ask Stripe about a grant that [`PaymentLedger::apply_checked`]
 //!   names, and what its answers come to, a [`Verdict`] that the grant is
 //!   then applied by.

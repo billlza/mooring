@@ -39,10 +39,9 @@ pub(crate) struct Pending {
 /// What a page that waits needs next.
 #[derive(Debug)]
 pub(crate) enum Wanted {
-    /// Nothing more of Stripe: the page, applied to a copy of the ledger.
-    Apply(Applied),
-    /// The page cannot be applied, as without the check.
-    Refused(ApplyRefusal),
+    /// Nothing more of Stripe: the page applied to a copy of the ledger,
+    /// or why it cannot be applied, as without the check.
+    Done(Result<Applied, ApplyRefusal>),
     /// Stripe must be asked: the lookup's next request, and how many
     /// grants the page still waits for, this one included.
     Ask {
@@ -81,8 +80,8 @@ impl Pending {
         loop {
             let (next, rest) =
                 match ledger.apply_checked(&self.page, users, now, rehearsal, &self.verdicts) {
-                    Err(refusal) => return Wanted::Refused(refusal),
-                    Ok(Checked::Applied(applied)) => return Wanted::Apply(applied),
+                    Err(refusal) => return Wanted::Done(Err(refusal)),
+                    Ok(Checked::Applied(applied)) => return Wanted::Done(Ok(applied)),
                     Ok(Checked::Unconfirmed { next, rest }) => (*next, rest),
                 };
             let left = rest.len() + 1;

@@ -24,6 +24,9 @@ const RENEWAL: &str = "sbc7dxq3cceajeb9ncge";
 /// The subscription the first order's checkout began.
 const SUBSCRIPTION: &str = "sub_1SynthMonthly";
 
+/// The subscription a second checkout of the first order began.
+const AGAIN: &str = "sub_1SynthTwice";
+
 /// When the tests' orders were paid (`Terms`).
 const PAID_AT: u64 = 1_796_990_000;
 
@@ -101,12 +104,15 @@ fn first_order(order: &'static str, terms_of: &Terms) -> Confirmable {
     }
 }
 
-/// The check of the renewal paid by [`INVOICE`], whose first order the
-/// ledger holds.
+/// The check of the renewal paid by [`INVOICE`] a month after its first
+/// order, which the ledger holds.
 fn renewal() -> Confirmable {
+    let mut renewed = month_auto(RENEWAL, Some(FIRST)).grant(1);
+    renewed["paid_at"] = json!(PAID_AT + 30 * DAY);
+    renewed["recorded_at"] = json!(PAID_AT + 30 * DAY + 100);
     Confirmable {
         order: OrderId::parse(RENEWAL).unwrap(),
-        terms: terms(month_auto(RENEWAL, Some(FIRST)).grant(1)),
+        terms: terms(renewed),
         first: Some(terms(month_auto(FIRST, None).grant(1))),
     }
 }
@@ -188,6 +194,14 @@ fn checkouts_url(paid_at: u64, after: Option<&str>) -> String {
         "{STRIPE_API}/v1/checkout/sessions?status=complete&created%5Bgte%5D={}&created%5Blte%5D={}&limit={PAGE_LIMIT}{}",
         paid_at - CHECKOUT_BEFORE,
         paid_at + CHECKOUT_AFTER,
+        after.map_or_else(String::new, |after| format!("&starting_after={after}"))
+    )
+}
+
+/// The invoices' address for `subscription`, after `after`.
+fn invoices_url(subscription: &str, after: Option<&str>) -> String {
+    format!(
+        "{STRIPE_API}/v1/invoices?subscription={subscription}&status=paid&limit={PAGE_LIMIT}{}",
         after.map_or_else(String::new, |after| format!("&starting_after={after}"))
     )
 }
@@ -404,6 +418,7 @@ fn a_lookup_reads_at_most_its_pages() {
     let mut asked = 0;
     while let Next::Ask(lookup) = next {
         asked += 1;
+        assert!(asked <= MAX_PAGES, "asked for page {asked}");
         let data = if asked == 1 {
             vec![unpaid.clone()]
         } else {
@@ -487,17 +502,17 @@ fn an_answer_that_is_not_a_list_of_what_was_asked_is_refused() {
     ));
 }
 
-/// A renewal is looked for through its first order: the paid checkout of
-/// the subscription that order began, in the week before its payment;
-/// then that subscription's paid invoices, page by page, for the invoice
-/// whose derived id is the renewal's.
+/// A renewal is looked for through its first order: every paid checkout
+/// of it that began a subscription, in the week before its payment, all
+/// pages of them; then the subscription's paid invoices, page by page, for
+/// the invoice whose derived id is the renewal's.
 #[test]
 fn a_renewal_is_confirmed_by_its_subscription_s_invoice() {
     let lookup = ask(Lookup::start(renewal()));
     assert_eq!(lookup.target().order.as_str(), RENEWAL);
-    // The first order's window, though both orders were paid then here.
+    // The first order's window, a month before the renewal was paid.
     assert_eq!(lookup.url(), checkouts_url(PAID_AT, None));
-    let invoices = ask(lookup
+    let more = ask(lookup
         .read(&list(
             vec![
                 checkout("cs_live_1", None),
@@ -506,20 +521,17 @@ fn a_renewal_is_confirmed_by_its_subscription_s_invoice() {
             true,
         ))
         .unwrap());
-    assert_eq!(
-        invoices.url(),
-        format!(
-            "{STRIPE_API}/v1/invoices?subscription={SUBSCRIPTION}&status=paid&limit={PAGE_LIMIT}"
-        )
-    );
+    assert_eq!(more.url(), checkouts_url(PAID_AT, Some("cs_live_2")));
+    let invoices = ask(more
+        .read(&list(vec![checkout("cs_live_3", None)], false))
+        .unwrap());
+    assert_eq!(invoices.url(), invoices_url(SUBSCRIPTION, None));
     let later = ask(invoices
         .read(&list(vec![invoice("in_1SynthCycld")], true))
         .unwrap());
     assert_eq!(
         later.url(),
-        format!(
-            "{STRIPE_API}/v1/invoices?subscription={SUBSCRIPTION}&status=paid&limit={PAGE_LIMIT}&starting_after=in_1SynthCycld"
-        )
+        invoices_url(SUBSCRIPTION, Some("in_1SynthCycld"))
     );
     assert_eq!(
         done(
@@ -532,6 +544,81 @@ fn a_renewal_is_confirmed_by_its_subscription_s_invoice() {
         ),
         Verdict::Confirmed
     );
+}
+
+/// A first order paid twice began two subscriptions, and the portal kept
+/// one of them: the renewal's invoice is looked for in each, in the order
+/// their checkouts were listed, and is no payment only when neither holds
+/// it.
+#[test]
+fn a_renewal_of_an_order_paid_twice_is_looked_for_in_both_subscriptions() {
+    let mut twice = subscription_checkout("cs_live_2");
+    twice["subscription"] = json!(AGAIN);
+    let checkouts = list(vec![twice, subscription_checkout("cs_live_1")], false);
+    let again = ask(ask(Lookup::start(renewal())).read(&checkouts).unwrap());
+    assert_eq!(again.url(), invoices_url(AGAIN, None));
+    let later = ask(again
+        .read(&list(vec![invoice("in_1SynthFirst")], true))
+        .unwrap());
+    assert_eq!(later.url(), invoices_url(AGAIN, Some("in_1SynthFirst")));
+    let kept = ask(later.read(&list(Vec::new(), false)).unwrap());
+    assert_eq!(kept.url(), invoices_url(SUBSCRIPTION, None));
+    assert_eq!(
+        done(kept.read(&list(vec![invoice(INVOICE)], false)).unwrap()),
+        Verdict::Confirmed
+    );
+    let again = ask(ask(Lookup::start(renewal())).read(&checkouts).unwrap());
+    let kept = ask(again
+        .read(&list(vec![invoice("in_1SynthFirst")], false))
+        .unwrap());
+    assert_eq!(
+        done(kept.read(&list(Vec::new(), false)).unwrap()),
+        Verdict::Refused(Refusal::NoInvoice)
+    );
+}
+
+/// A renewal's lookup reads at most 100 pages in all, checkouts and
+/// invoices together, and is then over with what it found: no
+/// subscription, or no invoice in those it found.
+#[test]
+fn a_renewal_s_lookup_reads_at_most_its_pages_in_all() {
+    for (first_page, refusal) in [
+        (
+            vec![checkout("cs_live_0", Some(FIRST))],
+            Refusal::NoSubscription,
+        ),
+        (vec![subscription_checkout("cs_live_0")], Refusal::NoInvoice),
+    ] {
+        let mut next = Lookup::start(renewal());
+        let mut asked = 0;
+        while let Next::Ask(lookup) = next {
+            asked += 1;
+            assert!(asked <= MAX_PAGES, "asked for page {asked}");
+            let data = if asked == 1 {
+                first_page.clone()
+            } else {
+                vec![checkout(&format!("cs_live_{asked}"), None)]
+            };
+            next = lookup.read(&list(data, true)).unwrap();
+        }
+        assert_eq!(asked, MAX_PAGES);
+        assert_eq!(next, Next::Done(Verdict::Refused(refusal)));
+    }
+    // Checkouts of one page, then invoices to the end.
+    let mut next = ask(Lookup::start(renewal()))
+        .read(&list(vec![subscription_checkout("cs_live_1")], false))
+        .unwrap();
+    let mut asked = 1;
+    while let Next::Ask(lookup) = next {
+        asked += 1;
+        assert!(asked <= MAX_PAGES, "asked for page {asked}");
+        assert!(lookup.url().starts_with(&invoices_url(SUBSCRIPTION, None)));
+        next = lookup
+            .read(&list(vec![invoice(&format!("in_1Synth{asked:04}"))], true))
+            .unwrap();
+    }
+    assert_eq!(asked, MAX_PAGES);
+    assert_eq!(next, Next::Done(Verdict::Refused(Refusal::NoInvoice)));
 }
 
 /// A renewal whose first order Mooring does not hold is refused without
@@ -657,7 +744,7 @@ fn each_refusal_holds_for_its_reason() {
         ),
         (
             Refusal::NoFirstOrder,
-            HeldReason::StripeNoPayment,
+            HeldReason::StripeNoFirstOrder,
             "Mooring holds no record of the order whose subscription it renews",
         ),
         (
@@ -710,6 +797,10 @@ fn each_refusal_holds_for_its_reason() {
         assert_eq!(difference.to_string(), text);
     }
     assert_eq!(HeldReason::StripeNoPayment.as_str(), "stripe_no_payment");
+    assert_eq!(
+        HeldReason::StripeNoFirstOrder.as_str(),
+        "stripe_no_first_order"
+    );
     assert_eq!(HeldReason::StripeUnpaid.as_str(), "stripe_unpaid");
     assert_eq!(HeldReason::StripeDiffers.as_str(), "stripe_differs");
 }

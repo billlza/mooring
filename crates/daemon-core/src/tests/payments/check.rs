@@ -239,7 +239,7 @@ fn a_page_is_applied_as_stripe_said() {
         LedgerEvent::Held {
             order: order(ORPHAN),
             user: id("pilotuserb"),
-            reason: HeldReason::StripeNoPayment,
+            reason: HeldReason::StripeNoFirstOrder,
             refusal: Some(Refusal::NoFirstOrder),
         }
     );
@@ -252,7 +252,7 @@ fn a_page_is_applied_as_stripe_said() {
         (PACK, HeldReason::StripeUnpaid),
         (STRANGER, HeldReason::UnknownUser),
         (RENEWAL, HeldReason::StripeDiffers),
-        (ORPHAN, HeldReason::StripeNoPayment),
+        (ORPHAN, HeldReason::StripeNoFirstOrder),
     ] {
         assert!(!grant(text).confirmed, "{text}");
         assert_eq!(grant(text).outcome, GrantOutcome::Held { reason }, "{text}");

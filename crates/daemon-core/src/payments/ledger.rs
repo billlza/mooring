@@ -36,7 +36,7 @@
 //! - **Test mode** (contract §5.3): a page of Stripe's test mode is applied
 //!   only while the operator rehearses ([`ApplyRefusal::TestMode`]), and its
 //!   grants count only while the rehearsal lasts ([`Entitlements`]).
-//! - **The check against Stripe** (contract §5.7), while the operator has it
+//! - **The check against Stripe** (contract §5.5), while the operator has it
 //!   on: each grant of a live page that would give a period or a pack is
 //!   applied as Stripe said, granted and recorded as confirmed, or held;
 //!   until Stripe has said it of every such grant, the page is not applied
@@ -140,6 +140,9 @@ pub enum HeldReason {
     /// The check against Stripe found nothing at Stripe that pays the
     /// order.
     StripeNoPayment,
+    /// A renewal whose first order Mooring does not hold, so that the
+    /// check against Stripe could not look for its subscription.
+    StripeNoFirstOrder,
     /// Stripe says the order's payment was not paid.
     StripeUnpaid,
     /// What Stripe says was paid is not what the order says.
@@ -155,6 +158,7 @@ impl HeldReason {
             Self::UserRevoked => "user_revoked",
             Self::BeyondCalendar => "beyond_calendar",
             Self::StripeNoPayment => "stripe_no_payment",
+            Self::StripeNoFirstOrder => "stripe_no_first_order",
             Self::StripeUnpaid => "stripe_unpaid",
             Self::StripeDiffers => "stripe_differs",
         }
