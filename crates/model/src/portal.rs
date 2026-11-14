@@ -8,17 +8,19 @@
 //! ([`named_users`]): a snapshot of their status, usage, quota and expiry,
 //! and a bundle of their CFM files, credentials included, which the portal
 //! hands out by download and by subscription link. The user agreement says
-//! where a user's data is kept and how files reach users; revision 1 names
-//! neither the portal's host (clause 4) nor a link (clauses 2 and 5). So
-//! nothing about a user may go to the portal until a revision that covers
-//! it is written and the user has accepted that revision.
+//! where a user's data is kept and how files reach users. Revision 1 named
+//! neither the portal's host (clause 4) nor a link (clauses 2 and 5);
+//! revision 2 (2026-11-06) covers both. So nothing about a user goes to the
+//! portal before the user has accepted a revision that covers it.
 //!
 //! Both portal exporters take a [`PortalAgreement`] and refuse everything
 //! while its [`PortalAgreement::required`] is an error. `mooringctl` passes
-//! [`PortalAgreement::SHIPPED`], which opens only once
+//! [`PortalAgreement::SHIPPED`], which is open because
 //! [`PORTAL_AGREEMENT_SINCE`] names a revision this build ships.
 
 mod named;
+
+use std::num::NonZeroU16;
 
 use crate::user::AgreementVersion;
 
@@ -26,14 +28,15 @@ pub use self::named::{NamedUsersError, NamedUsersErrorKind, named_users};
 
 /// The first revision of the user agreement whose text covers the portal:
 /// clause 4 says what the portal's host keeps, where and for how long, and
-/// clauses 2 and 5 how a subscription link is used and kept. `None` while
-/// no revision does.
-///
-/// Writing that revision sets it, in the commit that raises
-/// [`AgreementVersion::CURRENT`] and records the text's digest
-/// (`crates/export/tests/export/agreement_text.rs`, which also requires the
-/// text of a covering revision to name the portal).
-pub const PORTAL_AGREEMENT_SINCE: Option<AgreementVersion> = None;
+/// clauses 2 and 5 how a subscription link is used and kept. Revision 2,
+/// set in the commit that raised [`AgreementVersion::CURRENT`] to it and
+/// recorded its digest (`crates/export/tests/export/agreement_text.rs`,
+/// which also requires the text of a covering revision to name the portal).
+/// It stays 2 when later revisions raise `CURRENT`.
+pub const PORTAL_AGREEMENT_SINCE: Option<AgreementVersion> = match NonZeroU16::new(2) {
+    Some(revision) => Some(AgreementVersion::new(revision)),
+    None => panic!("agreement revisions count from 1"),
+};
 
 /// Whether this build may send anything about a user to the portal, and
 /// which agreement revision the user must have accepted first.
@@ -81,8 +84,6 @@ pub struct PortalNotCovered {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU16;
-
     use super::*;
 
     fn revision(number: u16) -> AgreementVersion {
@@ -120,6 +121,14 @@ mod tests {
             PortalAgreement::since(Some(revision(current.get() + 1))).required(),
             closed
         );
+    }
+
+    /// Revision 2 is the first that covers the portal, and stays so: a
+    /// later revision raises `CURRENT`, never the revision since which the
+    /// portal is covered.
+    #[test]
+    fn the_portal_is_covered_from_revision_2() {
+        assert_eq!(PORTAL_AGREEMENT_SINCE, Some(revision(2)));
     }
 
     #[test]

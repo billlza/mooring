@@ -1,13 +1,27 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!--
   Operator notes (not part of the text the user reads):
-  - Decisions F9–F11 (design §9.4, §20.2). The CFM wording below was checked
-    on 2026-10-18 against CFM 0.5.0 (build 50030, tag v0.5.0, commit 502adf9),
-    the first release with the mainland China direct switch (d828f92): its
-    zh-Hans catalogue (apps/cfw-tauri-shell/ui/src/locales/zh-Hans.json) and
-    the two English messages quoted in section 4 and section 8
-    (crates/cfw-engine-api/src/lib.rs). M6 still checks every CFM step
-    against the real build (design §22).
+  - Decisions F9–F11 (design §9.4, §20.2), revised by the operator on
+    2026-11-06 for the user portal (§9.5): configurations come from the
+    portal, by subscription link or download, and the encrypted image is the
+    backup when the portal cannot be reached. This guide goes with revision
+    2 of the agreement, and so to users only once payment is built.
+  - The CFM wording was checked on 2026-10-18 against CFM 0.5.0 (build
+    50030, tag v0.5.0, commit 502adf9), the first release with the mainland
+    China direct switch (d828f92): its zh-Hans catalogue
+    (apps/cfw-tauri-shell/ui/src/locales/zh-Hans.json) and the two English
+    messages quoted in section 4 and section 10
+    (crates/cfw-engine-api/src/lib.rs). On 2026-11-06 the subscription steps
+    (「导入链接」, the box 「HTTPS 订阅或节点链接」, 「更新」, 「删除」, 「QRCode」)
+    were checked against the same catalogue and app.js at v0.5.0 and at
+    release/0.5.1 (8fd6a634), and the route an update takes against
+    release/0.5.1's commands/subscriptions/fetch.rs:329-351: through CFM's
+    own proxy whenever its core runs, except in pure TUN mode, where the
+    tunnel captures the direct socket; direct only once the core is
+    stopped (「停止内核」 on the 「常规」 page, ui/src/general.js:149).
+    Turning both switches off keeps a ready core running as a local proxy
+    (src/engine.rs:66-76). M6 still checks every CFM step against the real
+    build (design §22).
   - The 「凭据」 step in section 3 needs the core stopped, not just both
     switches off. The profile menu's 「凭据」 waits until the core is off
     (apps/cfw-tauri-shell/ui/src/app.js:1059 and 1098-1100 at v0.5.0, 1095
@@ -15,18 +29,24 @@
     ready core running as a local proxy (src/engine.rs:64-74 at v0.5.0,
     66-76 at release/0.5.1). The core stops with 「停止内核」 on the 「常规」
     page (ui/src/general.js:141 at v0.5.0, 149 at release/0.5.1).
+  - The portal's wording (「我的账户」, 「账户」, 「订阅」, 「账号编号」,
+    「生成订阅链接」, 「重新生成」, 「停用链接」, 「下载配置文件（JSON）」) is the
+    portal's zh catalogue (crates/web/src/i18n/zh.rs) at its commit
+    ac7e285; the payment steps are written before the portal has them and
+    are checked again when payment is built.
   - Send users the text from the title on, never these notes (delivery.md,
     step 3 of section 1).
 -->
 # 使用指南
 
-这份指南帮你在 Mac 上把运营者给你的配置文件导入 CFM，并安全地使用。文中的按钮名称以 CFM 简体中文界面为准。
+这份指南帮你注册门户、在 Mac 上把配置导入 CFM，并安全地使用。文中的按钮名称以 CFM 和门户的简体中文界面为准。
 
 ## 0. 你需要什么
 
 - **电脑：** 一台使用 Apple 芯片（M1 或更新）的 Mac，系统为 macOS 15 或更新。
 - **CFM：** Clash for Mac 0.5.0 或更新的 0.5 版本。“中国大陆直连”开关从 0.5.0 起才有，更早的版本不能用。
 - **不支持的设备和客户端：** 手机、Windows 和其他客户端都不支持。
+- **门户：** 运营者的网站，网址由运营者在 FaceTime 通话中告诉你。你在门户上注册账号、付款，并取得配置。
 - **使用约定：** 你已经阅读《Mooring 使用约定》的当前版本，并在与运营者的 FaceTime 语音通话中确认同意。
 
 ## 1. 安装 CFM
@@ -41,20 +61,36 @@
    - 第一次打开时，macOS 还会询问是否允许 CFM 添加 VPN 配置，请选择允许。
 7. 「允许局域网连接」保持关闭：打开后，同一网络里的其他设备也能使用你的代理。
 
-## 2. 接收配置文件
+## 2. 注册门户账号
 
-- **当面：** 用隔空投送（AirDrop）接收，文件会出现在「下载」文件夹里；或者用 U 盘接收，U 盘里只有加密映像。
-- **远程：** 你会收到一个加密磁盘映像（.dmg 文件）。
-  - 它的口令是六个英文单词，由运营者在 FaceTime 语音通话中念给你；输入时全部用小写，单词之间各空一格。
-  - 不要通过微信、QQ 或普通电话索要口令，也不要把口令写下来发给任何人。
-  - 双击映像输入口令时，**不要**勾选“在我的钥匙串中记住密码”。
-- **任何时候：** 映像、配置文件、本指南和《使用约定》都不要经过微信、QQ（包括文件传输助手和 QQ 邮箱）、其他国内邮箱或网盘，或中国大陆 Apple ID 的 iMessage 和 iCloud（包括同步到 iCloud 的「桌面」和「文稿」文件夹），也不要转发到手机。
+1. 用 Mac 上的 Safari 打开门户的网址，注册账号。不要用手机或国内的浏览器（例如 QQ 浏览器、360 浏览器）。
+   - 登录邮箱就是你的登录名。不要用能对应你实名的邮箱，例如 QQ 邮箱。
+   - 密码至少 12 个字符，不要和其他网站共用，也不要让浏览器记住它。
+2. 登录后，在「我的账户」的「账户」页找到你的账号编号，在 FaceTime 通话中念给运营者。运营者据此把门户账号和你的服务对应起来。
+3. 在门户上选择要买的按月套餐或流量包，按页面提示付款。付款在 Stripe 的付款页上完成，只能用银行卡；付款后要等一段时间才生效。开通了自动续费的，可以在门户上自己取消，也可以在 FaceTime 通话中请运营者取消。
+4. 忘记门户密码时，告诉运营者：门户不能自己找回密码，运营者会删除你的门户账号，你重新注册，再把新的账号编号念给运营者。
 
-## 3. 导入
+## 3. 取得配置并导入
 
-1. 打开 CFM，进入「配置文件」，点「导入文件」，选择映像里或「下载」文件夹里的 .json 文件（如果运营者给的是 .yaml，就选 .yaml）。
-2. 在「配置文件」页右键点按（或双指点按）新导入的配置文件，选「凭据」，应能看到全部凭据都已存入「钥匙串凭据库」。这一项需要内核已经停止：「常规」页上的按钮是「停止内核」时，先点它。
-3. 不要用「导入链接」，也不要把文件内容粘贴进输入框。
+运营者为你开通后，「我的账户」的「订阅」页会出现「在 CFM 中使用」。下面两种方式任选一种，导入的配置完全相同：
+- **订阅链接：** 以后在 CFM 里点「更新」就能取得新配置。但链接本身就是凭据，会保存在 CFM 里；CFM 每次导入或「更新」还会用你所在网络的 DNS 查询门户的域名，你在国内使用的网络能看到；只有在 CFM 的内核运行、并且打开了「TUN 模式」时，这个查询才经节点用加密 DNS 发出。
+- **配置文件：** CFM 里不保存链接；但每次更新都要重新下载、重新导入。
+
+**用订阅链接：**
+1. 先关掉「接力」（在「系统设置」的「通用」›「隔空投送与接力」里），以及剪贴板管理工具和输入法的云剪贴板：否则复制的链接会被传到别的设备或服务器。
+2. 在「订阅」页点「生成订阅链接」。链接只显示这一次，离开这一页后就看不到了。
+3. 复制链接。打开 CFM，进入「配置文件」，把链接粘贴进「HTTPS 订阅或节点链接」框，点「导入链接」。
+4. 导入后，关掉门户的这一页，再随便复制一段别的文字，让剪贴板里不再留着链接。
+5. 不要在浏览器里打开这个链接，也不要把它保存到备忘录、密码管理工具或别的地方。
+
+**用配置文件：**
+1. 在「订阅」页点「下载配置文件（JSON）」，文件会出现在「下载」文件夹里。
+2. 打开 CFM，进入「配置文件」，点「导入文件」，选择这个文件。
+3. 导入后，删除这个文件，并清空废纸篓。
+
+**导入之后：** 在「配置文件」页右键点按（或双指点按）新导入的配置文件，选「凭据」，应能看到全部凭据都已存入「钥匙串凭据库」。这一项需要内核已经停止：「常规」页上的按钮是「停止内核」时，先点它。
+
+不要把配置文件的内容粘贴进输入框。
 
 ## 4. 打开“中国大陆直连”
 
@@ -81,28 +117,56 @@
 3. 「代理」页顶部有「全局」「规则」「直连」三个选项，连接后才能切换。确认选中的是「规则」：只有规则模式会让国内网站直连；「全局」会让所有流量都走代理，国内网站会打不开。
 4. 用浏览器分别打开一个国内网站和一个国外网站，确认两者都能访问。
 
-## 6. 删除文件
+## 6. 更新配置
+
+CFM 不会自动更新配置。运营者告诉你配置已经更新，或者所有节点都连不上时：
+
+- **用订阅链接导入的：** 在「配置文件」页右键点按这份配置，选「更新」。
+  - CFM 的内核在运行时，CFM 经过节点去取新配置，关掉「系统代理」和「TUN 模式」也一样；节点连不上时，这样会失败。这时到「常规」页，按钮显示「停止内核」就点它，再「更新」一次：CFM 会直接连接门户，你所在的网络能看到你访问了门户的域名。取到新配置后，按第 5 步重新连接。
+  - 修改过门户密码，或者重新生成过链接时，旧链接已经失效：按第 3 步用新链接导入，再在「配置文件」页右键点按旧的配置，选「删除」。
+- **用配置文件导入的：** 到「订阅」页重新下载，按第 3 步导入，再在「配置文件」页右键点按旧的配置，选「删除」。
+- 换用新的配置时，在「配置文件」页右键点按它并选「选择」。
+
+账户被暂停（包括配额用尽和到期）时，「更新」暂时取不到配置；续费或恢复后，同一个链接照常可用。
+
+## 7. 门户打不开时
+
+门户打不开、又需要新配置时，通过 FaceTime 告诉运营者。运营者会按原来的方式给你一份新文件：
+
+- **当面：** 用隔空投送（AirDrop）接收，文件会出现在「下载」文件夹里；或者用 U 盘接收，U 盘里只有加密映像。
+- **远程：** 你会收到一个加密磁盘映像（.dmg 文件）。
+  - 它的口令是六个英文单词，由运营者在 FaceTime 语音通话中念给你；输入时全部用小写，单词之间各空一格。
+  - 不要通过微信、QQ 或普通电话索要口令，也不要把口令写下来发给任何人。
+  - 双击映像输入口令时，**不要**勾选“在我的钥匙串中记住密码”。
+
+导入时，在「配置文件」页点「导入文件」，选择映像里或「下载」文件夹里的 .json 文件（如果运营者给的是 .yaml，就选 .yaml），然后按第 3 步检查凭据。导入后：
 
 1. 推出映像。
 2. 删除 .dmg 和 .json（或 .yaml）文件，并清空废纸篓。
 3. 删除聊天记录里发送映像的那条消息。
+4. 在「配置文件」页右键点按新配置并选「选择」，再删除旧的配置。
+5. 按第 5 步重新连接。
 
 凭据已保存在 CFM 的钥匙串凭据库里，不会因此丢失。
 
-## 7. 不要分享
+## 8. 任何时候
+
+门户的网址、订阅链接、映像、配置文件、本指南和《使用约定》都不要经过微信、QQ（包括文件传输助手和 QQ 邮箱）、其他国内邮箱或网盘，或中国大陆 Apple ID 的 iMessage 和 iCloud（包括同步到 iCloud 的「桌面」和「文稿」文件夹），也不要转发到手机。
+
+## 9. 不要分享
 
 详见《使用约定》第 2 条：
-- 文件和凭据只给你一人用；
-- 不要转发、截图或生成二维码；
-- 设备丢失、文件可能外泄，或者设备被他人拿走或检查时，在安全的时候尽快告诉运营者。
+- 订阅链接、配置文件和凭据只给你一人用，门户账号和密码也一样；
+- 不要转发、截图或生成二维码；CFM 里这份配置的「QRCode」、「编辑」和详情都会显示链接，不要在别人面前、屏幕共享或远程控制（例如腾讯会议、向日葵、ToDesk）时打开它们，也不要这时打开门户；
+- 订阅链接可能泄露时，在「订阅」页点「重新生成」或「停用链接」，并告诉运营者；
+- 设备丢失、文件或链接可能外泄，或者设备被他人拿走或检查时，在安全的时候尽快告诉运营者。
 
-## 8. 连不上时
+## 10. 连不上时
 
 详见《使用约定》第 5 条：
 - 先换另一个节点；
 - 北京时间凌晨 3 点到 6 点之间可能有几分钟中断；
+- 所有节点都连不上时，先试一次「更新」（第 6 步）；
 - 仍然不行，就通过 FaceTime 语音告诉运营者开始时间、所用网络，以及是否所有节点都不通。在微信等聊天软件里只约通话时间，不要提本服务。
 
 如果 CFM 提示 “Global cleanup could not be proven.”（无法确认已经清理干净），说明内核没有正常关闭，重启 Mac 之前都无法再连接：重启 Mac，再连接即可。
-
-收到新文件时，重复第 2、3、6 步，在「配置文件」中右键点按新配置文件并选「选择」，再删除旧的配置文件。

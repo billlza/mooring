@@ -11,8 +11,8 @@ use sha2::{Digest as _, Sha256};
 
 const AGREEMENT: &str = include_str!("../../../../docs/runbooks/user-agreement.md");
 
-/// SHA-256 of the user-visible text of revision 1.
-const REVISION_1_SHA256: &str = "feccdff92e09d6ed299ea4ac31b0dcd31c104e7025ef2d3cc68c3a19811aaacf";
+/// SHA-256 of the user-visible text of revision 2.
+const REVISION_2_SHA256: &str = "181ac3bda3d033bb43175b279bdd78bb39d6ced5b70325158e0826e6dbb039ba";
 
 /// The text the user reads: everything after the operator notes, a comment
 /// whose closing `-->` stands on its own line (the licence comment before it
@@ -42,7 +42,7 @@ fn sha256_hex(text: &str) -> String {
 #[test]
 fn the_agreement_text_is_bound_to_its_revision() {
     let expected = match AgreementVersion::CURRENT.get() {
-        1 => REVISION_1_SHA256,
+        2 => REVISION_2_SHA256,
         revision => panic!("record the digest of agreement revision {revision} here"),
     };
     assert_eq!(

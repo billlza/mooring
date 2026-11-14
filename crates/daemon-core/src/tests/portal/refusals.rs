@@ -70,8 +70,18 @@ fn a_user_without_the_required_acceptance_is_refused() {
     );
     let current = AgreementVersion::CURRENT;
     let other = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
+    // Revision 1 is what every pilot user accepted before revision 2.
+    let first = AgreementVersion::new(NonZeroU16::MIN);
+    assert!(first < current);
     for (record, said) in [
         (None, "no acceptance is recorded".to_owned()),
+        (
+            Some(AgreementRecord {
+                version: first,
+                accepted_on: date("2026-10-18"),
+            }),
+            format!("the recorded acceptance is of revision {first}"),
+        ),
         (
             Some(AgreementRecord {
                 version: other,

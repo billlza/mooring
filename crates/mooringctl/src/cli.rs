@@ -182,8 +182,9 @@ pub(crate) enum UserCommand {
     /// credentials included) or why it is withheld, to a new file with mode
     /// 0600 (never overwritten). Name every user bound to a portal account:
     /// the portal refuses a bundle that leaves one out, and `mooring-portal
-    /// bound-users` on its host prints them as --user arguments. Refused
-    /// until the user agreement covers the portal.
+    /// bound-users` on its host prints them as --user arguments. A user who
+    /// has not accepted the agreement revision this build ships is
+    /// withheld.
     ExportProfiles {
         /// A user bound to a portal account; give one --user per user. Only
         /// the users named are in the bundle.
@@ -237,8 +238,8 @@ pub(crate) enum PortalCommand {
     /// Write the portal snapshot of the users named, for `mooring-portal
     /// import`: their status, usage this billing cycle, quota and expiry,
     /// by user id and without credentials, to a new file with mode 0600
-    /// (never overwritten). Refused until the user agreement covers the
-    /// portal.
+    /// (never overwritten). Refused if a user named has not accepted the
+    /// agreement revision this build ships.
     Export {
         /// A user to include; give one --user per user. Only the users
         /// named are exported.

@@ -2023,8 +2023,8 @@ mod tests {
             agree(agreed, agreement(1, "2026-11-03")),
             Err(ModelError::AgreementRegressed {
                 user: user_id(1),
-                recorded: AgreementVersion::new(NonZeroU16::new(2).unwrap()),
-                offered: AgreementVersion::CURRENT,
+                recorded: agreement(2, "2026-11-02").version,
+                offered: agreement(1, "2026-11-03").version,
             })
         );
     }

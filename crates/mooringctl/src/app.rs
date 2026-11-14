@@ -79,8 +79,8 @@ pub(crate) struct Env<'a> {
     /// (`mooring_macsys::redirect_stderr` in the binary).
     pub(crate) redirect_stderr: &'a crate::daemon::log::RedirectStderr<'a>,
     /// Whether the agreement this build ships covers the portal
-    /// (`PortalAgreement::SHIPPED` in the binary): the portal's exports are
-    /// refused until it does.
+    /// (`PortalAgreement::SHIPPED` in the binary, open since revision 2):
+    /// while it does not, the portal's exports are refused.
     pub(crate) portal_agreement: mooring_model::PortalAgreement,
     /// How the payment pull reaches the portal (`/usr/bin/curl` in the
     /// binary).

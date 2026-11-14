@@ -88,14 +88,17 @@ fn inactive_users_are_refused() {
 
 /// Decision F9: a file goes only to a user who accepted the agreement
 /// revision this build ships. No record, or a record of another revision,
-/// is refused, and the error names both revisions.
+/// older (revision 1, which every pilot user accepted before revision 2)
+/// or newer, is refused, and the error names both revisions.
 #[test]
 fn a_user_without_the_current_agreement_is_refused() {
     let fixture = two_nodes();
     let user = first_user(&fixture);
+    let first = AgreementVersion::new(NonZeroU16::MIN);
+    assert!(first < AgreementVersion::CURRENT);
     let newer =
         AgreementVersion::new(NonZeroU16::new(AgreementVersion::CURRENT.get() + 1).unwrap());
-    for recorded in [None, Some(newer)] {
+    for recorded in [None, Some(first), Some(newer)] {
         let deployment = edited(&fixture.deployment, |parts| {
             parts.users[0].agreement = recorded.map(|version| AgreementRecord {
                 version,
@@ -118,7 +121,10 @@ fn a_user_without_the_current_agreement_is_refused() {
         };
         assert_eq!(
             error.to_string(),
-            format!("user {user} has not accepted agreement revision 1: {detail}")
+            format!(
+                "user {user} has not accepted agreement revision {}: {detail}",
+                AgreementVersion::CURRENT
+            )
         );
     }
 }
