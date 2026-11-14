@@ -733,6 +733,11 @@ closed_enum! {
         SshdReload,
         /// Restarting `mooring-xray` and `mooring-hy2`.
         EngineRestart,
+        /// Adding clients to the running Xray through its API, in place of
+        /// restarting it, and reading both VLESS inbounds back (design
+        /// §13.6): `systemctl is-active`, `xray api adu`, then
+        /// `xray api inbounduser`.
+        XrayUsers,
     }
 }
 

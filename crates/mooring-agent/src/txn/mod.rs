@@ -28,6 +28,7 @@ pub(crate) mod rollback;
 pub(crate) mod stage;
 mod timer;
 pub(crate) mod validate;
+pub(crate) mod xray_users;
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -43,7 +44,7 @@ use crate::host::{Node, Tool, run_ok};
 use crate::hostfiles::Applied;
 use crate::paths::Paths;
 use crate::store::{Lock, errno};
-use changes::{apply_changes, install_host};
+use changes::{Restarts, apply_changes, install_host};
 use links::swap;
 use prune::prune;
 use record::{
@@ -339,7 +340,15 @@ fn switch(
     };
     let host = install_host(paths, dir, applied)?;
     progress(paths, generation, TxnStage::Apply)?;
-    apply_changes(paths, node, before, header, dir, &host)?;
+    apply_changes(
+        paths,
+        node,
+        before,
+        header,
+        dir,
+        &host,
+        Restarts::UnlessUsersOnly,
+    )?;
     progress(paths, generation, TxnStage::HealthGate)?;
     health::wait(paths, node, dir, health::BUDGET)
         .map_err(|failed| RollbackCause::HealthGate { failed })

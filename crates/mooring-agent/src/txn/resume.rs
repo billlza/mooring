@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `Resume` (design §11.3): only an explicit request on the current
-//! generation clears the halt marker; the engines are then started and the
-//! local health gate must pass.
+//! generation clears the halt marker; the engines are then restarted and
+//! the local health gate must pass. A halted node's engines are stopped,
+//! so the restart starts them; one whose stop failed keeps running what it
+//! read at its start, and the restart has it read the current generation,
+//! which the users a later transaction adds to the running Xray rely on
+//! (design §13.6).
 
 use mooring_agent_proto::{AgentError, EngineUser, Generation, SystemdOp, UnitName};
 
@@ -28,10 +32,10 @@ pub(crate) fn resume(
     crate::store::remove(&paths.halted())?;
     for engine in EngineUser::ALL {
         let unit = UnitName::engine(*engine);
-        if run_ok(node, Tool::Systemctl, &["start", unit.as_str()])?.is_err() {
+        if run_ok(node, Tool::Systemctl, &["restart", unit.as_str()])?.is_err() {
             return Err(AgentError::Systemd {
                 unit,
-                op: SystemdOp::Start,
+                op: SystemdOp::Restart,
             });
         }
     }

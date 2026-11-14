@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The agent's opening of users on the running Xray (design §13.6), against
+# the pinned binary rather than the tests' stand-in: the engines the
+# engines workflow built on main, checked against the digests
+# engines.lock.toml records before anything of them runs, then the ignored
+# Linux-only test crates/mooring-agent/src/tests/txn/xray_users/lab.rs,
+# which starts that Xray on the runner's loopback (D-7: nothing of it runs
+# on the exit Mac, and nothing reaches a node). The engines workflow keeps
+# its artifact 90 days; when main holds none for the pinned tags, this
+# run says so, and dispatching the engines workflow on main makes one.
+name: xray-lab
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - crates/mooring-agent/src/txn/xray_users.rs
+      - crates/mooring-agent/src/tests/txn/xray_users/**
+      - crates/mooring-agent/src/accounting/stats.rs
+      - crates/mooring-agent/src/host.rs
+      - crates/mooring-agent/src/store.rs
+      - contract/golden/1-node-1-user/vps-lon1-xray.json.snap
+      - engines.lock.toml
+      - .github/workflows/xray-lab.yml
+  pull_request:
+    paths:
+      - crates/mooring-agent/src/txn/xray_users.rs
+      - crates/mooring-agent/src/tests/txn/xray_users/**
+      - crates/mooring-agent/src/accounting/stats.rs
+      - crates/mooring-agent/src/host.rs
+      - crates/mooring-agent/src/store.rs
+      - contract/golden/1-node-1-user/vps-lon1-xray.json.snap
+      - engines.lock.toml
+      - .github/workflows/xray-lab.yml
+
+permissions:
+  contents: read
+  # To list and download the engines workflow's artifact.
+  actions: read
+
+concurrency:
+  group: xray-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+      RUST_BACKTRACE: 1
+    defaults:
+      run:
+        # bash -eo pipefail, so that a failed command before a pipe fails
+        # the step.
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Pins
+        run: cargo xtask engines-pins | tee -a "$GITHUB_ENV"
+      - name: The engines main built, checked against the lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name="engines-xray-${XRAY_TAG}-sing-box-${SING_BOX_TAG}"
+          # The newest artifact of that name a run of this repository
+          # made on main and not yet expired.
+          run_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${name}&per_page=100" \
+            --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_branch == "main" and .workflow_run.head_repository_id == .workflow_run.repository_id)] | first | .workflow_run.id // empty')
+          if [ -z "$run_id" ]; then
+            echo "::error::main holds no unexpired ${name}: dispatch the engines workflow on main, whose artifacts are kept 90 days"
+            exit 1
+          fi
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$name" --dir build/out
+          cargo xtask engines-verify build
+          # An artifact keeps no file modes.
+          chmod 0755 build/out/linux-amd64/xray
+      - name: The opening of users against the pinned Xray
+        env:
+          MOORING_LAB_XRAY: ${{ github.workspace }}/build/out/linux-amd64/xray
+        run: >-
+          cargo test -p mooring-agent --bin mooring-agent --locked --
+          --ignored --exact
+          tests::txn::xray_users::lab::users_opened_through_the_api_are_served_at_once_without_dropping_a_connection

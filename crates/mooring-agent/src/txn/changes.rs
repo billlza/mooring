@@ -3,10 +3,11 @@
 //! Applying what changed between two generations (design §11.2 steps 4
 //! and 5): the host profile's files, installed as the swap's last part
 //! (step 4), then the ruleset, the tunnel, what those files need, and the
-//! engines whose configuration, artifacts or unit changed (step 5). Each
-//! tool's failure is reported through [`Step`], scrubbed of the
-//! generation's secrets; the rollback to nothing runs its tools through a
-//! `Step` too, with no secrets to scrub.
+//! engines whose configuration, artifacts or unit changed (step 5), Xray
+//! taking clients added and nothing else without a restart (design
+//! §13.6). Each tool's failure is reported through [`Step`], scrubbed of
+//! the generation's secrets; the rollback to nothing runs its tools
+//! through a `Step` too, with no secrets to scrub.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -17,7 +18,8 @@ use mooring_agent_proto::{
     StderrTail, UnitName, WG_INTERFACE,
 };
 
-use super::validate;
+use super::stage::{XRAY, program};
+use super::{validate, xray_users};
 use crate::gate;
 use crate::host::{Node, Tool, run_ok};
 use crate::hostfiles::{self, Applied};
@@ -51,13 +53,24 @@ pub(super) fn install_host(
     Ok(applied.files(changed))
 }
 
+/// How an engine whose configuration changed takes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Restarts {
+    /// A transaction's apply: Xray takes clients added and nothing else
+    /// through its API ([`xray_users`]); every other change restarts.
+    UnlessUsersOnly,
+    /// A rollback: every engine whose configuration changed restarts, which
+    /// puts back what ran before as surely as anything can.
+    Always,
+}
+
 /// Applies only what changed (design §11.2 step 5) from `before` to the
 /// generation now current, in `dir`: the ruleset, the tunnel (a restart if
 /// its address or MTU changed, else `wg syncconf`), what the host profile
 /// files in `host` need, and the engines whose configuration, artifacts or
-/// unit changed. No engine is restarted while the node is halted. Tool
-/// output is scrubbed of the generation's secrets; if they cannot be read,
-/// nothing is run.
+/// unit changed, as `restarts` says. Nothing reaches an engine while the
+/// node is halted. Tool output is scrubbed of the generation's secrets; if
+/// they cannot be read, nothing is run.
 pub(super) fn apply_changes(
     paths: &Paths,
     node: &dyn Node,
@@ -65,6 +78,7 @@ pub(super) fn apply_changes(
     next: &BundleHeader,
     dir: &Path,
     host: &BTreeSet<HostFile>,
+    restarts: Restarts,
 ) -> Result<(), RollbackCause> {
     let secrets = validate::secrets(dir).map_err(|error| RollbackCause::Apply {
         step: ApplyStep::Nftables,
@@ -103,12 +117,31 @@ pub(super) fn apply_changes(
         ),
         (EngineUser::Hy2, ManagedFile::Hy2Config, HostFile::Hy2Unit),
     ] {
-        if changed(file) || engines_changed || host.contains(&unit) {
-            step.run(
-                ApplyStep::EngineRestart,
-                Tool::Systemctl,
-                &["restart", UnitName::engine(engine).as_str()],
-            )?;
+        let runs_anew = engines_changed || host.contains(&unit);
+        if !runs_anew && !changed(file) {
+            continue;
+        }
+        let opening = match (engine, before, restarts) {
+            (EngineUser::Xray, Some(before), Restarts::UnlessUsersOnly) if !runs_anew => {
+                xray_users::opening(paths, &step, before, dir)?
+            }
+            _ => None,
+        };
+        match opening {
+            Some(opening) => {
+                xray_users::open(node, &program(dir, XRAY), &paths.validate_dir(), &opening)
+                    .map_err(|error| RollbackCause::Apply {
+                        step: ApplyStep::XrayUsers,
+                        stderr_tail: step.tail(error.to_string().as_bytes()),
+                    })?;
+            }
+            None => {
+                step.run(
+                    ApplyStep::EngineRestart,
+                    Tool::Systemctl,
+                    &["restart", UnitName::engine(engine).as_str()],
+                )?;
+            }
         }
     }
     Ok(())
@@ -121,7 +154,7 @@ pub(super) struct Step<'a> {
 }
 
 impl Step<'_> {
-    fn tail(&self, text: &[u8]) -> StderrTail {
+    pub(super) fn tail(&self, text: &[u8]) -> StderrTail {
         let refs: Vec<&[u8]> = self.secrets.iter().map(Vec::as_slice).collect();
         StderrTail::scrubbed(text, &refs)
     }
