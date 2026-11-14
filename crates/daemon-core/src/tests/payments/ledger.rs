@@ -50,6 +50,7 @@ fn a_rehearsal_grants_the_pilot_golden() {
                 outcome: period(now, now + 30 * DAY),
                 livemode: false,
                 suspended: None,
+                confirmed: false,
             },
             LedgerEvent::Granted {
                 order: order(B),
@@ -57,6 +58,7 @@ fn a_rehearsal_grants_the_pilot_golden() {
                 outcome: period(now, now + 30 * DAY),
                 livemode: false,
                 suspended: None,
+                confirmed: false,
             },
             LedgerEvent::Refunded {
                 order: order(A),
@@ -71,6 +73,7 @@ fn a_rehearsal_grants_the_pilot_golden() {
                 outcome: period(now + 30 * DAY, now + 60 * DAY),
                 livemode: false,
                 suspended: None,
+                confirmed: false,
             },
             LedgerEvent::Disputed {
                 order: order(A),
@@ -414,24 +417,28 @@ fn grants_for_unknown_or_revoked_users_are_held() {
             LedgerEvent::Held {
                 order: order("aaaaaaaaaaaaaaaaaaaa"),
                 user: id("pilotusera"),
-                reason: HeldReason::UnknownUser
+                reason: HeldReason::UnknownUser,
+                refusal: None,
             },
             LedgerEvent::Held {
                 order: order("bbbbbbbbbbbbbbbbbbbb"),
                 user: id("pilotuserb"),
-                reason: HeldReason::UserRevoked
+                reason: HeldReason::UserRevoked,
+                refusal: None,
             },
             LedgerEvent::Held {
                 order: order("cccccccccccccccccccc"),
                 user: id("pilotuserc"),
-                reason: HeldReason::UserRevoked
+                reason: HeldReason::UserRevoked,
+                refusal: None,
             },
             LedgerEvent::Granted {
                 order: order("dddddddddddddddddddd"),
                 user: id("pilotuserd"),
                 outcome: period(now, now + 30 * DAY),
                 livemode: true,
-                suspended: Some(SuspendReason::Expired)
+                suspended: Some(SuspendReason::Expired),
+                confirmed: false,
             },
         ]
     );
@@ -522,7 +529,8 @@ fn a_period_past_the_calendar_is_held() {
         LedgerEvent::Held {
             order: order("bbbbbbbbbbbbbbbbbbbb"),
             user: id("pilotuserb"),
-            reason: HeldReason::BeyondCalendar
+            reason: HeldReason::BeyondCalendar,
+            refusal: None,
         }
     );
 }
@@ -554,6 +562,7 @@ fn a_rehearsal_never_moves_real_time() {
             outcome: period(later, later + 30 * DAY),
             livemode: true,
             suspended: None,
+            confirmed: false,
         }
     );
     let off = applied.ledger.entitlements(false);
@@ -605,12 +614,12 @@ fn the_ledger_file_round_trips_and_keeps_its_rules() {
     assert_eq!(stopped.with_stop(None), applied.ledger);
     let text = String::from_utf8(applied.ledger.encode().unwrap()).unwrap();
     assert!(
-        text.starts_with("{\n  \"version\": 3,\n  \"cursor\": 7,"),
+        text.starts_with("{\n  \"version\": 4,\n  \"cursor\": 7,"),
         "{text}"
     );
     let value: Value = serde_json::from_str(&text).unwrap();
     let edits: Vec<(&str, Edit)> = vec![
-        ("version", Box::new(|value| value["version"] = json!(4))),
+        ("version", Box::new(|value| value["version"] = json!(5))),
         (
             "use of a month's refund in full",
             Box::new(|value| value["orders"][1]["refunds"][0]["pack_use"] = json!("awaiting")),
@@ -625,6 +634,14 @@ fn the_ledger_file_round_trips_and_keeps_its_rules() {
         (
             "version 1 with a use",
             Box::new(|value| value["version"] = json!(1)),
+        ),
+        (
+            "version 3 with a confirmation",
+            Box::new(|value| value["version"] = json!(3)),
+        ),
+        (
+            "confirmed in test mode",
+            Box::new(|value| value["orders"][0]["grant"]["confirmed"] = json!(true)),
         ),
         (
             "order",
@@ -709,7 +726,7 @@ fn the_ledger_file_round_trips_and_keeps_its_rules() {
         if name == "version" {
             assert!(matches!(
                 refused,
-                Err(LedgerError::UnknownVersion { found: 4 })
+                Err(LedgerError::UnknownVersion { found: 5 })
             ));
         }
     }
@@ -723,6 +740,12 @@ fn the_ledger_file_round_trips_and_keeps_its_rules() {
     assert_eq!(StopReason::Unauthorized.as_str(), "unauthorized");
     assert_eq!(StopReason::BadRequest.as_str(), "bad_request");
     assert_eq!(StopReason::Inconsistent.as_str(), "inconsistent");
+    assert_eq!(
+        StopReason::StripeUnauthorized.as_str(),
+        "stripe_unauthorized"
+    );
+    assert_eq!(StopReason::StripeForbidden.as_str(), "stripe_forbidden");
+    assert_eq!(StopReason::StripeBadRequest.as_str(), "stripe_bad_request");
 }
 
 /// An edit of a ledger document.

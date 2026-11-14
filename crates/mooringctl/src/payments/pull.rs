@@ -18,6 +18,12 @@
 //! - **Stops.** 400, 401, 409 and a page that does not fit the ledger stop
 //!   the pull, recorded in the ledger with the settings' revision, until
 //!   the operator changes the settings. A 409 never lowers the cursor.
+//! - **The check against Stripe** ([`super::confirm`]), while the settings
+//!   have it on: a page waits in memory until Stripe has said what it
+//!   knows of each live grant that would give, one request of Stripe's
+//!   per tick, through the same gate; then it is applied whole. Stripe's
+//!   400, 401, 403 and 404 stop the pull; its 429 waits; any other failure
+//!   is tried again as the portal's are.
 //! - **A ledger that cannot be read** at the daemon's start stops the pull
 //!   until the daemon starts again: it is never read as an empty one, which
 //!   would grant every order again.
@@ -29,8 +35,9 @@
 //!   fault of the usage is logged once while it lasts; usage that is only
 //!   behind is not.
 //!
-//! The token is read from the keychain again whenever the settings change,
-//! and kept in memory in a zeroizing buffer; no note holds it.
+//! The token, and Stripe's read key while the check is on, are read from
+//! the keychain again whenever the settings change, and kept in memory in
+//! zeroizing buffers; no note holds either.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -39,17 +46,18 @@ use std::time::{Duration, Instant};
 
 use mooring_daemon_core::error::UsageErrorKind;
 use mooring_daemon_core::payments::{
-    ApplyRefusal, Entitlements, FeedPage, MAX_LEDGER_BYTES, MAX_SETTINGS_BYTES, PaymentLedger,
-    PullSettings, RefundUsage, RunBegan, Stop, StopReason,
+    Applied, ApplyRefusal, Entitlements, FeedPage, MAX_LEDGER_BYTES, MAX_SETTINGS_BYTES,
+    PaymentLedger, PullSettings, RefundUsage, RunBegan, Stop, StopReason,
 };
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::usage::{DownlinkCount, ServedBefore};
 use mooring_model::secret::{SecretMaterial, SecretRef};
-use mooring_model::{Deployment, NodeId, PortalPullToken, UnixTime, User, UserId};
+use mooring_model::{Deployment, NodeId, PortalPullToken, StripeReadKey, UnixTime, User, UserId};
 use mooring_store::{read_payment_ledger, read_payment_pull, write_payment_ledger};
 
-use super::curl::PullRequest;
-use super::judge::{Judged, judge};
+use super::confirm::{Pending, Wanted};
+use super::curl::{Credential, PullRequest};
+use super::judge::{Judged, StripeJudged, judge, judge_stripe};
 use super::notes::{describe, stamp};
 use crate::app::Env;
 use crate::collected_usage::Told;
@@ -118,6 +126,15 @@ impl RefundUsage for Asked<'_> {
     }
 }
 
+/// What a tick applies a page with: the deployment's users, the time, and
+/// the settings it read.
+#[derive(Clone, Copy)]
+struct Applying<'a> {
+    users: &'a BTreeMap<UserId, User>,
+    now: UnixTime,
+    settings: &'a PullSettings,
+}
+
 /// Whether a request may be made on this tick.
 pub(crate) struct Gate<'g> {
     /// The room the next probe round leaves, if there is any.
@@ -153,6 +170,10 @@ pub(crate) struct Puller {
     retry: Duration,
     /// The token, and the settings revision it was read for.
     token: Option<(u64, PortalPullToken)>,
+    /// Stripe's read key, and the settings revision it was read for.
+    stripe_key: Option<(u64, StripeReadKey)>,
+    /// The page that waits for the check against Stripe, if one does.
+    pending: Option<Pending>,
     /// The last state logged, so that each is logged once.
     state: Option<String>,
     /// When a prune whose write failed is tried again.
@@ -175,6 +196,7 @@ impl std::fmt::Debug for Puller {
             .field("settings", &self.settings)
             .field("next", &self.next)
             .field("retry", &self.retry)
+            .field("waits_for_stripe", &self.pending.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -204,11 +226,20 @@ impl Puller {
             next,
             retry: RETRY_FIRST,
             token: None,
+            stripe_key: None,
+            pending: None,
             state: None,
             prune_retry: None,
             settle_next: None,
             settle_fault: None,
         }
+    }
+
+    /// Makes the next request due at once, as the wait after a failure
+    /// would once it has passed.
+    #[cfg(test)]
+    pub(crate) fn due_now(&mut self) {
+        self.next = None;
     }
 
     /// Why the ledger could not be read at the start, if it could not.
@@ -324,7 +355,8 @@ impl Puller {
 
     /// One tick of the pull: reads the settings, and when the pull is set
     /// up, not stopped, due and allowed by `gate`, makes one request at
-    /// `now` for `users`. Returns the lines to log.
+    /// `now` for `users`: of Stripe's while a page waits for the check
+    /// against Stripe, else of the portal's. Returns the lines to log.
     pub(crate) fn tick(
         &mut self,
         env: &Env<'_>,
@@ -387,6 +419,15 @@ impl Puller {
             );
             return notes;
         }
+        let at = Applying {
+            users,
+            now,
+            settings: &settings,
+        };
+        if let Some(pending) = self.pending.take() {
+            self.ask_stripe(pending, env, at, room, &mut notes);
+            return notes;
+        }
         let token = match self.token(env, settings.revision()) {
             Ok(token) => token,
             Err(why) => {
@@ -398,7 +439,7 @@ impl Puller {
         let cursor = self.ledger.cursor();
         let request = PullRequest {
             url: origin.entitlements_url(cursor),
-            token: &token,
+            credential: Credential::Portal(&token),
             within: room,
         };
         match env.portal.fetch(&request) {
@@ -409,21 +450,15 @@ impl Puller {
                 self.state = None;
                 self.retry_later();
             }
-            Ok(answer) => self.answered(judge(answer, cursor), users, now, &settings, &mut notes),
+            Ok(answer) => self.answered(judge(answer, cursor), at, &mut notes),
         }
         notes
     }
 
-    fn answered(
-        &mut self,
-        judged: Judged,
-        users: &BTreeMap<UserId, User>,
-        now: UnixTime,
-        settings: &PullSettings,
-        notes: &mut Vec<String>,
-    ) {
+    fn answered(&mut self, judged: Judged, at: Applying<'_>, notes: &mut Vec<String>) {
+        let Applying { now, settings, .. } = at;
         match judged {
-            Judged::Page(page) => self.record(&page, users, now, settings, notes),
+            Judged::Page(page) => self.received(page, at, notes),
             Judged::Refused(error) => {
                 self.failed(
                     notes,
@@ -462,18 +497,153 @@ impl Puller {
         }
     }
 
-    /// Applies `page` to a copy of the ledger, writes it, and only then
-    /// keeps it. A refund in full of a traffic pack that the page holds
-    /// waits for the usage ([`Self::settle`]).
+    /// A page the portal sent: applied at once while the check against
+    /// Stripe is off, else held until Stripe has said what it knows of
+    /// its grants.
+    fn received(&mut self, page: FeedPage, at: Applying<'_>, notes: &mut Vec<String>) {
+        let Applying {
+            users,
+            now,
+            settings,
+        } = at;
+        if settings.stripe_check() {
+            let pending = Pending::new(page);
+            self.confirm(pending, at, notes);
+        } else {
+            let applied = self.ledger.apply(&page, users, now, settings.rehearsal());
+            self.record(&page, applied, now, settings, notes);
+        }
+    }
+
+    /// Moves the page that waits for the check as far as it goes without
+    /// a request: it is applied once Stripe has said what it knows of each
+    /// grant that needs it, refused as without the check, or kept for the
+    /// lookup that asks Stripe on a later tick.
+    fn confirm(&mut self, mut pending: Pending, at: Applying<'_>, notes: &mut Vec<String>) {
+        let Applying {
+            users,
+            now,
+            settings,
+        } = at;
+        match pending.wanted(&self.ledger, users, now, settings.rehearsal()) {
+            Wanted::Apply(applied) => {
+                self.record(pending.page(), Ok(applied), now, settings, notes)
+            }
+            Wanted::Refused(refusal) => {
+                self.record(pending.page(), Err(refusal), now, settings, notes);
+            }
+            Wanted::Ask { lookup, left } => {
+                self.say_state(
+                    notes,
+                    &format!(
+                        "payment pull: asking Stripe about the payment of order {} ({left} grant(s) of the page wait for the check against Stripe)",
+                        lookup.target().order
+                    ),
+                );
+                self.pending = Some(pending);
+                self.retry = RETRY_FIRST;
+                self.next = None;
+            }
+        }
+    }
+
+    /// The one request of a tick while a page waits for the check: the next
+    /// of the lookup under way, unless the page needs no more of Stripe.
+    fn ask_stripe(
+        &mut self,
+        mut pending: Pending,
+        env: &Env<'_>,
+        at: Applying<'_>,
+        room: Duration,
+        notes: &mut Vec<String>,
+    ) {
+        let Applying {
+            users,
+            now,
+            settings,
+        } = at;
+        let lookup = match pending.wanted(&self.ledger, users, now, settings.rehearsal()) {
+            Wanted::Apply(applied) => {
+                return self.record(pending.page(), Ok(applied), now, settings, notes);
+            }
+            Wanted::Refused(refusal) => {
+                return self.record(pending.page(), Err(refusal), now, settings, notes);
+            }
+            Wanted::Ask { lookup, .. } => lookup,
+        };
+        let key = match self.stripe_key(env, settings.revision()) {
+            Ok(key) => key,
+            Err(why) => {
+                self.pending = Some(pending);
+                notes.push(format!("payment pull: {why}"));
+                self.retry_later();
+                return;
+            }
+        };
+        let request = PullRequest {
+            url: lookup.url(),
+            credential: Credential::Stripe(&key),
+            within: room,
+        };
+        let answer = match env.portal.fetch(&request) {
+            Ok(answer) => answer,
+            Err(failure) => {
+                self.pending = Some(pending);
+                notes.push(format!("payment pull: no answer from Stripe: {failure}"));
+                self.state = None;
+                self.retry_later();
+                return;
+            }
+        };
+        match judge_stripe(answer) {
+            StripeJudged::Page(body) => match pending.read(lookup, &body) {
+                Ok(()) => self.confirm(pending, at, notes),
+                Err(error) => {
+                    self.pending = Some(pending);
+                    self.failed(
+                        notes,
+                        format!("payment pull: {error}; the page waits, and Stripe is asked again"),
+                    );
+                }
+            },
+            StripeJudged::Stop { reason, text } => {
+                self.stop(reason, &text, now, settings.revision(), notes);
+            }
+            StripeJudged::Throttled { wait, stated } => {
+                self.pending = Some(pending);
+                notes.push(format!(
+                    "payment pull: Stripe answered 429 (Retry-After: {}); asking again in {} s",
+                    stated.as_deref().unwrap_or("none"),
+                    wait.as_secs()
+                ));
+                self.state = None;
+                self.next = Some(Instant::now() + wait);
+            }
+            StripeJudged::Failed { status, text } => {
+                self.pending = Some(pending);
+                self.failed(
+                    notes,
+                    format!(
+                        "payment pull: Stripe answered {status} ({text}); the page waits, and Stripe is asked again"
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Writes the ledger `applied` gave from `page`, and only then keeps
+    /// it; or acts on why the page could not be applied. A refund in full
+    /// of a traffic pack that the page holds waits for the usage
+    /// ([`Self::settle`]).
     fn record(
         &mut self,
         page: &FeedPage,
-        users: &BTreeMap<UserId, User>,
+        applied: Result<Applied, ApplyRefusal>,
         now: UnixTime,
         settings: &PullSettings,
         notes: &mut Vec<String>,
     ) {
-        let applied = match self.ledger.apply(page, users, now, settings.rehearsal()) {
+        let applied = match applied {
             Ok(applied) => applied,
             Err(ApplyRefusal::TestMode) => {
                 self.say_state(
@@ -544,17 +714,44 @@ impl Puller {
             }
             StopReason::BadRequest => "the portal answered 400: it says this request is malformed",
             StopReason::Inconsistent => "a page does not fit the payment ledger",
+            StopReason::StripeUnauthorized => {
+                "Stripe answered 401: the read key is wrong or was revoked; make a new restricted key and give it to `mooringctl portal stripe-check on`"
+            }
+            StopReason::StripeForbidden => {
+                "Stripe answered 403: the read key may not read checkouts or invoices; give it Read on Checkout Sessions and Invoices, or make a new one"
+            }
+            StopReason::StripeBadRequest => {
+                "Stripe answered 400 or 404: it says the check's request is wrong"
+            }
         };
-        if reason == StopReason::Unauthorized {
-            self.token = None;
+        let change = match reason {
+            StopReason::StripeUnauthorized
+            | StopReason::StripeForbidden
+            | StopReason::StripeBadRequest => {
+                "`mooringctl portal stripe-check on` with a key, or `portal stripe-check off`"
+            }
+            StopReason::Conflict
+            | StopReason::Unauthorized
+            | StopReason::BadRequest
+            | StopReason::Inconsistent => "`mooringctl portal connect` or `portal rehearsal`",
+        };
+        match reason {
+            StopReason::Unauthorized => self.token = None,
+            StopReason::StripeUnauthorized | StopReason::StripeForbidden => self.stripe_key = None,
+            StopReason::Conflict
+            | StopReason::BadRequest
+            | StopReason::Inconsistent
+            | StopReason::StripeBadRequest => {}
         }
+        // A page that waits is fetched again once the pull goes on.
+        self.pending = None;
         self.ledger = self.ledger.with_stop(Some(Stop {
             reason,
             at: now,
             settings_revision: revision,
         }));
         notes.push(format!(
-            "payment pull: stopped: {why} ({text}); it pulls again once its settings change (`mooringctl portal connect` or `portal rehearsal`)"
+            "payment pull: stopped: {why} ({text}); it pulls again once its settings change ({change})"
         ));
         if let Err(error) = self.write(&self.ledger) {
             notes.push(format!(
@@ -598,6 +795,27 @@ impl Puller {
         }
     }
 
+    /// Stripe's read key for the settings `revision`, read from the keychain
+    /// when the revision changed.
+    fn stripe_key(&mut self, env: &Env<'_>, revision: u64) -> Result<StripeReadKey, String> {
+        if let Some((read_for, key)) = &self.stripe_key
+            && *read_for == revision
+        {
+            return Ok(key.clone());
+        }
+        match env.secrets.get(&SecretRef::StripeReadKey) {
+            Ok(SecretMaterial::StripeReadKey(key)) => {
+                self.stripe_key = Some((revision, key.clone()));
+                Ok(key)
+            }
+            // The keychain decodes an item by its reference's kind.
+            Ok(_) => Err("the keychain item stripe/read-key is not a Stripe read key".to_owned()),
+            Err(error) => Err(format!(
+                "the check against Stripe is on, and its read key cannot be read: {error}; the page waits"
+            )),
+        }
+    }
+
     /// Reads the settings; a failure keeps none and is logged once.
     fn read_settings(&mut self, notes: &mut Vec<String>) {
         let read = read_payment_pull(&self.support, MAX_SETTINGS_BYTES + 1)
@@ -615,10 +833,13 @@ impl Puller {
                 if settings.as_ref().map(PullSettings::revision)
                     != self.settings.as_ref().map(PullSettings::revision)
                 {
-                    // A change of the settings may come with a new token,
-                    // and a revision may come again after the file was
-                    // lost: the token is read again.
+                    // A change of the settings may come with a new token
+                    // or key, and a revision may come again after the file
+                    // was lost: both are read again, and a page that waits
+                    // for the check is fetched again under the new ones.
                     self.token = None;
+                    self.stripe_key = None;
+                    self.pending = None;
                     self.next = None;
                     self.retry = RETRY_FIRST;
                     self.state = None;

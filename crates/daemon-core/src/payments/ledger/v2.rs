@@ -3,7 +3,7 @@
 //! The ledger's version 2 (2026-11-12), when the refund that takes a pack
 //! back recorded what the daemon's usage report said as it was applied, and
 //! took the pack back whole when the report could not tell. Read and lifted
-//! to the current version, never written.
+//! to version 3, and from there to the current one; never written.
 //!
 //! The lift, for the refund that takes a granted pack back:
 //!
@@ -22,7 +22,8 @@ use std::collections::BTreeMap;
 use mooring_model::UnixTime;
 use serde::Deserialize;
 
-use super::{DisputeRecord, GrantRecord, OrderTerms, Stop};
+use super::v3::{self, GrantRecord};
+use super::{DisputeRecord, OrderTerms, Stop};
 use crate::payments::ids::OrderId;
 
 /// The version this module reads.
@@ -88,10 +89,10 @@ pub(super) enum PackUse {
 }
 
 impl LedgerFile {
-    /// The document as the current version holds it.
-    pub(super) fn lift(self) -> super::LedgerFile {
-        super::LedgerFile {
-            _version: super::LEDGER_VERSION,
+    /// The document as version 3 holds it.
+    pub(super) fn lift(self) -> v3::LedgerFile {
+        v3::LedgerFile {
+            _version: v3::VERSION,
             cursor: self.cursor,
             pulled_at: self.pulled_at,
             stopped: self.stopped,
@@ -101,8 +102,8 @@ impl LedgerFile {
 }
 
 impl OrderRecord {
-    fn lift(self) -> super::OrderRecord {
-        super::OrderRecord {
+    fn lift(self) -> v3::OrderRecord {
+        v3::OrderRecord {
             order: self.order,
             terms: self.terms,
             livemode: self.livemode,

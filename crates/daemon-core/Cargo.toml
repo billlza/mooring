@@ -13,6 +13,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# The portal's renewal order ids, for the check against Stripe (design §9.6).
+blake2.workspace = true
 mooring-agent-proto.workspace = true
 mooring-model.workspace = true
 serde.workspace = true

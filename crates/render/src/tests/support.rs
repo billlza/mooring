@@ -179,6 +179,9 @@ pub(crate) fn secrets_where(
             SecretRef::PortalPullToken => {
                 SecretMaterial::PortalPullToken(secrets.portal_pull_token().unwrap().clone())
             }
+            SecretRef::StripeReadKey => {
+                SecretMaterial::StripeReadKey(secrets.stripe_read_key().unwrap().clone())
+            }
             SecretRef::NodeRealityPrivate(n) => {
                 SecretMaterial::RealityPrivateKey(secrets.reality_private(n).unwrap().clone())
             }

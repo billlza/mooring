@@ -36,6 +36,12 @@
 //! - **Test mode** (contract §5.3): a page of Stripe's test mode is applied
 //!   only while the operator rehearses ([`ApplyRefusal::TestMode`]), and its
 //!   grants count only while the rehearsal lasts ([`Entitlements`]).
+//! - **The check against Stripe** (contract §5.7), while the operator has it
+//!   on: each grant of a live page that would give a period or a pack is
+//!   applied as Stripe said, granted and recorded as confirmed, or held;
+//!   until Stripe has said it of every such grant, the page is not applied
+//!   and [`PaymentLedger::apply_checked`] names the grants it must still be
+//!   asked about.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,18 +57,20 @@ use super::ids::OrderId;
 use super::refund::{
     PackUse, RefundEffect, RefundUsage, TakeBacks, close_restarted, pack_taken_back,
 };
+use super::stripe::{Confirmable, Refusal, Verdict};
 use crate::period::BillingCycle;
 use crate::usage::boundary_after;
 
 mod v1;
 mod v2;
+mod v3;
 
-/// The ledger's version: 3 since a refunded pack waits for the usage
-/// (2026-11-12): a pack's use carries when Mooring learned it and the
-/// nodes that may still count a download that was open at the refund, and
-/// one not learned yet is recorded as waited for. Versions 1 and 2 are
-/// read and lifted.
-pub const LEDGER_VERSION: u32 = 3;
+/// The ledger's version: 4 since the check against Stripe (2026-11-14): a
+/// grant records whether Stripe confirmed it, a grant may be held for what
+/// Stripe said, and the pull may stop for Stripe's answer. Version 3 added
+/// that a refunded pack waits for the usage (2026-11-12). Versions 1 to 3
+/// are read and lifted.
+pub const LEDGER_VERSION: u32 = 4;
 
 /// The largest ledger written or read, in bytes. An order takes about
 /// 700 bytes, so this holds thousands of orders.
@@ -81,6 +89,13 @@ pub enum StopReason {
     BadRequest,
     /// An entry contradicted the ledger ([`ApplyRefusal::Contradicted`]).
     Inconsistent,
+    /// Stripe answered 401: the read key is wrong or revoked.
+    StripeUnauthorized,
+    /// Stripe answered 403: the read key may not read checkouts or
+    /// invoices.
+    StripeForbidden,
+    /// Stripe answered 400 or 404: it says Mooring's request is wrong.
+    StripeBadRequest,
 }
 
 impl StopReason {
@@ -92,6 +107,9 @@ impl StopReason {
             Self::Unauthorized => "unauthorized",
             Self::BadRequest => "bad_request",
             Self::Inconsistent => "inconsistent",
+            Self::StripeUnauthorized => "stripe_unauthorized",
+            Self::StripeForbidden => "stripe_forbidden",
+            Self::StripeBadRequest => "stripe_bad_request",
         }
     }
 }
@@ -119,6 +137,13 @@ pub enum HeldReason {
     UserRevoked,
     /// The service period would end after 9999-12-31.
     BeyondCalendar,
+    /// The check against Stripe found nothing at Stripe that pays the
+    /// order.
+    StripeNoPayment,
+    /// Stripe says the order's payment was not paid.
+    StripeUnpaid,
+    /// What Stripe says was paid is not what the order says.
+    StripeDiffers,
 }
 
 impl HeldReason {
@@ -129,6 +154,9 @@ impl HeldReason {
             Self::UnknownUser => "unknown_user",
             Self::UserRevoked => "user_revoked",
             Self::BeyondCalendar => "beyond_calendar",
+            Self::StripeNoPayment => "stripe_no_payment",
+            Self::StripeUnpaid => "stripe_unpaid",
+            Self::StripeDiffers => "stripe_differs",
         }
     }
 }
@@ -165,6 +193,10 @@ pub struct GrantRecord {
     pub applied_at: UnixTime,
     /// What it gave.
     pub outcome: GrantOutcome,
+    /// Whether Stripe confirmed the payment before the grant was applied
+    /// (design §9.6): never for a grant applied while the check was off,
+    /// one of test mode, or one held.
+    pub confirmed: bool,
 }
 
 /// A refund entry.
@@ -323,6 +355,8 @@ pub enum LedgerEvent {
         /// used this cycle, or in the next billing cycle; only the operator
         /// lifts the others (design §13.6).
         suspended: Option<SuspendReason>,
+        /// Whether Stripe confirmed the payment first.
+        confirmed: bool,
     },
     /// A grant was held.
     Held {
@@ -332,6 +366,8 @@ pub enum LedgerEvent {
         user: UserId,
         /// Why.
         reason: HeldReason,
+        /// For a grant held for what Stripe said, what that was.
+        refusal: Option<Refusal>,
     },
     /// A refund was recorded. The daemon's log names the order only: a
     /// line can outlive the 13 months the agreement keeps a user's records.
@@ -453,15 +489,17 @@ impl PaymentLedger {
     /// Reads a ledger the daemon wrote, of this version or an earlier one,
     /// which is lifted: a refund that takes a pack back and whose use was
     /// not recorded (version 1) or not known (version 2) waits for the
-    /// usage ([`PackUse::Awaiting`]), and a use version 2 recorded was
-    /// learned when its refund was applied. Besides its shape and version,
-    /// orders are in id order and each once, every recorded entry is at or
-    /// below the cursor, a grant's number is below its refunds' and
-    /// dispute's, a period ends after it starts and within the calendar, a
-    /// period or pack is of an order of its kind, each refund's amount and
-    /// flag are recorded once, a pack's use is recorded on the refund that
-    /// takes a granted pack back and on no other, and it was learned no
-    /// earlier than that refund was applied.
+    /// usage ([`PackUse::Awaiting`]), a use version 2 recorded was learned
+    /// when its refund was applied, and no grant before version 4 was
+    /// confirmed at Stripe. Besides its shape and version, orders are in id
+    /// order and each once, every recorded entry is at or below the cursor,
+    /// a grant's number is below its refunds' and dispute's, a period ends
+    /// after it starts and within the calendar, a period or pack is of an
+    /// order of its kind, each refund's amount and flag are recorded once,
+    /// a pack's use is recorded on the refund that takes a granted pack
+    /// back and on no other, and it was learned no earlier than that refund
+    /// was applied, and a grant confirmed at Stripe is a live one that gave
+    /// a period or a pack.
     pub fn decode(bytes: &[u8]) -> Result<Self, LedgerError> {
         if bytes.len() > MAX_LEDGER_BYTES {
             return Err(LedgerError::TooLarge);
@@ -471,11 +509,16 @@ impl PaymentLedger {
             LEDGER_VERSION => {
                 serde_json::from_slice::<LedgerFile>(bytes).map_err(LedgerError::Decode)?
             }
+            v3::VERSION => serde_json::from_slice::<v3::LedgerFile>(bytes)
+                .map_err(LedgerError::Decode)?
+                .lift(),
             v2::VERSION => serde_json::from_slice::<v2::LedgerFile>(bytes)
                 .map_err(LedgerError::Decode)?
+                .lift()
                 .lift(),
             v1::VERSION => serde_json::from_slice::<v1::LedgerFile>(bytes)
                 .map_err(LedgerError::Decode)?
+                .lift()
                 .lift()
                 .lift(),
             found => return Err(LedgerError::UnknownVersion { found }),
@@ -541,15 +584,16 @@ impl PaymentLedger {
     /// on the user's request). An order goes when the deployment no longer
     /// holds its user and either keeps the user's bare id (a removal at the
     /// user's request) or the ledger granted the order, or held it while
-    /// the user was being revoked or beyond the calendar: the user was the
-    /// deployment's then, so it has been removed since. An order held for
-    /// an id the deployment never held (`unknown_user`), or known only from
-    /// a refund or dispute, stays unless the id is kept: nothing tells it
-    /// apart from an order the portal sent for a user Mooring never had,
-    /// which the operator settles at Stripe. The cursor, the last pull and
-    /// the stop stay. Dropping an order forgets that it was granted, which
-    /// matters only if the portal sent it again, which it does only after
-    /// its journal was rewound (contract §5.1).
+    /// the user was being revoked, beyond the calendar or for what Stripe
+    /// said: the user was the deployment's then, so it has been removed
+    /// since. An order held for an id the deployment never held
+    /// (`unknown_user`), or known only from a refund or dispute, stays
+    /// unless the id is kept: nothing tells it apart from an order the
+    /// portal sent for a user Mooring never had, which the operator settles
+    /// at Stripe. The cursor, the last pull and the stop stay. Dropping an
+    /// order forgets that it was granted, which matters only if the portal
+    /// sent it again, which it does only after its journal was rewound
+    /// (contract §5.1).
     #[must_use]
     pub fn without_removed_users(&self, deployment: &Deployment) -> Option<(Self, Pruned)> {
         let removed = |record: &OrderRecord| {
@@ -594,13 +638,67 @@ impl PaymentLedger {
     /// `now`, for the deployment's `users`; `rehearsal` when the operator
     /// rehearses. A refund in full of a pack is recorded as waiting for the
     /// usage ([`PackUse::Awaiting`]), which [`Self::settle`] ends. The copy
-    /// has the page's cursor, `now` as its last pull and no stop.
+    /// has the page's cursor, `now` as its last pull and no stop. Every
+    /// grant is applied as the portal lists it: the pull with the check
+    /// against Stripe off.
     pub fn apply(
         &self,
         page: &FeedPage,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         rehearsal: bool,
+    ) -> Result<Applied, ApplyRefusal> {
+        self.apply_with(page, users, now, rehearsal, &mut Check::off())
+    }
+
+    /// Applies `page` as [`Self::apply`] does, with the check against
+    /// Stripe on (design §9.6), once `verdicts` says what Stripe said of
+    /// each grant of a live page that would give a period or a pack: one
+    /// confirmed is granted and recorded so, and one refused is held for
+    /// the reason of Stripe's [`Refusal`]. Until then the page is not
+    /// applied, and [`Checked::Unconfirmed`] names the grants `verdicts`
+    /// says nothing of, in the page's order. A page refused is refused as
+    /// [`Self::apply`] would refuse it, before Stripe is asked anything. A
+    /// test-mode page, which only a rehearsal applies, is not checked.
+    pub fn apply_checked(
+        &self,
+        page: &FeedPage,
+        users: &BTreeMap<UserId, User>,
+        now: UnixTime,
+        rehearsal: bool,
+        verdicts: &Verdicts,
+    ) -> Result<Checked, ApplyRefusal> {
+        let mut check = Check::on(verdicts);
+        let applied = self.apply_with(page, users, now, rehearsal, &mut check)?;
+        // A renewal's first order: in the ledger, or earlier on the page.
+        let target = |(order, terms): (OrderId, OrderTerms)| {
+            let first = terms
+                .renewal_of
+                .as_ref()
+                .and_then(|first| applied.ledger.orders.get(first))
+                .map(|record| record.terms.clone());
+            Confirmable {
+                order,
+                terms,
+                first,
+            }
+        };
+        let mut missing = check.missing.into_iter();
+        let Some(next) = missing.next() else {
+            return Ok(Checked::Applied(applied));
+        };
+        let next = Box::new(target(next));
+        let rest = missing.map(target).collect();
+        Ok(Checked::Unconfirmed { next, rest })
+    }
+
+    fn apply_with(
+        &self,
+        page: &FeedPage,
+        users: &BTreeMap<UserId, User>,
+        now: UnixTime,
+        rehearsal: bool,
+        check: &mut Check<'_>,
     ) -> Result<Applied, ApplyRefusal> {
         if !page.livemode() && !rehearsal {
             return Err(ApplyRefusal::TestMode);
@@ -615,7 +713,7 @@ impl PaymentLedger {
         let mut events = Vec::with_capacity(page.entries().len());
         for entry in page.entries() {
             let event = next
-                .apply_entry(entry, page.livemode(), users, now)
+                .apply_entry(entry, page.livemode(), users, now, check)
                 .map_err(|contradiction| ApplyRefusal::Contradicted {
                     seq: entry.seq,
                     order: entry.order.clone(),
@@ -841,6 +939,7 @@ impl PaymentLedger {
         livemode: bool,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
+        check: &mut Check<'_>,
     ) -> Result<LedgerEvent, Contradiction> {
         if let Some(record) = self.orders.get(&entry.order) {
             if record.terms != entry.terms {
@@ -851,7 +950,7 @@ impl PaymentLedger {
             }
         }
         match entry.event {
-            EntryEvent::Grant => self.grant(entry, livemode, users, now),
+            EntryEvent::Grant => self.grant(entry, livemode, users, now, check),
             EntryEvent::Refund {
                 amount_refunded,
                 in_full,
@@ -939,6 +1038,7 @@ impl PaymentLedger {
         livemode: bool,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
+        check: &mut Check<'_>,
     ) -> Result<LedgerEvent, Contradiction> {
         if let Some(record) = self.orders.get(&entry.order) {
             return match record.grant {
@@ -970,12 +1070,14 @@ impl PaymentLedger {
                 }
             },
         };
+        let (outcome, confirmed, refusal) = confirmed_outcome(check, entry, livemode, outcome);
         let mut record = OrderRecord::new(entry.order.clone(), terms.clone(), livemode);
         record.grant = Some(GrantRecord {
             seq: entry.seq,
             recorded_at: entry.recorded_at,
             applied_at: now,
             outcome,
+            confirmed,
         });
         self.orders.insert(entry.order.clone(), record);
         Ok(match outcome {
@@ -983,6 +1085,7 @@ impl PaymentLedger {
                 order: entry.order.clone(),
                 user: terms.user.clone(),
                 reason,
+                refusal,
             },
             GrantOutcome::Period { .. } | GrantOutcome::Pack => LedgerEvent::Granted {
                 order: entry.order.clone(),
@@ -990,6 +1093,7 @@ impl PaymentLedger {
                 outcome,
                 livemode,
                 suspended,
+                confirmed,
             },
         })
     }
@@ -1046,6 +1150,88 @@ impl PaymentLedger {
     }
 }
 
+/// What the check against Stripe said of each grant of a page, by its
+/// order ([`PaymentLedger::apply_checked`]).
+pub type Verdicts = BTreeMap<OrderId, Verdict>;
+
+/// What [`PaymentLedger::apply_checked`] came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Checked {
+    /// Stripe had said what it knows of every grant that needed it: the
+    /// page, applied.
+    Applied(Applied),
+    /// Stripe must still be asked about `next`, then about `rest`, in the
+    /// page's order; nothing of the page is applied.
+    Unconfirmed {
+        /// The first grant to ask about; boxed, as the other variant is
+        /// smaller.
+        next: Box<Confirmable>,
+        /// The others.
+        rest: Vec<Confirmable>,
+    },
+}
+
+/// How the live grants of a page are applied: as listed, or as Stripe
+/// said.
+struct Check<'a> {
+    /// What Stripe said; `None` while the check is off.
+    verdicts: Option<&'a Verdicts>,
+    /// The grants `verdicts` says nothing of, in the page's order: each is
+    /// applied as though confirmed, so that what follows it on the page is
+    /// applied as it would be, and the page is then not kept.
+    missing: Vec<(OrderId, OrderTerms)>,
+}
+
+impl<'a> Check<'a> {
+    /// The check off: every grant as the portal lists it.
+    const fn off() -> Self {
+        Self {
+            verdicts: None,
+            missing: Vec::new(),
+        }
+    }
+
+    /// The check on, with what Stripe said so far.
+    const fn on(verdicts: &'a Verdicts) -> Self {
+        Self {
+            verdicts: Some(verdicts),
+            missing: Vec::new(),
+        }
+    }
+}
+
+/// What the check makes of `entry`'s grant, whose outcome would be
+/// `outcome`: the outcome to record, whether Stripe confirmed it, and what
+/// Stripe said when it refused it. Only a live grant that gives a period or
+/// a pack is checked.
+fn confirmed_outcome(
+    check: &mut Check<'_>,
+    entry: &FeedEntry,
+    livemode: bool,
+    outcome: GrantOutcome,
+) -> (GrantOutcome, bool, Option<Refusal>) {
+    let gives = matches!(outcome, GrantOutcome::Period { .. } | GrantOutcome::Pack);
+    let Some(verdicts) = check.verdicts.filter(|_| livemode && gives) else {
+        return (outcome, false, None);
+    };
+    match verdicts.get(&entry.order) {
+        Some(Verdict::Confirmed) => (outcome, true, None),
+        Some(Verdict::Refused(refusal)) => (
+            GrantOutcome::Held {
+                reason: refusal.held_reason(),
+            },
+            false,
+            Some(refusal.clone()),
+        ),
+        None => {
+            check
+                .missing
+                .push((entry.order.clone(), entry.terms.clone()));
+            (outcome, true, None)
+        }
+    }
+}
+
 fn inconsistent(what: &'static str) -> LedgerError {
     LedgerError::Inconsistent { what }
 }
@@ -1079,6 +1265,15 @@ fn check_record(record: &OrderRecord, cursor: u64) -> Result<(), LedgerError> {
                 return Err(inconsistent("a pack is recorded for a service order"));
             }
             GrantOutcome::Pack | GrantOutcome::Held { .. } => {}
+        }
+        let gave = matches!(
+            grant.outcome,
+            GrantOutcome::Period { .. } | GrantOutcome::Pack
+        );
+        if grant.confirmed && !(record.livemode && gave) {
+            return Err(inconsistent(
+                "a grant is recorded as confirmed at Stripe that gave nothing or was of test mode",
+            ));
         }
     }
     let first_in_full = record

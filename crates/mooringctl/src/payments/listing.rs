@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What `portal payments` prints: the pull's settings, the ledger's cursor,
-//! last pull and stop, how many refunds wait for the usage or still take in
-//! downloads, and every order with what Mooring did about it. It names
-//! users by id only, as the ledger does.
+//! What `portal payments` prints: the pull's settings, the check against
+//! Stripe among them, the ledger's cursor, last pull and stop, how many
+//! refunds wait for the usage or still take in downloads, and every order
+//! with what Mooring did about it, a grant Stripe confirmed marked so. It
+//! names users by id only, as the ledger does.
 
 use mooring_daemon_core::payments::{
     GrantOutcome, LedgerError, OrderRecord, PaymentLedger, PullSettings, StopReason, TakeBacks,
@@ -37,6 +38,14 @@ pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedge
                     "off"
                 }
             ));
+            lines.push(format!(
+                "  check against Stripe: {}",
+                if settings.stripe_check() {
+                    "on: each live payment is confirmed at Stripe before it is granted"
+                } else {
+                    "off: payments are granted as the portal lists them"
+                }
+            ));
         }
     }
     let Some(ledger) = ledger else {
@@ -54,6 +63,11 @@ pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedge
             StopReason::Unauthorized => "401, the token was refused",
             StopReason::BadRequest => "400, the portal refused the request",
             StopReason::Inconsistent => "a page did not fit the ledger",
+            StopReason::StripeUnauthorized => "Stripe's 401, the read key was refused",
+            StopReason::StripeForbidden => {
+                "Stripe's 403, the read key may not read checkouts or invoices"
+            }
+            StopReason::StripeBadRequest => "Stripe's 400 or 404, Stripe refused the request",
         };
         let changed = settings.is_some_and(|settings| settings.revision() > stop.settings_revision);
         let then = if changed {
@@ -172,9 +186,14 @@ fn order_lines(record: &OrderRecord, take_backs: &TakeBacks, lines: &mut Vec<Str
                 }
             };
             lines.push(format!(
-                "    grant, entry {}, applied {}: {what}",
+                "    grant, entry {}, applied {}: {what}{}",
                 grant.seq,
-                stamp(grant.applied_at)
+                stamp(grant.applied_at),
+                if grant.confirmed {
+                    "; confirmed at Stripe"
+                } else {
+                    ""
+                }
             ));
         }
     }

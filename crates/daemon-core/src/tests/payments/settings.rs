@@ -68,15 +68,26 @@ fn an_origin_is_https_a_dns_name_and_an_optional_port() {
     assert!(!OriginError.to_string().contains("example"));
 }
 
-/// The settings round-trip; their file is of version 1 with every key and
-/// no other.
+/// The settings round-trip; their file is of version 2 with every key and
+/// no other. A change of the rehearsal keeps the check against Stripe, and
+/// a change of the check keeps the origin and the rehearsal.
 #[test]
 fn the_settings_round_trip_and_refuse_another_shape() {
     let origin = PortalOrigin::parse("https://portal.example.org").unwrap();
-    let connected = PullSettings::connected(3, origin.clone(), false);
+    let connected = PullSettings::connected(3, origin.clone(), false, false);
     let rehearsing = connected.rehearsing(4, true);
-    let disconnected = PullSettings::disconnected(5);
-    for settings in [&connected, &rehearsing, &disconnected] {
+    let disconnected = PullSettings::disconnected(5, false);
+    let checking = rehearsing.checking(6, true);
+    let checking_rehearsal_off = checking.rehearsing(7, false);
+    let disconnected_checking = PullSettings::disconnected(8, true);
+    for settings in [
+        &connected,
+        &rehearsing,
+        &disconnected,
+        &checking,
+        &checking_rehearsal_off,
+        &disconnected_checking,
+    ] {
         let bytes = settings.encode().unwrap();
         assert!(bytes.ends_with(b"}\n"));
         assert_eq!(&PullSettings::decode(&bytes).unwrap(), settings);
@@ -84,25 +95,45 @@ fn the_settings_round_trip_and_refuse_another_shape() {
     assert_eq!(connected.revision(), 3);
     assert_eq!(connected.origin(), Some(&origin));
     assert!(!connected.rehearsal());
+    assert!(!connected.stripe_check());
     assert_eq!(rehearsing.revision(), 4);
     assert_eq!(rehearsing.origin(), Some(&origin));
     assert!(rehearsing.rehearsal());
+    assert!(!rehearsing.stripe_check());
     assert_eq!(disconnected.origin(), None);
     assert!(!disconnected.rehearsal());
+    assert!(!disconnected.stripe_check());
+    assert_eq!(checking.revision(), 6);
+    assert_eq!(checking.origin(), Some(&origin));
+    assert!(checking.rehearsal());
+    assert!(checking.stripe_check());
+    assert_eq!(checking_rehearsal_off.revision(), 7);
+    assert!(!checking_rehearsal_off.rehearsal());
+    assert!(checking_rehearsal_off.stripe_check());
+    assert_eq!(disconnected_checking.revision(), 8);
+    assert_eq!(disconnected_checking.origin(), None);
+    assert!(disconnected_checking.stripe_check());
+    let all_on = PullSettings::connected(9, origin, true, true);
+    assert_eq!(all_on.rehearsing(9, true).checking(9, true), all_on);
+    assert_ne!(all_on.checking(9, false), all_on);
+    assert_ne!(all_on.rehearsing(9, false), all_on);
     assert_eq!(
-        String::from_utf8(connected.encode().unwrap()).unwrap(),
-        "{\n  \"version\": 1,\n  \"revision\": 3,\n  \"origin\": \"https://portal.example.org\",\n  \"rehearsal\": false\n}\n"
+        String::from_utf8(checking.encode().unwrap()).unwrap(),
+        "{\n  \"version\": 2,\n  \"revision\": 6,\n  \"origin\": \"https://portal.example.org\",\n  \"rehearsal\": true,\n  \"stripe_check\": true\n}\n"
     );
-    let base = json!({"version": 1, "revision": 3, "origin": "https://portal.example.org", "rehearsal": false});
+    let base = json!({"version": 2, "revision": 3, "origin": "https://portal.example.org", "rehearsal": false, "stripe_check": true});
     let decode =
         |value: &serde_json::Value| PullSettings::decode(&serde_json::to_vec(value).unwrap());
-    let mut version = base.clone();
-    version["version"] = json!(2);
-    assert!(matches!(
-        decode(&version),
-        Err(SettingsError::UnknownVersion { found: 2 })
-    ));
-    for key in ["revision", "origin", "rehearsal", "version"] {
+    assert!(decode(&base).unwrap().stripe_check());
+    for found in [0, 3] {
+        let mut version = base.clone();
+        version["version"] = json!(found);
+        assert!(matches!(
+            decode(&version),
+            Err(SettingsError::UnknownVersion { found: read }) if read == found
+        ));
+    }
+    for key in ["revision", "origin", "rehearsal", "stripe_check", "version"] {
         let mut missing = base.clone();
         missing.as_object_mut().unwrap().remove(key);
         assert!(
@@ -113,12 +144,50 @@ fn the_settings_round_trip_and_refuse_another_shape() {
     let mut extra = base.clone();
     extra["token"] = json!("0".repeat(64));
     assert!(matches!(decode(&extra), Err(SettingsError::Decode(_))));
-    let mut address = base;
+    let mut address = base.clone();
     address["origin"] = json!("http://portal.example.org");
     assert!(matches!(decode(&address), Err(SettingsError::Decode(_))));
+    let mut not_a_flag = base;
+    not_a_flag["stripe_check"] = json!("on");
+    assert!(matches!(decode(&not_a_flag), Err(SettingsError::Decode(_))));
     assert!(matches!(
         PullSettings::decode(&vec![b' '; 4097]),
         Err(SettingsError::TooLarge)
+    ));
+}
+
+/// Settings of version 1, from before the check against Stripe, are read
+/// with the check off; version 1 knows no check, so a file of version 1
+/// that names one is refused.
+#[test]
+fn settings_of_version_1_are_read_with_the_check_off() {
+    let origin = PortalOrigin::parse("https://portal.example.org").unwrap();
+    let decode =
+        |value: &serde_json::Value| PullSettings::decode(&serde_json::to_vec(value).unwrap());
+    let version_1 = json!({"version": 1, "revision": 3, "origin": "https://portal.example.org", "rehearsal": true});
+    assert_eq!(
+        decode(&version_1).unwrap(),
+        PullSettings::connected(3, origin, true, false)
+    );
+    let disconnected = json!({"version": 1, "revision": 4, "origin": null, "rehearsal": false});
+    assert_eq!(
+        decode(&disconnected).unwrap(),
+        PullSettings::disconnected(4, false)
+    );
+    for key in ["revision", "origin", "rehearsal"] {
+        let mut missing = version_1.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            matches!(decode(&missing), Err(SettingsError::Decode(_))),
+            "{key}"
+        );
+    }
+    let mut checked = version_1;
+    checked["stripe_check"] = json!(false);
+    assert!(matches!(decode(&checked), Err(SettingsError::Decode(_))));
+    assert!(matches!(
+        PullSettings::decode(b"{\"version\": \"1\"}"),
+        Err(SettingsError::Decode(_))
     ));
 }
 
@@ -133,7 +202,7 @@ fn a_revision_is_above_the_settings_and_the_stop() {
         settings_revision: revision,
     };
     assert_eq!(PullSettings::next_revision(None, None), 1);
-    let settings = PullSettings::connected(4, origin, false);
+    let settings = PullSettings::connected(4, origin, false, false);
     assert_eq!(PullSettings::next_revision(Some(&settings), None), 5);
     assert_eq!(
         PullSettings::next_revision(Some(&settings), Some(stop(2))),

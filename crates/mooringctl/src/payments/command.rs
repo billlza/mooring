@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The operator's payment commands (design §9.6): `portal connect`,
-//! `portal rehearsal on|off`, `portal disconnect` and `portal payments`.
+//! `portal rehearsal on|off`, `portal disconnect` and `portal payments`;
+//! `portal stripe-check on|off` is [`super::stripe_check`].
 //!
 //! The token is read at the terminal without echo, or from standard input,
 //! never from an argument, and checked before anything is written. It is
@@ -35,11 +36,11 @@ use crate::prompt::Console;
 /// and a LF.
 const MAX_TOKEN_INPUT: usize = PORTAL_PULL_TOKEN_CHARS + 2;
 
-fn output(error: io::Error) -> CommandError {
+pub(super) fn output(error: io::Error) -> CommandError {
     CommandError::Local(LocalError::Output(error))
 }
 
-fn files(error: PaymentFileError) -> CommandError {
+pub(super) fn files(error: PaymentFileError) -> CommandError {
     CommandError::Local(LocalError::PaymentFiles(Box::new(error)))
 }
 
@@ -55,10 +56,14 @@ pub(crate) fn token_of(bytes: &[u8]) -> Result<PortalPullToken, LocalError> {
     PortalPullToken::parse(text).map_err(LocalError::PullToken)
 }
 
-/// The token read from `stdin` to its end, at most [`MAX_TOKEN_INPUT`]
-/// bytes.
-pub(crate) fn stdin_token(stdin: &mut dyn Read) -> Result<PortalPullToken, LocalError> {
-    let mut buffer = Zeroizing::new(vec![0_u8; MAX_TOKEN_INPUT + 1]);
+/// `stdin` read to its end into a zeroizing buffer of `bound` bytes and
+/// one more, so that it never grows; `None` when more than `bound` bytes
+/// came, which no secret it is read for spells.
+pub(super) fn stdin_secret(
+    stdin: &mut dyn Read,
+    bound: usize,
+) -> Result<Option<Zeroizing<Vec<u8>>>, LocalError> {
+    let mut buffer = Zeroizing::new(vec![0_u8; bound + 1]);
     let mut filled = 0;
     loop {
         let read = match stdin.read(&mut buffer[filled..]) {
@@ -70,15 +75,25 @@ pub(crate) fn stdin_token(stdin: &mut dyn Read) -> Result<PortalPullToken, Local
             break;
         }
         filled += read;
-        if filled > MAX_TOKEN_INPUT {
-            return Err(LocalError::PullToken(
-                mooring_model::ModelError::InvalidSecret {
-                    kind: mooring_model::secret::SecretKind::PortalPullToken,
-                },
-            ));
+        if filled > bound {
+            return Ok(None);
         }
     }
-    token_of(&buffer[..filled])
+    buffer.truncate(filled);
+    Ok(Some(buffer))
+}
+
+/// The token read from `stdin` to its end, at most [`MAX_TOKEN_INPUT`]
+/// bytes.
+pub(crate) fn stdin_token(stdin: &mut dyn Read) -> Result<PortalPullToken, LocalError> {
+    match stdin_secret(stdin, MAX_TOKEN_INPUT)? {
+        Some(bytes) => token_of(&bytes),
+        None => Err(LocalError::PullToken(
+            mooring_model::ModelError::InvalidSecret {
+                kind: mooring_model::secret::SecretKind::PortalPullToken,
+            },
+        )),
+    }
 }
 
 /// The token typed (pasted) once at the terminal without echo.
@@ -89,7 +104,7 @@ pub(crate) fn terminal_token(console: &mut dyn Console) -> Result<PortalPullToke
 
 /// The ledger's stop revision and the ledger as read, or none; a ledger
 /// that cannot be read is an error, never none.
-fn ledger(support: &Path) -> Result<Option<PaymentLedger>, PaymentFileError> {
+pub(super) fn ledger(support: &Path) -> Result<Option<PaymentLedger>, PaymentFileError> {
     read_payment_ledger(support, MAX_LEDGER_BYTES + 1)
         .map_err(|source| PaymentFileError::Store {
             file: "payments/ledger.json",
@@ -100,7 +115,7 @@ fn ledger(support: &Path) -> Result<Option<PaymentLedger>, PaymentFileError> {
 }
 
 /// The pull's settings as read, or none.
-fn settings(support: &Path) -> Result<Option<PullSettings>, PaymentFileError> {
+pub(super) fn settings(support: &Path) -> Result<Option<PullSettings>, PaymentFileError> {
     read_payment_pull(support, MAX_SETTINGS_BYTES + 1)
         .map_err(|source| PaymentFileError::Store {
             file: "payment-pull.json",
@@ -112,7 +127,7 @@ fn settings(support: &Path) -> Result<Option<PullSettings>, PaymentFileError> {
 
 /// What a change of the settings did.
 #[derive(Debug)]
-enum Changed {
+pub(super) enum Changed {
     /// The new settings were written.
     Written,
     /// The settings were left as they are.
@@ -122,7 +137,7 @@ enum Changed {
 /// Changes the settings under the lock: `change` gets the current ones and
 /// the revision the change takes, and returns the new ones, or `None` to
 /// leave them as they are.
-fn change_settings(
+pub(super) fn change_settings(
     support: &Path,
     change: impl FnOnce(Option<PullSettings>, u64) -> Result<Option<PullSettings>, PaymentFileError>,
 ) -> Result<Changed, PaymentFileError> {
@@ -173,25 +188,28 @@ pub(crate) fn connect(
         .put(SecretEntry::PortalPullToken(token))
         .map_err(|error| CommandError::Local(LocalError::Keychain(error)))?;
     // What the change wrote, for the summary: a successful change ran it.
-    let mut written = (0, false);
+    let mut written = (0, false, false);
     change_settings(&support, |current, revision| {
         let rehearsal = current.as_ref().is_some_and(PullSettings::rehearsal);
-        written = (revision, rehearsal);
+        let stripe_check = current.as_ref().is_some_and(PullSettings::stripe_check);
+        written = (revision, rehearsal, stripe_check);
         Ok(Some(PullSettings::connected(
             revision,
             origin.clone(),
             rehearsal,
+            stripe_check,
         )))
     })
     .map_err(files)?;
-    let (revision, rehearsal) = written;
+    let (revision, rehearsal, stripe_check) = written;
     writeln!(
         out,
         "the payment pull reads {origin} with the token stored as {} (settings revision {revision}); the daemon asks within five minutes, while the Mac is on no foreign network",
         SecretRef::PortalPullToken,
     )
     .map_err(output)?;
-    writeln!(out, "{}", rehearsal_line(rehearsal)).map_err(output)
+    writeln!(out, "{}", rehearsal_line(rehearsal)).map_err(output)?;
+    writeln!(out, "{}", super::stripe_check::check_line(stripe_check)).map_err(output)
 }
 
 /// What a rehearsal being on or off means.
@@ -231,11 +249,12 @@ pub(crate) fn rehearsal(
 /// ledger stays: what was granted still counts.
 pub(crate) fn disconnect(env: &mut Env<'_>, out: &mut dyn Write) -> Result<(), CommandError> {
     let support = support_dir(env)?;
-    // Settings already without an origin are kept as they are.
+    // Settings already without an origin are kept as they are; the check
+    // against Stripe stays as it is, for when the pull is connected again.
     change_settings(&support, |current, revision| {
         Ok(current
             .filter(|current| current.origin().is_some())
-            .map(|_| PullSettings::disconnected(revision)))
+            .map(|current| PullSettings::disconnected(revision, current.stripe_check())))
     })
     .map_err(files)?;
     match env.secrets.delete(&SecretRef::PortalPullToken) {

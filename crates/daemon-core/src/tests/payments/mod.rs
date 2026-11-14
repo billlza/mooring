@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Payments (design §9.6): the portal's document and its goldens, the
-//! payment ledger and its rules, what paid orders give users, and the
-//! pull's settings.
+//! payment ledger and its rules, what paid orders give users, the pull's
+//! settings, and the check against Stripe.
 //!
 //! The goldens in `contract/portal-fixtures/entitlements-v1/` are copies of
 //! the portal repository's `contract/fixtures/entitlements-v1/` at its
@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use crate::payments::{FeedError, FeedPage, OrderId, RefundUsage, RunBegan};
 use crate::usage::{DownlinkCount, ServedBefore};
 
+mod check;
 mod feed;
 mod ledger;
 mod open_downloads;
@@ -26,6 +27,7 @@ mod policy;
 mod refunds;
 mod retention;
 mod settings;
+mod stripe;
 
 /// The contract's `pilot.json`: six entries of all three kinds, in
 /// Stripe's test mode.

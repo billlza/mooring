@@ -29,7 +29,7 @@ use mooring_model::node::{
 use mooring_model::ports::{DEBIAN_EPHEMERAL_PORTS, PortPlan};
 use mooring_model::secret::{
     Ed25519Seed, Hy2KeyPem, Password, PortalPullToken, RealityPrivateKey, RouterAdminPassword,
-    Secret, SecretEntry, SecretKind, SecretMaterial, SecretRef, WgPrivateKey,
+    Secret, SecretEntry, SecretKind, SecretMaterial, SecretRef, StripeReadKey, WgPrivateKey,
 };
 use mooring_model::sim::{
     BillDay, Carrier, CycleRule, EvidenceRef, PlanKind, SimPlan, SimPolicy, StopPolicy,
@@ -269,6 +269,9 @@ pub(crate) fn material_for(secret_ref: &SecretRef, seed: u8) -> SecretMaterial {
         ),
         SecretKind::PortalPullToken => SecretMaterial::PortalPullToken(
             PortalPullToken::parse(&format!("{seed:02x}").repeat(32)).unwrap(),
+        ),
+        SecretKind::StripeReadKey => SecretMaterial::StripeReadKey(
+            StripeReadKey::parse(&format!("rk_live_{}", format!("{seed:02x}").repeat(12))).unwrap(),
         ),
     }
 }

@@ -21,13 +21,13 @@ use super::super::support::{Harness, NOW};
 use super::{FIRST, grant, harness, ledger_on_disk, page, token};
 use crate::payments::pull::Puller;
 
-fn settings(harness: &Harness) -> Option<PullSettings> {
+pub(super) fn settings(harness: &Harness) -> Option<PullSettings> {
     read_payment_pull(&harness.support_dir(), MAX_SETTINGS_BYTES + 1)
         .unwrap()
         .map(|bytes| PullSettings::decode(&bytes).unwrap())
 }
 
-fn stored_token(harness: &Harness) -> Option<String> {
+pub(super) fn stored_token(harness: &Harness) -> Option<String> {
     match harness.secrets.get(&SecretRef::PortalPullToken) {
         Ok(SecretMaterial::PortalPullToken(token)) => Some(token.expose_str().to_owned()),
         Ok(other) => panic!("{other:?}"),
@@ -35,7 +35,7 @@ fn stored_token(harness: &Harness) -> Option<String> {
     }
 }
 
-const ORIGIN: &str = "https://portal.example.org";
+pub(super) const ORIGIN: &str = "https://portal.example.org";
 
 fn connect_with_stdin(harness: &mut Harness, input: &[u8]) -> super::super::support::Outcome {
     harness.stdin = Cursor::new(input.to_vec());
@@ -54,7 +54,8 @@ fn connect_stores_the_token_and_points_the_pull() {
         outcome.stdout,
         format!(
             "the payment pull reads {ORIGIN} with the token stored as portal/pull-token (settings revision 1); the daemon asks within five minutes, while the Mac is on no foreign network\n\
-             rehearsal off: payments of Stripe's test mode are not granted, and a portal in test mode is waited on\n"
+             rehearsal off: payments of Stripe's test mode are not granted, and a portal in test mode is waited on\n\
+             check against Stripe off: payments are granted as the portal lists them (`mooringctl portal stripe-check on` confirms each at Stripe first)\n"
         )
     );
     assert_eq!(
@@ -65,6 +66,7 @@ fn connect_stores_the_token_and_points_the_pull() {
     assert_eq!(written.revision(), 1);
     assert_eq!(written.origin().unwrap().to_string(), ORIGIN);
     assert!(!written.rehearsal());
+    assert!(!written.stripe_check());
     let path = harness.support_dir().join(PAYMENT_PULL_FILE);
     assert_eq!(
         std::os::unix::fs::PermissionsExt::mode(&fs::metadata(&path).unwrap().permissions())
@@ -301,6 +303,7 @@ fn payments_lists_the_pull_and_every_order() {
         listed.stdout,
         "payment pull: https://portal.example.org (settings revision 1)\n\
          \x20 rehearsal: off\n\
+         \x20 check against Stripe: off: payments are granted as the portal lists them\n\
          payment ledger: cursor 3; last pull 2026-10-13 19:20:00 UTC\n\
          orders: 2 (1 held, 1 refunded, 0 disputed)\n\
          \x20 aaaaaaaaaaaaaaaaaaaa user fxuseraaab plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp)\n\

@@ -277,6 +277,10 @@ pub(crate) enum LocalError {
         "the pull token is not the 64 lower-case hexadecimal characters `mooring-portal pull-token` printed"
     )]
     PullToken(#[source] ModelError),
+    /// The key given to `portal stripe-check on` is not a restricted live
+    /// key; the error says why without echoing it.
+    #[error("the Stripe key was refused")]
+    StripeKey(#[source] mooring_model::StripeKeyError),
     /// The payment pull's files could not be read or written.
     #[error("the payment pull's files failed")]
     PaymentFiles(#[source] Box<crate::payments::PaymentFileError>),

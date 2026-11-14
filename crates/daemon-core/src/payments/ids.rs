@@ -6,7 +6,12 @@
 
 use std::fmt;
 
+use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
+
+/// What the portal hashes before an invoice's id to give the order id of
+/// the renewal that the invoice paid ([`OrderId::for_renewal`]).
+const RENEWAL_DOMAIN: &[u8] = b"mooring-portal renewal order v1\0";
 
 /// Crockford's base 32 in lower case: the digits and the letters but `i`,
 /// `l`, `o` and `u`.
@@ -47,6 +52,42 @@ impl OrderId {
         } else {
             Err(IdError::Order)
         }
+    }
+
+    /// The id as written.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The id of the order the portal makes for the renewal of a
+    /// subscription that the Stripe invoice `invoice` paid (design §9.6;
+    /// the portal's `OrderId::for_renewal`): the first 100 bits of
+    /// BLAKE2s-256 of the 31 bytes `mooring-portal renewal order v1`, a
+    /// zero byte and the invoice's id, five bits to a symbol, most
+    /// significant first. Nobody places a renewal's order, so its id is
+    /// the invoice's rather than drawn at random: the same invoice always
+    /// gives the same id, and two invoices share one no more often than two
+    /// random ids do.
+    #[must_use]
+    pub fn for_renewal(invoice: &str) -> Self {
+        let digest = Blake2s256::new()
+            .chain_update(RENEWAL_DOMAIN)
+            .chain_update(invoice.as_bytes())
+            .finalize();
+        let bytes = digest.as_slice();
+        let id = (0..ORDER_ID_CHARS)
+            .map(|index| {
+                // The five bits that begin `bit` bits in: in one byte or
+                // across two. The last symbol's lie in bytes 11 and 12, so
+                // `bit / 8 + 1` is always within the digest.
+                let bit = 5 * index;
+                let pair = (u16::from(bytes[bit / 8]) << 8) | u16::from(bytes[bit / 8 + 1]);
+                let value = (pair >> (11 - bit % 8)) & 0x1f;
+                char::from(CROCKFORD[usize::from(value)])
+            })
+            .collect();
+        Self(id)
     }
 }
 
@@ -126,6 +167,12 @@ impl Currency {
         } else {
             Err(IdError::Currency)
         }
+    }
+
+    /// The code as written.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 

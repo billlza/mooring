@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The payment pull (design §9.6): curl's request, the daemon's pull and
-//! its every outcome, the operator's commands, and the daemon's loop.
+//! its every outcome, the check against Stripe, the operator's commands,
+//! and the daemon's loop.
 //! Nothing here reaches a portal: the system's curl is run only against a
 //! stub on the loopback interface.
 
@@ -16,6 +17,7 @@ use serde_json::{Value, json};
 use super::support::Harness;
 use super::user::{fixture, harness_with};
 
+mod check;
 mod command;
 mod curl;
 mod daemon;
@@ -24,6 +26,7 @@ mod open_downloads;
 mod prune;
 mod pull;
 mod settle;
+mod stripe_check;
 
 /// The first fixture user, `fxuseraaab`.
 pub(crate) const FIRST: &str = "fxuseraaab";
@@ -50,7 +53,7 @@ pub(crate) fn connect(harness: &mut Harness, revision: u64, rehearsal: bool, byt
         .put(SecretEntry::PortalPullToken(token(byte)))
         .unwrap();
     let origin = PortalOrigin::parse("https://portal.example.org").unwrap();
-    let settings = PullSettings::connected(revision, origin, rehearsal);
+    let settings = PullSettings::connected(revision, origin, rehearsal, false);
     update_payment_pull::<()>(&harness.support_dir(), 4096, |_| {
         Ok(Some(settings.encode().unwrap()))
     })

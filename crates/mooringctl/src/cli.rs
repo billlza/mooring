@@ -222,8 +222,14 @@ pub(crate) enum PortalCommand {
         #[arg(value_enum)]
         state: OnOff,
     },
+    /// Turn the check against Stripe on or off. While it is on, the daemon
+    /// grants a live payment only once Stripe confirms it, and holds one
+    /// Stripe does not.
+    #[command(subcommand)]
+    StripeCheck(StripeCheckCommand),
     /// Stop the payment pull and delete its token. The payment ledger
-    /// stays, and what it granted still counts.
+    /// stays, and what it granted still counts; the check against Stripe
+    /// stays as it is.
     Disconnect,
     /// Print the payment pull's settings, the ledger's cursor, its last
     /// pull and any stop, and every order the portal listed with what
@@ -249,6 +255,24 @@ pub(crate) enum PortalCommand {
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
     },
+}
+
+/// `portal stripe-check`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum StripeCheckCommand {
+    /// Store a restricted key of Stripe's live mode (rk_live_...) that may
+    /// only read Checkout Sessions and Invoices, typed (pasted) at the
+    /// terminal without echo or read from stdin, and turn the check on. It
+    /// may be turned on before `portal connect`; giving a new key ends a
+    /// stop for Stripe's 401 or 403.
+    On {
+        /// Read the key from stdin (whitespace around it is ignored).
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Turn the check off and delete the key: payments are then granted as
+    /// the portal lists them.
+    Off,
 }
 
 /// A switch, as typed on the command line.

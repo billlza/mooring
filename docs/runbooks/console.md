@@ -290,13 +290,38 @@ mooringctl portal payments
 
 - **Rehearse first.** In Stripe's test mode the portal's journal says so, and Mooring grants nothing from it unless you rehearse: `mooringctl portal rehearsal on`, pay with Stripe's test cards, check `portal payments` and the console, then `mooringctl portal rehearsal off`, which takes the rehearsal's grants out at once, and `mooring-portal discard-test-payments` on the portal's host before real payments are taken. The cursor carries on.
 - **It pulls only while the Mac is on no foreign network** (the pull goes the Mac's own way, so never over campus Wi-Fi or eduroam). The daemon's log says when it waits.
-- **A stop** (the portal answered 409, 401 or 400, or a page contradicted the ledger) holds until you change the pull's settings: `portal connect` again (with a new token after a 401), or `portal rehearsal`. The log line names the reason. After a 409 the portal's journal is not the one pulled before (a database restored from a backup, say): find out which journal is right before connecting again; Mooring never lowers its cursor.
-- **A held grant** (`unknown_user`, `user_revoked`) names a payment Mooring did not grant: refund it at Stripe.
+- **A stop** (the portal answered 409, 401 or 400, or a page contradicted the ledger) holds until you change the pull's settings: `portal connect` again (with a new token after a 401), or `portal rehearsal`; Stripe's own stops are below. The log line names the reason. After a 409 the portal's journal is not the one pulled before (a database restored from a backup, say): find out which journal is right before connecting again; Mooring never lowers its cursor.
+- **A held grant** (`unknown_user`, `user_revoked`, and with the check against Stripe on the three below) names a payment Mooring did not grant: refund it at Stripe.
 - `mooringctl portal disconnect` stops the pull and deletes the token; the ledger stays, and what it granted still counts.
 
 The daemon's log has a line for each grant, hold, refund, dispute, failure and stop, by order id and user id.
 
 The ledger keeps a user's orders only while the deployment holds the user: once the user is removed (section 7), the daemon deletes their orders at its next tick and logs how many, naming no one.
+
+### The check against Stripe (2026-11-14)
+
+The portal's list is all the daemon knows of a payment, so whoever broke into the portal could write grants that nobody paid for. With the check on, the daemon confirms at Stripe each live grant that gives a period or a pack before it grants it, with a key that can only read (design §9.6, `docs/portal-contract.md` §5.5). It is off until you turn it on.
+
+1. **Make the key.** In Stripe's Dashboard, in live mode, open **Developers → API keys** and create a restricted key. Name it for its use (`mooring-check`, say), set **Checkout Sessions** to **Read** and **Invoices** to **Read**, leave every other permission at **None**, and copy the key (`rk_live_…`) when Stripe shows it. Never give the daemon the account's secret key (`sk_live_…`), which can move money: `stripe-check on` refuses it, and a test-mode key too.
+2. **Store it** on this Mac: paste it at the prompt (it is not echoed), or pipe it in with `--stdin`.
+
+   ```
+   mooringctl portal stripe-check on
+   mooringctl portal payments
+   ```
+
+   The key goes to the keychain (`stripe/read-key`) and nowhere else, and `portal payments` says `check against Stripe: on`. Turn it on before the first real payment: a grant pulled while it is off is granted as the portal lists it. `portal connect`, `portal rehearsal` and `portal disconnect` keep the check and its key.
+3. **Try it with one purchase.** Buy the cheapest plan once with your own card, for a user of your own. Within about five minutes the daemon's log has the grant with "Stripe confirmed its payment", and `portal payments` marks it "confirmed at Stripe". Then refund it in full at Stripe; the refund takes back what the order gave, as above. This is the only test of the check against Stripe itself: the build was tested against Stripe's documented answers.
+
+What it does:
+
+- **A page waits for Stripe.** Nothing of a page of the portal's list is granted until Stripe has answered for every live grant on it, and the log says which order Stripe is being asked about. The daemon sends Stripe one request every two seconds at most, and only while it may pull (no foreign network). A page waiting when the daemon stops is pulled again after it starts.
+- **Where it looks.** A first order's checkout among those completed from a week before its payment to five minutes after it, by the order id the checkout carries; a renewal's invoice among the paid invoices of the subscription its first order's checkout began.
+- **A held grant** is never granted, now or later: `stripe_no_payment` (Stripe has no payment for the order), `stripe_unpaid` (its payment is not paid), `stripe_differs` (paid, but in test mode, in another currency, for another amount, or in a checkout of the other kind). The log line and `portal payments` say what Stripe answered. If the user did pay, refund them at Stripe. An order you let through at the portal although its checkout charged another amount (`approve-order`) is held too, so refund such an order instead of letting it through. A payment with a coupon or a free trial charges less than the plan's price and is held as well.
+- **A stop.** Stripe's 401 (the key is wrong, or was deleted), 403 (it may not read checkouts or invoices) or 400 and 404 (Stripe refused the request) stop the pull until you change its settings. After a 401 make a new key and run `stripe-check on` with it; after a 403 give the key both permissions at Stripe, or make a new one, and run `stripe-check on` again. A 400 or 404 is a fault in the request, the build's or one a change at Stripe caused: report the log line, which has Stripe's error type and code and nothing else of Stripe's answer; `stripe-check off` lets payments through unchecked meanwhile.
+- **Failures** (Stripe's 429 or 5xx, or no answer) only make the page wait. Stripe is asked again after a pause that grows, as the portal is; after a 429, when Stripe says, or five minutes later.
+- `mooringctl portal stripe-check off` turns the check off, then deletes the key from the keychain; delete it at Stripe as well.
+- Once this build has written the payment ledger (version 4) or the pull's settings (version 2), an older build cannot read them: do not put one back.
 
 ## 7. The nightly apply job (2026-11-12)
 
