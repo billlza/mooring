@@ -148,6 +148,21 @@ classdef RadioHistoryTest < matlab.unittest.TestCase
                 testCase.verifySubstring(failure.message, "mooring.readRadioSamples");
             end
         end
+
+        function withoutAProgramNamedItIsTheInstalledAppsUnderTheHomeFolder(testCase)
+            % HOME points at a folder that holds no app while this runs, so
+            % that the test neither finds nor runs the Mac's own mooringctl.
+            homeFolder = fullfile(testCase.Folder, "home");
+            testCase.applyFixture(matlab.unittest.fixtures.EnvironmentVariableFixture("HOME", homeFolder));
+            try
+                mooring.radioHistory();
+                testCase.verifyFail("A history was returned.");
+            catch failure
+                testCase.verifyEqual(string(failure.identifier), "mooring:radio:NoMooringctl");
+                testCase.verifySubstring(failure.message, ...
+                    fullfile(homeFolder, "Applications", "Mooring.app", "Contents", "MacOS", "mooringctl"));
+            end
+        end
     end
 end
 
