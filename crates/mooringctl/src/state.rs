@@ -8,7 +8,7 @@ use std::convert::Infallible;
 use std::io;
 
 use mooring_model::deployment::Bookkeeping;
-use mooring_model::{Deployment, StateV4};
+use mooring_model::{Deployment, ModelError, StateV4};
 use mooring_store::{ChangeError, Store, StoreError};
 
 use crate::error::{CommandError, LocalError};
@@ -87,6 +87,16 @@ pub(crate) fn state_change(error: ChangeError<Infallible>) -> LocalError {
     match error {
         ChangeError::Store(error) => store_failure(error),
         ChangeError::Refused(never) => match never {},
+    }
+}
+
+/// A change whose closure refuses as the model does: that refusal,
+/// reported as the store reports the model's (`InvalidChange`), or the
+/// store's failure.
+pub(crate) fn model_change(error: ChangeError<ModelError>) -> LocalError {
+    match error {
+        ChangeError::Store(error) => store_failure(error),
+        ChangeError::Refused(source) => store_failure(StoreError::InvalidChange { source }),
     }
 }
 

@@ -12,18 +12,21 @@ use std::path::PathBuf;
 use mooring_agent_proto::{Generation, RequestKind, Response};
 use mooring_model::node::NodeLifecycle;
 use mooring_model::removal::ForgottenUser;
+use mooring_model::secret::{SecretEntry, SecretSnapshot};
 use mooring_model::user::SuspendReason;
 use mooring_model::{
-    CalendarDate, ConfigGeneration, Deployment, DeploymentParts, NodeId, UnixTime, User, UserId,
-    UserStatus,
+    CalendarDate, ConfigGeneration, Deployment, DeploymentParts, NodeId, SPARE_USERS, UnixTime,
+    User, UserId, UserStatus,
 };
+use mooring_store::SecretStore;
 use serde_json::Value;
 
 use super::apply::{bundle_and_header, stand_in_engines};
 use super::deployed::deployed_with;
-use super::support::{Answered, Expected, ExpectedRemote, Harness, NOW};
+use super::support::{Answered, Expected, ExpectedRemote, Harness, NOW, Refusals};
 use super::user::{fixture, state_bytes, store};
 use crate::apply::APPLY_LOCK_FILE;
+use crate::apply::report::{Spares, SparesFailure};
 use crate::daemon::RunPaths;
 use crate::daemon::deployed::ENGINES_DIRECTORY;
 use crate::error::EXIT_LOCAL;
@@ -76,12 +79,63 @@ fn revoke(parts: &mut DeploymentParts, text: &str, since: UnixTime) {
 
 /// A harness for the job: the deployed daemon's (the M7 pinned, the
 /// egress resolving to lo0, the fixture's secrets) with stand-in engines
-/// in the support directory, where the job takes them from.
+/// in the support directory, where the job takes them from, and the spare
+/// users ready ([`with_ready_spares`]), so that the step that tops them up
+/// has nothing to do.
 fn job(deployment: Deployment) -> Harness {
+    job_as_is(with_ready_spares(deployment))
+}
+
+/// [`job`] with `deployment` as it is, spare users and all.
+fn job_as_is(deployment: Deployment) -> Harness {
     let mut harness = deployed_with(deployment);
+    for secret_ref in spare_secrets().refs() {
+        let material = spare_secrets().material(&secret_ref).unwrap();
+        harness
+            .secrets
+            .put(SecretEntry::new(secret_ref, material).unwrap())
+            .unwrap();
+    }
     let engines = harness.support_dir().join(ENGINES_DIRECTORY);
     stand_in_engines(&mut harness, &engines);
     harness
+}
+
+/// The fixture's secrets with those of its spare users
+/// (`Fixture::with_spares`).
+pub(crate) fn spare_secrets() -> SecretSnapshot {
+    mooring_fixtures::two_nodes_three_users()
+        .unwrap()
+        .with_spares(u8::try_from(SPARE_USERS).unwrap())
+        .unwrap()
+        .secrets
+}
+
+/// `deployment` with the fixture's [`SPARE_USERS`] spare users, each
+/// holding credentials on the active nodes of `deployment`.
+fn with_ready_spares(deployment: Deployment) -> Deployment {
+    let spares = mooring_fixtures::two_nodes_three_users()
+        .unwrap()
+        .with_spares(u8::try_from(SPARE_USERS).unwrap())
+        .unwrap()
+        .deployment
+        .spares()
+        .clone();
+    let mut parts = deployment.into_parts();
+    let active: Vec<NodeId> = parts
+        .nodes
+        .iter()
+        .filter(|node| node.lifecycle.is_active())
+        .map(|node| node.id.clone())
+        .collect();
+    parts.spares = spares
+        .into_values()
+        .map(|mut spare| {
+            spare.per_node.retain(|node, _| active.contains(node));
+            spare
+        })
+        .collect();
+    Deployment::try_from(parts).unwrap()
 }
 
 fn deployment(harness: &Harness) -> Deployment {
@@ -146,7 +200,7 @@ fn a_firing_outside_the_window_does_nothing() {
         let outcome = harness.run(&["apply", "--pending", "--json"]);
         assert_eq!(
             outcome.stdout,
-            format!("{{\"version\":1,\"at\":{now},\"ran\":false}}\n")
+            format!("{{\"version\":2,\"at\":{now},\"ran\":false}}\n")
         );
     }
     assert_eq!(state_bytes(&harness), before);
@@ -211,9 +265,10 @@ fn suspensions_go_while_no_node_can_be_reached() {
         outcome.stdout,
         format!(
             "suspended {FIRST}: expired\n\
+             spare users: 3 ready\n\
              ams1: apply failed: the node could not be reached or refused: ssh ended without a reply (exit status 255): / ssh: connect to the node: Operation timed out\n\
              lon1: apply failed: the node could not be reached or refused: ssh ended without a reply (exit status 255): / ssh: connect to the node: Operation timed out\n\
-             apply at 2026-10-13 19:20:00 UTC: 1 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 2 node(s) behind applied; 2 failure(s)\n"
+             apply at 2026-10-13 19:20:00 UTC: 1 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 0 of 2 node(s) behind applied; 2 failure(s)\n"
         )
     );
     assert_eq!(
@@ -268,7 +323,8 @@ fn the_cap_holds_a_resume_back() {
         format!(
             "held back by the cap on active users: {THIRD}, suspended for quota in the billing cycle from 2026-09-01 since 2026-09-03 19:20:00 UTC: its billing cycle has ended; still suspended\n\
              held back by the cap on active users: {SECOND}, suspended for quota in the billing cycle from 2026-09-01 since 2026-09-08 19:20:00 UTC: its billing cycle has ended; still suspended\n\
-             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 2 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+             spare users: 3 ready\n\
+             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 2 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
         )
     );
     assert_eq!(state_bytes(&harness), before);
@@ -327,6 +383,7 @@ fn a_clock_that_stepped_back_carries_out_nothing_but_node_applies() {
         lines.next().unwrap(),
         "removals skipped: the clock stepped back"
     );
+    assert_eq!(lines.next().unwrap(), "spare users: 3 ready");
     assert!(lines.next().unwrap().starts_with("ams1: apply failed: "));
     assert!(lines.next().unwrap().starts_with("lon1: apply failed: "));
     assert_eq!(harness.nodes.seen.borrow().len(), 2);
@@ -360,7 +417,8 @@ fn a_user_is_removed_13_months_after_the_revocation_to_the_second() {
         outcome.stdout,
         format!(
             "removed {SECOND}: revoked 13 months ago\n\
-             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 1 removed, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+             spare users: 3 ready\n\
+             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 1 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
         )
     );
     let log = log(&harness);
@@ -534,7 +592,7 @@ fn the_json_outcome_names_each_part() {
     assert_eq!(
         value,
         serde_json::json!({
-            "version": 1,
+            "version": 2,
             "at": NOW,
             "ran": true,
             "policy": {"carried_out": {
@@ -547,6 +605,7 @@ fn the_json_outcome_names_each_part() {
                 "usage_behind": "ams1 may have counted traffic, but no usage ledger is given for it"
             }},
             "removals": {"done": {"removed": [], "kept_ids_dropped": false, "failed": []}},
+            "spares": {"done": {"drawn": 0, "credentials": 0, "ready": 3}},
             "nodes": []
         })
     );
@@ -567,9 +626,9 @@ fn a_node_behind_is_applied() {
             }
         }
     });
-    let mut harness = job(deployment.clone());
+    let mut harness = job(deployment);
     let engines = harness.support_dir().join(ENGINES_DIRECTORY);
-    let (_, header) = bundle_and_header(&harness, &engines, &deployment);
+    let (_, header) = bundle_and_header(&harness, &engines, &self::deployment(&harness));
     super::apply::script_hello_and_blobs(&harness, header.blobs());
     harness.nodes.expect(
         Expected::Request {
@@ -591,11 +650,12 @@ fn a_node_behind_is_applied() {
     assert_eq!(applied.config_generation.get(), 2);
     assert!(
         outcome.stdout.ends_with(
-            "lon1: applied\napply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 1 of 1 node(s) behind applied; 0 failure(s)\n"
+            "lon1: applied\napply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 1 of 1 node(s) behind applied; 0 failure(s)\n"
         ),
         "{}",
         outcome.stdout
     );
+    assert!(outcome.stdout.starts_with("spare users: 3 ready\n"));
     assert!(log(&harness).contains("mooringctl apply: lon1: applied\n"));
 }
 
@@ -860,6 +920,206 @@ fn a_pack_lifts_nothing_while_the_usage_is_behind() {
     assert_eq!(status(&harness, FIRST), suspended);
     assert_eq!(
         outcome.stdout,
-        "apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+        "spare users: 3 ready\n\
+         apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
     );
+}
+
+/// The ids of `deployment`'s spare users.
+fn spare_ids(deployment: &Deployment) -> Vec<UserId> {
+    deployment.spares().keys().cloned().collect()
+}
+
+/// In the window the job draws the spare users `user add` takes, each with
+/// credentials on every node planned, adopted or applied, in one
+/// configuration change whose secrets the keychain holds; the report
+/// counts them, and the log names none.
+#[test]
+fn the_job_draws_spare_users_in_the_window() {
+    let mut harness = job_as_is(unapplied(|_| {}));
+    let before = deployment(&harness);
+    assert!(before.spares().is_empty());
+    let keychain = harness.secrets.refs();
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let after = deployment(&harness);
+    assert_eq!(
+        after.config_generation(),
+        before.config_generation().next().unwrap()
+    );
+    let spares = spare_ids(&after);
+    assert_eq!(spares.len(), SPARE_USERS);
+    for spare in after.spares().values() {
+        let held: Vec<&str> = spare.per_node.keys().map(NodeId::as_str).collect();
+        assert_eq!(held, ["ams1", "lon1"]);
+        assert!(!before.users().contains_key(&spare.id));
+    }
+    assert_eq!(
+        harness.secrets.refs(),
+        keychain.union(&after.required_secrets()).cloned().collect()
+    );
+    assert_eq!(
+        outcome.stdout,
+        "spare users: 3 drawn, 0 credential set(s) given on nodes that lacked them; 3 ready\n\
+         apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 3 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+    );
+    let log = log(&harness);
+    assert!(
+        log.contains("mooringctl apply: spare users: 3 drawn, 0 credential set(s) given"),
+        "{log}"
+    );
+    for spare in &spares {
+        assert!(!log.contains(spare.as_str()), "{log}");
+    }
+    // The next run has nothing to do, and changes nothing.
+    let ready = state_bytes(&harness);
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(outcome.stdout.starts_with("spare users: 3 ready\n"));
+    assert_eq!(state_bytes(&harness), ready);
+}
+
+/// A spare without credentials on a node planned or adopted since it was
+/// drawn gets them there; one short of the count is drawn.
+#[test]
+fn the_job_gives_spare_users_credentials_on_new_nodes() {
+    let mut parts = with_ready_spares(unapplied(|_| {})).into_parts();
+    parts.spares.pop();
+    for spare in &mut parts.spares {
+        spare.per_node.remove(&node("ams1"));
+    }
+    // The keychain still holds what the spares left behind; the new
+    // credentials replace those items.
+    let mut harness = job_as_is(Deployment::try_from(parts).unwrap());
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        outcome.stdout.starts_with(
+            "spare users: 1 drawn, 2 credential set(s) given on nodes that lacked them; 3 ready\n"
+        ),
+        "{}",
+        outcome.stdout
+    );
+    let after = deployment(&harness);
+    assert_eq!(after.spares().len(), SPARE_USERS);
+    for spare in after.spares().values() {
+        let held: Vec<&str> = spare.per_node.keys().map(NodeId::as_str).collect();
+        assert_eq!(held, ["ams1", "lon1"]);
+    }
+    let keychain = harness.secrets.refs();
+    assert!(after.required_secrets().is_subset(&keychain));
+}
+
+/// The operator's `apply --now` outside the window leaves the spare users
+/// as they are, so that no node restarts for them by day; that is no
+/// failure.
+#[test]
+fn a_run_outside_the_window_leaves_the_spare_users() {
+    let mut harness = job_as_is(unapplied(|_| {}));
+    harness.now.set(NOW + 3600);
+    let before = state_bytes(&harness);
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "spare users left as they are: outside the apply window, where the restart they need is expected\n\
+         apply at 2026-10-13 20:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+    );
+    assert_eq!(state_bytes(&harness), before);
+    let outcome = harness.run(&["apply", "--now", "--json"]);
+    let value: Value = serde_json::from_str(&outcome.stdout).unwrap();
+    assert_eq!(value["spares"], "outside_window");
+}
+
+/// A top-up the keychain refuses changes nothing and is one failure of the
+/// run. The report says why, naming the spare it drew; the log says which
+/// part failed and names no spare, since a spare's id is a user's to come.
+#[test]
+fn a_top_up_the_keychain_refuses_is_a_failure_of_the_run() {
+    let mut harness = job_as_is(unapplied(|_| {}));
+    let before = state_bytes(&harness);
+    let keychain = harness.secrets.refs();
+    *harness.keychain.lock().unwrap() = Refusals {
+        put: Some(-25308),
+        ..Refusals::default()
+    };
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+    let (line, summary) = outcome.stdout.split_once('\n').unwrap();
+    let first = refused_spare(line);
+    assert_eq!(
+        summary,
+        "apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, \
+         0 spare user(s) drawn, 0 of 0 node(s) behind applied; 1 failure(s)\n"
+    );
+    assert_eq!(state_bytes(&harness), before);
+    assert_eq!(harness.secrets.refs(), keychain);
+    let outcome = harness.run(&["apply", "--now", "--json"]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    let value: Value = serde_json::from_str(&outcome.stdout).unwrap();
+    assert_eq!(value["spares"]["failed"]["kind"], "change");
+    let error = value["spares"]["failed"]["error"].as_str().unwrap();
+    let second = refused_spare(&format!("spare users not topped up: {error}"));
+    assert_eq!(state_bytes(&harness), before);
+    let log = log(&harness);
+    assert_eq!(
+        log.matches(
+            "mooringctl apply: spare users not topped up: \
+             their credentials or the configuration change could not be written\n"
+        )
+        .count(),
+        2,
+        "{log}"
+    );
+    for drawn in [first, second] {
+        assert!(!log.contains(drawn.as_str()), "{drawn} in {log}");
+    }
+}
+
+/// A failed top-up's line in the report gives its error, which can name a
+/// spare; its line in the log, and its kind in `--json`, only which part
+/// failed.
+#[test]
+fn a_failed_top_up_is_logged_by_the_part_that_failed() {
+    let error = "writing secret user/fxuserzzz1/lon1/vless-uuid failed".to_owned();
+    for (kind, json, words) in [
+        (SparesFailure::State, "state", "the state cannot be read"),
+        (
+            SparesFailure::Credentials,
+            "credentials",
+            "their ids or credentials could not be made",
+        ),
+        (
+            SparesFailure::Change,
+            "change",
+            "their credentials or the configuration change could not be written",
+        ),
+    ] {
+        let spares = Spares::Failed {
+            kind,
+            error: error.clone(),
+        };
+        assert_eq!(spares.line(), format!("spare users not topped up: {error}"));
+        assert_eq!(
+            spares.log_line(),
+            format!("spare users not topped up: {words}")
+        );
+        assert_eq!(
+            serde_json::to_value(&spares).unwrap(),
+            serde_json::json!({"failed": {"kind": json, "error": error}})
+        );
+    }
+}
+
+/// The spare that the report's `line` says the keychain refused to hold.
+fn refused_spare(line: &str) -> UserId {
+    let id = line
+        .strip_prefix("spare users not topped up: the state was not changed: writing secret user/")
+        .and_then(|rest| {
+            rest.strip_suffix(
+                "/ams1/vless-uuid failed; the state is unchanged: keychain put failed with OSStatus -25308",
+            )
+        })
+        .unwrap_or_else(|| panic!("{line}"));
+    UserId::parse(id).unwrap()
 }

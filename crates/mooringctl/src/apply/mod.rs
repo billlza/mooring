@@ -27,7 +27,11 @@
 //!    (`ForgottenExpired`); skipped when the clock stepped back. The daemon
 //!    deletes what it keeps of a removed user (its usage history and its
 //!    payment orders) on its next tick.
-//! 3. **Node applies** ([`nodes::apply_behind`]): every applied node whose
+//! 3. **Spare users** ([`spares::step`], design §13.6): inside the window
+//!    only, the spares `user add` takes are topped up, each with
+//!    credentials on every node, in one configuration change, so that the
+//!    node applies that follow carry them while a restart is expected.
+//! 4. **Node applies** ([`nodes::apply_behind`]): every applied node whose
 //!    confirmed generation is older than the deployment's, by id, through
 //!    the exit's egress as the daemon resolves it, with the engines in the
 //!    support directory; one that fails is reported, and the next one runs.
@@ -38,12 +42,13 @@
 //! (§15.7). `--pending` points standard error at the log, as the daemon
 //! does, since launchd keeps no output of an agent. The run fails (exit 1)
 //! when any part of it failed; a user the cap holds back, a lapsed
-//! suspension kept, and quotas left unchecked are reported, and are no
-//! failure.
+//! suspension kept, quotas left unchecked and spares left outside the
+//! window are reported, and are no failure.
 
 mod nodes;
 pub(crate) mod policy;
 pub(crate) mod report;
+mod spares;
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
@@ -121,8 +126,11 @@ pub(crate) fn apply(
     say_as(&mut log, (env.clock)()?, "apply", &policy.log_line())?;
     let removals = policy::remove(&store, now, policy.clock_stepped_back());
     say_as(&mut log, (env.clock)()?, "apply", &removals.log_line())?;
+    let spares = spares::step(&store, env.secrets, now);
+    say_as(&mut log, (env.clock)()?, "apply", &spares.log_line())?;
     if !json {
         report::write_lines(out, &policy.lines(), &removals.lines())?;
+        report::write_lines(out, &[spares.line()], &[])?;
     }
     let mut progress = Vec::new();
     let sink: &mut dyn Write = if json { &mut progress } else { out };
@@ -133,6 +141,7 @@ pub(crate) fn apply(
         at: now,
         policy,
         removals,
+        spares,
         nodes,
     };
     let failures = outcome.failures();

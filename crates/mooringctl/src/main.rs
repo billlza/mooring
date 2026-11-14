@@ -140,6 +140,10 @@ mod user;
 mod user_forget;
 #[cfg(target_os = "macos")]
 mod user_history;
+#[cfg(target_os = "macos")]
+mod user_opening;
+#[cfg(target_os = "macos")]
+mod user_spares;
 
 use std::io;
 use std::process::ExitCode;
