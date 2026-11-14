@@ -8,11 +8,13 @@
 //! applied: its first apply is the operator's (design §13.2). A node that
 //! cannot be reached, or whose apply fails, is reported, and the next one
 //! runs; an egress that does not resolve fails each node without dialling.
+//! The nodes at the deployment's generation are those the render-drift
+//! step looks at ([`super::drift`]).
 
 use std::io::Write;
 use std::path::Path;
 
-use mooring_model::node::NodeLifecycle;
+use mooring_model::node::{AppliedConfig, NodeLifecycle};
 use mooring_model::{Deployment, NodeId, UnixTime};
 use mooring_store::Store;
 
@@ -24,17 +26,33 @@ use crate::error::{CommandError, LocalError};
 use crate::runtime::resolve::exit_interfaces;
 use crate::state::load;
 
+/// The applied nodes of `deployment`, each with what it confirmed, in id
+/// order: the nodes the job applies.
+fn applied(deployment: &Deployment) -> impl Iterator<Item = (&NodeId, &AppliedConfig)> {
+    deployment.nodes().iter().filter_map(|(id, node)| {
+        if let NodeLifecycle::Applied { applied, .. } = &node.lifecycle {
+            Some((id, applied))
+        } else {
+            None
+        }
+    })
+}
+
 /// The nodes of `deployment` behind its generation, in id order.
 pub(super) fn behind(deployment: &Deployment) -> Vec<NodeId> {
     let current = deployment.config_generation();
-    deployment
-        .nodes()
-        .iter()
-        .filter(|(_, node)| {
-            matches!(&node.lifecycle, NodeLifecycle::Applied { applied, .. }
-                if applied.config_generation < current)
-        })
+    applied(deployment)
+        .filter(|(_, applied)| applied.config_generation < current)
         .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// The nodes of `deployment` that confirmed its generation, each with what
+/// it confirmed, in id order.
+pub(super) fn at_generation(deployment: &Deployment) -> Vec<(&NodeId, &AppliedConfig)> {
+    let current = deployment.config_generation();
+    applied(deployment)
+        .filter(|(_, applied)| applied.config_generation == current)
         .collect()
 }
 

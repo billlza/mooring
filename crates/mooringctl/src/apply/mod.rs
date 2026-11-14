@@ -31,7 +31,13 @@
 //!    only, the spares `user add` takes are topped up, each with
 //!    credentials on every node, in one configuration change, so that the
 //!    node applies that follow carry them while a restart is expected.
-//! 4. **Node applies** ([`nodes::apply_behind`]): every applied node whose
+//! 4. **Render drift** ([`drift::step`], design §13.6): inside the window
+//!    only, when a node that confirmed the deployment's generation is on
+//!    another build's bundle (the bundle it confirmed is not the one this
+//!    build renders for it now), the deployment is given a new generation,
+//!    changing nothing else, so that the node applies carry this build's
+//!    bundle to it in the night.
+//! 5. **Node applies** ([`nodes::apply_behind`]): every applied node whose
 //!    confirmed generation is older than the deployment's, by id, through
 //!    the exit's egress as the daemon resolves it, with the engines in the
 //!    support directory; one that fails is reported, and the next one runs.
@@ -42,9 +48,11 @@
 //! (§15.7). `--pending` points standard error at the log, as the daemon
 //! does, since launchd keeps no output of an agent. The run fails (exit 1)
 //! when any part of it failed; a user the cap holds back, a lapsed
-//! suspension kept, quotas left unchecked and spares left outside the
-//! window are reported, and are no failure.
+//! suspension kept, quotas left unchecked, and spares and nodes on another
+//! build's bundle left outside the window are reported, and are no
+//! failure.
 
+mod drift;
 mod nodes;
 pub(crate) mod policy;
 pub(crate) mod report;
@@ -128,9 +136,11 @@ pub(crate) fn apply(
     say_as(&mut log, (env.clock)()?, "apply", &removals.log_line())?;
     let spares = spares::step(&store, env.secrets, now);
     say_as(&mut log, (env.clock)()?, "apply", &spares.log_line())?;
+    let drift = drift::step(env, &store, &support, now);
+    say_as(&mut log, (env.clock)()?, "apply", &drift.log_line())?;
     if !json {
         report::write_lines(out, &policy.lines(), &removals.lines())?;
-        report::write_lines(out, &[spares.line()], &[])?;
+        report::write_lines(out, &[spares.line(), drift.line()], &[])?;
     }
     let mut progress = Vec::new();
     let sink: &mut dyn Write = if json { &mut progress } else { out };
@@ -142,6 +152,7 @@ pub(crate) fn apply(
         policy,
         removals,
         spares,
+        drift,
         nodes,
     };
     let failures = outcome.failures();

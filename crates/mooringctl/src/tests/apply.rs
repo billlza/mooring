@@ -15,15 +15,15 @@ use mooring_agent_proto::{
     Sha256Hex, TARGET_CHECK_BOUND, TargetFacts, TargetHost, TlsGroup, TlsProbe, TlsSession,
     TlsVersion, TxnStage, TxnState,
 };
-use mooring_model::secret::SecretEntry;
-use mooring_model::{Deployment, NodeId, Sha256Digest};
+use mooring_model::secret::{SecretEntry, SecretSnapshot};
+use mooring_model::{Deployment, NodeId, NodeLifecycle, Sha256Digest};
 use mooring_store::{InMemorySecretStore, SecretStore};
 
 use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
 use crate::node::dial::CONNECT_TIMEOUT;
-use crate::node::engines::{MAC_PINS, PINS};
+use crate::node::engines::{MAC_PINS, PINS, pinned_catalog};
 
 fn node_id(text: &str) -> NodeId {
     NodeId::parse(text).unwrap()
@@ -331,13 +331,23 @@ fn an_engine_file_that_does_not_match_its_pin_is_refused_before_any_session() {
 }
 
 pub(crate) fn script_hello_and_blobs(harness: &Harness, present: BTreeSet<Sha256Hex>) {
+    script_hello_and_blobs_at(harness, Ipv4Addr::new(45, 67, 89, 10), present);
+}
+
+/// The `Hello` of a node at `address`, then its answer that it holds the
+/// blobs in `present`.
+pub(crate) fn script_hello_and_blobs_at(
+    harness: &Harness,
+    address: Ipv4Addr,
+    present: BTreeSet<Sha256Hex>,
+) {
     harness.nodes.expect(
         Expected::Request {
             identity: "ops_ed25519",
             remote: ExpectedRemote::Forced,
             kind: RequestKind::Hello,
         },
-        Answered::Replied(Ok(super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)))),
+        Answered::Replied(Ok(super::node::hello_at(address))),
     );
     harness.nodes.expect(
         Expected::Request {
@@ -509,7 +519,7 @@ fn apply_confirms_the_transaction_and_records_the_bundle() {
     drop(seen);
     let after = store(&harness).load().unwrap().deployment;
     let node = &after.nodes()[&node_id("lon1")];
-    let mooring_model::node::NodeLifecycle::Applied { applied, .. } = &node.lifecycle else {
+    let NodeLifecycle::Applied { applied, .. } = &node.lifecycle else {
         panic!("{:?}", node.lifecycle);
     };
     assert_eq!(applied.config_generation, generation);
@@ -524,6 +534,17 @@ pub(crate) fn bundle_and_header(
     engines: &std::path::Path,
     deployment: &Deployment,
 ) -> (mooring_render::VpsBundle, mooring_agent_proto::BundleHeader) {
+    bundle_and_header_of(harness, engines, deployment, &node_id("lon1"))
+}
+
+/// The bundle of `deployment`'s `node` with the harness's engine pins, and
+/// its header after the `Hello` of a node at its address.
+pub(crate) fn bundle_and_header_of(
+    harness: &Harness,
+    engines: &std::path::Path,
+    deployment: &Deployment,
+    node: &NodeId,
+) -> (mooring_render::VpsBundle, mooring_agent_proto::BundleHeader) {
     let pins: Vec<(&str, &str)> = harness
         .engine_pins
         .iter()
@@ -534,13 +555,71 @@ pub(crate) fn bundle_and_header(
         .catalog()
         .clone();
     let secrets = super::apply_job::spare_secrets();
-    let bundle =
-        mooring_render::vps::bundle(deployment, &node_id("lon1"), &secrets, &catalog).unwrap();
-    let Response::Hello(hello) = super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) else {
+    let bundle = mooring_render::vps::bundle(deployment, node, &secrets, &catalog).unwrap();
+    let address = deployment.node_addresses()[node].ipv4();
+    let Response::Hello(hello) = super::node::hello_at(address) else {
         unreachable!()
     };
     let header = bundle.header(&hello.host).unwrap();
     (bundle, header)
+}
+
+/// `deployment` with each applied node having confirmed the bundle this
+/// build renders for it from `secrets`, with the stand-in engines.
+pub(crate) fn confirmed_as_rendered(
+    deployment: Deployment,
+    secrets: &SecretSnapshot,
+) -> Deployment {
+    let pins = stand_in_pins();
+    let pins: Vec<(&str, &str)> = pins
+        .iter()
+        .map(|(path, hex)| (*path, hex.as_str()))
+        .collect();
+    let catalog = pinned_catalog(std::path::Path::new("engines"), &pins).unwrap();
+    let digest = |deployment: &Deployment, node: &NodeId| -> Sha256Digest {
+        mooring_render::vps::bundle(deployment, node, secrets, &catalog)
+            .unwrap()
+            .digest()
+    };
+    let mut parts = deployment.clone().into_parts();
+    for node in &mut parts.nodes {
+        if let NodeLifecycle::Applied { applied, .. } = &mut node.lifecycle {
+            applied.digest = digest(&deployment, &node.id);
+        }
+    }
+    let confirmed = Deployment::try_from(parts).unwrap();
+    for (id, node) in confirmed.nodes() {
+        if let Some(applied) = node.lifecycle.applied() {
+            // What a node confirmed is not rendered into its bundle.
+            assert_eq!(applied.digest, digest(&confirmed, id), "{id}");
+        }
+    }
+    confirmed
+}
+
+/// A transaction for `generation` that the node launches, that awaits its
+/// confirmation at the first status read, and that the node confirms.
+pub(crate) fn script_transaction(harness: &Harness, generation: Generation) {
+    for (kind, reply) in [
+        (RequestKind::Apply, Response::TxnLaunched { generation }),
+        (
+            RequestKind::TxnStatus,
+            Response::TxnStatus {
+                generation,
+                state: TxnState::AwaitingConfirm,
+            },
+        ),
+        (RequestKind::Confirm, Response::Confirmed { generation }),
+    ] {
+        harness.nodes.expect(
+            Expected::Request {
+                identity: "ops_ed25519",
+                remote: ExpectedRemote::Forced,
+                kind,
+            },
+            Answered::Replied(Ok(reply)),
+        );
+    }
 }
 
 /// A failed transaction is the error, and nothing is recorded.
@@ -615,9 +694,7 @@ fn an_unchanged_bundle_is_recorded_without_a_transaction() {
             .contains("lon1 already serves this bundle (its generation 1)")
     );
     let after = store(&harness).load().unwrap().deployment;
-    let mooring_model::node::NodeLifecycle::Applied { applied, .. } =
-        &after.nodes()[&node_id("lon1")].lifecycle
-    else {
+    let NodeLifecycle::Applied { applied, .. } = &after.nodes()[&node_id("lon1")].lifecycle else {
         panic!("not applied");
     };
     assert_eq!(applied.config_generation, deployment.config_generation());

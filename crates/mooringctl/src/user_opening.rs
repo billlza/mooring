@@ -18,16 +18,11 @@
 
 use std::path::Path;
 
-use mooring_model::secret::SecretSnapshot;
-use mooring_model::{Deployment, NodeId, Sha256Digest};
-use mooring_render::EngineCatalog;
-use mooring_render::vps::bundle;
-use mooring_store::read_snapshot;
+use mooring_model::{Deployment, NodeId};
 
 use crate::app::Env;
-use crate::daemon::deployed::ENGINES_DIRECTORY;
 use crate::error::LocalError;
-use crate::node::engines::pinned_catalog;
+use crate::node::rendered::{Renders, Unreadable};
 use crate::user_spares::NewUser;
 
 /// What a node's next apply does for the user.
@@ -89,9 +84,12 @@ pub(crate) fn lines(
         } else {
             let renders = match &mut renders {
                 Some(renders) => renders,
-                None => renders.insert(Renders::read(env, support, deployment, node)?),
+                None => renders.insert(read(env, support, deployment, node)?),
             };
-            if renders.digest(deployment, node)? == applied.digest {
+            if renders
+                .confirmed(deployment, node, applied)
+                .map_err(|error| unrendered(node, LocalError::Render(error)))?
+            {
                 NextApply::AddsLive
             } else {
                 NextApply::OtherRender
@@ -102,34 +100,19 @@ pub(crate) fn lines(
     Ok(lines)
 }
 
-/// What a node's bundle is rendered from: the deployment's secrets and the
-/// engines this build pins, as `node apply` and the apply job render it.
-struct Renders {
-    secrets: SecretSnapshot,
-    engines: EngineCatalog,
-}
-
-impl Renders {
-    /// Reads them for the first node to render, `node`.
-    fn read(
-        env: &Env<'_>,
-        support: &Path,
-        deployment: &Deployment,
-        node: &NodeId,
-    ) -> Result<Self, LocalError> {
-        let secrets = read_snapshot(&*env.secrets, &deployment.required_secrets())
-            .map_err(|error| LocalError::OpeningSecrets(Box::new(error)))?;
-        let engines = pinned_catalog(&support.join(ENGINES_DIRECTORY), env.engine_pins)
-            .map_err(|error| unrendered(node, error))?;
-        Ok(Self { secrets, engines })
-    }
-
-    /// The digest of `node`'s bundle, as `node apply` would confirm it.
-    fn digest(&self, deployment: &Deployment, node: &NodeId) -> Result<Sha256Digest, LocalError> {
-        bundle(deployment, node, &self.secrets, &self.engines)
-            .map(|bundle| bundle.digest())
-            .map_err(|error| unrendered(node, LocalError::Render(error)))
-    }
+/// What the bundles are rendered from, read for the first node to render,
+/// `node`: secrets that cannot be read refuse the add, and so do engines
+/// this build cannot pin, as `node`'s.
+fn read(
+    env: &Env<'_>,
+    support: &Path,
+    deployment: &Deployment,
+    node: &NodeId,
+) -> Result<Renders, LocalError> {
+    Renders::read(env, support, deployment).map_err(|error| match error {
+        Unreadable::Secrets(error) => LocalError::OpeningSecrets(Box::new(error)),
+        Unreadable::Engines(error) => unrendered(node, error),
+    })
 }
 
 /// `node`'s bundle could not be rendered, for `source`.

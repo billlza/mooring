@@ -12,6 +12,7 @@ pub(crate) mod engines;
 pub(crate) mod files;
 pub(crate) mod new;
 pub(crate) mod planned;
+pub(crate) mod rendered;
 pub(crate) mod repin;
 pub(crate) mod runtime;
 pub(crate) mod session;

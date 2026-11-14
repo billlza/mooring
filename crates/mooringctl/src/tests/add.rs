@@ -6,26 +6,23 @@
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
-use std::path::Path;
 
 use mooring_export::{ExportErrorKind, export_secret_refs};
 use mooring_model::deployment::Bookkeeping;
 use mooring_model::node::AppliedConfig;
-use mooring_model::secret::{SecretEntry, SecretSnapshot};
+use mooring_model::secret::SecretEntry;
 use mooring_model::{
     Capability, ClientLine, Deployment, DeploymentParts, NodeId, NodeLifecycle, SecretRef,
     Sha256Digest, UnixTime, User, UserId, UserPolicy, UserStatus,
 };
-use mooring_render::vps::bundle;
 use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_with_secrets};
 
-use super::apply::stand_in_pins;
+use super::apply::{confirmed_as_rendered, stand_in_pins};
 use super::support::{
     CAP_RAISED_MEANWHILE, Harness, NOW, Refusals, change_the_configuration_meanwhile,
 };
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
-use crate::node::engines::pinned_catalog;
 
 const LABEL: &str = "Cousin in Chengdu";
 
@@ -404,36 +401,6 @@ fn alias_gives_a_user_a_random_alias_once() {
     assert_eq!(state_bytes(&harness), bytes);
 }
 
-/// `deployment` with each applied node having confirmed the bundle this
-/// build renders for it from `secrets`, with the stand-in engines.
-fn confirmed_as_rendered(deployment: Deployment, secrets: &SecretSnapshot) -> Deployment {
-    let pins = stand_in_pins();
-    let pins: Vec<(&str, &str)> = pins
-        .iter()
-        .map(|(path, hex)| (*path, hex.as_str()))
-        .collect();
-    let catalog = pinned_catalog(Path::new("engines"), &pins).unwrap();
-    let digest = |deployment: &Deployment, node: &NodeId| -> Sha256Digest {
-        bundle(deployment, node, secrets, &catalog)
-            .unwrap()
-            .digest()
-    };
-    let mut parts = deployment.clone().into_parts();
-    for node in &mut parts.nodes {
-        if let NodeLifecycle::Applied { applied, .. } = &mut node.lifecycle {
-            applied.digest = digest(&deployment, &node.id);
-        }
-    }
-    let confirmed = Deployment::try_from(parts).unwrap();
-    for (id, node) in confirmed.nodes() {
-        if let Some(applied) = node.lifecycle.applied() {
-            // What a node confirmed is not rendered into its bundle.
-            assert_eq!(applied.digest, digest(&confirmed, id), "{id}");
-        }
-    }
-    confirmed
-}
-
 /// A harness holding the fixture with its three spare users, as `edit`
 /// leaves it, each applied node having confirmed the bundle this build
 /// renders for it with the stand-in engines the harness pins, and their
@@ -578,8 +545,8 @@ fn a_node_that_confirmed_another_build_s_bundle_carries_the_difference() {
 
 /// What each node's next apply does is decided before the add, from the
 /// secrets and the engines this build pins: a keychain that refuses to be
-/// read, or a build pinning no engine, refuses the add with nothing
-/// written.
+/// read, a build pinning no engine, or a bundle that cannot be rendered
+/// refuses the add with nothing written.
 #[test]
 fn a_node_that_cannot_be_rendered_refuses_the_add() {
     let (_, mut harness) = adding_with_spares(|_| {});
@@ -615,6 +582,38 @@ fn a_node_that_cannot_be_rendered_refuses_the_add() {
                 .join("engines/linux-amd64/xray")
                 .display()
         )
+    );
+    assert_eq!(state_bytes(&harness), state);
+
+    // Two users holding one credential on lon1, which rendering refuses.
+    let (_, mut harness) = adding_with_spares(|_| {});
+    let lon1 = node("lon1");
+    let shared = harness
+        .secrets
+        .get(&SecretRef::UserVlessUuid(
+            UserId::parse("fxuseraaab").unwrap(),
+            lon1.clone(),
+        ))
+        .unwrap();
+    harness
+        .secrets
+        .put(
+            SecretEntry::new(
+                SecretRef::UserVlessUuid(UserId::parse("fxuseraaac").unwrap(), lon1),
+                shared,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+    assert_eq!(outcome.stdout, "");
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: the user was not added: lon1's bundle could not be rendered, \
+         to tell what its next apply does\n  \
+         caused by: a value from or for the node was not accepted\n  \
+         caused by: user fxuseraaab and user fxuseraaac share a credential on node lon1 (VlessUuid)\n"
     );
     assert_eq!(state_bytes(&harness), state);
 }

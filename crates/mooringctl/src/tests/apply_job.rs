@@ -6,13 +6,14 @@
 //! back, a clock that stepped back, the 13-month removal's boundary, a
 //! node that cannot be reached, and the log that names no user.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, OpenOptions, Permissions};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use mooring_agent_proto::{Generation, RequestKind, Response};
-use mooring_model::node::NodeLifecycle;
+use mooring_agent_proto::{Generation, LineRequest, RequestKind, Response};
+use mooring_model::node::{AppliedConfig, NodeLifecycle};
 use mooring_model::removal::ForgottenUser;
-use mooring_model::secret::{SecretEntry, SecretSnapshot};
+use mooring_model::secret::{SecretEntry, SecretRef, SecretSnapshot};
 use mooring_model::user::SuspendReason;
 use mooring_model::{
     CalendarDate, ConfigGeneration, Deployment, DeploymentParts, NodeId, SPARE_USERS, UnixTime,
@@ -21,12 +22,15 @@ use mooring_model::{
 use mooring_store::SecretStore;
 use serde_json::Value;
 
-use super::apply::{bundle_and_header, stand_in_engines};
+use super::apply::{
+    bundle_and_header, bundle_and_header_of, confirmed_as_rendered, script_hello_and_blobs,
+    script_hello_and_blobs_at, script_transaction, stand_in_engines,
+};
 use super::deployed::deployed_with;
-use super::support::{Answered, Expected, ExpectedRemote, Harness, NOW, Refusals};
+use super::support::{Answered, Expected, ExpectedRemote, Harness, NOW, Outcome, Refusals, Sent};
 use super::user::{fixture, state_bytes, store};
 use crate::apply::APPLY_LOCK_FILE;
-use crate::apply::report::{Spares, SparesFailure};
+use crate::apply::report::{Drift, DriftFailure, Regenerated, Spares, SparesFailure};
 use crate::daemon::RunPaths;
 use crate::daemon::deployed::ENGINES_DIRECTORY;
 use crate::error::EXIT_LOCAL;
@@ -200,7 +204,7 @@ fn a_firing_outside_the_window_does_nothing() {
         let outcome = harness.run(&["apply", "--pending", "--json"]);
         assert_eq!(
             outcome.stdout,
-            format!("{{\"version\":2,\"at\":{now},\"ran\":false}}\n")
+            format!("{{\"version\":3,\"at\":{now},\"ran\":false}}\n")
         );
     }
     assert_eq!(state_bytes(&harness), before);
@@ -266,6 +270,7 @@ fn suspensions_go_while_no_node_can_be_reached() {
         format!(
             "suspended {FIRST}: expired\n\
              spare users: 3 ready\n\
+             no node that confirmed the configuration generation is on another build's bundle\n\
              ams1: apply failed: the node could not be reached or refused: ssh ended without a reply (exit status 255): / ssh: connect to the node: Operation timed out\n\
              lon1: apply failed: the node could not be reached or refused: ssh ended without a reply (exit status 255): / ssh: connect to the node: Operation timed out\n\
              apply at 2026-10-13 19:20:00 UTC: 1 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 0 of 2 node(s) behind applied; 2 failure(s)\n"
@@ -324,6 +329,7 @@ fn the_cap_holds_a_resume_back() {
             "held back by the cap on active users: {THIRD}, suspended for quota in the billing cycle from 2026-09-01 since 2026-09-03 19:20:00 UTC: its billing cycle has ended; still suspended\n\
              held back by the cap on active users: {SECOND}, suspended for quota in the billing cycle from 2026-09-01 since 2026-09-08 19:20:00 UTC: its billing cycle has ended; still suspended\n\
              spare users: 3 ready\n\
+             no node that confirmed the configuration generation is on another build's bundle\n\
              apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 2 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
         )
     );
@@ -384,6 +390,10 @@ fn a_clock_that_stepped_back_carries_out_nothing_but_node_applies() {
         "removals skipped: the clock stepped back"
     );
     assert_eq!(lines.next().unwrap(), "spare users: 3 ready");
+    assert_eq!(
+        lines.next().unwrap(),
+        "no node that confirmed the configuration generation is on another build's bundle"
+    );
     assert!(lines.next().unwrap().starts_with("ams1: apply failed: "));
     assert!(lines.next().unwrap().starts_with("lon1: apply failed: "));
     assert_eq!(harness.nodes.seen.borrow().len(), 2);
@@ -418,6 +428,7 @@ fn a_user_is_removed_13_months_after_the_revocation_to_the_second() {
         format!(
             "removed {SECOND}: revoked 13 months ago\n\
              spare users: 3 ready\n\
+             no node that confirmed the configuration generation is on another build's bundle\n\
              apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 1 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
         )
     );
@@ -592,7 +603,7 @@ fn the_json_outcome_names_each_part() {
     assert_eq!(
         value,
         serde_json::json!({
-            "version": 2,
+            "version": 3,
             "at": NOW,
             "ran": true,
             "policy": {"carried_out": {
@@ -606,6 +617,7 @@ fn the_json_outcome_names_each_part() {
             }},
             "removals": {"done": {"removed": [], "kept_ids_dropped": false, "failed": []}},
             "spares": {"done": {"drawn": 0, "credentials": 0, "ready": 3}},
+            "drift": "none_found",
             "nodes": []
         })
     );
@@ -613,7 +625,8 @@ fn the_json_outcome_names_each_part() {
 }
 
 /// A node behind is applied by the job, as `node apply` applies it; the
-/// node up to date is not asked.
+/// node up to date, at the deployment's generation and on the bundle this
+/// build renders for it, is not asked.
 #[test]
 fn a_node_behind_is_applied() {
     let deployment = fixture(|parts| {
@@ -626,10 +639,11 @@ fn a_node_behind_is_applied() {
             }
         }
     });
-    let mut harness = job(deployment);
+    let deployment = confirmed_as_rendered(with_ready_spares(deployment), &spare_secrets());
+    let mut harness = job_as_is(deployment);
     let engines = harness.support_dir().join(ENGINES_DIRECTORY);
     let (_, header) = bundle_and_header(&harness, &engines, &self::deployment(&harness));
-    super::apply::script_hello_and_blobs(&harness, header.blobs());
+    script_hello_and_blobs(&harness, header.blobs());
     harness.nodes.expect(
         Expected::Request {
             identity: "ops_ed25519",
@@ -921,6 +935,7 @@ fn a_pack_lifts_nothing_while_the_usage_is_behind() {
     assert_eq!(
         outcome.stdout,
         "spare users: 3 ready\n\
+         no node that confirmed the configuration generation is on another build's bundle\n\
          apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
     );
 }
@@ -961,6 +976,7 @@ fn the_job_draws_spare_users_in_the_window() {
     assert_eq!(
         outcome.stdout,
         "spare users: 3 drawn, 0 credential set(s) given on nodes that lacked them; 3 ready\n\
+         no node that confirmed the configuration generation is on another build's bundle\n\
          apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 3 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
     );
     let log = log(&harness);
@@ -1023,6 +1039,7 @@ fn a_run_outside_the_window_leaves_the_spare_users() {
     assert_eq!(
         outcome.stdout,
         "spare users left as they are: outside the apply window, where the restart they need is expected\n\
+         nodes on another build's bundle left as they are: outside the apply window, where the restart they need is expected\n\
          apply at 2026-10-13 20:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
     );
     assert_eq!(state_bytes(&harness), before);
@@ -1045,7 +1062,12 @@ fn a_top_up_the_keychain_refuses_is_a_failure_of_the_run() {
     };
     let outcome = harness.run(&["apply", "--now"]);
     assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
-    let (line, summary) = outcome.stdout.split_once('\n').unwrap();
+    let (line, rest) = outcome.stdout.split_once('\n').unwrap();
+    let (drift, summary) = rest.split_once('\n').unwrap();
+    assert_eq!(
+        drift,
+        "no node that confirmed the configuration generation is on another build's bundle"
+    );
     let first = refused_spare(line);
     assert_eq!(
         summary,
@@ -1122,4 +1144,446 @@ fn refused_spare(line: &str) -> UserId {
         })
         .unwrap_or_else(|| panic!("{line}"));
     UserId::parse(id).unwrap()
+}
+
+/// The fixture with its spare users ready, at its first generation, which
+/// each applied node confirmed: those named in `rendered` with the bundle
+/// this build renders for them, every other with the fixture's, which
+/// another build rendered.
+fn at_generation(rendered: &[&str]) -> Deployment {
+    let deployment = with_ready_spares(fixture(|_| {}));
+    let confirmed = confirmed_as_rendered(deployment.clone(), &spare_secrets());
+    let mut parts = deployment.into_parts();
+    for entry in &mut parts.nodes {
+        if rendered.contains(&entry.id.as_str()) {
+            entry.lifecycle = confirmed.nodes()[&entry.id].lifecycle.clone();
+        }
+    }
+    Deployment::try_from(parts).unwrap()
+}
+
+/// What `text` confirmed in `deployment`.
+fn confirmed(deployment: &Deployment, text: &str) -> AppliedConfig {
+    *deployment.nodes()[&node(text)].lifecycle.applied().unwrap()
+}
+
+/// A node that confirmed the deployment's generation, but a bundle another
+/// build rendered, is given this build's in the window: the deployment
+/// takes a new generation with nothing else changed, and every applied
+/// node is applied, as `node apply` applies it. The node that confirmed
+/// this build's bundle is sent that same bundle, which its agent answers
+/// `Unchanged`, restarting nothing; the other runs a transaction. What
+/// each node then confirmed is the bundle the step renders, so the next
+/// night's run finds no node to apply and makes no generation.
+#[test]
+fn a_node_on_another_builds_bundle_is_applied_in_the_window() {
+    let before = at_generation(&["ams1"]);
+    let mut harness = job_as_is(before.clone());
+    let engines = harness.support_dir().join(ENGINES_DIRECTORY);
+    let mut next = before.clone().into_parts();
+    next.config_generation = ConfigGeneration::new(2).unwrap();
+    let next = Deployment::try_from(next).unwrap();
+    let ams1 = node("ams1");
+    let (ams1_bundle, ams1_header) = bundle_and_header_of(&harness, &engines, &next, &ams1);
+    // The digest leaves the generation out: at the new generation, ams1's
+    // bundle is the one it confirmed.
+    assert_eq!(ams1_bundle.digest(), confirmed(&before, "ams1").digest);
+    script_hello_and_blobs_at(
+        &harness,
+        next.node_addresses()[&ams1].ipv4(),
+        ams1_header.blobs(),
+    );
+    harness.nodes.expect(
+        Expected::Request {
+            identity: "ops_ed25519",
+            remote: ExpectedRemote::Forced,
+            kind: RequestKind::Apply,
+        },
+        Answered::Replied(Ok(Response::Unchanged {
+            generation: Generation::new(1),
+        })),
+    );
+    let (lon1_bundle, lon1_header) = bundle_and_header(&harness, &engines, &next);
+    assert_ne!(lon1_bundle.digest(), confirmed(&before, "lon1").digest);
+    script_hello_and_blobs(&harness, lon1_header.blobs());
+    script_transaction(&harness, Generation::new(2));
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(harness.nodes.script.borrow().is_empty());
+    let seen = harness.nodes.seen.borrow();
+    let applies: Vec<&Sent> = seen
+        .iter()
+        .map(|(_, sent)| sent)
+        .filter(|sent| matches!(sent, Sent::Request(LineRequest::Apply(_))))
+        .collect();
+    assert_eq!(
+        applies,
+        [
+            &Sent::Request(LineRequest::Apply(Box::new(ams1_header))),
+            &Sent::Request(LineRequest::Apply(Box::new(lon1_header))),
+        ]
+    );
+    drop(seen);
+    let mut expected = next.into_parts();
+    for entry in &mut expected.nodes {
+        if let NodeLifecycle::Applied { applied, .. } = &mut entry.lifecycle {
+            applied.config_generation = ConfigGeneration::new(2).unwrap();
+            if entry.id.as_str() == "lon1" {
+                applied.digest = lon1_bundle.digest();
+            }
+        }
+    }
+    assert_eq!(
+        deployment(&harness),
+        Deployment::try_from(expected).unwrap()
+    );
+    let drift = "on another build's bundle: lon1; generation 2 made, so that the node applies below carry this build's";
+    assert!(
+        outcome
+            .stdout
+            .starts_with(&format!("spare users: 3 ready\n{drift}\n")),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.ends_with(
+            "ams1: applied\nlon1: applied\napply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, \
+             0 kept suspended, 0 removed, 0 spare user(s) drawn, 2 of 2 node(s) behind applied; 0 failure(s)\n"
+        ),
+        "{}",
+        outcome.stdout
+    );
+    assert!(log(&harness).contains(&format!("mooringctl apply: {drift}\n")));
+
+    let after = state_bytes(&harness);
+    let asked = harness.nodes.seen.borrow().len();
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "spare users: 3 ready\n\
+         no node that confirmed the configuration generation is on another build's bundle\n\
+         apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, \
+         0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+    );
+    assert_eq!(
+        state_bytes(&harness),
+        after,
+        "the next night changes nothing"
+    );
+    assert_eq!(harness.nodes.seen.borrow().len(), asked, "and asks no node");
+}
+
+/// A run outside the window, the operator's `apply --now` by day, leaves a
+/// node on another build's bundle: no new generation, no node asked.
+#[test]
+fn a_run_outside_the_window_leaves_a_node_on_another_builds_bundle() {
+    let mut harness = job_as_is(at_generation(&["ams1"]));
+    harness.now.set(NOW + 3600);
+    let before = state_bytes(&harness);
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "spare users left as they are: outside the apply window, where the restart they need is expected\n\
+         nodes on another build's bundle left as they are: outside the apply window, where the restart they need is expected\n\
+         apply at 2026-10-13 20:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, \
+         0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+    );
+    let outcome = harness.run(&["apply", "--now", "--json"]);
+    let value: Value = serde_json::from_str(&outcome.stdout).unwrap();
+    assert_eq!(value["drift"], "outside_window");
+    assert_eq!(state_bytes(&harness), before);
+    assert!(harness.nodes.seen.borrow().is_empty());
+}
+
+/// Nodes that confirmed the bundle this build renders for them are left
+/// alone in the window: no new generation, no node asked.
+#[test]
+fn nodes_on_this_builds_bundle_are_not_applied() {
+    let mut harness = job_as_is(at_generation(&["ams1", "lon1"]));
+    let before = state_bytes(&harness);
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "spare users: 3 ready\n\
+         no node that confirmed the configuration generation is on another build's bundle\n\
+         apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, \
+         0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+    );
+    let outcome = harness.run(&["apply", "--now", "--json"]);
+    let value: Value = serde_json::from_str(&outcome.stdout).unwrap();
+    assert_eq!(value["drift"], "none_found");
+    assert_eq!(state_bytes(&harness), before);
+    assert!(harness.nodes.seen.borrow().is_empty());
+}
+
+/// `apply --now`, then `apply --now --json`, on `harness`.
+fn twice(harness: &mut Harness) -> [Outcome; 2] {
+    [
+        harness.run(&["apply", "--now"]),
+        harness.run(&["apply", "--now", "--json"]),
+    ]
+}
+
+/// Asserts that in `runs`, [`twice`] on `harness` from the state `before`,
+/// only the drift step failed, as `kind` with the report's `error`: the
+/// run fails, the state is as it was, no node was asked, and each run's
+/// line in the log gives `words` and names no user.
+fn assert_drift_failed(
+    harness: &Harness,
+    runs: &[Outcome; 2],
+    before: &[u8],
+    (kind, error, words): (&str, &str, &str),
+) {
+    let [text, json] = runs;
+    assert_eq!(text.code, EXIT_LOCAL, "{}", text.stderr);
+    assert_eq!(
+        text.stdout,
+        format!(
+            "spare users: 3 ready\n\
+             nodes on another build's bundle not handled: {error}\n\
+             apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, \
+             0 removed, 0 spare user(s) drawn, 0 of 0 node(s) behind applied; 1 failure(s)\n"
+        )
+    );
+    assert_eq!(json.code, EXIT_LOCAL, "{}", json.stderr);
+    let value: Value = serde_json::from_str(&json.stdout).unwrap();
+    assert_eq!(
+        value["drift"],
+        serde_json::json!({"failed": {"kind": kind, "error": error}})
+    );
+    assert_eq!(state_bytes(harness), before);
+    assert!(harness.nodes.seen.borrow().is_empty());
+    let log = log(harness);
+    assert_eq!(
+        log.matches(&format!(
+            "mooringctl apply: nodes on another build's bundle not handled: {words}\n"
+        ))
+        .count(),
+        2,
+        "{log}"
+    );
+    assert!(!log.contains("fxuser"), "{log}");
+}
+
+/// Secrets the keychain will not give fail the drift step, which changes
+/// nothing, and the run. They are read only when a node is at the
+/// configuration generation: with none at it, the keychain is not asked,
+/// and the step finds no node.
+#[test]
+fn secrets_the_keychain_refuses_fail_the_drift_step() {
+    let refused = Refusals {
+        get: Some(-25308),
+        ..Refusals::default()
+    };
+    let mut harness = job_as_is(at_generation(&["ams1"]));
+    let before = state_bytes(&harness);
+    *harness.keychain.lock().unwrap() = refused;
+    let runs = twice(&mut harness);
+    assert_drift_failed(
+        &harness,
+        &runs,
+        &before,
+        (
+            "secrets",
+            "keychain get failed with OSStatus -25308",
+            "the deployment's secrets cannot be read from the keychain",
+        ),
+    );
+
+    let mut harness = job(unapplied(|_| {}));
+    *harness.keychain.lock().unwrap() = refused;
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "spare users: 3 ready\n\
+         no node that confirmed the configuration generation is on another build's bundle\n\
+         apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, \
+         0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+    );
+}
+
+/// An engine this build pins that it cannot read fails the drift step the
+/// same way.
+#[test]
+fn engines_this_build_cannot_read_fail_the_drift_step() {
+    let mut harness = job_as_is(at_generation(&["ams1"]));
+    let before = state_bytes(&harness);
+    harness.engine_pins = Vec::new();
+    let error = format!(
+        "no pinned engine file at {}",
+        harness
+            .support_dir()
+            .join("engines/linux-amd64/xray")
+            .display()
+    );
+    let runs = twice(&mut harness);
+    assert_drift_failed(
+        &harness,
+        &runs,
+        &before,
+        (
+            "engines",
+            &error,
+            "the engines this build pins cannot be read",
+        ),
+    );
+}
+
+/// A bundle that cannot be rendered fails the drift step: two users
+/// holding one credential on lon1, which rendering refuses. The report
+/// names the node and both users; the log only which part failed.
+#[test]
+fn a_bundle_that_cannot_be_rendered_fails_the_drift_step() {
+    let mut harness = job_as_is(at_generation(&["ams1"]));
+    let before = state_bytes(&harness);
+    let lon1 = node("lon1");
+    let shared = harness
+        .secrets
+        .get(&SecretRef::UserVlessUuid(id(FIRST), lon1.clone()))
+        .unwrap();
+    harness
+        .secrets
+        .put(SecretEntry::new(SecretRef::UserVlessUuid(id(SECOND), lon1), shared).unwrap())
+        .unwrap();
+    let runs = twice(&mut harness);
+    assert_drift_failed(
+        &harness,
+        &runs,
+        &before,
+        (
+            "render",
+            "lon1: user fxuseraaab and user fxuseraaac share a credential on node lon1 (VlessUuid)",
+            "a node's bundle could not be rendered",
+        ),
+    );
+}
+
+/// A new generation the store cannot write fails the drift step, which
+/// leaves the state as it was: the support directory, which holds the
+/// state, made read-only once the run directory is in it.
+#[test]
+fn a_generation_the_store_cannot_write_fails_the_drift_step() {
+    let mut harness = job_as_is(at_generation(&["ams1"]));
+    let before = state_bytes(&harness);
+    let support = harness.support_dir();
+    fs::create_dir_all(RunPaths::under(&support).dir).unwrap();
+    fs::set_permissions(&support, Permissions::from_mode(0o500)).unwrap();
+    let runs = twice(&mut harness);
+    fs::set_permissions(&support, Permissions::from_mode(0o700)).unwrap();
+    let error = format!(
+        "the state was not changed: failed to create a temporary file at {}: \
+         Permission denied (os error 13)",
+        support.join("state.json.tmp").display()
+    );
+    assert_drift_failed(
+        &harness,
+        &runs,
+        &before,
+        (
+            "change",
+            &error,
+            "the configuration change could not be written",
+        ),
+    );
+}
+
+/// Spare users drawn in the run make its one new generation: the drift
+/// step, which follows, finds no node at it, and every node, behind it,
+/// is applied with this build's bundle. In the other order a node on
+/// another build's bundle would make a generation of its own, and the
+/// spares a second.
+#[test]
+fn spares_drawn_in_the_run_make_its_one_new_generation() {
+    let mut parts = at_generation(&["ams1"]).into_parts();
+    parts.spares.pop().unwrap();
+    let mut harness = job_as_is(Deployment::try_from(parts).unwrap());
+    for _ in 0..2 {
+        unreachable(&harness);
+    }
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+    assert_eq!(
+        deployment(&harness).config_generation(),
+        ConfigGeneration::new(2).unwrap()
+    );
+    assert!(
+        outcome.stdout.starts_with(
+            "spare users: 1 drawn, 0 credential set(s) given on nodes that lacked them; 3 ready\n\
+             no node that confirmed the configuration generation is on another build's bundle\n"
+        ),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .ends_with("1 spare user(s) drawn, 0 of 2 node(s) behind applied; 2 failure(s)\n"),
+        "{}",
+        outcome.stdout
+    );
+}
+
+/// The drift step's lines: in the report a failure gives its error, which
+/// can name a user; in the log, and in `--json` as its kind, only which
+/// part failed. The nodes found are named in both, and the new generation
+/// given.
+#[test]
+fn the_drift_step_is_logged_by_the_part_that_failed() {
+    let regenerated = Drift::Regenerated(Regenerated {
+        nodes: vec![node("ams1"), node("lon1")],
+        generation: ConfigGeneration::new(7).unwrap(),
+    });
+    let line = "on another build's bundle: ams1, lon1; generation 7 made, \
+                so that the node applies below carry this build's";
+    assert_eq!(regenerated.line(), line);
+    assert_eq!(regenerated.log_line(), line);
+    assert_eq!(
+        serde_json::to_value(&regenerated).unwrap(),
+        serde_json::json!({"regenerated": {"nodes": ["ams1", "lon1"], "generation": 7}})
+    );
+    let error = "lon1: fxuseraaab and fxuseraaac share a credential".to_owned();
+    for (kind, json, words) in [
+        (DriftFailure::State, "state", "the state cannot be read"),
+        (
+            DriftFailure::Secrets,
+            "secrets",
+            "the deployment's secrets cannot be read from the keychain",
+        ),
+        (
+            DriftFailure::Engines,
+            "engines",
+            "the engines this build pins cannot be read",
+        ),
+        (
+            DriftFailure::Render,
+            "render",
+            "a node's bundle could not be rendered",
+        ),
+        (
+            DriftFailure::Change,
+            "change",
+            "the configuration change could not be written",
+        ),
+    ] {
+        let drift = Drift::Failed {
+            kind,
+            error: error.clone(),
+        };
+        assert_eq!(
+            drift.line(),
+            format!("nodes on another build's bundle not handled: {error}")
+        );
+        assert_eq!(
+            drift.log_line(),
+            format!("nodes on another build's bundle not handled: {words}")
+        );
+        assert_eq!(
+            serde_json::to_value(&drift).unwrap(),
+            serde_json::json!({"failed": {"kind": json, "error": error}})
+        );
+    }
 }

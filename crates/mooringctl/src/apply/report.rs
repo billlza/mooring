@@ -4,15 +4,16 @@
 //! standard output, which names users by id; the log's lines, which count
 //! users and name none (design §15.7: a log line can outlive the 13 months
 //! the agreement keeps a user's records); and, with `--json`, one JSON line
-//! (version 2): `{"version":2,"at":<secs>,"ran":false}` for a firing outside
-//! the window, otherwise `ran: true` with `policy`, `removals`, `spares`
-//! and `nodes`. Version 2 added `spares` (2026-11-14).
+//! (version 3): `{"version":3,"at":<secs>,"ran":false}` for a firing outside
+//! the window, otherwise `ran: true` with `policy`, `removals`, `spares`,
+//! `drift` and `nodes`. Version 2 added `spares` and version 3 `drift`
+//! (both 2026-11-14).
 
 use std::io::Write;
 
 use mooring_daemon_core::apply::{Kept, Lapse, Lapsed, Suspension};
 use mooring_model::user::SuspendReason;
-use mooring_model::{NodeId, UnixTime, UserId};
+use mooring_model::{ConfigGeneration, NodeId, UnixTime, UserId};
 use serde::Serialize;
 
 use crate::error::CommandError;
@@ -20,7 +21,7 @@ use crate::payments::notes::stamp;
 use crate::state::output;
 
 /// The version of the `--json` outcome.
-pub(crate) const OUTCOME_VERSION: u32 = 2;
+pub(crate) const OUTCOME_VERSION: u32 = 3;
 
 /// What refused the policy step, in words that name no user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -398,6 +399,107 @@ impl Spares {
     }
 }
 
+/// Which part of the render-drift step failed. The log says this alone,
+/// since an error rendering a bundle may name a user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DriftFailure {
+    /// The state cannot be read.
+    State,
+    /// The deployment's secrets cannot be read from the keychain.
+    Secrets,
+    /// The engines this build pins cannot be read.
+    Engines,
+    /// A node's bundle could not be rendered.
+    Render,
+    /// The configuration change could not be written.
+    Change,
+}
+
+impl DriftFailure {
+    const fn words(self) -> &'static str {
+        match self {
+            Self::State => "the state cannot be read",
+            Self::Secrets => "the deployment's secrets cannot be read from the keychain",
+            Self::Engines => "the engines this build pins cannot be read",
+            Self::Render => "a node's bundle could not be rendered",
+            Self::Change => "the configuration change could not be written",
+        }
+    }
+}
+
+/// The nodes on another build's bundle, and the generation made for them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct Regenerated {
+    /// The nodes, in id order.
+    pub(crate) nodes: Vec<NodeId>,
+    /// The deployment's new generation, which every applied node is behind.
+    pub(crate) generation: ConfigGeneration,
+}
+
+/// The render-drift step's outcome. A node at the deployment's generation
+/// is on another build's bundle when the bundle it confirmed is not the
+/// one this build renders for it now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Drift {
+    /// Not looked for: the run is outside the window (`apply --now`).
+    OutsideWindow,
+    /// No node at the deployment's generation is on another build's
+    /// bundle, or none is at it.
+    NoneFound,
+    /// Some were, and the deployment was given a new generation for them.
+    Regenerated(Regenerated),
+    /// It failed, and changed nothing.
+    Failed {
+        /// Which part failed.
+        kind: DriftFailure,
+        /// Why, which may name a user.
+        error: String,
+    },
+}
+
+impl Drift {
+    /// Its line in the report: a failure with its error.
+    pub(crate) fn line(&self) -> String {
+        match self {
+            Self::Failed { error, .. } => format!("{NOT_HANDLED}: {error}"),
+            Self::OutsideWindow | Self::NoneFound | Self::Regenerated(_) => self.log_line(),
+        }
+    }
+
+    /// Its line in the log, which names no user: a failure by its kind.
+    pub(crate) fn log_line(&self) -> String {
+        match self {
+            Self::OutsideWindow => {
+                "nodes on another build's bundle left as they are: outside the apply window, where the restart they need is expected"
+                    .to_owned()
+            }
+            Self::NoneFound => "no node that confirmed the configuration generation is on another build's bundle".to_owned(),
+            Self::Regenerated(regenerated) => format!(
+                "on another build's bundle: {}; generation {} made, so that the node applies below carry this build's",
+                regenerated
+                    .nodes
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                regenerated.generation
+            ),
+            Self::Failed { kind, .. } => format!("{NOT_HANDLED}: {}", kind.words()),
+        }
+    }
+
+    const fn failures(&self) -> usize {
+        match self {
+            Self::Failed { .. } => 1,
+            Self::OutsideWindow | Self::NoneFound | Self::Regenerated(_) => 0,
+        }
+    }
+}
+
+const NOT_HANDLED: &str = "nodes on another build's bundle not handled";
+
 /// How one node's apply ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -446,6 +548,8 @@ pub(crate) struct Outcome {
     pub(crate) removals: Removals,
     /// The spare users.
     pub(crate) spares: Spares,
+    /// The nodes on another build's bundle.
+    pub(crate) drift: Drift,
     /// The node applies.
     pub(crate) nodes: Vec<NodeOutcome>,
 }
@@ -458,6 +562,7 @@ struct Ran<'a> {
     policy: &'a PolicyOutcome,
     removals: &'a Removals,
     spares: &'a Spares,
+    drift: &'a Drift,
     nodes: &'a [NodeOutcome],
 }
 
@@ -470,12 +575,13 @@ struct NotRan {
 
 impl Outcome {
     /// How many parts of the run failed: the policy step as a whole when it
-    /// was refused, each change, removal and node apply that failed, and the
-    /// spare users' step.
+    /// was refused, each change, removal and node apply that failed, the
+    /// spare users' step and the render-drift step.
     pub(crate) fn failures(&self) -> usize {
         self.policy.failures()
             + self.removals.failures()
             + self.spares.failures()
+            + self.drift.failures()
             + self
                 .nodes
                 .iter()
@@ -496,6 +602,7 @@ impl Outcome {
                     policy: &self.policy,
                     removals: &self.removals,
                     spares: &self.spares,
+                    drift: &self.drift,
                     nodes: &self.nodes,
                 },
             );
