@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 use super::{DAY, NOW, PILOT, Terms, by_id, id, live, order, pilot_users, secs, user};
 use crate::payments::{
     Applied, ApplyRefusal, Checked, Confirmable, Contradiction, Difference, FeedPage, GrantOutcome,
-    HeldReason, LedgerError, LedgerEvent, OrderTerms, PaymentLedger, Refusal, Verdict, Verdicts,
+    HeldReason, LedgerError, LedgerEvent, OrderTerms, PaymentLedger, PlanBook, Refusal, Verdict,
+    Verdicts,
 };
 
 /// A renewing month's first order, for pilotusera.
@@ -100,7 +101,10 @@ fn unconfirmed(
     users: &BTreeMap<UserId, User>,
     said: &Verdicts,
 ) -> Vec<Confirmable> {
-    match ledger.apply_checked(page, users, NOW, false, said).unwrap() {
+    match ledger
+        .apply_checked(page, users, NOW, false, &PlanBook::default(), said)
+        .unwrap()
+    {
         Checked::Applied(_) => Vec::new(),
         Checked::Unconfirmed { next, rest } => iter::once(*next).chain(rest).collect(),
     }
@@ -130,21 +134,25 @@ fn stripe_must_confirm_each_live_grant_that_would_give() {
                 order: order(MONTH),
                 terms: month_terms.clone(),
                 first: None,
+                payment_links: Vec::new(),
             },
             Confirmable {
                 order: order(PACK),
                 terms: terms_on(&page, PACK),
                 first: None,
+                payment_links: Vec::new(),
             },
             Confirmable {
                 order: order(RENEWAL),
                 terms: terms_on(&page, RENEWAL),
                 first: Some(month_terms.clone()),
+                payment_links: Vec::new(),
             },
             Confirmable {
                 order: order(ORPHAN),
                 terms: terms_on(&page, ORPHAN),
                 first: None,
+                payment_links: Vec::new(),
             },
         ]
     );
@@ -189,8 +197,14 @@ fn a_page_is_applied_as_stripe_said() {
         (RENEWAL, Verdict::Refused(differs.clone())),
         (ORPHAN, Verdict::Refused(Refusal::NoFirstOrder)),
     ]);
-    let applied =
-        applied(PaymentLedger::new().apply_checked(&page, &pilot_users(), NOW, false, &said));
+    let applied = applied(PaymentLedger::new().apply_checked(
+        &page,
+        &pilot_users(),
+        NOW,
+        false,
+        &PlanBook::default(),
+        &said,
+    ));
     let now = NOW.as_secs();
     assert_eq!(
         applied.events[0],
@@ -277,7 +291,7 @@ fn a_page_waits_until_stripe_has_said_of_every_grant() {
     let users = pilot_users();
     let partial = verdicts(vec![(MONTH, Verdict::Confirmed)]);
     let Checked::Unconfirmed { next, rest } = PaymentLedger::new()
-        .apply_checked(&page, &users, NOW, false, &partial)
+        .apply_checked(&page, &users, NOW, false, &PlanBook::default(), &partial)
         .unwrap()
     else {
         panic!("applied without every verdict");
@@ -289,8 +303,22 @@ fn a_page_waits_until_stripe_has_said_of_every_grant() {
     beyond.insert(order(NEVER_SEEN), Verdict::Refused(Refusal::NoCheckout));
     beyond.insert(order(STRANGER), Verdict::Refused(Refusal::Unpaid));
     assert_eq!(
-        PaymentLedger::new().apply_checked(&page, &users, NOW, false, &beyond),
-        PaymentLedger::new().apply_checked(&page, &users, NOW, false, &every_confirmed())
+        PaymentLedger::new().apply_checked(
+            &page,
+            &users,
+            NOW,
+            false,
+            &PlanBook::default(),
+            &beyond
+        ),
+        PaymentLedger::new().apply_checked(
+            &page,
+            &users,
+            NOW,
+            false,
+            &PlanBook::default(),
+            &every_confirmed()
+        )
     );
 }
 
@@ -304,8 +332,14 @@ fn with_the_check_off_nothing_is_confirmed() {
     let off = PaymentLedger::new()
         .apply(&page, &users, NOW, false)
         .unwrap();
-    let on =
-        applied(PaymentLedger::new().apply_checked(&page, &users, NOW, false, &every_confirmed()));
+    let on = applied(PaymentLedger::new().apply_checked(
+        &page,
+        &users,
+        NOW,
+        false,
+        &PlanBook::default(),
+        &every_confirmed(),
+    ));
     for (record, checked) in off
         .ledger
         .orders()
@@ -340,18 +374,18 @@ fn a_rehearsal_is_not_checked_and_a_page_refused_is_never_asked_about() {
     let none = Verdicts::new();
     let ledger = PaymentLedger::new();
     assert_eq!(
-        ledger.apply_checked(&pilot, &users, NOW, true, &none),
+        ledger.apply_checked(&pilot, &users, NOW, true, &PlanBook::default(), &none),
         Ok(Checked::Applied(
             ledger.apply(&pilot, &users, NOW, true).unwrap()
         ))
     );
     assert_eq!(
-        ledger.apply_checked(&pilot, &users, NOW, false, &none),
+        ledger.apply_checked(&pilot, &users, NOW, false, &PlanBook::default(), &none),
         Err(ApplyRefusal::TestMode)
     );
     let elsewhere = live(3, vec![Terms::month(MONTH, "pilotusera").grant(4)]);
     assert_eq!(
-        ledger.apply_checked(&elsewhere, &users, NOW, false, &none),
+        ledger.apply_checked(&elsewhere, &users, NOW, false, &PlanBook::default(), &none),
         Err(ApplyRefusal::CursorMoved {
             after: 3,
             cursor: 0
@@ -368,7 +402,7 @@ fn a_rehearsal_is_not_checked_and_a_page_refused_is_never_asked_about() {
         .ledger;
     let changed = live(1, vec![Terms::pack(MONTH, "pilotusera").grant(2)]);
     assert_eq!(
-        first.apply_checked(&changed, &users, NOW, false, &none),
+        first.apply_checked(&changed, &users, NOW, false, &PlanBook::default(), &none),
         Err(ApplyRefusal::Contradicted {
             seq: 2,
             order: order(MONTH),
@@ -377,7 +411,7 @@ fn a_rehearsal_is_not_checked_and_a_page_refused_is_never_asked_about() {
     );
     let repeated = live(1, vec![Terms::month(MONTH, "pilotusera").grant(2)]);
     assert_eq!(
-        first.apply_checked(&repeated, &users, NOW, false, &none),
+        first.apply_checked(&repeated, &users, NOW, false, &PlanBook::default(), &none),
         Ok(Checked::Applied(
             first.apply(&repeated, &users, NOW, false).unwrap()
         ))
@@ -414,6 +448,7 @@ fn the_user_s_status_comes_before_the_check() {
         &users,
         NOW,
         false,
+        &PlanBook::default(),
         &verdicts(vec![(PACK, Verdict::Confirmed)]),
     ));
     let now = NOW.as_secs();
@@ -454,6 +489,7 @@ fn only_a_live_grant_that_gave_is_recorded_as_confirmed() {
         &pilot_users(),
         NOW,
         false,
+        &PlanBook::default(),
         &verdicts(vec![(MONTH, Verdict::Confirmed)]),
     ));
     let mut value: Value = serde_json::from_slice(&applied.ledger.encode().unwrap()).unwrap();

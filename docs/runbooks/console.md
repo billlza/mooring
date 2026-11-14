@@ -291,7 +291,7 @@ mooringctl portal payments
 - **Rehearse first.** In Stripe's test mode the portal's journal says so, and Mooring grants nothing from it unless you rehearse: `mooringctl portal rehearsal on`, pay with Stripe's test cards, check `portal payments` and the console, then `mooringctl portal rehearsal off`, which takes the rehearsal's grants out at once, and `mooring-portal discard-test-payments` on the portal's host before real payments are taken. The cursor carries on.
 - **It pulls only while the Mac is on no foreign network** (the pull goes the Mac's own way, so never over campus Wi-Fi or eduroam). The daemon's log says when it waits.
 - **A stop** (the portal answered 409, 401 or 400, or a page contradicted the ledger) holds until you change the pull's settings: `portal connect` again (with a new token after a 401), or `portal rehearsal`; Stripe's own stops are below. The log line names the reason. After a 409 the portal's journal is not the one pulled before (a database restored from a backup, say): find out which journal is right before connecting again; Mooring never lowers its cursor.
-- **A held grant** (`unknown_user`, `user_revoked`, and with the check against Stripe on the three below) names a payment Mooring did not grant: refund it at Stripe.
+- **A held grant** (`unknown_user`, `user_revoked`, with the check against Stripe on the four below, and with the plans kept on this Mac `plan_unknown` and `plan_differs`) names a payment Mooring did not grant: refund it at Stripe.
 - `mooringctl portal disconnect` stops the pull and deletes the token; the ledger stays, and what it granted still counts.
 
 The daemon's log has a line for each grant, hold, refund, dispute, failure and stop, by order id and user id.
@@ -317,11 +317,33 @@ What it does:
 
 - **A page waits for Stripe.** Nothing of a page of the portal's list is granted until Stripe has answered for every live grant on it, and the log says which order Stripe is being asked about. The daemon sends Stripe one request every two seconds at most, and only while it may pull (no foreign network). A page waiting when the daemon stops is pulled again after it starts.
 - **Where it looks.** A first order's checkout among those completed from a week before its payment to five minutes after it, by the order id the checkout carries; a renewal's invoice among the paid invoices of the subscriptions its first order's checkouts began (two when that order was paid twice).
-- **A held grant** is never granted, now or later: `stripe_no_payment` (Stripe has no payment for the order), `stripe_unpaid` (its payment is not paid), `stripe_differs` (paid, but in test mode, in another currency, for another amount, or in a checkout of the other kind), `stripe_no_first_order` (a renewal whose first order Mooring does not hold, so Stripe was not asked). The log line and `portal payments` say what Stripe answered. If the user did pay, refund them at Stripe. An order you let through at the portal although its checkout charged another amount or currency (`approve-order`) is held too, so refund such an order instead of letting it through. A payment with a coupon or a free trial charges less than the plan's price and is held as well.
+- **A held grant** is never granted, now or later: `stripe_no_payment` (Stripe has no payment for the order), `stripe_unpaid` (its payment is not paid), `stripe_differs` (paid, but in test mode, in another currency, for another amount, in a checkout of the other kind, or, with the plans kept on this Mac, on another Payment Link), `stripe_no_first_order` (a renewal whose first order Mooring does not hold, so Stripe was not asked). The log line and `portal payments` say what Stripe answered. If the user did pay, refund them at Stripe. An order you let through at the portal although its checkout charged another amount or currency (`approve-order`) is held too, so refund such an order instead of letting it through. A payment with a coupon or a free trial charges less than the plan's price and is held as well.
 - **A stop.** Stripe's 401 (the key is wrong, or was deleted), 403 (it may not read checkouts or invoices) or 400 and 404 (Stripe refused the request) stop the pull until you change its settings. After a 401 make a new key and run `stripe-check on` with it; after a 403 give the key both permissions at Stripe, or make a new one, and run `stripe-check on` again. A 400 or 404 is a fault in the request, the build's or one a change at Stripe caused: report the log line, which has Stripe's error type and code and nothing else of Stripe's answer; `stripe-check off` lets payments through unchecked meanwhile.
 - **Failures** (Stripe's 429 or 5xx, or no answer) only make the page wait. Stripe is asked again after a pause that grows, as the portal is; after a 429, when Stripe says, or five minutes later.
 - `mooringctl portal stripe-check off` turns the check off, then deletes the key from the keychain; delete it at Stripe as well.
 - Once this build has written the payment ledger (version 4) or the pull's settings (version 2), an older build cannot read them: do not put one back.
+
+### The plans on the Mac (2026-11-14)
+
+The check against Stripe proves that an order was paid, not what the payment buys: a broken portal could still list a real £15 payment as a year of service. With the plans kept on this Mac, the daemon grants a live payment only at the terms of a plan you sell, and holds any other (design §9.6, `docs/portal-contract.md` §5.6). It is off until you keep a plan file.
+
+1. **Keep the plan file.** Copy the portal's live plan file (the `catalogue-live.json` its service runs) to this Mac from your own copy, and keep it:
+
+   ```
+   mooringctl portal plans set <the file>
+   mooringctl portal payments
+   ```
+
+   The file is checked as the portal checks it, and refused, with nothing written, when the portal would refuse it or when it is of Stripe's test mode. `portal plans set` lists every plan kept, and `portal payments` lists them under the settings. It may come before `portal connect`, and `portal connect`, `rehearsal`, `stripe-check` and `disconnect` keep the plans.
+2. **Before you change what the portal sells**, keep the new file here first, then restart the portal with it. The plans of earlier files stay (96 at most, the longest unlisted forgotten first), so orders paid before the change still match. A grant of a plan this Mac does not keep is held and never granted: its buyer gets a refund and orders again.
+3. **A plan whose days, traffic or price change needs a new Payment Link.** Make the new link at Stripe, put it in the file, and deactivate the old one there: the subscriptions begun on it go on renewing, at the old terms, which stay kept. A Payment Link is kept for one plan, so `portal plans set` refuses a file that lists other terms on the link of a plan kept, current or earlier, and writes nothing; the error names the plan, the link and the plan kept on it.
+
+What it does:
+
+- **A held grant**: `plan_unknown` (no plan kept has the order's plan id: the portal sells a plan you did not keep here, or someone made the order up) or `plan_differs` (plans of that id are kept, none at the order's kind, days, traffic, amount and currency). Such a grant is held before Stripe is asked. If the portal does sell the plan, keep its file here (`portal plans set`), then refund the order at Stripe; the log line and `portal payments` say what the hold means. A held renewal's subscription goes on charging each month, and each charge is held again: cancel the subscription at Stripe as well as refunding.
+- **With the check against Stripe on too**, a first order is confirmed only by a checkout made on its plan's Payment Link, and a renewal only in a subscription begun on it (the portal lists a renewal at its first order's terms, so one listed at another plan's is held); a payment on another link, or on a link the plan file does not list (a private link, say), is held as `stripe_differs`, with the link named.
+- `mooringctl portal plans off` forgets every plan: grants are then applied at the terms the portal lists. A file kept after it holds only its own plans, so a renewal of a subscription begun on an earlier plan's link is then held: use `off` only when no such subscription still renews.
+- Once this build has written the payment ledger (version 5) or the pull's settings (version 3), an older build cannot read them: do not put one back.
 
 ## 7. The nightly apply job (2026-11-12)
 

@@ -6,8 +6,9 @@
 //! It holds the cursor and every order the portal named, with the grant,
 //! refunds and dispute that named it, so that one write keeps the cursor
 //! and everything a page did together (contract §5.1).
-//! [`PaymentLedger::apply`] applies a page to a copy, which the daemon
-//! writes and only then keeps.
+//! [`PaymentLedger::apply_planned`] applies a page to a copy (with the
+//! check against Stripe on, [`PaymentLedger::apply_checked`]), which the
+//! daemon writes and only then keeps.
 //!
 //! # Rules
 //!
@@ -54,6 +55,7 @@ use super::entitlement::{Entitlements, PackRefund, PaidPack, PaidPeriod};
 use super::error::{ApplyRefusal, Contradiction, LedgerError};
 use super::feed::{EntryEvent, FeedEntry, FeedPage, OrderTerms};
 use super::ids::OrderId;
+use super::plans::{PlanBook, PlanVerdict};
 use super::refund::{
     PackUse, RefundEffect, RefundUsage, TakeBacks, close_restarted, pack_taken_back,
 };
@@ -65,12 +67,18 @@ mod v1;
 mod v2;
 mod v3;
 
-/// The ledger's version: 4 since the check against Stripe (2026-11-14): a
-/// grant records whether Stripe confirmed it, a grant may be held for what
-/// Stripe said, and the pull may stop for Stripe's answer. Version 3 added
-/// that a refunded pack waits for the usage (2026-11-12). Versions 1 to 3
-/// are read and lifted.
-pub const LEDGER_VERSION: u32 = 4;
+/// The ledger's version: 5 since the plans on the Mac (2026-11-14): a
+/// grant may be held for a plan the Mac does not know at its terms.
+/// Version 4 added the check against Stripe (2026-11-14): a grant records
+/// whether Stripe confirmed it, a grant may be held for what Stripe said,
+/// and the pull may stop for Stripe's answer. Version 3 added that a
+/// refunded pack waits for the usage (2026-11-12). Version 4 is read as it
+/// is, since it holds nothing version 5 would not; versions 1 to 3 are
+/// read and lifted.
+pub const LEDGER_VERSION: u32 = 5;
+
+/// The version before the plans on the Mac, of the same shape.
+const LEDGER_VERSION_4: u32 = 4;
 
 /// The largest ledger written or read, in bytes. An order takes about
 /// 700 bytes, so this holds thousands of orders.
@@ -147,6 +155,11 @@ pub enum HeldReason {
     StripeUnpaid,
     /// What Stripe says was paid is not what the order says.
     StripeDiffers,
+    /// The Mac knows plans, and none of the grant's plan id.
+    PlanUnknown,
+    /// The Mac knows the grant's plan, but not at its terms: its kind,
+    /// days, traffic, amount or currency.
+    PlanDiffers,
 }
 
 impl HeldReason {
@@ -161,6 +174,8 @@ impl HeldReason {
             Self::StripeNoFirstOrder => "stripe_no_first_order",
             Self::StripeUnpaid => "stripe_unpaid",
             Self::StripeDiffers => "stripe_differs",
+            Self::PlanUnknown => "plan_unknown",
+            Self::PlanDiffers => "plan_differs",
         }
     }
 }
@@ -269,6 +284,19 @@ impl OrderRecord {
             refunds: Vec::new(),
             dispute: None,
         }
+    }
+
+    /// Whether the order's grant was held for a plan the Mac does not know
+    /// at its terms.
+    fn held_for_plan(&self) -> bool {
+        self.grant.is_some_and(|grant| {
+            matches!(
+                grant.outcome,
+                GrantOutcome::Held {
+                    reason: HeldReason::PlanUnknown | HeldReason::PlanDiffers
+                }
+            )
+        })
     }
 
     /// Whether Mooring granted the order: its grant gave a period or a
@@ -510,7 +538,7 @@ impl PaymentLedger {
         }
         let Version { version } = serde_json::from_slice(bytes).map_err(LedgerError::Decode)?;
         let file = match version {
-            LEDGER_VERSION => {
+            LEDGER_VERSION | LEDGER_VERSION_4 => {
                 serde_json::from_slice::<LedgerFile>(bytes).map_err(LedgerError::Decode)?
             }
             v3::VERSION => serde_json::from_slice::<v3::LedgerFile>(bytes)
@@ -536,6 +564,11 @@ impl PaymentLedger {
                 return Err(inconsistent("orders are not in id order, each once"));
             }
             check_record(&record, file.cursor)?;
+            if version == LEDGER_VERSION_4 && record.held_for_plan() {
+                return Err(inconsistent(
+                    "a grant of version 4 is held for a plan, which version 5 added",
+                ));
+            }
             orders.insert(record.order.clone(), record);
         }
         Ok(Self {
@@ -638,41 +671,65 @@ impl PaymentLedger {
         }
     }
 
-    /// Applies `page`, which follows the ledger's cursor, to a copy at
-    /// `now`, for the deployment's `users`; `rehearsal` when the operator
-    /// rehearses. A refund in full of a pack is recorded as waiting for the
-    /// usage ([`PackUse::Awaiting`]), which [`Self::settle`] ends. The copy
-    /// has the page's cursor, `now` as its last pull and no stop. Every
-    /// grant is applied as the portal lists it: the pull with the check
-    /// against Stripe off.
-    pub fn apply(
+    /// [`Self::apply_planned`] with no plan known: every grant as the
+    /// portal lists it. The tests' shorthand; the pull passes the plans it
+    /// keeps, so that none of its pages is applied unchecked.
+    #[cfg(test)]
+    pub(crate) fn apply(
         &self,
         page: &FeedPage,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         rehearsal: bool,
     ) -> Result<Applied, ApplyRefusal> {
-        self.apply_with(page, users, now, rehearsal, &mut Check::off())
+        self.apply_planned(page, users, now, rehearsal, &PlanBook::default())
     }
 
-    /// Applies `page` as [`Self::apply`] does, with the check against
-    /// Stripe on (design §9.6), once `verdicts` says what Stripe said of
-    /// each grant of a live page that would give a period or a pack: one
-    /// confirmed is granted and recorded so, and one refused is held for
-    /// the reason of Stripe's [`Refusal`]. Until then the page is not
-    /// applied, and [`Checked::Unconfirmed`] names the grants `verdicts`
-    /// says nothing of, in the page's order. A page refused is refused as
-    /// [`Self::apply`] would refuse it, before Stripe is asked anything. A
-    /// test-mode page, which only a rehearsal applies, is not checked.
+    /// Applies `page`, which follows the ledger's cursor, to a copy at
+    /// `now`, for the deployment's `users`; `rehearsal` when the operator
+    /// rehearses: the pull with the check against Stripe off. A refund in
+    /// full of a pack is recorded as waiting for the usage
+    /// ([`PackUse::Awaiting`]), which [`Self::settle`] ends. The copy has
+    /// the page's cursor, `now` as its last pull and no stop. While `plans`
+    /// knows any plan (design §9.6), a live grant that would give a period
+    /// or a pack is held when its terms are not those of a known plan
+    /// ([`HeldReason::PlanUnknown`], [`HeldReason::PlanDiffers`]); a
+    /// test-mode page is not checked. With no plan known, every grant is
+    /// applied as the portal lists it.
+    pub fn apply_planned(
+        &self,
+        page: &FeedPage,
+        users: &BTreeMap<UserId, User>,
+        now: UnixTime,
+        rehearsal: bool,
+        plans: &PlanBook,
+    ) -> Result<Applied, ApplyRefusal> {
+        self.apply_with(page, users, now, rehearsal, &mut Check::off(plans))
+    }
+
+    /// Applies `page` as [`Self::apply_planned`] does, with the check
+    /// against Stripe on (design §9.6), once `verdicts` says what Stripe
+    /// said of each grant of a live page that would give a period or a
+    /// pack: one confirmed is granted and recorded so, and one refused is
+    /// held for the reason of Stripe's [`Refusal`]. Until then the page is
+    /// not applied, and [`Checked::Unconfirmed`] names the grants
+    /// `verdicts` says nothing of, in the page's order. A page refused is
+    /// refused as [`Self::apply_planned`] would refuse it, before Stripe is
+    /// asked anything. A test-mode page, which only a rehearsal applies, is
+    /// not checked. A grant `plans` holds is held without asking Stripe;
+    /// while `plans` knows any, the others are confirmed only on a Payment
+    /// Link of a plan at their terms, a renewal in a subscription begun on
+    /// one ([`Confirmable::payment_links`]).
     pub fn apply_checked(
         &self,
         page: &FeedPage,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         rehearsal: bool,
+        plans: &PlanBook,
         verdicts: &Verdicts,
     ) -> Result<Checked, ApplyRefusal> {
-        let mut check = Check::on(verdicts);
+        let mut check = Check::on(plans, verdicts);
         let applied = self.apply_with(page, users, now, rehearsal, &mut check)?;
         // A renewal's first order: in the ledger, or earlier on the page.
         let target = |(order, terms): (OrderId, OrderTerms)| {
@@ -681,10 +738,15 @@ impl PaymentLedger {
                 .as_ref()
                 .and_then(|first| applied.ledger.orders.get(first))
                 .map(|record| record.terms.clone());
+            // A renewal's links are its own plan's, as a first order's are:
+            // the portal lists a renewal at its first order's terms, so its
+            // subscription was begun on one of them.
+            let payment_links = plans.links_for(&terms);
             Confirmable {
                 order,
                 terms,
                 first,
+                payment_links,
             }
         };
         let mut missing = check.missing.into_iter();
@@ -1074,6 +1136,7 @@ impl PaymentLedger {
                 }
             },
         };
+        let outcome = planned_outcome(check.plans, terms, livemode, outcome);
         let (outcome, confirmed, refusal) = confirmed_outcome(check, entry, livemode, outcome);
         let mut record = OrderRecord::new(entry.order.clone(), terms.clone(), livemode);
         record.grant = Some(GrantRecord {
@@ -1175,10 +1238,12 @@ pub enum Checked {
     },
 }
 
-/// How the live grants of a page are applied: as listed, or as Stripe
-/// said.
+/// How the live grants of a page are applied: as listed, or as the plans
+/// on the Mac and Stripe said.
 struct Check<'a> {
-    /// What Stripe said; `None` while the check is off.
+    /// The plans the Mac knows: none while the plan check is off.
+    plans: &'a PlanBook,
+    /// What Stripe said; `None` while the check against Stripe is off.
     verdicts: Option<&'a Verdicts>,
     /// The grants `verdicts` says nothing of, in the page's order: each is
     /// applied as though confirmed, so that what follows it on the page is
@@ -1187,20 +1252,46 @@ struct Check<'a> {
 }
 
 impl<'a> Check<'a> {
-    /// The check off: every grant as the portal lists it.
-    const fn off() -> Self {
+    /// The check against Stripe off: every grant as the portal lists it,
+    /// unless `plans` holds it.
+    const fn off(plans: &'a PlanBook) -> Self {
         Self {
+            plans,
             verdicts: None,
             missing: Vec::new(),
         }
     }
 
-    /// The check on, with what Stripe said so far.
-    const fn on(verdicts: &'a Verdicts) -> Self {
+    /// The check against Stripe on, with what Stripe said so far.
+    const fn on(plans: &'a PlanBook, verdicts: &'a Verdicts) -> Self {
         Self {
+            plans,
             verdicts: Some(verdicts),
             missing: Vec::new(),
         }
+    }
+}
+
+/// `outcome`, or the hold of a live grant that would give a period or a
+/// pack when `plans` knows plans, none of them at the grant's terms.
+fn planned_outcome(
+    plans: &PlanBook,
+    terms: &OrderTerms,
+    livemode: bool,
+    outcome: GrantOutcome,
+) -> GrantOutcome {
+    let gives = matches!(outcome, GrantOutcome::Period { .. } | GrantOutcome::Pack);
+    if !(livemode && gives) {
+        return outcome;
+    }
+    match plans.judge(terms) {
+        PlanVerdict::Off | PlanVerdict::Sells { .. } => outcome,
+        PlanVerdict::Unknown => GrantOutcome::Held {
+            reason: HeldReason::PlanUnknown,
+        },
+        PlanVerdict::Differs => GrantOutcome::Held {
+            reason: HeldReason::PlanDiffers,
+        },
     }
 }
 

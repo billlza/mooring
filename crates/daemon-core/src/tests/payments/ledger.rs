@@ -614,12 +614,12 @@ fn the_ledger_file_round_trips_and_keeps_its_rules() {
     assert_eq!(stopped.with_stop(None), applied.ledger);
     let text = String::from_utf8(applied.ledger.encode().unwrap()).unwrap();
     assert!(
-        text.starts_with("{\n  \"version\": 4,\n  \"cursor\": 7,"),
+        text.starts_with("{\n  \"version\": 5,\n  \"cursor\": 7,"),
         "{text}"
     );
     let value: Value = serde_json::from_str(&text).unwrap();
     let edits: Vec<(&str, Edit)> = vec![
-        ("version", Box::new(|value| value["version"] = json!(5))),
+        ("version", Box::new(|value| value["version"] = json!(6))),
         (
             "use of a month's refund in full",
             Box::new(|value| value["orders"][1]["refunds"][0]["pack_use"] = json!("awaiting")),
@@ -726,7 +726,7 @@ fn the_ledger_file_round_trips_and_keeps_its_rules() {
         if name == "version" {
             assert!(matches!(
                 refused,
-                Err(LedgerError::UnknownVersion { found: 5 })
+                Err(LedgerError::UnknownVersion { found: 6 })
             ));
         }
     }

@@ -6,8 +6,10 @@
 use serde_json::json;
 
 use super::NOW;
+use super::plans::{book_of, file_of, listed, parse, sold};
 use crate::payments::{
-    ENTITLEMENTS_PATH, OriginError, PortalOrigin, PullSettings, SettingsError, Stop, StopReason,
+    ENTITLEMENTS_PATH, MAX_FILE_PLANS, MAX_SETTINGS_BYTES, MAX_STORED_PLANS, OriginError, PlanBook,
+    PortalOrigin, PullSettings, SettingsError, Stop, StopReason,
 };
 
 /// An origin is `https://`, a lower-case DNS name and an optional port, and
@@ -119,13 +121,13 @@ fn the_settings_round_trip_and_refuse_another_shape() {
     assert_ne!(all_on.rehearsing(9, false), all_on);
     assert_eq!(
         String::from_utf8(checking.encode().unwrap()).unwrap(),
-        "{\n  \"version\": 2,\n  \"revision\": 6,\n  \"origin\": \"https://portal.example.org\",\n  \"rehearsal\": true,\n  \"stripe_check\": true\n}\n"
+        "{\n  \"version\": 3,\n  \"revision\": 6,\n  \"origin\": \"https://portal.example.org\",\n  \"rehearsal\": true,\n  \"stripe_check\": true,\n  \"plans\": []\n}\n"
     );
-    let base = json!({"version": 2, "revision": 3, "origin": "https://portal.example.org", "rehearsal": false, "stripe_check": true});
+    let base = json!({"version": 3, "revision": 3, "origin": "https://portal.example.org", "rehearsal": false, "stripe_check": true, "plans": []});
     let decode =
         |value: &serde_json::Value| PullSettings::decode(&serde_json::to_vec(value).unwrap());
     assert!(decode(&base).unwrap().stripe_check());
-    for found in [0, 3] {
+    for found in [0, 4] {
         let mut version = base.clone();
         version["version"] = json!(found);
         assert!(matches!(
@@ -133,7 +135,14 @@ fn the_settings_round_trip_and_refuse_another_shape() {
             Err(SettingsError::UnknownVersion { found: read }) if read == found
         ));
     }
-    for key in ["revision", "origin", "rehearsal", "stripe_check", "version"] {
+    for key in [
+        "revision",
+        "origin",
+        "rehearsal",
+        "stripe_check",
+        "plans",
+        "version",
+    ] {
         let mut missing = base.clone();
         missing.as_object_mut().unwrap().remove(key);
         assert!(
@@ -151,7 +160,7 @@ fn the_settings_round_trip_and_refuse_another_shape() {
     not_a_flag["stripe_check"] = json!("on");
     assert!(matches!(decode(&not_a_flag), Err(SettingsError::Decode(_))));
     assert!(matches!(
-        PullSettings::decode(&vec![b' '; 4097]),
+        PullSettings::decode(&vec![b' '; MAX_SETTINGS_BYTES + 1]),
         Err(SettingsError::TooLarge)
     ));
 }
@@ -217,4 +226,123 @@ fn a_revision_is_above_the_settings_and_the_stop() {
         PullSettings::next_revision(None, Some(stop(u64::MAX))),
         u64::MAX
     );
+}
+
+/// The plans kept are in the settings from version 3: every other change
+/// keeps them, they read back as written, and only a change of plans drops
+/// them; plans no file leaves are refused. Version 2 is read with none,
+/// and a file of version 2 that names any is refused.
+#[test]
+fn the_plans_kept_are_in_the_settings() {
+    let origin = PortalOrigin::parse("https://portal.example.org").unwrap();
+    let book = book_of(sold());
+    let planned = PullSettings::connected(3, origin.clone(), true, true).planning(4, book.clone());
+    assert_eq!(planned.revision(), 4);
+    assert_eq!(planned.plans(), &book);
+    assert_eq!(planned.origin(), Some(&origin));
+    assert!(planned.rehearsal());
+    assert!(planned.stripe_check());
+    assert_eq!(
+        PullSettings::decode(&planned.encode().unwrap()).unwrap(),
+        planned
+    );
+    assert_eq!(planned.rehearsing(5, false).plans(), &book);
+    assert_eq!(planned.checking(6, false).plans(), &book);
+    let away = planned.disconnecting(7);
+    assert_eq!(away.revision(), 7);
+    assert_eq!(away.origin(), None);
+    assert!(!away.rehearsal());
+    assert!(away.stripe_check());
+    assert_eq!(away.plans(), &book);
+    let back = away.connecting(8, origin.clone());
+    assert_eq!(back.revision(), 8);
+    assert_eq!(back.origin(), Some(&origin));
+    assert!(!back.rehearsal());
+    assert!(back.stripe_check());
+    assert_eq!(back.plans(), &book);
+    let unplanned = back.planning(9, PlanBook::default());
+    assert_eq!(unplanned.revision(), 9);
+    assert!(unplanned.plans().is_empty());
+    assert_eq!(unplanned.origin(), Some(&origin));
+    assert!(unplanned.stripe_check());
+    assert!(
+        PullSettings::connected(1, origin.clone(), false, false)
+            .plans()
+            .is_empty()
+    );
+    assert!(PullSettings::disconnected(1, true).plans().is_empty());
+    let written: serde_json::Value = serde_json::from_slice(&planned.encode().unwrap()).unwrap();
+    assert_eq!(
+        written["plans"],
+        serde_json::to_value(book.plans()).unwrap()
+    );
+    let decode =
+        |value: &serde_json::Value| PullSettings::decode(&serde_json::to_vec(value).unwrap());
+    let mut out_of_bounds = written.clone();
+    out_of_bounds["plans"][0]["days"] = json!(3661);
+    assert!(matches!(
+        decode(&out_of_bounds),
+        Err(SettingsError::Decode(_))
+    ));
+    let mut repeated = written;
+    repeated["plans"][1] = repeated["plans"][0].clone();
+    assert!(matches!(decode(&repeated), Err(SettingsError::Decode(_))));
+    let version_2 = json!({"version": 2, "revision": 3, "origin": "https://portal.example.org", "rehearsal": false, "stripe_check": true});
+    assert_eq!(
+        decode(&version_2).unwrap(),
+        PullSettings::connected(3, origin, false, true)
+    );
+    let mut planned_in_2 = version_2.clone();
+    planned_in_2["plans"] = json!([]);
+    assert!(matches!(
+        decode(&planned_in_2),
+        Err(SettingsError::Decode(_))
+    ));
+    for key in ["revision", "origin", "rehearsal", "stripe_check"] {
+        let mut missing = version_2.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            matches!(decode(&missing), Err(SettingsError::Decode(_))),
+            "{key}"
+        );
+    }
+}
+
+/// The most plans kept, each as long as the portal lets a plan be, with
+/// the longest origin and revision, fit in a settings file the daemon
+/// reads.
+#[test]
+fn the_most_plans_kept_fit_in_the_settings() {
+    let longest_word = "a".repeat(124);
+    let mut book = PlanBook::default();
+    for file in 0..MAX_STORED_PLANS / MAX_FILE_PLANS {
+        let plans = (0..MAX_FILE_PLANS)
+            .map(|at| {
+                let mut plan = listed(
+                    &format!("{}{file:02}{at:02}", "p".repeat(28)),
+                    "month_auto",
+                    100_000,
+                    10_000_000,
+                    &format!("{file:02}{at:02}{longest_word}"),
+                );
+                plan["days"] = json!(3660);
+                plan
+            })
+            .collect();
+        book = book.stored(&parse(&file_of(plans)).unwrap()).unwrap().0;
+    }
+    assert_eq!(book.plans().len(), MAX_STORED_PLANS);
+    let host = format!(
+        "{}.{}.{}.{}",
+        "a".repeat(63),
+        "b".repeat(63),
+        "c".repeat(63),
+        "d".repeat(61)
+    );
+    assert_eq!(host.len(), 253);
+    let origin = PortalOrigin::parse(&format!("https://{host}:65535")).unwrap();
+    let settings = PullSettings::connected(u64::MAX, origin, true, true).planning(u64::MAX, book);
+    let bytes = settings.encode().unwrap();
+    assert!(bytes.len() <= MAX_SETTINGS_BYTES, "{}", bytes.len());
+    assert_eq!(PullSettings::decode(&bytes).unwrap(), settings);
 }

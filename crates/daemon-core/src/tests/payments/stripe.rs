@@ -6,11 +6,13 @@
 
 use serde_json::{Value, json};
 
-use super::{DAY, Terms, live};
+use super::plans::{book_of, listed};
+use super::{DAY, NOW, Terms, live, pilot_users};
 use crate::payments::{
-    CHECKOUT_AFTER, CHECKOUT_BEFORE, Confirmable, Difference, HeldReason, Lookup, MAX_PAGES,
-    MAX_STRIPE_ID_CHARS, Next, NotAStripeId, OrderId, OrderTerms, PAGE_LIMIT, PortalPlanKind,
-    Refusal, STRIPE_API, STRIPE_VERSION, StripeAnswerError, StripeId, Verdict,
+    CHECKOUT_AFTER, CHECKOUT_BEFORE, Checked, Confirmable, Difference, HeldReason, Lookup,
+    MAX_PAGES, MAX_STRIPE_ID_CHARS, Next, NotAStripeId, OrderId, OrderTerms, PAGE_LIMIT,
+    PaymentLedger, PortalPlanKind, Refusal, STRIPE_API, STRIPE_VERSION, StripeAnswerError,
+    StripeId, Verdict, Verdicts,
 };
 
 /// The first order, a month.
@@ -101,6 +103,7 @@ fn first_order(order: &'static str, terms_of: &Terms) -> Confirmable {
         order: OrderId::parse(order).unwrap(),
         terms: terms(terms_of.grant(1)),
         first: None,
+        payment_links: Vec::new(),
     }
 }
 
@@ -114,6 +117,7 @@ fn renewal() -> Confirmable {
         order: OrderId::parse(RENEWAL).unwrap(),
         terms: terms(renewed),
         first: Some(terms(month_auto(FIRST, None).grant(1))),
+        payment_links: Vec::new(),
     }
 }
 
@@ -135,6 +139,7 @@ fn checkout(id: &str, reference: Option<&str>) -> Value {
         "payment_status": "paid",
         "status": "complete",
         "subscription": null,
+        "payment_link": null,
     })
 }
 
@@ -457,6 +462,7 @@ fn an_answer_that_is_not_a_list_of_what_was_asked_is_refused() {
         "currency",
         "livemode",
         "subscription",
+        "payment_link",
     ] {
         let mut missing = checkout("cs_live_1", Some(FIRST));
         missing.as_object_mut().unwrap().remove(key);
@@ -883,4 +889,233 @@ fn each_refusal_holds_for_its_reason() {
     );
     assert_eq!(HeldReason::StripeUnpaid.as_str(), "stripe_unpaid");
     assert_eq!(HeldReason::StripeDiffers.as_str(), "stripe_differs");
+}
+
+/// The Payment Link `plink_<text>`.
+fn plink(text: &str) -> StripeId {
+    StripeId::parse(&format!("plink_{text}")).unwrap()
+}
+
+/// `checkout` on the Payment Link `link`, or on none.
+fn on_link(mut checkout: Value, link: Option<&str>) -> Value {
+    checkout["payment_link"] = json!(link);
+    checkout
+}
+
+/// While the Mac knows the order's plan, its checkout must have been on
+/// one of the plan's Payment Links: on another or on none it is refused
+/// for that, after every other difference, and a checkout on the plan's
+/// later on the page still confirms it. With no plan known, any link or
+/// none confirms it.
+#[test]
+fn a_checkout_on_none_of_its_plan_s_payment_links_is_refused() {
+    let month = Confirmable {
+        payment_links: vec![plink("1Month"), plink("2Month")],
+        ..first_order(FIRST, &Terms::month(FIRST, "pilotusera"))
+    };
+    let differs = |found: &str| {
+        Verdict::Refused(Refusal::Differs(Difference::PaymentLink {
+            found: found.to_owned(),
+        }))
+    };
+    let longest = format!("plink_{}", "a".repeat(249));
+    for (link, verdict) in [
+        (Some("plink_1Month"), Verdict::Confirmed),
+        (Some("plink_2Month"), Verdict::Confirmed),
+        (Some("plink_1Auto"), differs("plink_1Auto")),
+        (None, differs("none")),
+        (Some(longest.as_str()), differs(&longest[..40])),
+    ] {
+        let paying = on_link(checkout("cs_live_1", Some(FIRST)), link);
+        let lookup = ask(Lookup::start(month.clone()));
+        assert_eq!(
+            done(lookup.read(&list(vec![paying], false)).unwrap()),
+            verdict,
+            "{link:?}"
+        );
+    }
+    assert_eq!(
+        Refusal::Differs(Difference::PaymentLink {
+            found: "plink_1Auto".to_owned()
+        })
+        .to_string(),
+        "what Stripe says was paid differs from the order: its checkout was on Payment Link plink_1Auto, not one of its plan's"
+    );
+    // Another amount is the refusal, before the link.
+    let mut dearer = on_link(checkout("cs_live_1", Some(FIRST)), Some("plink_1Auto"));
+    dearer["amount_total"] = json!(900);
+    assert_eq!(
+        done(
+            ask(Lookup::start(month.clone()))
+                .read(&list(vec![dearer], false))
+                .unwrap()
+        ),
+        Verdict::Refused(Refusal::Differs(Difference::Amount { found: Some(900) }))
+    );
+    // A checkout on another link, then one on the plan's.
+    let page = list(
+        vec![
+            on_link(checkout("cs_live_1", Some(FIRST)), Some("plink_1Auto")),
+            on_link(checkout("cs_live_2", Some(FIRST)), Some("plink_2Month")),
+        ],
+        false,
+    );
+    assert_eq!(
+        done(ask(Lookup::start(month.clone())).read(&page).unwrap()),
+        Verdict::Confirmed
+    );
+    // A link that is not a Stripe id is an answer that is not read.
+    let odd = on_link(checkout("cs_live_1", Some(FIRST)), Some("plink-1Month"));
+    assert!(matches!(
+        ask(Lookup::start(month)).read(&list(vec![odd], false)),
+        Err(StripeAnswerError::Decode { .. })
+    ));
+    for link in [Some("plink_1Auto"), None] {
+        let paying = on_link(checkout("cs_live_1", Some(FIRST)), link);
+        let unplanned = first_order(FIRST, &Terms::month(FIRST, "pilotusera"));
+        assert_eq!(
+            done(
+                ask(Lookup::start(unplanned))
+                    .read(&list(vec![paying], false))
+                    .unwrap()
+            ),
+            Verdict::Confirmed,
+            "{link:?}"
+        );
+    }
+}
+
+/// While the Mac knows the renewal's plan, the renewal is looked for only
+/// in the subscriptions its first order's paid checkouts began on the
+/// plan's Payment Links. When none began one there and one began one elsewhere,
+/// the renewal is refused for the first such link, whichever page listed
+/// it; a checkout elsewhere that began none is no such link. With no plan
+/// known, a subscription begun on any link is looked in.
+#[test]
+fn a_renewal_is_looked_for_in_subscriptions_begun_on_its_plan_s_links() {
+    let planned = Confirmable {
+        payment_links: vec![plink("1Auto")],
+        ..renewal()
+    };
+    let begun = |id: &str, link: Option<&str>, subscription: &str| {
+        let mut began = on_link(subscription_checkout(id), link);
+        began["subscription"] = json!(subscription);
+        began
+    };
+    let differs = |found: &str| {
+        Verdict::Refused(Refusal::Differs(Difference::PaymentLink {
+            found: found.to_owned(),
+        }))
+    };
+    for (link, verdict) in [
+        (Some("plink_1Month"), differs("plink_1Month")),
+        (None, differs("none")),
+    ] {
+        let elsewhere = list(vec![begun("cs_live_1", link, SUBSCRIPTION)], false);
+        assert_eq!(
+            done(
+                ask(Lookup::start(planned.clone()))
+                    .read(&elsewhere)
+                    .unwrap()
+            ),
+            verdict,
+            "{link:?}"
+        );
+    }
+    // The first link elsewhere is kept from page to page.
+    let more = ask(ask(Lookup::start(planned.clone()))
+        .read(&list(
+            vec![begun("cs_live_1", Some("plink_1Month"), SUBSCRIPTION)],
+            true,
+        ))
+        .unwrap());
+    assert_eq!(
+        done(
+            more.read(&list(
+                vec![begun("cs_live_0", Some("plink_2Month"), AGAIN)],
+                false
+            ))
+            .unwrap()
+        ),
+        differs("plink_1Month")
+    );
+    // An unpaid checkout elsewhere began nothing.
+    let mut unpaid = begun("cs_live_1", Some("plink_1Month"), SUBSCRIPTION);
+    unpaid["payment_status"] = json!("unpaid");
+    assert_eq!(
+        done(
+            ask(Lookup::start(planned.clone()))
+                .read(&list(vec![unpaid], false))
+                .unwrap()
+        ),
+        Verdict::Refused(Refusal::NoSubscription)
+    );
+    // Elsewhere, then on the plan's link: only the plan's subscription's
+    // invoices are read.
+    let both = list(
+        vec![
+            begun("cs_live_2", Some("plink_1Month"), AGAIN),
+            begun("cs_live_1", Some("plink_1Auto"), SUBSCRIPTION),
+        ],
+        false,
+    );
+    let invoices = ask(ask(Lookup::start(planned.clone())).read(&both).unwrap());
+    assert_eq!(invoices.url(), invoices_url(SUBSCRIPTION, None));
+    assert_eq!(
+        done(invoices.read(&list(Vec::new(), false)).unwrap()),
+        Verdict::Refused(Refusal::NoInvoice)
+    );
+    let found = ask(ask(Lookup::start(planned)).read(&both).unwrap());
+    assert_eq!(
+        done(found.read(&list(vec![invoice(INVOICE)], false)).unwrap()),
+        Verdict::Confirmed
+    );
+    let unplanned = ask(ask(Lookup::start(renewal()))
+        .read(&list(
+            vec![begun("cs_live_1", Some("plink_1Month"), SUBSCRIPTION)],
+            false,
+        ))
+        .unwrap());
+    assert_eq!(unplanned.url(), invoices_url(SUBSCRIPTION, None));
+}
+
+/// A renewal is asked about on the Payment Links of the plans at its own
+/// terms. The portal lists a renewal at its first order's terms, so one
+/// listed at the terms of another plan sold at the same price is refused
+/// for the link its subscription was begun on: that link decides what a
+/// renewal buys, as a checkout's link decides what a first order buys.
+#[test]
+fn a_renewal_listed_at_another_plan_s_terms_is_refused_for_its_link() {
+    let book = book_of(vec![
+        listed("plan-month-auto", "month_auto", 100, 800, "1Auto"),
+        listed("plan-month-auto-big", "month_auto", 500, 800, "2Auto"),
+    ]);
+    let mut bigger = Terms {
+        gigabytes: 500,
+        ..month_auto(RENEWAL, Some(FIRST))
+    }
+    .grant(2);
+    bigger["plan"] = json!("plan-month-auto-big");
+    let page = live(0, vec![month_auto(FIRST, None).grant(1), bigger]);
+    let checked = PaymentLedger::new()
+        .apply_checked(&page, &pilot_users(), NOW, false, &book, &Verdicts::new())
+        .unwrap();
+    let Checked::Unconfirmed { next, rest } = checked else {
+        panic!("applied without Stripe");
+    };
+    assert_eq!(next.payment_links, [plink("1Auto")]);
+    let [renewed]: [Confirmable; 1] = rest.try_into().unwrap();
+    assert_eq!(renewed.order, OrderId::parse(RENEWAL).unwrap());
+    assert_eq!(renewed.payment_links, [plink("2Auto")]);
+    let began = on_link(subscription_checkout("cs_live_1"), Some("plink_1Auto"));
+    assert_eq!(
+        done(
+            ask(Lookup::start(renewed))
+                .read(&list(vec![began], false))
+                .unwrap()
+        ),
+        Verdict::Refused(Refusal::Differs(Difference::PaymentLink {
+            found: "plink_1Auto".to_owned()
+        }))
+    );
 }

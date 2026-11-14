@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! What `portal payments` prints: the pull's settings, the check against
-//! Stripe among them, the ledger's cursor, last pull and stop, how many
+//! Stripe and the plans kept among them, the ledger's cursor, last pull and
+//! stop, how many
 //! refunds wait for the usage or still take in downloads, and every order
 //! with what Mooring did about it, a grant Stripe confirmed marked so. It
 //! names users by id only, as the ledger does.
@@ -12,7 +13,8 @@ use mooring_daemon_core::payments::{
 use serde::Serialize;
 
 use super::error::PaymentFileError;
-use super::notes::{stamp, taken_back};
+use super::notes::{held_meaning, stamp, taken_back};
+use super::plans::{plan_line, plans_line};
 
 /// The text summary.
 pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedger>) -> String {
@@ -46,6 +48,14 @@ pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedge
                     "off: payments are granted as the portal lists them"
                 }
             ));
+            lines.push(format!("  {}", plans_line(settings.plans())));
+            lines.extend(
+                settings
+                    .plans()
+                    .plans()
+                    .iter()
+                    .map(|plan| format!("  {}", plan_line(plan))),
+            );
         }
     }
     let Some(ledger) = ledger else {
@@ -180,8 +190,9 @@ fn order_lines(record: &OrderRecord, take_backs: &TakeBacks, lines: &mut Vec<Str
                 }
                 GrantOutcome::Held { reason } => {
                     format!(
-                        "held, not granted ({}): settle it at Stripe",
-                        reason.as_str()
+                        "held, not granted ({}{}): settle it at Stripe",
+                        reason.as_str(),
+                        held_meaning(reason)
                     )
                 }
             };

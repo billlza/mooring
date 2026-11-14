@@ -23,7 +23,7 @@
 
 use mooring_model::UnixTime;
 use mooring_model::date::SECS_PER_DAY;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::error::printable;
 use super::feed::{OrderTerms, PortalPlanKind};
@@ -66,8 +66,8 @@ const MAX_FOUND_CHARS: usize = 40;
 /// An id Stripe gave an object (`cs_live_…`, `in_…`, `sub_…`): 1 to
 /// [`MAX_STRIPE_ID_CHARS`] letters, digits and `_`, so that it is safe in
 /// a request's query.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "String")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct StripeId(String);
 
 /// Text that is not a Stripe id. The text is never echoed.
@@ -104,6 +104,12 @@ impl TryFrom<String> for StripeId {
     }
 }
 
+impl From<StripeId> for String {
+    fn from(id: StripeId) -> Self {
+        id.0
+    }
+}
+
 /// A grant the check must confirm ([`super::Checked::Unconfirmed`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Confirmable {
@@ -115,6 +121,14 @@ pub struct Confirmable {
     /// subscription, when the ledger or the page holds that order; `None`
     /// for a first order.
     pub first: Option<OrderTerms>,
+    /// The Payment Links of the plans the Mac knows at the order's terms
+    /// (`PlanBook::links_for`): a first order's checkout must have been
+    /// made on one, and a renewal's subscription begun on one, since the
+    /// portal lists a renewal at its first order's terms. Empty, any link
+    /// does: so it is while the plan check is off, since a grant the plan
+    /// check lets through is at the terms of a known plan, which has its
+    /// link.
+    pub payment_links: Vec<StripeId>,
 }
 
 /// What Stripe said of a grant.
@@ -208,6 +222,12 @@ pub enum Difference {
         /// Stripe's billing reason, or `none`.
         found: String,
     },
+    /// A checkout on a Payment Link of none of the order's plans.
+    #[error("its checkout was on Payment Link {found}, not one of its plan's")]
+    PaymentLink {
+        /// Stripe's Payment Link, or `none`.
+        found: String,
+    },
 }
 
 /// Stripe's answer could not be read.
@@ -261,6 +281,20 @@ struct Checkout {
     livemode: bool,
     #[serde(deserialize_with = "Option::deserialize")]
     subscription: Option<StripeId>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    payment_link: Option<StripeId>,
+}
+
+impl Checkout {
+    /// Whether the checkout was on one of `links`; on any while there are
+    /// none to hold it to.
+    fn on_link(&self, links: &[StripeId]) -> bool {
+        links.is_empty()
+            || self
+                .payment_link
+                .as_ref()
+                .is_some_and(|link| links.contains(link))
+    }
 }
 
 /// An invoice, as far as the check reads it. Every key read is required;
@@ -302,16 +336,20 @@ enum Step {
         best: Option<Refusal>,
     },
     /// The same of a renewal's first order `name`, every page of them, for
-    /// the subscriptions its paid checkouts began: `began`, in the order
-    /// listed. An order is paid twice when its buyer finishes two checkouts
-    /// of it; the portal keeps one subscription and the operator refunds
-    /// the other, so either may be the renewal's.
+    /// the subscriptions its paid checkouts began on a Payment Link of the
+    /// renewal's plan (on any while the Mac knows none): `began`, in the
+    /// order listed. An order is paid twice when its buyer finishes two
+    /// checkouts of it; the portal keeps one subscription and the operator
+    /// refunds the other, so either may be the renewal's. `elsewhere` is
+    /// the Payment Link of the first checkout that began one on another
+    /// link, the refusal when none began one on the plan's.
     Subscriptions {
         name: OrderId,
         from: u64,
         until: u64,
         after: Option<StripeId>,
         began: Vec<StripeId>,
+        elsewhere: Option<String>,
     },
     /// The paid invoices of `subscription`; then those of `rest`, the other
     /// subscriptions the first order began.
@@ -380,6 +418,7 @@ impl Lookup {
                     until,
                     after: None,
                     began: Vec::new(),
+                    elsewhere: None,
                 }
             }
             (Some(_), None) => return Next::Done(Verdict::Refused(Refusal::NoFirstOrder)),
@@ -455,7 +494,7 @@ impl Lookup {
                 let page = Page::of(&list, "checkout.session")?;
                 let mut best = best;
                 for checkout in naming(&list, &name) {
-                    match judge_checkout(checkout, &target.terms) {
+                    match judge_checkout(checkout, &target.terms, &target.payment_links) {
                         Ok(()) => return Ok(Next::Done(Verdict::Confirmed)),
                         Err(refusal) => best = Some(closer(best, refusal)),
                     }
@@ -478,15 +517,28 @@ impl Lookup {
                 from,
                 until,
                 mut began,
+                mut elsewhere,
                 ..
             } => {
                 let list: List<Checkout> = decode(body, "checkout.session")?;
                 let page = Page::of(&list, "checkout.session")?;
-                began.extend(naming(&list, &name).filter_map(began_subscription).cloned());
-                let over = Verdict::Refused(if began.is_empty() {
-                    Refusal::NoSubscription
-                } else {
-                    Refusal::NoInvoice
+                for checkout in naming(&list, &name) {
+                    let Some(subscription) = began_subscription(checkout) else {
+                        continue;
+                    };
+                    if checkout.on_link(&target.payment_links) {
+                        began.push(subscription.clone());
+                    } else if elsewhere.is_none() {
+                        elsewhere =
+                            Some(found(checkout.payment_link.as_ref().map(StripeId::as_str)));
+                    }
+                }
+                let over = Verdict::Refused(match (began.is_empty(), &elsewhere) {
+                    (false, _) => Refusal::NoInvoice,
+                    (true, None) => Refusal::NoSubscription,
+                    (true, Some(found)) => Refusal::Differs(Difference::PaymentLink {
+                        found: found.clone(),
+                    }),
                 });
                 let step = match page.more_after {
                     Some(after) => Step::Subscriptions {
@@ -495,6 +547,7 @@ impl Lookup {
                         until,
                         after: Some(after),
                         began,
+                        elsewhere,
                     },
                     None => match Step::invoices(began) {
                         Some(step) => step,
@@ -632,8 +685,13 @@ fn found(value: Option<&str>) -> String {
 }
 
 /// Whether `checkout` pays the order of `terms`: paid, in live mode, of
-/// the plan's mode, in its currency and for its amount.
-fn judge_checkout(checkout: &Checkout, terms: &OrderTerms) -> Result<(), Refusal> {
+/// the plan's mode, in its currency and for its amount, and on one of
+/// `links` when the Mac knows the plan's.
+fn judge_checkout(
+    checkout: &Checkout,
+    terms: &OrderTerms,
+    links: &[StripeId],
+) -> Result<(), Refusal> {
     if checkout.payment_status != "paid" {
         return Err(Refusal::Unpaid);
     }
@@ -658,6 +716,11 @@ fn judge_checkout(checkout: &Checkout, terms: &OrderTerms) -> Result<(), Refusal
     if checkout.amount_total != Some(terms.amount.get()) {
         return Err(Refusal::Differs(Difference::Amount {
             found: checkout.amount_total,
+        }));
+    }
+    if !checkout.on_link(links) {
+        return Err(Refusal::Differs(Difference::PaymentLink {
+            found: found(checkout.payment_link.as_ref().map(StripeId::as_str)),
         }));
     }
     Ok(())

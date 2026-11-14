@@ -517,7 +517,13 @@ impl Puller {
             let pending = Pending::new(page);
             self.confirm(pending, at, notes);
         } else {
-            let applied = self.ledger.apply(&page, users, now, settings.rehearsal());
+            let applied = self.ledger.apply_planned(
+                &page,
+                users,
+                now,
+                settings.rehearsal(),
+                settings.plans(),
+            );
             self.record(&page, applied, now, settings, notes);
         }
     }
@@ -556,7 +562,13 @@ impl Puller {
             now,
             settings,
         } = at;
-        match pending.wanted(&self.ledger, users, now, settings.rehearsal()) {
+        match pending.wanted(
+            &self.ledger,
+            users,
+            now,
+            settings.rehearsal(),
+            settings.plans(),
+        ) {
             Wanted::Done(applied) => {
                 self.record(pending.page(), applied, now, settings, notes);
                 None

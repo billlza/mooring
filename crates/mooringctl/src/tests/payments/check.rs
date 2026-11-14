@@ -76,6 +76,7 @@ fn checkout(id: &str, order: &str) -> Value {
         "currency": "gbp",
         "livemode": true,
         "subscription": null,
+        "payment_link": null,
         "customer_details": {"email": "payer@example.org"},
     })
 }
@@ -205,6 +206,55 @@ fn a_grant_stripe_does_not_confirm_is_held_with_why() {
     assert!(!grant.confirmed);
     let first = UserId::parse(FIRST).unwrap();
     assert!(puller.entitlements().user(&first).is_none());
+}
+
+/// With plans kept, Stripe confirms a grant only on its plan's Payment
+/// Link: a checkout on another link is held for that link, one on the
+/// plan's is granted; a grant of a plan not kept is held before Stripe is
+/// asked.
+#[test]
+fn with_plans_kept_a_checkout_must_be_on_its_plan_s_link() {
+    let mut harness = harness();
+    check_on(&mut harness, 2, Some('K'));
+    let kept = super::plans::book(super::plans::sold());
+    let origin = PortalOrigin::parse("https://portal.example.org").unwrap();
+    write_settings(
+        &harness,
+        &PullSettings::connected(3, origin, false, true).planning(3, kept),
+    );
+    let mut puller = Puller::open(&harness.support_dir());
+    let mut unsold = grant(3, "cccccccccccccccccccc", SECOND);
+    unsold["plan"] = json!("month-gift");
+    harness.portal.ok(&page(
+        true,
+        0,
+        vec![grant(1, A, FIRST), grant(2, B, SECOND), unsold],
+        false,
+    ));
+    let mut elsewhere = checkout("cs_live_1", A);
+    elsewhere["payment_link"] = json!("plink_1Pack");
+    harness.portal.ok(&stripe_page(vec![elsewhere], false));
+    let mut on_its_link = checkout("cs_live_2", B);
+    on_its_link["payment_link"] = json!("plink_1Month");
+    harness.portal.ok(&stripe_page(vec![on_its_link], false));
+    assert_eq!(tick(&mut harness, &mut puller, OPEN), [asking(A, 2)]);
+    assert_eq!(tick(&mut harness, &mut puller, OPEN), [asking(B, 1)]);
+    let notes = tick(&mut harness, &mut puller, OPEN);
+    assert_eq!(
+        notes,
+        [
+            format!(
+                "payment: order {A} for user {FIRST} is held, not granted (stripe_differs: what Stripe says was paid differs from the order: its checkout was on Payment Link plink_1Pack, not one of its plan's); settle it at Stripe"
+            ),
+            format!(
+                "payment: order {B} granted user {SECOND} {GRANTED_UNTIL}; Stripe confirmed its payment"
+            ),
+            format!(
+                "payment: order cccccccccccccccccccc for user {SECOND} is held, not granted (plan_unknown: the plans kept on the Mac have none of its plan's id; if the portal sells it, keep the portal's plan file first (`mooringctl portal plans set`)); settle it at Stripe"
+            ),
+            "payment pull: pulling; the cursor is at 3".to_owned(),
+        ]
+    );
 }
 
 /// A lookup reads Stripe's pages one request a tick, each after the last

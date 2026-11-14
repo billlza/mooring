@@ -13,6 +13,7 @@
 //! - [`command`]: `portal connect | rehearsal | disconnect | payments`,
 //!   and the paid entitlements the portal snapshot reads.
 //! - [`stripe_check`]: `portal stripe-check on | off`.
+//! - [`plans`]: `portal plans set | off`, the plans on the Mac.
 //! - [`listing`]: what `portal payments` prints.
 
 pub(crate) mod command;
@@ -22,6 +23,7 @@ mod error;
 pub(crate) mod judge;
 pub(crate) mod listing;
 pub(crate) mod notes;
+pub(crate) mod plans;
 pub(crate) mod pull;
 pub(crate) mod stripe_check;
 

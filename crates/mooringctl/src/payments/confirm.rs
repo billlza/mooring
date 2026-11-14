@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use mooring_daemon_core::payments::{
     Applied, ApplyRefusal, Checked, Confirmable, FeedPage, Lookup, Next, OrderId, PaymentLedger,
-    StripeAnswerError, Verdicts,
+    PlanBook, StripeAnswerError, Verdicts,
 };
 use mooring_model::{UnixTime, User, UserId};
 
@@ -68,22 +68,25 @@ impl Pending {
         &self.page
     }
 
-    /// What the page needs next, applied to `ledger` at `now` for `users`
-    /// and the `rehearsal`: lookups that need no request are done here.
+    /// What the page needs next, applied to `ledger` at `now` for `users`,
+    /// the `rehearsal` and the `plans` kept: lookups that need no request
+    /// are done here.
     pub(crate) fn wanted(
         &mut self,
         ledger: &PaymentLedger,
         users: &BTreeMap<UserId, User>,
         now: UnixTime,
         rehearsal: bool,
+        plans: &PlanBook,
     ) -> Wanted {
         loop {
-            let (next, rest) =
-                match ledger.apply_checked(&self.page, users, now, rehearsal, &self.verdicts) {
-                    Err(refusal) => return Wanted::Done(Err(refusal)),
-                    Ok(Checked::Applied(applied)) => return Wanted::Done(Ok(applied)),
-                    Ok(Checked::Unconfirmed { next, rest }) => (*next, rest),
-                };
+            let checked =
+                ledger.apply_checked(&self.page, users, now, rehearsal, plans, &self.verdicts);
+            let (next, rest) = match checked {
+                Err(refusal) => return Wanted::Done(Err(refusal)),
+                Ok(Checked::Applied(applied)) => return Wanted::Done(Ok(applied)),
+                Ok(Checked::Unconfirmed { next, rest }) => (*next, rest),
+            };
             let left = rest.len() + 1;
             if let Some(lookup) = self
                 .lookup

@@ -227,6 +227,13 @@ pub(crate) enum PortalCommand {
     /// Stripe does not.
     #[command(subcommand)]
     StripeCheck(StripeCheckCommand),
+    /// Keep the plans the operator sells on the Mac, from the portal's live
+    /// plan file, so that the daemon grants a live payment only at the
+    /// terms of a plan kept and, with the check against Stripe, only when
+    /// it was paid on that plan's Payment Link; a grant at other terms is
+    /// held.
+    #[command(subcommand)]
+    Plans(PlansCommand),
     /// Stop the payment pull and delete its token. The payment ledger
     /// stays, and what it granted still counts; the check against Stripe
     /// stays as it is.
@@ -272,6 +279,24 @@ pub(crate) enum StripeCheckCommand {
     },
     /// Turn the check off and delete the key: payments are then granted as
     /// the portal lists them.
+    Off,
+}
+
+/// `portal plans`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum PlansCommand {
+    /// Keep the plans of the portal's live plan file: the operator's own
+    /// copy of the file the portal runs, refused wherever the portal
+    /// refuses it or when it is of Stripe's test mode. Its plans become the
+    /// current ones, and the plans of earlier files are kept for the orders
+    /// paid on them; keep a new file here before the portal sells it.
+    Set {
+        /// The plan file (format mooring-portal-payments, version 1).
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
+    /// Forget every plan kept: grants are then applied at the terms the
+    /// portal lists.
     Off,
 }
 

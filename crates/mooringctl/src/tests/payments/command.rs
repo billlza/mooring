@@ -7,7 +7,7 @@ use std::fs;
 use std::io::Cursor;
 
 use mooring_daemon_core::payments::{
-    MAX_SETTINGS_BYTES, PaymentLedger, PullSettings, Stop, StopReason,
+    MAX_SETTINGS_BYTES, PaymentLedger, PlanBook, PullSettings, Stop, StopReason,
 };
 use mooring_model::secret::{SecretMaterial, SecretRef};
 use mooring_model::{AgreementVersion, PortalAgreement, UnixTime};
@@ -55,7 +55,8 @@ fn connect_stores_the_token_and_points_the_pull() {
         format!(
             "the payment pull reads {ORIGIN} with the token stored as portal/pull-token (settings revision 1); the daemon asks within five minutes, while the Mac is on no foreign network\n\
              rehearsal off: payments of Stripe's test mode are not granted, and a portal in test mode is waited on\n\
-             check against Stripe off: payments are granted as the portal lists them (`mooringctl portal stripe-check on` confirms each at Stripe first)\n"
+             check against Stripe off: payments are granted as the portal lists them (`mooringctl portal stripe-check on` confirms each at Stripe first)\n\
+             plans kept: none: grants are applied at the terms the portal lists (`mooringctl portal plans set <file>` keeps the portal's live plan file)\n"
         )
     );
     assert_eq!(
@@ -304,6 +305,7 @@ fn payments_lists_the_pull_and_every_order() {
         "payment pull: https://portal.example.org (settings revision 1)\n\
          \x20 rehearsal: off\n\
          \x20 check against Stripe: off: payments are granted as the portal lists them\n\
+         \x20 plans kept: none: grants are applied at the terms the portal lists (`mooringctl portal plans set <file>` keeps the portal's live plan file)\n\
          payment ledger: cursor 3; last pull 2026-10-13 19:20:00 UTC\n\
          orders: 2 (1 held, 1 refunded, 0 disputed)\n\
          \x20 aaaaaaaaaaaaaaaaaaaa user fxuseraaab plan month-100 (month, 30 days, 100000000000 bytes, 800 gbp)\n\
@@ -349,7 +351,13 @@ fn the_portal_snapshot_carries_the_paid_policy() {
     )
     .unwrap();
     let ledger = PaymentLedger::new()
-        .apply(&page, &users, UnixTime::from_secs(NOW), false)
+        .apply_planned(
+            &page,
+            &users,
+            UnixTime::from_secs(NOW),
+            false,
+            &PlanBook::default(),
+        )
         .unwrap()
         .ledger;
     write_payment_ledger(&harness.support_dir(), &ledger.encode().unwrap()).unwrap();
