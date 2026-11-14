@@ -1,5 +1,5 @@
 classdef RadioForecastTest < matlab.unittest.TestCase
-%RADIOFORECASTTEST The coming hours, from the trend and the daily pattern.
+%RADIOFORECASTTEST The coming hours, from the daily pattern and the trend.
 
 % SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -42,20 +42,25 @@ classdef RadioForecastTest < matlab.unittest.TestCase
             dip = -3 * (hourOfDay >= 18 & hourOfDay <= 21);
         end
 
-        function sinr = rising(count)
-            % `count` hours ending with the one from 23:00: 20 dB then,
-            % 0.1 dB less each hour before, and the evening's dip.
+        function sinr = steady(count)
+            % `count` hours ending with the one from 23:00: 20 dB, and the
+            % evening's dip.
             offset = (1 - count:0)';
-            sinr = 20 + 0.1 * offset + RadioForecastTest.evening(mod(23 + offset, 24));
+            sinr = 20 + RadioForecastTest.evening(mod(23 + offset, 24));
+        end
+
+        function sinr = rising(count)
+            % The same, 0.1 dB less each hour before the last.
+            sinr = RadioForecastTest.steady(count) + 0.1 * (1 - count:0)';
         end
     end
 
     methods (Test)
-        function theTrendAndTheDailyPatternAreContinued(testCase)
-            [forecast, fit] = mooring.radioForecast(testCase.hourly(RadioForecastTest.rising(240)));
+        function theDailyPatternIsContinued(testCase)
+            [forecast, fit] = mooring.radioForecast(testCase.hourly(RadioForecastTest.steady(240)));
 
             ahead = (1:48)';
-            expected = 20 + 0.1 * ahead + RadioForecastTest.evening(mod(23 + ahead, 24));
+            expected = 20 + RadioForecastTest.evening(mod(23 + ahead, 24));
             testCase.verifyClass(forecast, "timetable");
             testCase.verifyEqual(string(forecast.Properties.VariableNames), ["expected", "low", "high"]);
             testCase.verifyEqual(string(forecast.Properties.DimensionNames{1}), "hour");
@@ -66,28 +71,87 @@ classdef RadioForecastTest < matlab.unittest.TestCase
             testCase.verifyEqual(forecast.low, expected, "AbsTol", 1e-9);
             testCase.verifyEqual(forecast.high, expected, "AbsTol", 1e-9);
 
-            testCase.verifyEqual(sort(string(fieldnames(fit)))', sort(["metric", "hours", "slope_per_day", ...
-                "profile", "residual_low", "residual_high", "backtest_hours", "backtest_mae", "naive_mae"]));
+            testCase.verifyEqual(sort(string(fieldnames(fit)))', sort(["metric", "hours", "trend", ...
+                "slope_per_day", "profile", "residual_low", "residual_high", "backtest_hours", ...
+                "backtest_mae", "naive_mae"]));
             testCase.verifyEqual(fit.metric, "lte_sinr_db");
             testCase.verifyEqual(fit.hours, 240);
-            testCase.verifyEqual(fit.slope_per_day, 2.4, "AbsTol", 1e-9);
-            % The profile is each hour of the day's level at the last hour.
+            testCase.verifyEqual(fit.trend, false);
+            testCase.verifyEqual(fit.slope_per_day, 0, "AbsTol", 1e-9);
             testCase.verifyEqual(fit.profile, 20 + RadioForecastTest.evening((0:23)'), "AbsTol", 1e-9);
             testCase.verifyEqual(fit.residual_low, 0, "AbsTol", 1e-9);
             testCase.verifyEqual(fit.residual_high, 0, "AbsTol", 1e-9);
             % Without the last 48 hours the same fit forecasts them
-            % exactly. "As at the same hour of the last day before" is 2.4
-            % dB under the first held day and 4.8 dB under the second.
+            % exactly, and so does "as at the same hour of the last day
+            % before".
+            testCase.verifyEqual(fit.backtest_hours, 48);
+            testCase.verifyEqual(fit.backtest_mae, 0, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.naive_mae, 0, "AbsTol", 1e-9);
+        end
+
+        function aRisingLevelIsReportedAndContinuedOnlyWithTheTrend(testCase)
+            samples = testCase.hourly(RadioForecastTest.rising(240));
+            ahead = (1:48)';
+            hourOfDay = (0:23)';
+
+            % Without the trend the forecast of an hour of the day is the
+            % median of its ten values: the level of four and a half days
+            % before the hour was last seen, 108 hours.
+            [forecast, fit] = mooring.radioForecast(samples);
+            lastSeen = -mod(23 - hourOfDay, 24);
+            pattern = 20 + 0.1 * (lastSeen - 108) + RadioForecastTest.evening(hourOfDay);
+            testCase.verifyEqual(fit.trend, false);
+            testCase.verifyEqual(fit.slope_per_day, 2.4, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.profile, pattern, "AbsTol", 1e-9);
+            testCase.verifyEqual(forecast.expected, pattern(mod(23 + ahead, 24) + 1), "AbsTol", 1e-9);
+            % The ten values of an hour of the day lie 1.2, 3.6, 6, 8.4
+            % and 10.8 dB on each side of their median.
+            testCase.verifyEqual(fit.residual_low, -8.64, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.residual_high, 8.64, "AbsTol", 1e-9);
+            testCase.verifyEqual(forecast.low, forecast.expected - 8.64, "AbsTol", 1e-9);
+            testCase.verifyEqual(forecast.high, forecast.expected + 8.64, "AbsTol", 1e-9);
+            % The backtest tells that this fit is behind: made without
+            % the last 48 hours it is 10.8 dB under the first held day
+            % and 13.2 dB under the second, where "as at the same hour of
+            % the last day before" is 2.4 and 4.8 dB under them.
+            testCase.verifyEqual(fit.backtest_hours, 48);
+            testCase.verifyEqual(fit.backtest_mae, 12, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.naive_mae, 3.6, "AbsTol", 1e-9);
+
+            % With the trend the rise is continued.
+            [forecast, fit] = mooring.radioForecast(samples, Trend=true);
+            expected = 20 + 0.1 * ahead + RadioForecastTest.evening(mod(23 + ahead, 24));
+            testCase.verifyEqual(fit.trend, true);
+            testCase.verifyEqual(forecast.expected, expected, "AbsTol", 1e-9);
+            testCase.verifyEqual(forecast.low, expected, "AbsTol", 1e-9);
+            testCase.verifyEqual(forecast.high, expected, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.slope_per_day, 2.4, "AbsTol", 1e-9);
+            % The profile is each hour of the day's level at the last hour.
+            testCase.verifyEqual(fit.profile, 20 + RadioForecastTest.evening(hourOfDay), "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.residual_low, 0, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.residual_high, 0, "AbsTol", 1e-9);
             testCase.verifyEqual(fit.backtest_hours, 48);
             testCase.verifyEqual(fit.backtest_mae, 0, "AbsTol", 1e-9);
             testCase.verifyEqual(fit.naive_mae, 3.6, "AbsTol", 1e-9);
         end
 
         function oneHourFarFromTheOthersMovesNothing(testCase)
-            sinr = RadioForecastTest.rising(240);
+            sinr = RadioForecastTest.steady(240);
             plain = mooring.radioForecast(testCase.hourly(sinr));
             sinr(100) = sinr(100) + 30;
             [forecast, fit] = mooring.radioForecast(testCase.hourly(sinr));
+
+            testCase.verifyEqual(forecast.expected, plain.expected, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.slope_per_day, 0, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.profile, 20 + RadioForecastTest.evening((0:23)'), "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.residual_high, 0, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.backtest_mae, 0, "AbsTol", 1e-9);
+
+            % Nor does it move the trend of a rising level.
+            sinr = RadioForecastTest.rising(240);
+            plain = mooring.radioForecast(testCase.hourly(sinr), Trend=true);
+            sinr(100) = sinr(100) + 30;
+            [forecast, fit] = mooring.radioForecast(testCase.hourly(sinr), Trend=true);
 
             testCase.verifyEqual(forecast.expected, plain.expected, "AbsTol", 1e-9);
             testCase.verifyEqual(fit.slope_per_day, 2.4, "AbsTol", 1e-9);
@@ -99,7 +163,7 @@ classdef RadioForecastTest < matlab.unittest.TestCase
         function theBandIsWhereTheHistorysHoursLayAroundTheFit(testCase)
             % Every fifth hour 1 dB over the pattern, every fifth 2 dB
             % under it, in an order that repeats every five days.
-            sinr = RadioForecastTest.rising(240) - 0.1 * (-239:0)';
+            sinr = RadioForecastTest.steady(240);
             index = (1:240)';
             sinr(mod(index, 5) == 0) = sinr(mod(index, 5) == 0) + 1;
             sinr(mod(index, 5) == 1) = sinr(mod(index, 5) == 1) - 2;
@@ -118,9 +182,9 @@ classdef RadioForecastTest < matlab.unittest.TestCase
 
         function anHourOfTheDayTheHistoryNeverHeldHasNoForecast(testCase)
             % Polls only from 00:00 to 11:59 UTC of each of ten days.
-            offset = (-239:0)';
-            sinr = RadioForecastTest.rising(240);
-            sinr(mod(23 + offset, 24) >= 12) = NaN;
+            morning = mod(23 + (-239:0)', 24) < 12;
+            sinr = RadioForecastTest.steady(240);
+            sinr(~morning) = NaN;
             [forecast, fit] = mooring.radioForecast(testCase.hourly(sinr));
 
             % The last sample's hour is the one from 11:00.
@@ -130,12 +194,23 @@ classdef RadioForecastTest < matlab.unittest.TestCase
             testCase.verifyEqual(isnan(forecast.expected), afternoon);
             testCase.verifyEqual(isnan(forecast.low), afternoon);
             testCase.verifyEqual(isnan(forecast.high), afternoon);
-            ahead = (1:48)';
-            testCase.verifyEqual(forecast.expected(~afternoon), 20 + 0.1 * (ahead(~afternoon) - 12), ...
-                "AbsTol", 1e-9);
+            testCase.verifyEqual(forecast.expected(~afternoon), repmat(20, 24, 1), "AbsTol", 1e-9);
             testCase.verifyEqual(fit.hours, 120);
             testCase.verifyEqual(isnan(fit.profile), (0:23)' >= 12);
             % The backtest scores the hours it has on both sides.
+            testCase.verifyEqual(fit.backtest_hours, 24);
+            testCase.verifyEqual(fit.backtest_mae, 0, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.naive_mae, 0, "AbsTol", 1e-9);
+
+            % The same with the trend, of a rising level.
+            sinr = RadioForecastTest.rising(240);
+            sinr(~morning) = NaN;
+            [forecast, fit] = mooring.radioForecast(testCase.hourly(sinr), Trend=true);
+            ahead = (1:48)';
+            testCase.verifyEqual(isnan(forecast.expected), afternoon);
+            testCase.verifyEqual(forecast.expected(~afternoon), 20 + 0.1 * (ahead(~afternoon) - 12), ...
+                "AbsTol", 1e-9);
+            testCase.verifyEqual(isnan(fit.profile), (0:23)' >= 12);
             testCase.verifyEqual(fit.backtest_hours, 24);
             testCase.verifyEqual(fit.backtest_mae, 0, "AbsTol", 1e-9);
             testCase.verifyEqual(fit.naive_mae, 3.6, "AbsTol", 1e-9);
@@ -167,6 +242,19 @@ classdef RadioForecastTest < matlab.unittest.TestCase
                 Metric="nr_sinr_db"), "mooring:radio:TooFewHours");
             testCase.verifyError(@() mooring.radioForecast(noRadioSamples(testCase.Folder)), ...
                 "mooring:radio:TooFewHours");
+        end
+
+        function aFitAndItsBacktestNeedMinHoursAndNoMore(testCase)
+            % 72 hours are enough for a fit. A backtest fits without the
+            % last 48, so it needs 120.
+            [~, fit] = mooring.radioForecast(testCase.hourly(RadioForecastTest.steady(72)));
+            testCase.verifyEqual(fit.hours, 72);
+            testCase.verifyEqual(fit.backtest_hours, 0);
+            [~, fit] = mooring.radioForecast(testCase.hourly(RadioForecastTest.steady(119)));
+            testCase.verifyEqual(fit.backtest_hours, 0);
+            [~, fit] = mooring.radioForecast(testCase.hourly(RadioForecastTest.steady(120)));
+            testCase.verifyEqual(fit.backtest_hours, 48);
+            testCase.verifyEqual(fit.backtest_mae, 0, "AbsTol", 1e-9);
         end
 
         function theHistoryLookedAtIsTheCallers(testCase)
@@ -207,29 +295,20 @@ classdef RadioForecastTest < matlab.unittest.TestCase
             end
         end
 
-        function theTrendIsTheMedianSlopeBetweenTheSameHoursOfTheDay(testCase)
-            trend = @mooring.internal.seasonalTrend;
+        function theSlopeIsTheMedianOfTheSlopesBetweenTheSameHoursOfTheDay(testCase)
+            slope = @mooring.internal.seasonalSlope;
             % Two days: an eighth more each hour, on a level that is the
             % hour of the day.
             offset = (0:47)';
-            [slope, profile] = trend(offset, mod(offset, 24), 0.125 * offset + mod(offset, 24));
-            testCase.verifyEqual(slope, 0.125);
-            testCase.verifyEqual(profile, (0:23)');
+            testCase.verifyEqual(slope(offset, 0.125 * offset + mod(offset, 24)), 0.125);
 
-            % Three days of two hours each: the three slopes of an hour of
-            % the day's pairs, and the median of the six.
-            offset = [0; 1; 24; 25; 48; 49];
-            values = [0; 10; 24; 34; 96; 106];
-            [slope, profile] = trend(offset, mod(offset, 24), values);
-            testCase.verifyEqual(slope, 2);
-            testCase.verifyEqual(profile(1:2), [0; 8]);
-            testCase.verifyEqual(isnan(profile), (0:23)' >= 2);
+            % Three days of two hours each: the slopes between an hour of
+            % the day's three values are 1, 3 and 2, for both hours.
+            testCase.verifyEqual(slope([0; 1; 24; 25; 48; 49], [0; 10; 24; 34; 96; 106]), 2);
 
-            % No two values of one hour of the day: no trend to take.
+            % No two values a whole number of days apart: no slope.
             offset = (0:23)';
-            [slope, profile] = trend(offset, offset, offset);
-            testCase.verifyEqual(slope, NaN);
-            testCase.verifyEqual(profile, nan(24, 1));
+            testCase.verifyEqual(slope(offset, offset), NaN);
         end
     end
 end

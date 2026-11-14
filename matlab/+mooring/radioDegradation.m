@@ -1,12 +1,11 @@
 function [indicators, verdict] = radioDegradation(samples, options)
-%RADIODEGRADATION Whether the radio link is worse than its own recent past.
+%RADIODEGRADATION Whether the radio link is worse than on its own earlier days.
 %   [INDICATORS, VERDICT] = mooring.radioDegradation(SAMPLES) compares the
 %   last 24 hours of SAMPLES (the timetable mooring.readRadioSamples
-%   returns), counted back from the last sample, with the 7 days before
-%   them. The baseline holds only the hours of the day the recent window
-%   holds, so that a recent window shorter than a day is compared with the
-%   same hours of the earlier days and not with their busier or quieter
-%   ones.
+%   returns), counted back from the last sample, with the same 24 hours of
+%   each of the 7 days before them. A recent window shorter than a day is
+%   compared with the same hours of each earlier day, and not with that
+%   day's busier or quieter ones.
 %
 %   INDICATORS is a table with a row per indicator:
 %
@@ -18,16 +17,28 @@ function [indicators, verdict] = radioDegradation(samples, options)
 %     ca_secondary_mean             the mean number of secondary carriers
 %                                   of the attached polls
 %
-%   and the variables `recent`, `baseline`, `change` (recent less
-%   baseline), `threshold`, `worse_when` ("lower" or "higher"),
-%   `recent_count`, `baseline_count` (the polls behind each value) and
-%   `state`:
+%   and these variables:
 %
-%     degraded            the value moved the worse way by its threshold
-%                         or more
-%     ok                  it did not
-%     insufficient_data   one of the two windows holds fewer polls with a
-%                         value than MinSamples
+%     recent         the indicator over the recent window
+%     baseline       the median of the indicator over each earlier day's
+%                    window: what a usual day shows
+%     change         recent less baseline
+%     threshold      the change that matters (a name-value argument)
+%     spread         the median of how far the earlier days lie from the
+%                    baseline: how much the link's days differ anyway
+%     worse_when     "lower" or "higher"
+%     recent_count   the polls with a value in the recent window
+%     baseline_days  the earlier days that count: those whose window holds
+%                    MinSamples polls with a value or more
+%     state          "degraded", "ok" or "insufficient_data"
+%
+%   An indicator is degraded when it is worse than the baseline by its
+%   threshold or more, and by more than SpreadFactor times the spread. So
+%   a share that swings from day to day is not degraded by one more swing,
+%   and a link that became worse and stays worse is degraded until most of
+%   the baseline's days are as bad. An indicator is insufficient_data when
+%   the recent window holds fewer polls with a value than MinSamples, or
+%   when fewer earlier days than MinDays count. Otherwise it is ok.
 %
 %   VERDICT is "degraded" when an indicator is degraded, else "ok" when
 %   one is ok, else "insufficient_data".
@@ -39,10 +50,17 @@ function [indicators, verdict] = radioDegradation(samples, options)
 %   changes.
 %
 %   Name-value arguments:
-%     Recent         the recent window (default hours(24))
-%     Baseline       the baseline before it (default days(7))
+%     Recent         the recent window, 24 hours at most (default
+%                    hours(24))
+%     Days           how many days before it make the baseline (default 7)
 %     MinSamples     the fewest polls with a value a window needs
 %                    (default 30)
+%     MinDays        the fewest earlier days that must count, Days at most
+%                    (default 3)
+%     SpreadFactor   how many times the spread a change must exceed
+%                    (default 3: about two standard deviations of days
+%                    scattered like a normal distribution); with 0 the
+%                    thresholds decide alone
 %     RsrpDrop       dB the median RSRP falls by (default 3)
 %     RsrqDrop       dB the median RSRQ falls by (default 2)
 %     SinrDrop       dB the median SINR falls by (default 3)
@@ -53,6 +71,7 @@ function [indicators, verdict] = radioDegradation(samples, options)
 %     Nr5gDrop       what the share on 5G falls by (default 0.2)
 %     CarrierDrop    what the mean number of secondary carriers falls by
 %                    (default 0.5)
+%   A threshold of Inf never calls its indicators degraded.
 %
 %   See also mooring.readRadioSamples, mooring.radioForecast.
 
@@ -61,8 +80,10 @@ function [indicators, verdict] = radioDegradation(samples, options)
     arguments
         samples timetable {mooring.internal.mustBeSamples}
         options.Recent (1,1) duration = hours(24)
-        options.Baseline (1,1) duration = days(7)
+        options.Days (1,1) double {mustBeInteger, mustBePositive} = 7
         options.MinSamples (1,1) double {mustBeInteger, mustBePositive} = 30
+        options.MinDays (1,1) double {mustBeInteger, mustBePositive} = 3
+        options.SpreadFactor (1,1) double {mustBeFinite, mustBeNonnegative} = 3
         options.RsrpDrop (1,1) double {mustBePositive} = 3
         options.RsrqDrop (1,1) double {mustBePositive} = 2
         options.SinrDrop (1,1) double {mustBePositive} = 3
@@ -72,19 +93,23 @@ function [indicators, verdict] = radioDegradation(samples, options)
         options.Nr5gDrop (1,1) double {mustBePositive} = 0.2
         options.CarrierDrop (1,1) double {mustBePositive} = 0.5
     end
-    if options.Recent <= seconds(0) || options.Baseline <= seconds(0)
-        error("mooring:radio:BadWindow", "Recent and Baseline are lengths of time above zero.");
+    if ~(options.Recent > seconds(0) && options.Recent <= hours(24))
+        error("mooring:radio:BadWindow", "Recent is a length of time above zero, of 24 hours at most.");
+    end
+    if options.MinDays > options.Days
+        error("mooring:radio:BadWindow", ...
+            "MinDays is %d and Days %d: no baseline could count.", options.MinDays, options.Days);
     end
 
+    % Which window each poll is in: 0 for the recent one, k for the same
+    % hours k days before it, NaN for a poll in none of them.
     times = samples.Properties.RowTimes;
-    recent = false(size(times));
-    baseline = false(size(times));
+    back = nan(size(times));
     if ~isempty(times)
-        recentStart = max(times) - options.Recent;
-        recent = times > recentStart;
-        hourOfDay = hour(times);
-        baseline = times > recentStart - options.Baseline & times <= recentStart ...
-            & ismember(hourOfDay, hourOfDay(recent));
+        age = max(times) - times;
+        wholeDays = floor(age ./ days(1));
+        inside = age - days(wholeDays) < options.Recent & wholeDays <= options.Days;
+        back(inside) = wholeDays(inside);
     end
 
     % One column per indicator: NaN where a poll is not of the indicator's
@@ -104,25 +129,36 @@ function [indicators, verdict] = radioDegradation(samples, options)
         options.RsrpDrop, options.RsrqDrop, options.SinrDrop, ...
         options.FailedRise, options.NoServiceRise, options.Nr5gDrop, options.CarrierDrop]';
 
-    count = numel(names);
-    recentValue = nan(count, 1);
-    baselineValue = nan(count, 1);
-    recentCount = zeros(count, 1);
-    baselineCount = zeros(count, 1);
-    for index = 1:count
-        [recentValue(index), recentCount(index)] = windowValue(values(recent, index), asMedian(index));
-        [baselineValue(index), baselineCount(index)] = windowValue(values(baseline, index), asMedian(index));
+    % Each indicator over each window: column 1 the recent one, column
+    % k + 1 the one k days before it.
+    indicatorCount = numel(names);
+    value = nan(indicatorCount, options.Days + 1);
+    polls = zeros(indicatorCount, options.Days + 1);
+    for index = 1:indicatorCount
+        for daysBack = 0:options.Days
+            [value(index, daysBack + 1), polls(index, daysBack + 1)] = ...
+                windowValue(values(back == daysBack, index), asMedian(index));
+        end
     end
+    recentValue = value(:, 1);
+    recentCount = polls(:, 1);
+    earlier = value(:, 2:end);
+    earlier(polls(:, 2:end) < options.MinSamples) = NaN;
+    baselineDays = sum(~isnan(earlier), 2);
+    baselineValue = median(earlier, 2, "omitnan");
+    spread = median(abs(earlier - baselineValue), 2, "omitnan");
+
     change = recentValue - baselineValue;
     worse = change;
-    worse(worseWhen == "lower") = -worse(worseWhen == "lower");
-    state = repmat("ok", count, 1);
-    state(worse >= threshold) = "degraded";
-    state(recentCount < options.MinSamples | baselineCount < options.MinSamples) = "insufficient_data";
+    lowerIsWorse = worseWhen == "lower";
+    worse(lowerIsWorse) = -worse(lowerIsWorse);
+    state = repmat("ok", indicatorCount, 1);
+    state(worse >= threshold & worse > options.SpreadFactor * spread) = "degraded";
+    state(recentCount < options.MinSamples | baselineDays < options.MinDays) = "insufficient_data";
 
-    indicators = table(names, recentValue, baselineValue, change, threshold, worseWhen, ...
-        recentCount, baselineCount, state, 'VariableNames', {'indicator', 'recent', 'baseline', ...
-        'change', 'threshold', 'worse_when', 'recent_count', 'baseline_count', 'state'});
+    indicators = table(names, recentValue, baselineValue, change, threshold, spread, worseWhen, ...
+        recentCount, baselineDays, state, 'VariableNames', {'indicator', 'recent', 'baseline', ...
+        'change', 'threshold', 'spread', 'worse_when', 'recent_count', 'baseline_days', 'state'});
     if any(state == "degraded")
         verdict = "degraded";
     elseif any(state == "ok")
@@ -132,14 +168,14 @@ function [indicators, verdict] = radioDegradation(samples, options)
     end
 end
 
-function [value, count] = windowValue(column, asMedian)
+function [value, known] = windowValue(column, asMedian)
 % The median or the mean of a window's values that are not NaN, and how
 % many they are; NaN without one.
-    known = column(~isnan(column));
-    count = numel(known);
+    column = column(~isnan(column));
+    known = numel(column);
     if asMedian
-        value = median(known);
+        value = median(column);
     else
-        value = mean(known);
+        value = mean(column);
     end
 end

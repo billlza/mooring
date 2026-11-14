@@ -1,5 +1,5 @@
 function [forecast, fit] = radioForecast(samples, options)
-%RADIOFORECAST The coming hours of a reading, from its trend and daily pattern.
+%RADIOFORECAST The coming hours of a reading, from its daily pattern.
 %   FORECAST = mooring.radioForecast(SAMPLES) forecasts the hourly median
 %   of the LTE SINR for the 48 hours after the last sample of SAMPLES (the
 %   timetable mooring.readRadioSamples returns), from the hourly medians
@@ -10,22 +10,32 @@ function [forecast, fit] = radioForecast(samples, options)
 %     low, high  expected plus the 10 % and the 90 % quantile of what the
 %                history's hours differ from the fit by
 %
-%   The fit is a straight trend plus a level for each hour of the day
-%   (mooring.internal.seasonalTrend). It is a description of the history
+%   The fit is the daily pattern: for each hour of the day, the median of
+%   the history's values of that hour. It is a description of the history
 %   continued, and knows nothing of what changes a link: another band,
 %   another network or cell, the M7 moved. The band between low and high
 %   holds 80 % of the history's hours around the fit and does not widen
 %   with the distance ahead. An hour of the day the history never held has
 %   no forecast: NaN.
 %
+%   With Trend=true the fit is a straight trend plus the daily pattern:
+%   the history's slope (mooring.internal.seasonalSlope) is taken out of
+%   the values before the pattern is, and continued over the coming hours.
+%   A level that moved in one step, as with another network, reads as a
+%   slope and is continued wrongly; compare the two fits by their
+%   backtests before trusting the trend.
+%
 %   [FORECAST, FIT] = mooring.radioForecast(...) also returns what was
 %   fitted and how well it did on the history's own last hours:
 %
 %     metric          the reading
 %     hours           how many hourly medians the fit used
-%     slope_per_day   the trend, in the reading's unit per day
-%     profile         24 by 1: the level of each hour of the day, 00 to
-%                     23 UTC, at the history's last hour
+%     trend           whether the fit continues the slope
+%     slope_per_day   the history's slope, in the reading's unit per day,
+%                     whether the fit continues it or not
+%     profile         24 by 1: the pattern, 00 to 23 UTC; with the trend,
+%                     each hour of the day's level at the history's last
+%                     hour
 %     residual_low, residual_high
 %                     the two quantiles above
 %     backtest_hours  how many hours a backtest scored: the fit made
@@ -45,6 +55,8 @@ function [forecast, fit] = radioForecast(samples, options)
 %     MinHours  the fewest hourly medians a fit needs, at least 48
 %               (default 72); with fewer the function throws
 %               mooring:radio:TooFewHours
+%     Trend     whether the fit continues the history's slope (default
+%               false)
 %
 %   See also mooring.radioHourly, mooring.radioDegradation.
 
@@ -56,6 +68,7 @@ function [forecast, fit] = radioForecast(samples, options)
         options.Horizon (1,1) duration = hours(48)
         options.History (1,1) duration = days(14)
         options.MinHours (1,1) double {mustBeInteger, mustBeGreaterThanOrEqual(options.MinHours, 48)} = 72
+        options.Trend (1,1) logical = false
     end
     readings = mooring.internal.radioReadings();
     if ~ismember(options.Metric, readings)
@@ -80,22 +93,23 @@ function [forecast, fit] = radioForecast(samples, options)
             sum(known), numel(values), options.Metric, options.MinHours);
     end
 
-    % Hours are counted from the history's last one, so that the profile
-    % is each hour of the day's level now.
+    % Hours are counted from the history's last one, so that a profile
+    % made with the trend is each hour of the day's level now.
     offset = (1 - numel(values):0)';
     hourOfDay = hour(starts);
-    [slope, profile] = mooring.internal.seasonalTrend(offset(known), hourOfDay(known), values(known));
+    [drift, profile, slope] = dailyFit(offset(known), hourOfDay(known), values(known), options.Trend);
     residual = mooring.internal.quantiles( ...
-        values - (slope * offset + profile(hourOfDay + 1)), [0.1 0.9]);
+        values - (drift * offset + profile(hourOfDay + 1)), [0.1 0.9]);
     ahead = (1:horizon)';
     comingHours = starts(end) + hours(ahead);
-    expected = slope * ahead + profile(hour(comingHours) + 1);
+    expected = drift * ahead + profile(hour(comingHours) + 1);
     forecast = timetable(comingHours, expected, expected + residual(1), expected + residual(2), ...
         'VariableNames', {'expected', 'low', 'high'});
     forecast.Properties.DimensionNames{1} = 'hour';
 
     fit.metric = options.Metric;
     fit.hours = sum(known);
+    fit.trend = options.Trend;
     fit.slope_per_day = 24 * slope;
     fit.profile = profile;
     fit.residual_low = residual(1);
@@ -106,9 +120,9 @@ function [forecast, fit] = radioForecast(samples, options)
     held = offset > -horizon;
     earlier = known & ~held;
     if sum(earlier) >= options.MinHours
-        [earlierSlope, earlierProfile] = mooring.internal.seasonalTrend( ...
-            offset(earlier), hourOfDay(earlier), values(earlier));
-        fitted = earlierSlope * offset(held) + earlierProfile(hourOfDay(held) + 1);
+        [earlierDrift, earlierProfile] = dailyFit( ...
+            offset(earlier), hourOfDay(earlier), values(earlier), options.Trend);
+        fitted = earlierDrift * offset(held) + earlierProfile(hourOfDay(held) + 1);
         % The naive forecast: each hour of the day as it last was. The
         % rows are in the order of time, so the latest of an hour of the
         % day is the one with the highest index.
@@ -123,4 +137,23 @@ function [forecast, fit] = radioForecast(samples, options)
         fit.backtest_mae = mean(abs(actual(scored) - fitted(scored)));
         fit.naive_mae = mean(abs(actual(scored) - naive(scored)));
     end
+end
+
+function [drift, profile, slope] = dailyFit(offset, hourOfDay, values, trend)
+% The fit of hourly values, as
+%
+%     drift * offset + profile(hourOfDay + 1)
+%
+% `slope` is the values' slope per hour. With `trend` it is the fit's
+% drift, and the profile, 24 by 1, is for each hour of the day the median
+% of what the values of that hour are once the drift is taken out, at
+% offset 0. Without it the drift is 0 and the profile is the median of
+% each hour of the day's values. An hour of the day without a value has
+% NaN.
+    slope = mooring.internal.seasonalSlope(offset, values);
+    drift = 0;
+    if trend
+        drift = slope;
+    end
+    profile = accumarray(hourOfDay + 1, values - drift * offset, [24 1], @median, NaN);
 end
