@@ -700,6 +700,26 @@
         }
       }
     },
+    "Apply job: being repaired, up to a minute": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行任务：正在修复，最多一分钟"
+          }
+        }
+      }
+    },
+    "Apply job: macOS refuses its start, so it does not run": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "执行任务：macOS 拒绝它启动，所以它没有在运行"
+          }
+        }
+      }
+    },
     "Apply job: not started": {
       "localizations": {
         "zh-Hans": {
@@ -840,6 +860,16 @@
         }
       }
     },
+    "Check Again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再检查一次"
+          }
+        }
+      }
+    },
     "Checked": {
       "localizations": {
         "zh-Hans": {
@@ -950,12 +980,52 @@
         }
       }
     },
+    "Daemon: a new build; waiting for macOS, about a minute and a half": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：新版本，正在等 macOS，约一分半钟"
+          }
+        }
+      }
+    },
+    "Daemon: being registered again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：正在重新登记"
+          }
+        }
+      }
+    },
+    "Daemon: macOS refuses its start": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：macOS 拒绝它启动"
+          }
+        }
+      }
+    },
     "Daemon: not started": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "守护进程：未启动"
+          }
+        }
+      }
+    },
+    "Daemon: starting…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程：正在启动…"
           }
         }
       }
@@ -1190,6 +1260,26 @@
         }
       }
     },
+    "Finish Starting": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完成启动"
+          }
+        }
+      }
+    },
+    "Finish Starting the Daemon": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完成守护进程的启动"
+          }
+        }
+      }
+    },
     "Firmware": {
       "localizations": {
         "zh-Hans": {
@@ -1403,12 +1493,32 @@
         }
       }
     },
+    "It does so after a new build is installed, until its record of the registration is replaced. Finishing the start takes up to a minute and a half: the app waits for the daemon's second start, starts the nightly apply job twice, and registers both again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "装上新版本后都会这样，直到 macOS 为这项登记留的记录被换掉。完成启动最多需要一分半钟：应用等守护进程第二次启动，把每晚的执行任务启动两次，再把两者重新登记一遍。"
+          }
+        }
+      }
+    },
     "It reads the M7 and runs the exit. Started here, it runs at every login until stopped from the menu.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "它负责读取 M7 并运行出口。在这里启动后，每次登录都会运行，直到从菜单中停止。"
+          }
+        }
+      }
+    },
+    "It took longer than %lld s.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "超过了 %lld 秒。"
           }
         }
       }
@@ -2036,6 +2146,26 @@
         }
       }
     },
+    "Not checked whether macOS lets the daemon and the apply job start": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能检查 macOS 是否允许守护进程和执行任务启动"
+          }
+        }
+      }
+    },
+    "Not checked: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未能检查：%@"
+          }
+        }
+      }
+    },
     "Not live: mooringctl stopped": {
       "localizations": {
         "zh-Hans": {
@@ -2469,12 +2599,42 @@
         }
       }
     },
+    "Registered again. Waiting for launchd to start the daemon.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已重新登记。正在等 launchd 启动守护进程。"
+          }
+        }
+      }
+    },
     "Reload": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "重新加载"
+          }
+        }
+      }
+    },
+    "Repair the Apply Job": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修复执行任务"
+          }
+        }
+      }
+    },
+    "Repairing the nightly apply job": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在修复每晚的执行任务"
           }
         }
       }
@@ -2842,6 +3002,16 @@
         }
       }
     },
+    "Start the Apply Job": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启动执行任务"
+          }
+        }
+      }
+    },
     "Start the Daemon at Login": {
       "localizations": {
         "zh-Hans": {
@@ -2858,6 +3028,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "开始"
+          }
+        }
+      }
+    },
+    "Starting Mooring's daemon": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在启动 Mooring 守护进程"
+          }
+        }
+      }
+    },
+    "Starting a new build of Mooring": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在启动新版本的 Mooring"
           }
         }
       }
@@ -3312,6 +3502,16 @@
         }
       }
     },
+    "The daemon and the apply job could not be registered again: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能重新登记守护进程和执行任务：%@"
+          }
+        }
+      }
+    },
     "The daemon could not read its record of the SIM's network and began it again, so on record is what the M7 reported at the first poll after that, which may not be what it reported when the carrier check and the billing cycle were recorded: a SIM changed before that is not noticed. The daemon reads the SIM's name and the network's codes only, so two SIMs of one carrier look alike.": {
       "localizations": {
         "zh-Hans": {
@@ -3342,6 +3542,16 @@
         }
       }
     },
+    "The daemon is registered and the job is not, so the night's suspensions, resumes and node applies do not happen.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程已登记，执行任务没有登记，所以夜里该做的暂停、恢复和节点应用都不会发生。"
+          }
+        }
+      }
+    },
     "The daemon reports after its first poll of the M7, which waits while macOS asks you to allow keychain or local network access.": {
       "localizations": {
         "zh-Hans": {
@@ -3358,6 +3568,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "出口运行后，守护进程才会对出口采样。"
+          }
+        }
+      }
+    },
+    "The daemon started and ended by itself with exit code %d; its log (~/Library/Logs/Mooring/daemon.log) says why.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程启动后自己退出了，退出码 %d；原因见它的日志（~/Library/Logs/Mooring/daemon.log）。"
+          }
+        }
+      }
+    },
+    "The daemon started and ended by itself; its log (~/Library/Logs/Mooring/daemon.log) says why.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程启动后自己退出了；原因见它的日志（~/Library/Logs/Mooring/daemon.log）。"
           }
         }
       }
@@ -3532,6 +3762,26 @@
         }
       }
     },
+    "The nightly apply job does not run": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每晚的执行任务没有在运行"
+          }
+        }
+      }
+    },
+    "The nightly apply job is not started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每晚的执行任务未启动"
+          }
+        }
+      }
+    },
     "The own-network declarations cannot be read; no declared network matches.": {
       "localizations": {
         "zh-Hans": {
@@ -3562,6 +3812,26 @@
         }
       }
     },
+    "The record launchctl printed for %@ has a line this build cannot read: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchctl 为 %@ 打印的记录里有一行这个版本读不了：%@"
+          }
+        }
+      }
+    },
+    "The record launchctl printed for %@ has no “%@” line.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchctl 为 %@ 打印的记录里没有“%@”这一行。"
+          }
+        }
+      }
+    },
     "The router adapter is not set up": {
       "localizations": {
         "zh-Hans": {
@@ -3588,6 +3858,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "独立上行链路就是出口接口。"
+          }
+        }
+      }
+    },
+    "The start of the daemon and the apply job was not completed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程和执行任务的启动没有完成"
+          }
+        }
+      }
+    },
+    "The start was not completed: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启动没有完成：%@"
+          }
+        }
+      }
+    },
+    "The steps by hand are in `docs/runbooks/console.md`, sections 1 and 7.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手动步骤见 `docs/runbooks/console.md` 第 1 节和第 7 节。"
           }
         }
       }
@@ -3708,6 +4008,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ 的流量"
+          }
+        }
+      }
+    },
+    "Try Again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重试"
           }
         }
       }
@@ -3912,6 +4222,16 @@
         }
       }
     },
+    "Waiting for launchd to start it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等 launchd 启动它。"
+          }
+        }
+      }
+    },
     "Waiting for the Mooring daemon…": {
       "localizations": {
         "zh-Hans": {
@@ -3968,6 +4288,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "网页程序版本"
+          }
+        }
+      }
+    },
+    "What launchctl printed for %@ is not a record this build reads. It begins: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchctl 为 %@ 打印的内容不是这个版本能读的记录。开头是：%@"
           }
         }
       }
@@ -4061,6 +4391,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "用 `mooringctl exit allow-network` 声明的自有网络和 CFM 的隧道不影响出口继续服务；每个出口连接仍绑定在 M7 上。"
+          }
+        }
+      }
+    },
+    "`launchctl %@` exited with code %d.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "`launchctl %@` 已退出，退出码 %d。"
+          }
+        }
+      }
+    },
+    "`launchctl %@` had not ended after %lld s, so the app ended it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "`launchctl %@` 过了 %lld 秒仍未结束，应用已将它终止。"
+          }
+        }
+      }
+    },
+    "`launchctl %@` printed more than %lld KiB, so the app stopped reading it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "`launchctl %@` 的输出超过了 %lld KiB，应用已停止读取。"
+          }
+        }
+      }
+    },
+    "`launchctl %@` was ended by signal %d.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "`launchctl %@` 被信号 %d 终止。"
           }
         }
       }
@@ -4585,6 +4955,76 @@
         }
       }
     },
+    "launchctl could not be started: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法启动 launchctl：%@"
+          }
+        }
+      }
+    },
+    "launchd did not start the daemon within %lld s.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 在 %lld 秒内没有启动守护进程。"
+          }
+        }
+      }
+    },
+    "launchd does not list the apply job.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 里没有执行任务。"
+          }
+        }
+      }
+    },
+    "launchd does not list the daemon.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 里没有守护进程。"
+          }
+        }
+      }
+    },
+    "launchd was asked to start the apply job, and its record of the job did not change.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已请 launchd 启动执行任务，但它对这个任务的记录没有变化。"
+          }
+        }
+      }
+    },
+    "launchd's record of the apply job is in a state this build does not know: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 对执行任务的记录处于这个版本不认识的状态：%@"
+          }
+        }
+      }
+    },
+    "launchd's record of the daemon is in a state this build does not know: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "launchd 对守护进程的记录处于这个版本不认识的状态：%@"
+          }
+        }
+      }
+    },
     "level 2": {
       "localizations": {
         "zh-Hans": {
@@ -4605,12 +5045,102 @@
         }
       }
     },
+    "macOS has replaced its records. Registering the daemon and the apply job again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 已经换掉了记录。正在重新登记守护进程和执行任务。"
+          }
+        }
+      }
+    },
     "macOS lists it under System Settings › General › Login Items; turn it on there.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "它在“系统设置 › 通用 › 登录项”中列出，请在那里打开。"
+          }
+        }
+      }
+    },
+    "macOS refused the apply job at %lld starts by hand and did not replace its record of it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手动启动了 %lld 次执行任务，macOS 都拒绝了，也没有换掉它的记录。"
+          }
+        }
+      }
+    },
+    "macOS refused the daemon and did not replace its record of it within %lld s.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 拒绝了守护进程，并且在 %lld 秒内没有换掉它的记录。"
+          }
+        }
+      }
+    },
+    "macOS refused the start, as it does after a new build is installed until its record of the registration is replaced. That happens at the daemon's second start, which launchd makes a minute after the first; meanwhile the app starts the nightly apply job twice, for the same reason. Then, 20 s later, it registers both again: about a minute and a half in all. Nothing needs doing.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 拒绝了这次启动：装上新版本后都会这样，直到它为这项登记留的记录被换掉。记录要到守护进程第二次启动时才换，launchd 会在第一次之后一分钟自己再启动一次；这期间应用会把每晚的执行任务也启动两次，道理相同。再过 20 秒，应用把两者重新登记一遍：前后大约一分半钟。你什么都不用做。"
+          }
+        }
+      }
+    },
+    "macOS refuses its start, as it does after a new build until the job is registered again, so the night's suspensions, resumes and node applies do not happen. The repair takes up to a minute; it stops the daemon for a few seconds and restarts the exit with it, because both are registered again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 拒绝它启动：装上新版本后都会这样，直到这个任务被重新登记，所以夜里该做的暂停、恢复和节点应用都不会发生。修复最多需要一分钟；守护进程会停几秒，出口也跟着重启，因为两者要一起重新登记。"
+          }
+        }
+      }
+    },
+    "macOS refuses the daemon's start": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 拒绝守护进程启动"
+          }
+        }
+      }
+    },
+    "macOS replaces its record of the job at the job's second refused start, which the app makes about 20 s after it saw the first. Then, 20 s later, it registers the daemon and the job again, which stops the daemon for a few seconds and restarts the exit with it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS 要到执行任务第二次被拒绝启动时才换掉它的记录，应用在看到第一次被拒绝约 20 秒后把它启动一次。再过 20 秒，应用把守护进程和执行任务重新登记一遍，守护进程会因此停几秒，出口也跟着重启。"
+          }
+        }
+      }
+    },
+    "macOS still refuses the apply job after it was registered again %lld times.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新登记了 %lld 次之后，macOS 仍然拒绝执行任务。"
+          }
+        }
+      }
+    },
+    "macOS still refuses the daemon after it was registered again %lld times.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新登记了 %lld 次之后，macOS 仍然拒绝守护进程。"
           }
         }
       }
