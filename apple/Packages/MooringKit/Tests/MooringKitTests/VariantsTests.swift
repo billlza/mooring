@@ -58,7 +58,7 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
         ListWithObjects(SuspendReason.self, "suspend_reason", count: 4),
         ListWithObjects(Violation.self, "violation", count: 4),
         ListWithObjects(StopPolicy.self, "stop_policy", count: 2),
-        ListWithObjects(WatchError.self, "watch_error", count: 12),
+        ListWithObjects(WatchError.self, "watch_error", count: 15),
         ListWithObjects(EngineRun.self, "engine_run", count: 2),
         ListWithObjects(RouterReading.self, "router_reading", count: 2),
         ListWithObjects(RadioState.self, "radio_state", count: 2),
@@ -193,6 +193,8 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
                 .macSilent(since: UnixTime(seconds: 1_791_416_400)), .diskLow(free: 950_000_000),
                 .clockUnsynced, .rebootPending(since: UnixTime(seconds: 1_791_331_200)),
                 .accountingCanaryMissing(inbounds: [.reality, .hy2]),
+                .abuseCut(users: 1), .abuseSuspected(users: 2),
+                .abuseGuardUnavailable(cause: .readFailed),
             ])
         let undecodable = try JSONDecoder().decode(
             WatchError.self, from: Data(#"{"TargetReadFailed":{"errno":null}}"#.utf8))

@@ -146,7 +146,8 @@ proptest! {
             let xray = xray_of(&fixture, id);
             let outbounds: Vec<XrayOutbound> = xray.outbounds.into();
             prop_assert_eq!(outbounds[0], XrayOutbound::Deny);
-            prop_assert_eq!(outbounds.len(), if camo_forward { 4 } else { 2 });
+            let users = crate::tests::invariants::served_sources(&fixture, id).len();
+            prop_assert_eq!(outbounds.len(), users + if camo_forward { 4 } else { 2 });
             prop_assert_eq!(xray.inbounds.camo.is_some(), camo_forward);
             let rules = &xray.routing.rules;
             let allow = position(rules, is_probe_allow);

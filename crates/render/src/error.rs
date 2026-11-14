@@ -146,6 +146,21 @@ pub enum RenderError {
         /// The holder found to share the first's credential.
         second: CredentialHolder,
     },
+    /// Two users the node serves have the same source address inside the
+    /// node (`mooring_agent_proto::user_source`, design §11.8), so its
+    /// kernel could not tell their flows apart, and a cut of one would cut
+    /// both. `user add` draws another id rather than make such a pair, so
+    /// only a state that already held one meets this; suspend one of the
+    /// two, or revoke and add them again.
+    #[error("{first} and {second} have the same source address on node {node}")]
+    UserSourceCollision {
+        /// The node.
+        node: NodeId,
+        /// The user served first (in id order).
+        first: UserId,
+        /// The user found to share the first's address.
+        second: UserId,
+    },
     /// A value does not satisfy the other side's rule for its field.
     #[error("{field} does not satisfy both the model's and the agent protocol's rule")]
     WireValue {
@@ -209,6 +224,8 @@ kinds! {
         NoAppliedNodes,
         /// See [`RenderError::DuplicateCredential`].
         DuplicateCredential,
+        /// See [`RenderError::UserSourceCollision`].
+        UserSourceCollision,
         /// See [`RenderError::WireValue`].
         WireValue,
         /// See [`RenderError::AddressNotOnUplink`].
@@ -236,6 +253,7 @@ impl RenderError {
             Self::Export(_) => RenderErrorKind::Export,
             Self::NoAppliedNodes => RenderErrorKind::NoAppliedNodes,
             Self::DuplicateCredential { .. } => RenderErrorKind::DuplicateCredential,
+            Self::UserSourceCollision { .. } => RenderErrorKind::UserSourceCollision,
             Self::WireValue { .. } => RenderErrorKind::WireValue,
             Self::AddressNotOnUplink { .. } => RenderErrorKind::AddressNotOnUplink,
             Self::TargetFactsForOtherHost { .. } => RenderErrorKind::TargetFactsForOtherHost,

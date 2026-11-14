@@ -208,6 +208,7 @@ fn files(
     let id = &node.id;
     let NodeAddress::Public(vps4) = site.address;
     let served = served::served(deployment, node, secrets)?;
+    let user_exits = served::user_exits(id, &served)?;
     let reach = NodeReach::of(deployment)?;
     let policy = deployment.policy();
     let xray = xray::config(&xray::XrayInput {
@@ -215,6 +216,7 @@ fn files(
         target,
         private_key: secrets.reality_private(id)?,
         served: &served,
+        user_exits: &user_exits,
         reach: &reach,
         policy,
     })?;
@@ -244,6 +246,7 @@ fn files(
     };
     let nft = nft::NftInput {
         vps4,
+        wg_index: node.wg_index,
         flow_cap: deployment.exit().flow_cap,
         target: target.ipv4(),
         camo_forward: policy.camo_forward,

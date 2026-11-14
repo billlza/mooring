@@ -133,6 +133,26 @@ pub enum Response {
     /// Answers `MacReport`: the stored report and when the node received
     /// it.
     MacReport(Box<StoredMacReport>),
+    /// Answers `AbuseRecords`.
+    AbuseRecords(Box<crate::AbuseRecordsV1>),
+    /// Answers `AbuseCut`: the user is cut, by the record named (a new
+    /// one, or the one that cut the user before).
+    AbuseCutDone {
+        /// The record of the user's cut.
+        record: crate::AbuseSeq,
+        /// The users cut now.
+        cuts: crate::AbuseCuts,
+    },
+    /// Answers `AbuseClear`: the user is not cut (whether or not they were
+    /// before).
+    AbuseCleared {
+        /// The record of the lift; `None` when the user was not cut, and
+        /// nothing was recorded.
+        #[serde(deserialize_with = "Option::deserialize")]
+        record: Option<crate::AbuseSeq>,
+        /// The users cut now.
+        cuts: crate::AbuseCuts,
+    },
 }
 
 closed_enum! {
@@ -187,6 +207,12 @@ closed_enum! {
         MacReportStored,
         /// [`Response::MacReport`].
         MacReport,
+        /// [`Response::AbuseRecords`].
+        AbuseRecords,
+        /// [`Response::AbuseCutDone`].
+        AbuseCutDone,
+        /// [`Response::AbuseCleared`].
+        AbuseCleared,
     }
 }
 
@@ -217,6 +243,9 @@ impl ResponseKind {
             Self::Resumed => RequestKind::Resume,
             Self::MacReportStored => RequestKind::PutMacReport,
             Self::MacReport => RequestKind::MacReport,
+            Self::AbuseRecords => RequestKind::AbuseRecords,
+            Self::AbuseCutDone => RequestKind::AbuseCut,
+            Self::AbuseCleared => RequestKind::AbuseClear,
         }
     }
 }
@@ -249,6 +278,9 @@ impl Response {
             Self::Resumed { .. } => ResponseKind::Resumed,
             Self::MacReportStored { .. } => ResponseKind::MacReportStored,
             Self::MacReport(_) => ResponseKind::MacReport,
+            Self::AbuseRecords(_) => ResponseKind::AbuseRecords,
+            Self::AbuseCutDone { .. } => ResponseKind::AbuseCutDone,
+            Self::AbuseCleared { .. } => ResponseKind::AbuseCleared,
         }
     }
 

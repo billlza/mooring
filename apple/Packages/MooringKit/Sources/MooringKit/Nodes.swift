@@ -209,6 +209,14 @@ public enum Inbound: String, Decodable, Sendable, CaseIterable {
     case hy2 = "Hy2"
 }
 
+/// Why a node's abuse guard cannot measure.
+public enum AbuseGuardFault: String, Decodable, Sendable, CaseIterable {
+    /// The node runs a configuration rendered before the guard.
+    case notInstalled = "NotInstalled"
+    /// The guard's counters could not be read.
+    case readFailed = "ReadFailed"
+}
+
 /// A condition a node's watch reports.
 public enum WatchError: Decodable, Hashable, Sendable {
     case wgReadFailed
@@ -225,6 +233,12 @@ public enum WatchError: Decodable, Hashable, Sendable {
     case clockUnsynced
     case rebootPending(since: UnixTime)
     case accountingCanaryMissing(inbounds: [Inbound])
+    /// Users the abuse guard holds cut on the node (design §11.8).
+    case abuseCut(users: UInt16)
+    /// Users with an abuse finding at its alert level in the last hour.
+    case abuseSuspected(users: UInt16)
+    /// The abuse guard cannot measure; its limits and cuts stay in force.
+    case abuseGuardUnavailable(cause: AbuseGuardFault)
 
     public init(from decoder: any Decoder) throws {
         let (tag, value) = try decoder.variant()
@@ -249,6 +263,13 @@ public enum WatchError: Decodable, Hashable, Sendable {
         case ("AccountingCanaryMissing", let value?):
             self = .accountingCanaryMissing(
                 inbounds: try value.fields("inbounds").field([Inbound].self, "inbounds"))
+        case ("AbuseCut", let value?):
+            self = .abuseCut(users: try value.fields("users").field(UInt16.self, "users"))
+        case ("AbuseSuspected", let value?):
+            self = .abuseSuspected(users: try value.fields("users").field(UInt16.self, "users"))
+        case ("AbuseGuardUnavailable", let value?):
+            self = .abuseGuardUnavailable(
+                cause: try value.fields("cause").field(AbuseGuardFault.self, "cause"))
         default:
             throw decoder.unknownVariant(tag)
         }

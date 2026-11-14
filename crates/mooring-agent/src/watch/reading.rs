@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use mooring_agent_proto::{
-    EngineHealth, EngineUser, NftCounter, StatsEmail, UnixTime, WatchConfig,
+    EngineHealth, EngineUser, InstalledWatchConfig, NftCounter, StatsEmail, UnixTime,
 };
 
 use super::nft::counter;
@@ -49,7 +49,7 @@ impl Watch {
         node: &dyn Node,
         now: UnixTime,
         boot_id: &str,
-        config: Option<&WatchConfig>,
+        config: Option<&InstalledWatchConfig>,
     ) -> Result<Reading, Fatal> {
         if let Some(view) = &self.view
             && now
@@ -78,7 +78,7 @@ impl Watch {
             now,
             (boot_id, boot_secs),
             config.filter(|_| xray.active_since.is_some()).is_some(),
-            config.map(|config| &config.emails),
+            config.map(InstalledWatchConfig::emails),
         )?;
         Ok(Reading {
             host,

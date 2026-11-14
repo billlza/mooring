@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The conditions a tick raises (design §11.3), at most one of each kind:
-//! from the peer, the target check, accounting, the flow cap, a failed
-//! write, the Mac's silence and the host's figures.
+//! from the abuse guard (design §11.8), the peer, the target check,
+//! accounting, the flow cap, a failed write, the Mac's silence and the
+//! host's figures.
 
 use mooring_agent_proto::{
     AgentError, Holds, Inbound, InboundSet, IoOp, MAC_SILENT_SECS, UnixTime, WatchConditions,
     WatchError, WatchErrorKind,
 };
 
+use super::abuse::AbuseConditions;
 use super::reading::Reading;
 use super::{Watch, host};
 use crate::store::malformed;
@@ -21,6 +23,8 @@ pub(super) struct Installed {
     /// The hourly target check's verdict on the configured target (design
     /// §11.3), a result it cannot read included.
     pub(super) target: Verdict,
+    /// The abuse guard's conditions (design §11.8).
+    pub(super) abuse: AbuseConditions,
 }
 
 impl Watch {
@@ -35,7 +39,10 @@ impl Watch {
         failed: Option<Option<i32>>,
         reading: &Reading,
     ) -> Result<WatchConditions, AgentError> {
-        let mut conditions = Vec::new();
+        let mut conditions: Vec<WatchError> = installed
+            .iter()
+            .flat_map(|installed| installed.abuse.errors())
+            .collect();
         if let Some(Err(_)) = peer {
             conditions.push(WatchError::WgReadFailed);
         }

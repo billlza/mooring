@@ -5,6 +5,7 @@
 //! their canaries, and the status document's variants, with shared
 //! builders.
 
+mod abuse;
 mod alerts;
 mod apply;
 mod canary;

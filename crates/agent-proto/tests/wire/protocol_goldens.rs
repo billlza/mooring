@@ -16,15 +16,15 @@
 use std::collections::BTreeMap;
 
 use mooring_agent_proto::{
-    AgentEvent, AgentEventKind, AppliedGeneration, EngineHealth, EngineRun, EngineState,
-    EngineUser, EventSeq, EventsV1, ExitPhase, GateReason, GateState, Generation, Holds,
-    HostHealth, Inbound, InboundSet, LineRequest, MacAlertKind, MacReportParts, MacReportV1,
-    NodeName, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber, ReportCapacity,
-    ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine,
-    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim,
-    ReportUsage, ReportUser, ReportUserId, ReportUserStatus, RequestKind, Resolution, Response,
-    SeriesRange, ShutdownReason, StatsEmail, StatusV1, StoredMacReport, Traffic, UnixTime,
-    UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, WatchConditions, WatchError,
+    AbuseGuardFault, AbuseSeq, AgentEvent, AgentEventKind, AppliedGeneration, EngineHealth,
+    EngineRun, EngineState, EngineUser, EventSeq, EventsV1, ExitPhase, GateReason, GateState,
+    Generation, Holds, HostHealth, Inbound, InboundSet, LineRequest, MacAlertKind, MacReportParts,
+    MacReportV1, NodeName, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber,
+    ReportCapacity, ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal,
+    ReportPlanLine, ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity,
+    ReportSim, ReportUsage, ReportUser, ReportUserId, ReportUserStatus, RequestKind, Resolution,
+    Response, SeriesRange, ShutdownReason, StatsEmail, StatusV1, StoredMacReport, Traffic,
+    UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, WatchConditions, WatchError,
     WatchErrorKind,
 };
 
@@ -177,6 +177,17 @@ fn events_response() -> Vec<u8> {
                 inbounds: InboundSet::of(Inbound::Reality).with(Inbound::Hy2),
             },
         },
+        AgentEventKind::ConditionRaised {
+            condition: WatchError::AbuseCut { users: 1 },
+        },
+        AgentEventKind::ConditionRaised {
+            condition: WatchError::AbuseSuspected { users: 2 },
+        },
+        AgentEventKind::ConditionRaised {
+            condition: WatchError::AbuseGuardUnavailable {
+                cause: AbuseGuardFault::ReadFailed,
+            },
+        },
         AgentEventKind::ConditionCleared {
             condition: WatchErrorKind::MacSilent,
         },
@@ -209,8 +220,20 @@ fn events_response() -> Vec<u8> {
             kind,
         })
         .collect();
-    let page = EventsV1::new(events, EventSeq::new(55)).unwrap();
+    let page = EventsV1::new(events, EventSeq::new(58)).unwrap();
     reply_frame(&Ok(Response::Events(Box::new(page))))
+}
+
+fn abuse_records_request() -> Vec<u8> {
+    request_frame(&LineRequest::AbuseRecords {
+        since: AbuseSeq::new(20),
+    })
+}
+
+fn abuse_records_response() -> Vec<u8> {
+    reply_frame(&Ok(Response::AbuseRecords(Box::new(
+        crate::fixtures::abuse_records(),
+    ))))
 }
 
 fn report_user(text: &str) -> ReportUserId {
@@ -401,7 +424,7 @@ fn mac_report_response() -> Vec<u8> {
 }
 
 /// Every protocol-1 golden outside the frozen core.
-pub(crate) const GOLDENS: [Golden; 10] = [
+pub(crate) const GOLDENS: [Golden; 12] = [
     (RequestKind::Status, Frame::Request, status_request),
     (RequestKind::Status, Frame::Response, status_response),
     (
@@ -428,6 +451,16 @@ pub(crate) const GOLDENS: [Golden; 10] = [
     ),
     (RequestKind::MacReport, Frame::Request, mac_report_request),
     (RequestKind::MacReport, Frame::Response, mac_report_response),
+    (
+        RequestKind::AbuseRecords,
+        Frame::Request,
+        abuse_records_request,
+    ),
+    (
+        RequestKind::AbuseRecords,
+        Frame::Response,
+        abuse_records_response,
+    ),
 ];
 
 #[test]

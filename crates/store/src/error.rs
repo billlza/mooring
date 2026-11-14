@@ -109,6 +109,11 @@ io_ops! {
     ReadPaymentPull => "read the payment pull's settings",
     /// Opening or reading the daemon's record of pending applies.
     ReadPendingApplies => "read the record of pending applies",
+    /// Opening or reading the Mac's copy of the nodes' abuse records, or
+    /// inspecting the abuse directory to read it.
+    ReadAbuseRecords => "read the abuse records",
+    /// Creating or inspecting the abuse directory, to update the records.
+    CreateAbuseDir => "create the abuse directory",
 }
 
 /// What is wrong with a radio history day file. `Copy`: no fault holds a

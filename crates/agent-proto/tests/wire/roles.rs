@@ -37,6 +37,9 @@ const TABLE: &[(RequestKind, bool, bool, bool)] = &[
     (RequestKind::Resume, false, true, false),
     (RequestKind::PutMacReport, false, true, false),
     (RequestKind::MacReport, false, true, true),
+    (RequestKind::AbuseRecords, false, true, true),
+    (RequestKind::AbuseCut, false, true, false),
+    (RequestKind::AbuseClear, false, true, false),
 ];
 
 /// The roles of a row, with whether each may send the request.
@@ -109,8 +112,8 @@ fn bootstrap_is_the_bootstrap_roles_only_request() {
 
 /// The viewer reads and may stop, never more: every request it may send
 /// is one the ops role may send too, and none of them changes the
-/// configuration, clears a hold, halts or resumes the node, or stores a
-/// report.
+/// configuration, clears a hold, halts or resumes the node, stores a
+/// report, or cuts a user or lifts a cut (it may read the abuse records).
 #[test]
 fn the_viewer_only_reads_and_stops() {
     let viewer: Vec<RequestKind> = RequestKind::ALL
@@ -127,6 +130,7 @@ fn the_viewer_only_reads_and_stops() {
             RequestKind::Events,
             RequestKind::GateSet,
             RequestKind::MacReport,
+            RequestKind::AbuseRecords,
         ]
     );
     assert!(viewer.iter().all(|kind| Role::Ops.permits(*kind)));

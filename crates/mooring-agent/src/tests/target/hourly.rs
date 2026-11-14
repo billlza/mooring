@@ -31,6 +31,7 @@ fn configured() -> (tempfile::TempDir, Paths) {
             keepalive_secs: NonZeroU16::new(10).unwrap(),
             target: target(),
             emails: BTreeSet::new(),
+            abuse_guard: mooring_agent_proto::AbuseGuardVersion::V1,
         },
         0o640,
     )

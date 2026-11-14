@@ -240,6 +240,42 @@ description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render xray.jso
       }
     },
     {
+      "tag": "exit-198.18.99.100",
+      "protocol": "freedom",
+      "sendThrough": "198.18.99.100",
+      "streamSettings": {
+        "sockopt": {
+          "interface": "wgexit",
+          "tcpUserTimeout": 30000,
+          "domainStrategy": "ForceIPv4"
+        }
+      }
+    },
+    {
+      "tag": "exit-198.18.96.177",
+      "protocol": "freedom",
+      "sendThrough": "198.18.96.177",
+      "streamSettings": {
+        "sockopt": {
+          "interface": "wgexit",
+          "tcpUserTimeout": 30000,
+          "domainStrategy": "ForceIPv4"
+        }
+      }
+    },
+    {
+      "tag": "exit-198.18.83.50",
+      "protocol": "freedom",
+      "sendThrough": "198.18.83.50",
+      "streamSettings": {
+        "sockopt": {
+          "interface": "wgexit",
+          "tcpUserTimeout": 30000,
+          "domainStrategy": "ForceIPv4"
+        }
+      }
+    },
+    {
       "tag": "camo-80-out",
       "protocol": "freedom",
       "settings": {
@@ -345,9 +381,30 @@ description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render xray.jso
         "outboundTag": "deny"
       },
       {
-        "inboundTag": [
-          "reality-in",
-          "hy2-loop-in"
+        "user": [
+          "fxuseraaab@reality",
+          "fxuseraaab@hy2"
+        ],
+        "outboundTag": "exit-198.18.99.100"
+      },
+      {
+        "user": [
+          "fxuseraaac@reality",
+          "fxuseraaac@hy2"
+        ],
+        "outboundTag": "exit-198.18.96.177"
+      },
+      {
+        "user": [
+          "fxuseraaad@reality",
+          "fxuseraaad@hy2"
+        ],
+        "outboundTag": "exit-198.18.83.50"
+      },
+      {
+        "user": [
+          "probe@reality",
+          "probe@hy2"
         ],
         "outboundTag": "exit"
       }

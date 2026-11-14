@@ -24,13 +24,26 @@ use crate::hostfiles::{self, Applied};
 use crate::paths::Paths;
 use crate::store::{Scratch, errno, io_error};
 
-/// A `key = value` line of a WireGuard configuration.
-fn wg_value(conf: &str, key: &str) -> Option<String> {
-    conf.lines().find_map(|line| {
-        let (name, value) = line.split_once('=')?;
-        (name.trim() == key).then(|| value.trim().to_owned())
-    })
+/// Every value of `key` in a WireGuard configuration, in order: a hook may
+/// be given more than once.
+fn wg_values(conf: &str, key: &str) -> Vec<String> {
+    conf.lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once('=')?;
+            (name.trim() == key).then(|| value.trim().to_owned())
+        })
+        .collect()
 }
+
+/// The `wgexit.conf` keys only `wg-quick` reads, which `wg syncconf` leaves
+/// as they are: a change to any of them needs the tunnel restarted. The
+/// hooks are among them: the abuse guard's `local` route for the users'
+/// source addresses is a `PostUp` line (design §11.8), and a generation that
+/// added it with `wg syncconf` alone would leave every user's bind failing
+/// until the next reboot.
+pub(crate) const WG_QUICK_KEYS: [&str; 7] = [
+    "Address", "MTU", "Table", "PreUp", "PostUp", "PreDown", "PostDown",
+];
 
 /// Installs the host profile's files staged with the generation in `dir`
 /// (the swap's last part, design §11.2 step 4) and returns those to apply,
@@ -53,7 +66,7 @@ pub(super) fn install_host(
 
 /// Applies only what changed (design §11.2 step 5) from `before` to the
 /// generation now current, in `dir`: the ruleset, the tunnel (a restart if
-/// its address or MTU changed, else `wg syncconf`), what the host profile
+/// a key only wg-quick reads changed, else `wg syncconf`), what the host profile
 /// files in `host` need, and the engines whose configuration, artifacts or
 /// unit changed. No engine is restarted while the node is halted. Tool
 /// output is scrubbed of the generation's secrets; if they cannot be read,
@@ -151,9 +164,9 @@ impl Step<'_> {
     }
 }
 
-/// The tunnel's step: `wg-quick@wgexit` restarted when it is new or its
-/// address or MTU changed (or the old configuration cannot be read), else
-/// the peers synchronised with `wg syncconf`.
+/// The tunnel's step: `wg-quick@wgexit` restarted when it is new or one of
+/// [`WG_QUICK_KEYS`] changed (or the old configuration cannot be read),
+/// else the peers synchronised with `wg syncconf`.
 fn apply_wireguard(
     paths: &Paths,
     step: &Step<'_>,
@@ -167,9 +180,9 @@ fn apply_wireguard(
             .generation(before.config_generation)
             .join(ManagedFile::WgConf.file_name());
         fs::read_to_string(old).map_or(true, |old| {
-            ["Address", "MTU"]
+            WG_QUICK_KEYS
                 .iter()
-                .any(|key| wg_value(&old, key) != wg_value(&next, key))
+                .any(|key| wg_values(&old, key) != wg_values(&next, key))
         })
     });
     if restart {

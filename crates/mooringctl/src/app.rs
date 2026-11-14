@@ -27,8 +27,8 @@ use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, wr
 
 use crate::backup::BackupCheck;
 use crate::cli::{
-    Command, ExitCommand, NodeCommand, OnOff, PortalCommand, RouterCommand, SimCommand,
-    TargetCommand, UserCommand,
+    AbuseCommand, Command, ExitCommand, NodeCommand, OnOff, PortalCommand, RouterCommand,
+    SimCommand, TargetCommand, UserCommand,
 };
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::paths;
@@ -121,6 +121,25 @@ pub(crate) fn run(
             crate::user::add(env, out, client.into(), mlkem)
         }
         Command::User(UserCommand::Alias { user }) => crate::user::alias(env, out, &user),
+        Command::User(UserCommand::Suspend { user, reason }) => {
+            crate::user::suspend(env, out, &user, reason)
+        }
+        Command::User(UserCommand::Resume { user }) => crate::user::resume(env, out, &user),
+        Command::Abuse(AbuseCommand::Records {
+            node,
+            interface,
+            json,
+        }) => crate::abuse::records(env, out, &node, &interface, json),
+        Command::Abuse(AbuseCommand::Cut {
+            node,
+            user,
+            interface,
+        }) => crate::abuse::cut(env, out, &node, &user, &interface),
+        Command::Abuse(AbuseCommand::Clear {
+            node,
+            user,
+            interface,
+        }) => crate::abuse::clear(env, out, &node, &user, &interface),
         Command::User(UserCommand::Agree { user }) => crate::user::agree(env, out, &user),
         Command::User(UserCommand::Forget { user, yes }) => {
             crate::user_forget::forget(env, out, &user, yes)

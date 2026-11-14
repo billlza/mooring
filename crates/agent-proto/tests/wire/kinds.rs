@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Cursor, Read, Write};
 
 use mooring_agent_proto::{
+    AbuseCuts, AbuseFigures, AbuseFindings, AbuseGuardVersion, AbuseRecordsV1, AbuseSeq,
     AgentError, AgentErrorKind, BlobLen, BundleFiles, CertName, EventSeq, EventsV1, HttpStatus,
     IfName, InboundSet, KernelIdent, KernelRelease, LineRequest, MAX_BLOB_BYTES,
     MAX_REQUEST_LINE_BYTES, MacReportV1, NodeName, NoticeBody, NoticeTitle, OpaqueUserId,
@@ -81,6 +82,31 @@ fn value_error(kind: ValueErrorKind) -> ValueError {
         }
         ValueErrorKind::NoticeTitle => NoticeTitle::new("203.0.113.7").unwrap_err(),
         ValueErrorKind::NoticeBody => NoticeBody::new("a\n\nb").unwrap_err(),
+        ValueErrorKind::AbuseGuardVersion => AbuseGuardVersion::try_from(2).unwrap_err(),
+        ValueErrorKind::AbuseFindings => AbuseFindings::try_from(Vec::new()).unwrap_err(),
+        ValueErrorKind::AbuseFigures => {
+            let page = fixtures::abuse_records();
+            let figures = page.records()[1].figures.unwrap();
+            AbuseFigures {
+                port_buckets: 1025,
+                ..figures
+            }
+            .check()
+            .unwrap_err()
+        }
+        ValueErrorKind::AbuseCuts => {
+            let entry = fixtures::abuse_records().cuts().entries()[0].clone();
+            AbuseCuts::new(vec![entry.clone(), entry]).unwrap_err()
+        }
+        ValueErrorKind::AbuseRecords => {
+            let page = fixtures::abuse_records();
+            AbuseRecordsV1::new(
+                page.cuts().clone(),
+                page.records().to_vec(),
+                AbuseSeq::FIRST,
+            )
+            .unwrap_err()
+        }
     }
 }
 

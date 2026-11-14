@@ -6,7 +6,10 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
 use ipnet::Ipv4Net;
-use mooring_agent_proto::{ManagedFile, StatsEmail};
+use mooring_agent_proto::{
+    AbuseSet, CONCURRENT_FLOWS, DATAGRAM_BURST, DATAGRAMS_PER_SEC, ManagedFile, NEW_FLOW_BURST,
+    NEW_FLOWS_PER_SEC, OpaqueUserId, StatsEmail, USER_SOURCE_NET, user_source,
+};
 use mooring_fixtures::Fixture;
 use mooring_keys::x25519::{RealityKeyPair, WgKeyPair};
 use mooring_model::exit::ProbeProtocol;
@@ -44,8 +47,10 @@ pub(crate) fn position<T>(rules: &[T], predicate: impl Fn(&T) -> bool) -> usize 
     rules.iter().position(predicate).unwrap()
 }
 
+/// The probe's allow to the nodes' reflectors: the probe's emails, the
+/// node addresses, and `exit`.
 pub(crate) fn is_probe_allow(rule: &XrayRule) -> bool {
-    rule.user.is_some() && rule.outbound_tag == OutboundTag::Exit
+    rule.user.is_some() && rule.ip.is_some() && rule.outbound_tag == OutboundTag::Exit
 }
 
 pub(crate) fn is_node_deny(rule: &XrayRule, addresses: &[Ipv4Addr]) -> bool {
@@ -76,14 +81,38 @@ fn node_addresses(fixture: &Fixture) -> Vec<Ipv4Addr> {
         .collect()
 }
 
+/// The users `node` serves, in id order, each with its source address
+/// inside the node (design §11.8).
+pub(crate) fn served_sources(fixture: &Fixture, node: &str) -> Vec<(String, Ipv4Addr)> {
+    let node = crate::tests::support::node(node);
+    fixture
+        .deployment
+        .users()
+        .values()
+        .filter(|user| user.is_served_on(&node))
+        .map(|user| {
+            let opaque = OpaqueUserId::new(user.id.as_str()).unwrap();
+            (user.id.as_str().to_owned(), user_source(&opaque))
+        })
+        .collect()
+}
+
 #[test]
-fn deny_is_the_first_outbound_and_exit_is_bound_to_wgexit() {
+fn deny_is_first_then_exit_then_each_users_exit_then_camouflage() {
     for fixture in fixtures() {
         for id in fixture.deployment.nodes().keys() {
             let xray = xray_of(&fixture, id.as_str());
             let outbounds: Vec<XrayOutbound> = xray.outbounds.into();
             assert_eq!(outbounds[0], XrayOutbound::Deny);
             assert!(matches!(outbounds[1], XrayOutbound::Exit(_)));
+            let sources = served_sources(&fixture, id.as_str());
+            assert!(!sources.is_empty(), "every fixture node serves a user");
+            for (outbound, (_, source)) in outbounds[2..].iter().zip(&sources) {
+                let XrayOutbound::UserExit(_, user) = outbound else {
+                    panic!("each served user's exit follows exit, in served order");
+                };
+                assert_eq!(user.address(), *source);
+            }
             let target = fixture
                 .deployment
                 .node(id)
@@ -92,11 +121,75 @@ fn deny_is_the_first_outbound_and_exit_is_bound_to_wgexit() {
                 .target
                 .as_ref()
                 .unwrap();
-            for outbound in &outbounds[2..] {
+            for outbound in &outbounds[2 + sources.len()..] {
                 let XrayOutbound::CamoRedirect(camo) = outbound else {
-                    panic!("only camouflage redirects follow exit");
+                    panic!("only camouflage redirects follow the users' exits");
                 };
                 assert_eq!(camo.ip, target.ipv4());
+            }
+        }
+    }
+}
+
+/// Each served user's flows leave through their own exit, from their own
+/// source address, by one rule naming both of their accounting emails; the
+/// last rule sends the probe alone to `exit`, so no rule sends a user to
+/// `exit` and a flow no rule names falls to `deny`.
+#[test]
+fn each_user_leaves_from_its_own_source_and_only_the_probe_through_exit() {
+    for fixture in fixtures() {
+        for id in fixture.deployment.nodes().keys() {
+            let xray = xray_of(&fixture, id.as_str());
+            let rules = &xray.routing.rules;
+            let sources = served_sources(&fixture, id.as_str());
+            let user_rules: Vec<&XrayRule> = rules
+                .iter()
+                .filter(|rule| matches!(rule.outbound_tag, OutboundTag::UserExit(_)))
+                .collect();
+            assert_eq!(user_rules.len(), sources.len());
+            for (rule, (user, source)) in user_rules.iter().zip(&sources) {
+                let OutboundTag::UserExit(tag) = rule.outbound_tag else {
+                    unreachable!()
+                };
+                assert_eq!(tag.address(), *source);
+                let emails: Vec<String> = rule
+                    .user
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect();
+                assert_eq!(emails, [format!("{user}@reality"), format!("{user}@hy2")]);
+                assert!(rule.ip.is_none() && rule.inbound_tag.is_none());
+            }
+            let last = rules.last().unwrap();
+            assert_eq!(last.outbound_tag, OutboundTag::Exit);
+            let probe: Vec<String> = last
+                .user
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            assert_eq!(probe, ["probe@reality", "probe@hy2"]);
+            for rule in rules {
+                if rule.outbound_tag == OutboundTag::Exit {
+                    let users = rule.user.iter().flatten();
+                    assert!(
+                        users
+                            .into_iter()
+                            .all(|email| email.to_string().starts_with("probe@"))
+                            || rule.inbound_tag.is_some(),
+                        "only the probe and the DoH queries leave through exit: {rule:?}"
+                    );
+                }
+            }
+            let bundle = vps(&fixture, id);
+            let text =
+                std::str::from_utf8(bundle.file(ManagedFile::XrayConfig).expose_bytes()).unwrap();
+            for (_, source) in &sources {
+                assert!(text.contains(&format!("\"tag\": \"exit-{source}\"")));
+                assert!(text.contains(&format!("\"sendThrough\": \"{source}\"")));
             }
         }
     }
@@ -151,6 +244,9 @@ fn reordered_or_rebound_outbounds_do_not_read_back() {
             "\"redirect\": \"45.67.89.200:443\"",
             "\"redirect\": \"10.0.0.1:443\"",
         ),
+        ("\"tag\": \"exit-198.", "\"tag\": \"exit-10."),
+        ("\"sendThrough\": \"198.", "\"sendThrough\": \"10."),
+        ("\"tag\": \"exit-198.", "\"tag\": \"exit-0198."),
         ("\"loglevel\": \"none\"", "\"loglevel\": \"info\""),
         ("\"loglevel\": \"none\"", "\"loglevel\": \"debug\""),
         ("\"loglevel\": \"none\"", "\"loglevel\": \"warning\""),
@@ -397,10 +493,17 @@ fn nftables_guards_the_engines_and_scopes_every_public_rule() {
             assert!(text.contains(&format!("define VPS4 = {vps4}\n")));
             assert!(text.contains(&format!("elements = {{ {target} }}")));
             assert!(text.contains("elements = { \"wgexit\" }"));
+            // A port rule opens a public service only on `$VPS4`, guards an
+            // engine, or is the hy2 handoff. The one exception is
+            // `user_flow`, which only measures and limits the users' own
+            // outgoing flows: `exit_flow` reaches it for their source
+            // addresses alone, after the owner guard.
+            let user_flow = chain(text, "user_flow");
             for line in text.lines().filter(|line| line.contains(" dport ")) {
                 let scoped = line.contains("ip daddr $VPS4")
                     || line.contains("meta skuid")
-                    || line.contains("ip daddr 127.0.0.1");
+                    || line.contains("ip daddr 127.0.0.1")
+                    || user_flow.contains(&line.trim());
                 assert!(scoped, "unscoped port rule {line:?}");
             }
             let hop = node.ports.hy2().first().hop();
@@ -428,10 +531,14 @@ fn nftables_guards_the_engines_and_scopes_every_public_rule() {
             assert!(guard[3].ends_with("counter name xray_guard reject"));
             assert!(guard[5].ends_with("counter name hy2_guard reject"));
             // Each per-source set carries one kind of stateful expression.
+            // The set whose element carries `needle`: the last `@set` named
+            // before it on its line (added to or updated).
             let set_of = |needle: &str| {
                 let line = text.lines().find(|line| line.contains(needle)).unwrap();
-                line.split("add @")
-                    .nth(1)
+                let before = &line[..line.find(needle).unwrap()];
+                before
+                    .rsplit('@')
+                    .next()
                     .unwrap()
                     .split(' ')
                     .next()
@@ -440,10 +547,34 @@ fn nftables_guards_the_engines_and_scopes_every_public_rule() {
             };
             let sets = [
                 set_of("ct count over 64"),
-                set_of("limit rate over 50/second"),
+                set_of("limit rate over 50/second burst 200"),
                 set_of("limit rate over 5/second"),
+                set_of(&format!("ct count over {CONCURRENT_FLOWS}")),
+                set_of(&format!(
+                    "limit rate over {NEW_FLOWS_PER_SEC}/second burst {NEW_FLOW_BURST}"
+                )),
+                set_of(&format!(
+                    "limit rate over {DATAGRAMS_PER_SEC}/second burst {DATAGRAM_BURST}"
+                )),
             ];
-            assert_eq!(sets, ["camo_tcp_src", "camo_udp_src", "refl_src"]);
+            assert_eq!(
+                sets,
+                [
+                    "camo_tcp_src",
+                    "camo_udp_src",
+                    "refl_src",
+                    AbuseSet::Conns.name(),
+                    AbuseSet::Rate.name(),
+                    AbuseSet::Datagrams.name()
+                ]
+            );
+            // Every guard set is declared once, and the cut set holds no
+            // timeout: a cut lasts until the operator lifts it.
+            for set in AbuseSet::ALL {
+                let header = format!("\tset {} {{", set.name());
+                assert_eq!(text.matches(&header).count(), 1, "{header}");
+            }
+            assert!(text.contains("\tset abuse_cut {\n\t\ttype ipv4_addr\n\t\tsize 256\n\t}\n"));
             assert!(text.contains(
                 "\tset camo_tcp_src {\n\t\ttype ipv4_addr\n\t\tsize 65536\n\t\tflags dynamic\n\t}\n"
             ));
@@ -641,11 +772,74 @@ fn nftables_drops_by_default_and_gates_exit_traffic_first() {
                 "ct state new ct count over {} counter name flow_cap reject",
                 fixture.deployment.exit().flow_cap.get()
             );
+            let users = format!("ip saddr {USER_SOURCE_NET} jump user_flow");
             let exit_flow = chain(text, "exit_flow");
             assert_eq!(
                 exit_flow,
-                [probes.as_str(), cap.as_str(), "accept"],
-                "the in-chain probes are counted, with no verdict, before the flow cap"
+                [
+                    "ip saddr @abuse_cut meta l4proto tcp reject with tcp reset",
+                    "ip saddr @abuse_cut reject with icmpx admin-prohibited",
+                    probes.as_str(),
+                    users.as_str(),
+                    cap.as_str(),
+                    "accept"
+                ],
+                "a cut user is refused first; the in-chain probes are counted, with no \
+                 verdict, and the users measured and limited, before the flow cap"
+            );
+
+            // What wgexit brings a cut user is dropped, and the others'
+            // replies metered, before any established flow is accepted.
+            let invalid = position(&input, |rule| *rule == "ct state invalid drop");
+            assert_eq!(
+                &input[invalid + 1..invalid + 4],
+                [
+                    "iifname \"wgexit\" ip daddr @abuse_cut drop",
+                    format!(
+                        "iifname \"wgexit\" ip daddr {USER_SOURCE_NET} add @meter_in {{ ip daddr counter }}"
+                    )
+                    .as_str(),
+                    "ct state established,related accept",
+                ]
+            );
+
+            // user_flow measures with no verdict, then limits; its last
+            // three rules are the only ones that refuse.
+            let user_flow = chain(text, "user_flow");
+            assert!(
+                user_flow[0]
+                    .starts_with("ct state new ct mark set jhash ip daddr mod 4096 seed 0x")
+            );
+            let (measures, limits) = user_flow.split_at(user_flow.len() - 3);
+            for rule in measures {
+                assert!(
+                    !rule.contains("reject") && !rule.contains("drop") && !rule.contains("accept"),
+                    "{rule}"
+                );
+            }
+            for rule in limits {
+                assert!(
+                    rule.contains("add @user_capped { ip saddr counter }"),
+                    "{rule}"
+                );
+                assert!(
+                    rule.ends_with(" reject") || rule.ends_with(" drop"),
+                    "{rule}"
+                );
+            }
+
+            // The users' sources leave the node as its own tunnel address.
+            let node = fixture.deployment.node(id).unwrap();
+            let nat = chain(text, "postrouting_nat");
+            assert_eq!(
+                nat,
+                [
+                    "type nat hook postrouting priority srcnat; policy accept;".to_owned(),
+                    format!(
+                        "oifname \"wgexit\" ip saddr {USER_SOURCE_NET} snat ip to {}",
+                        node.wg_index.vps_host().addr()
+                    ),
+                ]
             );
         }
     }
@@ -674,7 +868,7 @@ fn nftables_uses_variables_only_where_nft_takes_them() {
             let cap = fixture.deployment.exit().flow_cap.get();
             let exit_flow = chain(text, "exit_flow");
             assert_eq!(
-                exit_flow[1],
+                exit_flow[exit_flow.len() - 2],
                 format!("ct state new ct count over {cap} counter name flow_cap reject")
             );
         }

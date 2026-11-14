@@ -77,6 +77,47 @@ fn a_change_applies_only_what_changed() {
     index_of(&node.calls(), "restart wg-quick@wgexit.service");
 }
 
+/// A hook only wg-quick runs changes nothing `wg syncconf` sets, so a
+/// generation that adds, changes or removes one restarts the tunnel: the
+/// abuse guard's `local` route for the users' source addresses is a
+/// `PostUp` line (design §11.8), and with `syncconf` alone every user's
+/// bind would fail until the next reboot.
+#[test]
+fn a_changed_hook_restarts_the_tunnel() {
+    let world = World::new();
+    world.commit(&world.node(1000), world.bundle(1, same));
+    let accept_local = "PostUp = sysctl -qw net.ipv4.conf.%i.accept_local=1";
+    let route = "PostUp = ip -4 route replace local 198.18.0.0/15 dev %i table local";
+    let added = format!("{accept_local}\n{route}");
+    let changed = added.replace("/15", "/16");
+    for (generation, hooks) in [
+        (2, added.as_str()),
+        (3, changed.as_str()),
+        (4, accept_local),
+    ] {
+        let node = world.node(1000 * (generation + 1));
+        let bundle = world.bundle(generation, |file, text| {
+            if file == ManagedFile::WgConf {
+                text.replace(accept_local, hooks)
+            } else {
+                text
+            }
+        });
+        assert_eq!(
+            world.apply_and_run(&node, bundle),
+            TxnState::AwaitingConfirm,
+            "generation {generation}"
+        );
+        let calls = node.calls();
+        index_of(&calls, "restart wg-quick@wgexit.service");
+        assert!(
+            calls.iter().all(|call| !call.contains("syncconf")),
+            "generation {generation}: {calls:#?}"
+        );
+        txn::confirm(&world.paths, &node, Generation::new(generation)).unwrap();
+    }
+}
+
 #[test]
 fn an_engine_change_restarts_both_engines() {
     let world = World::new();

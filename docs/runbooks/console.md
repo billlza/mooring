@@ -295,7 +295,29 @@ Its log is `~/Library/Logs/Mooring/apply.log`: one line when a run starts, then 
 
 After a new build is installed, launchd refuses the job as it refuses the daemon, but only when it starts the job, which is at minute 20: the stop and start that bring the daemon back (section 1) do not repair the job. Measured on 2026-11-13 with a throwaway app (design §5.1): left alone, the job is refused at its first firing after the install, ends with `last exit code = 78` at the next, and does not run until a **Stop the Daemon** and **Start the Daemon at Login** made after that, while the menu still shows it as registered. So start it by hand twice, about 20 s apart, in the minute you wait for the daemon's 78 (section 1): `launchctl kickstart gui/$(id -u)/com.bill.mooring.apply`. The command prints nothing; `launchctl print gui/$(id -u)/com.bill.mooring.apply` shows `job state = spawn failed` after the first and `last exit code = 78: EX_CONFIG` after the second, and the **Stop the Daemon** and **Start the Daemon at Login** that follow bring the job back with the daemon. Check it after the next minute 20 with the same `launchctl print`: `last exit code = 0`, and `runs` one more each hour. `job state = spawn failed` or `last exit code = 78` there means that the job does not run: start it by hand until it shows 78, then choose **Stop the Daemon** and **Start the Daemon at Login** once more. A start by hand of a job that is not refused runs it, and outside its window it does nothing: do not install a new build between 19:15 and 19:45 UTC. Mooring's own job has not been through this: at the deployment of 2026-11-13 its record was new, the build before having carried no job, and launchd ran it from its first firing.
 
-**Removing a user at their request.** `mooringctl user forget <uid>` removes a revoked user at once, with their label, alias and agreement record; the daemon then deletes their usage history and payment orders. It says what goes and asks first (`--yes` to skip the question), and cannot be undone. The bare id stays in `state.json` for a few weeks, until no node can still name it. Only a revoked user can be forgotten.
+**Removing a user at their request.** `mooringctl user forget <uid>` removes a revoked user at once, with their label, alias and agreement record; the daemon then deletes their usage history and payment orders. Their abuse records stay for their 13 months (section 8). It says what goes and asks first (`--yes` to skip the question), and cannot be undone. The bare id stays in `state.json` for a few weeks, until no node can still name it. Only a revoked user can be forgotten.
+
+## 8. Abuse cases (2026-11-11)
+
+The abuse guard (design §11.8) runs on each node by itself. A user whose connections look like a scan, a flood, password guessing or bulk mail is cut on that node at once: every flow of theirs is refused, and nobody else is touched. The console's node row then shows `Users cut off for abuse: 1`, and `Users with abuse findings below the cut level` for a user only alerted on. No content is read and no destination is kept: the records hold an opaque user id and counts.
+
+Review each case from Terminal.app's own shell with the installed app's `mooringctl`, as section 1 says (`--interface` names the interface facing the M7):
+
+```
+mooringctl abuse records lon1 --interface en9
+```
+
+It prints the users cut and every record the node keeps (30 days), with their figures, and then keeps a copy on this Mac (`abuse/records.json`, 13 months). If it then reports a record unlike the one this Mac holds, the node's abuse state was lost and its numbering began again (design §11.8): the printout is still the node's, and the copy keeps the earlier records as they were. Then one of:
+
+- **A false positive:** `mooringctl abuse clear lon1 <user> --interface en9`. The user is served again at once and judged afresh: what led to the cut is no longer counted. The record says so.
+- **To examine further:** `mooringctl user suspend <user> --reason abuse-review`, then `node apply` on each node the user holds, then `abuse clear` on each, once the apply has removed the user (the cut has nothing left to hold). `mooringctl user resume <user>` and `node apply` undo it.
+- **A confirmed case:** a ban, the operator's rule of 2026-11-06 with no refund: revoke the user (design §13.5), ban the account at the portal (`delivery.md` §11), and copy the records into the ban record. Lift the node's cut once the revocation has committed; `abuse clear` works for a user this Mac no longer holds.
+
+To cut a user yourself, on a complaint for example: `mooringctl abuse cut lon1 <user> --interface en9`.
+
+If a node's SSH cannot be reached, its guard still cuts by itself, and the console shows it once the node answers again. To stop a user the node has not detected meanwhile, stop the exit for everyone: `mooringctl exit disable` on this Mac, or the phone's emergency stop. This Mac cannot stop one user alone: every user's flows reach it from the node's single tunnel address.
+
+**Rolling the guard out:** the users must first have accepted the agreement's revision 2, which states it (design §11.8, decision F21). The guard must not run on a node with users before then. Then `node upgrade-agent` before `node apply` on each node: an older agent cannot read the new `watch.json`. `node apply`, the nightly job's included, refuses a node whose agent is older than this Mac's build, and says to upgrade it first. The first apply restarts the tunnel once. Until it runs, the node shows `The abuse guard is not installed`.
 
 ## Troubleshooting
 

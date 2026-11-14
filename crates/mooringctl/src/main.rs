@@ -89,6 +89,8 @@
 //! lane (design §16).
 
 #[cfg(target_os = "macos")]
+mod abuse;
+#[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
 mod apply;

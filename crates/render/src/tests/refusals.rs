@@ -481,6 +481,7 @@ fn every_error_kind_is_named_once() {
         RenderErrorKind::Export,
         RenderErrorKind::NoAppliedNodes,
         RenderErrorKind::DuplicateCredential,
+        RenderErrorKind::UserSourceCollision,
         RenderErrorKind::WireValue,
         RenderErrorKind::AddressNotOnUplink,
         RenderErrorKind::TargetFactsForOtherHost,

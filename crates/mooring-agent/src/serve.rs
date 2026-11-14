@@ -132,6 +132,17 @@ pub(crate) fn line_reply(
         LineRequest::Events { since } => {
             Ok(Response::Events(Box::new(journal::page(paths, since)?)))
         }
+        LineRequest::AbuseRecords { since } => Ok(Response::AbuseRecords(Box::new(
+            crate::abuse::state::AbuseState::read(paths)?.page(since)?,
+        ))),
+        LineRequest::AbuseCut { user } => {
+            let (record, cuts) = crate::abuse::requests::cut(paths, node, &user)?;
+            Ok(Response::AbuseCutDone { record, cuts })
+        }
+        LineRequest::AbuseClear { user } => {
+            let (record, cuts) = crate::abuse::requests::clear(paths, node, &user)?;
+            Ok(Response::AbuseCleared { record, cuts })
+        }
         LineRequest::Status => Ok(Response::Status(Box::new(status::status(paths, node)?))),
         LineRequest::WatchRuntime => Ok(Response::WatchRuntime(crate::runtime::inspect(
             paths, node,

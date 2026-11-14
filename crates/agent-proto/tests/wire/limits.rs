@@ -11,17 +11,19 @@ use std::collections::BTreeSet;
 use std::io::Cursor;
 
 use mooring_agent_proto::{
-    AgentEvent, AgentEventKind, EngineUser, EventSeq, EventsV1, ExitPhase, GateReason, Generation,
-    Inbound, InboundSet, LineRequest, MAX_EVENTS, MAX_MAC_REPORT_BYTES, MAX_REPORT_ALERTS,
-    MAX_REPORT_USERS, MAX_REQUEST_LINE_BYTES, MAX_RESPONSE_LINE_BYTES, MAX_SERIES_ENTRIES,
-    MAX_USAGE_SERIES_REPLY_BYTES, MacAlertKind, MacReportParts, MacReportRule, MacReportV1,
-    NodeName, Reply, ReportAccuracy, ReportAlert, ReportBand, ReportBandNumber, ReportCapacity,
-    ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal, ReportPlanLine,
-    ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity, ReportSim,
-    ReportUsage, ReportUser, ReportUserId, ReportUserStatus, Request, Resolution, Response,
-    SeriesRange, ShutdownReason, StatsEmail, StoredMacReport, Traffic, UnixTime, UsageBin,
-    UsageSeriesV1, ValueError, WatchError, WatchErrorKind, read_reply, read_request, write_reply,
-    write_request,
+    AbuseAction, AbuseCutEntry, AbuseCuts, AbuseFigures, AbuseFinding, AbuseFindings,
+    AbuseGuardFault, AbuseGuardVersion, AbuseRecord, AbuseRecordsV1, AbuseSeq, AgentEvent,
+    AgentEventKind, EngineUser, EventSeq, EventsV1, ExitPhase, GateReason, Generation, Inbound,
+    InboundSet, LineRequest, MAX_ABUSE_CUTS, MAX_ABUSE_RECORDS, MAX_EVENTS, MAX_MAC_REPORT_BYTES,
+    MAX_REPORT_ALERTS, MAX_REPORT_USERS, MAX_REQUEST_LINE_BYTES, MAX_RESPONSE_LINE_BYTES,
+    MAX_SERIES_ENTRIES, MAX_USAGE_SERIES_REPLY_BYTES, MacAlertKind, MacReportParts, MacReportRule,
+    MacReportV1, NodeName, OpaqueUserId, Reply, ReportAccuracy, ReportAlert, ReportBand,
+    ReportBandNumber, ReportCapacity, ReportDataService, ReportExit, ReportForecast,
+    ReportLteSignal, ReportNrSignal, ReportPlanLine, ReportRadio, ReportRadioSystem, ReportRouter,
+    ReportSaturation, ReportSeverity, ReportSim, ReportUsage, ReportUser, ReportUserId,
+    ReportUserStatus, Request, Resolution, Response, SeriesRange, ShutdownReason, StatsEmail,
+    StoredMacReport, Traffic, UnixTime, UsageBin, UsageSeriesV1, ValueError, WatchError,
+    WatchErrorKind, read_reply, read_request, write_reply, write_request,
 };
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -138,6 +140,11 @@ fn longest_kinds() -> Vec<AgentEventKind> {
             WatchErrorKind::RebootPending => WatchError::RebootPending { since: at },
             WatchErrorKind::AccountingCanaryMissing => WatchError::AccountingCanaryMissing {
                 inbounds: InboundSet::of(Inbound::Reality).with(Inbound::Hy2),
+            },
+            WatchErrorKind::AbuseCut => WatchError::AbuseCut { users: u16::MAX },
+            WatchErrorKind::AbuseSuspected => WatchError::AbuseSuspected { users: u16::MAX },
+            WatchErrorKind::AbuseGuardUnavailable => WatchError::AbuseGuardUnavailable {
+                cause: AbuseGuardFault::NotInstalled,
             },
         };
         kinds.push(AgentEventKind::ConditionRaised { condition });
@@ -440,4 +447,64 @@ proptest! {
             prop_assert_eq!(request, LineRequest::UsageSeries(range));
         }
     }
+}
+
+/// The largest abuse page the types can hold, every record and cut at its
+/// longest (a 32-character user, every number at its widest, the longest
+/// action and every figure present), fits one reply frame; the types refuse
+/// one record or cut more.
+#[test]
+fn the_largest_abuse_page_fits_a_reply_frame() {
+    let user = |index: usize| OpaqueUserId::new(format!("{index:0>32}")).unwrap();
+    let figures = AbuseFigures {
+        destination_buckets: 4096,
+        port_buckets: 1024,
+        busiest_destination_flows: u32::MAX,
+        busiest_login_flows: u32::MAX,
+        submission_buckets: 4096,
+        new_flows_per_min: Some(u32::MAX),
+        datagrams_per_sec: Some(u32::MAX),
+        udp_share_permille: Some(1000),
+        received_per_sent_permille: Some(u64::MAX),
+        received_bytes_per_flow: Some(u64::MAX),
+        refused_packets: u64::MAX,
+    };
+    let every = AbuseFinding::ALL[1..]
+        .iter()
+        .fold(AbuseFindings::of(AbuseFinding::ALL[0]), |set, finding| {
+            set.with(*finding)
+        });
+    let first = u64::MAX - MAX_ABUSE_RECORDS as u64 - 1;
+    let records: Vec<AbuseRecord> = (0..MAX_ABUSE_RECORDS)
+        .map(|index| AbuseRecord {
+            seq: AbuseSeq::new(first + index as u64),
+            at: UnixTime::from_secs(u64::MAX),
+            user: user(index),
+            guard: AbuseGuardVersion::V1,
+            action: AbuseAction::Alerted { findings: every },
+            figures: Some(figures),
+        })
+        .collect();
+    let cuts: Vec<AbuseCutEntry> = (0..MAX_ABUSE_CUTS)
+        .map(|index| AbuseCutEntry {
+            user: user(index),
+            since: UnixTime::from_secs(u64::MAX),
+            record: AbuseSeq::new(first),
+        })
+        .collect();
+    let page = AbuseRecordsV1::new(
+        AbuseCuts::new(cuts).unwrap(),
+        records,
+        AbuseSeq::new(u64::MAX),
+    )
+    .unwrap();
+    let mut frame = Vec::new();
+    write_reply(&mut frame, &Ok(Response::AbuseRecords(Box::new(page)))).unwrap();
+    assert!(
+        frame.len() <= MAX_RESPONSE_LINE_BYTES,
+        "{} > {MAX_RESPONSE_LINE_BYTES}",
+        frame.len()
+    );
+    let decoded: Reply = read_reply(&mut Cursor::new(frame)).unwrap();
+    assert!(matches!(decoded, Ok(Response::AbuseRecords(_))));
 }

@@ -3,10 +3,12 @@
 //! `watch`, the `mooring-watch` unit (design §11.3), the only process that
 //! opens the gate. Every [`WATCH_TICK_SECS`] it reads the Mac peer, carries
 //! out a viewer's stop, clears a drain hold the Mac has come back from,
-//! opens or closes the gate, takes a reading every [`HOST_READING_SECS`]
-//! (the host, the engine units, the uplink's transfer, and accounting,
-//! design §11.5), evaluates its conditions, journals what changed since the
-//! journal last recorded, and writes its view.
+//! opens or closes the gate (setting the abuse guard's cut set in the same
+//! transaction that opens it), runs the guard's part (design §11.8), takes
+//! a reading every [`HOST_READING_SECS`] (the host, the engine units, the
+//! uplink's transfer, and accounting, design §11.5), evaluates its
+//! conditions, journals what changed since the journal last recorded, and
+//! writes its view.
 //!
 //! What ends it: an `nft` failure (`NftFailed`, design §11.3 step 3), and
 //! any reading it needs but cannot take (the installed generation, its
@@ -24,6 +26,7 @@
 //! view's difference from what it last recorded, so each is journaled at
 //! least once (twice when an append fails after its lines reached the file).
 
+mod abuse;
 mod conditions;
 pub(crate) mod engines;
 mod gating;
@@ -39,8 +42,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use mooring_agent_proto::{
-    AgentError, GateState, Generation, IoOp, MacDrainHold, TxnState, UnixTime, WATCH_TICK_SECS,
-    WatchConditions, WatchConfig, WatchError, WatchErrorKind,
+    AgentError, GateState, Generation, InstalledWatchConfig, IoOp, MacDrainHold, TxnState,
+    UnixTime, WATCH_TICK_SECS, WatchConditions, WatchError, WatchErrorKind,
 };
 
 use crate::gate;
@@ -49,6 +52,7 @@ use crate::journal::Journal;
 use crate::paths::Paths;
 use crate::store::{errno, malformed, read_json};
 use crate::wg;
+use abuse::AbuseWatch;
 use conditions::Installed;
 use gating::Rx;
 use journaling::changes;
@@ -92,6 +96,8 @@ pub(crate) struct Watch {
     drain: Option<(MacDrainHold, u64)>,
     /// The error number of a state write that failed in the latest tick.
     write_failed: Option<Option<i32>>,
+    /// The abuse guard's memory (design §11.8).
+    abuse: AbuseWatch,
 }
 
 /// Runs the watch until something ends it.
@@ -131,6 +137,7 @@ impl Watch {
             rx: None,
             drain: None,
             write_failed: None,
+            abuse: AbuseWatch::default(),
         })
     }
 
@@ -143,7 +150,7 @@ impl Watch {
             None
         } else {
             Some(
-                read_json::<WatchConfig>(&paths.watch_config())?
+                read_json::<InstalledWatchConfig>(&paths.watch_config())?
                     .ok_or(malformed(IoOp::ReadState))?,
             )
         };
@@ -166,9 +173,13 @@ impl Watch {
         } else {
             previous_committed
         };
-        let installed = config.as_ref().map(|config| Installed {
-            target: crate::target::hourly::verdict(paths, &config.target),
-        });
+        let installed = match &config {
+            Some(config) => Some(Installed {
+                target: crate::target::hourly::verdict(paths, config.target()),
+                abuse: self.abuse_tick(paths, node, now, config)?,
+            }),
+            None => None,
+        };
         let conditions = self.conditions(
             now,
             installed,

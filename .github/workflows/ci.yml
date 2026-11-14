@@ -45,3 +45,41 @@ jobs:
             cargo clippy -p mooring-agent --target "$target" --all-targets --locked -- -D warnings
             RUSTDOCFLAGS="-D warnings" cargo doc -p mooring-agent --target "$target" --no-deps --locked
           done
+      # The rendered rulesets against a real kernel (design 11.8, 16): every
+      # golden nftables.conf is checked with `nft -c`; one is loaded into a
+      # throwaway network namespace, each measured set of the abuse guard
+      # gets one element, and the watch's parser reads what `nft -j` prints.
+      # The engine accounts exist only so that `meta skuid` resolves.
+      - name: The rendered rulesets on a Linux kernel
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nftables
+          sudo useradd --system --no-create-home mooring-xray
+          sudo useradd --system --no-create-home mooring-hy2
+          nft --version
+          work="$(mktemp -d)"
+          for snap in contract/golden/*/vps-*-nftables.conf.snap; do
+            sed '1,/^---$/d' "$snap" > "$work/ruleset.nft"
+            echo "nft -c $snap"
+            sudo nft -c -f "$work/ruleset.nft"
+          done
+          sed '1,/^---$/d' contract/golden/1-node-1-user/vps-lon1-nftables.conf.snap > "$work/ruleset.nft"
+          sudo ip netns add mooring-lane
+          sudo ip netns exec mooring-lane nft -f "$work/ruleset.nft"
+          add() { sudo ip netns exec mooring-lane nft add element inet mooring "$1" "$2"; }
+          add user_dst '{ 198.18.0.5 . 77 }'
+          add user_port '{ 198.18.0.5 . 443 }'
+          add user_burst '{ 198.18.0.5 . 77 counter packets 3 bytes 180 }'
+          add user_login '{ 198.18.0.5 . 77 counter packets 2 bytes 120 }'
+          add user_mail '{ 198.18.0.5 . 77 }'
+          add meter_new '{ 198.18.0.5 . tcp counter packets 9 bytes 540 }'
+          add meter_out '{ 198.18.0.5 . udp counter packets 1000 bytes 1200000 }'
+          add meter_in '{ 198.18.0.5 counter packets 7 bytes 9000 }'
+          add user_capped '{ 198.18.0.5 counter packets 4 bytes 240 }'
+          mkdir "$work/listings"
+          for set in user_dst user_port user_burst user_login user_mail meter_new meter_out meter_in user_capped; do
+            sudo ip netns exec mooring-lane nft -j list set inet mooring "$set" > "$work/listings/$set.json"
+            cat "$work/listings/$set.json"; echo
+          done
+          sudo ip netns delete mooring-lane
+          MOORING_NFT_LISTINGS="$work/listings" cargo test -p mooring-agent --locked -- --ignored --exact tests::abuse::sets::real_nft_listings_are_read

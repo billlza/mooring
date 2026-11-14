@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::store::Store;
 
+mod abuse_records;
 mod allowed_networks;
 mod builders;
 mod cas;

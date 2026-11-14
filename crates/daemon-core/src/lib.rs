@@ -64,6 +64,7 @@
 
 #![deny(missing_docs)]
 
+pub mod abuse;
 pub mod alert;
 pub mod apply;
 pub mod capacity;

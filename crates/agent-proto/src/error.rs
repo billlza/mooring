@@ -142,6 +142,31 @@ pub enum ValueError {
     /// Not a valid [`crate::NoticeBody`].
     #[error("not a notice body")]
     NoticeBody,
+    /// An abuse-guard version this agent does not know
+    /// ([`crate::AbuseGuardVersion`]).
+    #[error("abuse guard version {number} is not known")]
+    AbuseGuardVersion {
+        /// The rejected version number.
+        number: u32,
+    },
+    /// A set of findings that is empty, out of
+    /// [`crate::AbuseFinding::ALL`] order, or names a finding twice.
+    #[error("not a non-empty list of abuse findings in order, each at most once")]
+    AbuseFindings,
+    /// Abuse figures outside their bounds ([`crate::AbuseFigures::check`]).
+    #[error("abuse figures are outside their bounds")]
+    AbuseFigures,
+    /// A list of cuts out of user order, naming a user twice, or over
+    /// [`crate::MAX_ABUSE_CUTS`] ([`crate::AbuseCuts::new`]).
+    #[error("abuse cuts are out of user order or over {}", crate::MAX_ABUSE_CUTS)]
+    AbuseCuts,
+    /// A page of abuse records that breaks its rules
+    /// ([`crate::AbuseRecordsV1::new`]).
+    #[error(
+        "a cut's record is at or after the records' end, or records are not numbered consecutively below their end or are over {}",
+        crate::MAX_ABUSE_RECORDS
+    )]
+    AbuseRecords,
 }
 
 closed_enum! {
@@ -210,6 +235,16 @@ closed_enum! {
         NoticeTitle,
         /// [`ValueError::NoticeBody`].
         NoticeBody,
+        /// [`ValueError::AbuseGuardVersion`].
+        AbuseGuardVersion,
+        /// [`ValueError::AbuseFindings`].
+        AbuseFindings,
+        /// [`ValueError::AbuseFigures`].
+        AbuseFigures,
+        /// [`ValueError::AbuseCuts`].
+        AbuseCuts,
+        /// [`ValueError::AbuseRecords`].
+        AbuseRecords,
     }
 }
 
@@ -248,6 +283,11 @@ impl ValueError {
             Self::MacReport { .. } => ValueErrorKind::MacReport,
             Self::NoticeTitle => ValueErrorKind::NoticeTitle,
             Self::NoticeBody => ValueErrorKind::NoticeBody,
+            Self::AbuseGuardVersion { .. } => ValueErrorKind::AbuseGuardVersion,
+            Self::AbuseFindings => ValueErrorKind::AbuseFindings,
+            Self::AbuseFigures => ValueErrorKind::AbuseFigures,
+            Self::AbuseCuts => ValueErrorKind::AbuseCuts,
+            Self::AbuseRecords => ValueErrorKind::AbuseRecords,
         }
     }
 }
@@ -500,6 +540,35 @@ pub enum AgentError {
     /// the node was set up. It is never answered with an empty report.
     #[error("no Mac report is stored")]
     MacReportMissing,
+    /// `AbuseCut` or `AbuseClear` reached a node whose current generation
+    /// carries no abuse guard (none is installed, or it was rendered
+    /// before the guard, design §11.8): there is no per-user address to
+    /// cut. Nothing was changed; apply a current bundle first.
+    #[error("the node's configuration carries no abuse guard; apply a current bundle first")]
+    AbuseGuardNotInstalled,
+    /// `AbuseCut` named a user the node's current generation does not
+    /// serve. Nothing was changed.
+    #[error("the node does not serve user {user}")]
+    AbuseUserNotServed {
+        /// The user named.
+        user: crate::OpaqueUserId,
+    },
+    /// `AbuseCut` would hold more than [`crate::MAX_ABUSE_CUTS`] users cut
+    /// on the node. Nothing was changed; lift cuts that are no longer
+    /// needed, or stop the node (`GateSet`).
+    #[error("the node already holds {max} users cut", max = crate::MAX_ABUSE_CUTS)]
+    AbuseCutsFull,
+    /// `nft` refused to change the cut set for `AbuseCut` or `AbuseClear`.
+    /// The change is written to the node's abuse state, and the watch sets
+    /// the cut set from that state at its next re-read of the gate (within
+    /// [`crate::GATE_SET_REREAD_SECS`]) or before it next opens the gate.
+    #[error(
+        "nft refused to change the cut set now; the watch applies the recorded change within a minute"
+    )]
+    AbuseSetFailed {
+        /// nft's scrubbed stderr.
+        stderr_tail: StderrTail,
+    },
     /// A viewer's `GateSet{Operator}` was handed to the watch, which did not
     /// record the Operator hold and close the gate within
     /// [`crate::VIEWER_STOP_WAIT_SECS`] (design §11.3): the viewer account
@@ -624,6 +693,14 @@ closed_enum! {
         SeriesNotRecorded,
         /// [`AgentError::MacReportMissing`].
         MacReportMissing,
+        /// [`AgentError::AbuseGuardNotInstalled`].
+        AbuseGuardNotInstalled,
+        /// [`AgentError::AbuseUserNotServed`].
+        AbuseUserNotServed,
+        /// [`AgentError::AbuseCutsFull`].
+        AbuseCutsFull,
+        /// [`AgentError::AbuseSetFailed`].
+        AbuseSetFailed,
         /// [`AgentError::GateStopUnconfirmed`].
         GateStopUnconfirmed,
         /// [`AgentError::GateCloseFailed`].
@@ -678,6 +755,10 @@ impl AgentError {
             Self::SeriesTooLarge { .. } => AgentErrorKind::SeriesTooLarge,
             Self::SeriesNotRecorded { .. } => AgentErrorKind::SeriesNotRecorded,
             Self::MacReportMissing => AgentErrorKind::MacReportMissing,
+            Self::AbuseGuardNotInstalled => AgentErrorKind::AbuseGuardNotInstalled,
+            Self::AbuseUserNotServed { .. } => AgentErrorKind::AbuseUserNotServed,
+            Self::AbuseCutsFull => AgentErrorKind::AbuseCutsFull,
+            Self::AbuseSetFailed { .. } => AgentErrorKind::AbuseSetFailed,
             Self::GateStopUnconfirmed { .. } => AgentErrorKind::GateStopUnconfirmed,
             Self::GateCloseFailed { .. } => AgentErrorKind::GateCloseFailed,
             Self::Io { .. } => AgentErrorKind::Io,

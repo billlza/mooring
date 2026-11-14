@@ -4,6 +4,7 @@
 //! runs, the clock and sleeping) and a scratch root holding the same file
 //! layout as a node. The real tools run only on a node (M4's VM lane).
 
+mod abuse;
 mod accounting;
 mod accounts;
 mod blobs;
@@ -20,7 +21,7 @@ mod serve;
 mod store;
 mod target;
 mod txn;
-mod watch;
+pub(crate) mod watch;
 
 use std::cell::{Cell, RefCell};
 use std::io;

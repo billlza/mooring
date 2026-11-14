@@ -6,10 +6,12 @@
 //! here was checked against the pinned source; `docs/engines.md` lists each
 //! with its `file:line`. Invalid configurations cannot be expressed:
 //!
-//! - [`XrayOutbound`] is `Deny`, `Exit(ExitBinding)` or
-//!   `CamoRedirect(CamoTarget)`. An [`ExitBinding`] always binds to
-//!   `wgexit`; a [`CamoTarget`] is the REALITY target's public address on
-//!   port 80 or 443. [`XrayOutbounds`] always serialises `deny` first, which
+//! - [`XrayOutbound`] is `Deny`, `Exit(ExitBinding)`,
+//!   `UserExit(ExitBinding, UserSource)` or `CamoRedirect(CamoTarget)`. An
+//!   [`ExitBinding`] always binds to `wgexit`; a user's exit also binds the
+//!   user's source address inside the node (design §11.8), which its tag
+//!   names; a [`CamoTarget`] is the REALITY target's public address on port
+//!   80 or 443. [`XrayOutbounds`] always serialises `deny` first, which
 //!   makes it the default outbound.
 //! - The run-time log level is `none`, its only value; validation copies are
 //!   forced to `warning` by the agent.
@@ -34,7 +36,7 @@ use crate::reach::NodeReach;
 use crate::secret_text::Rendered;
 use crate::system::SMTP_PORT;
 use crate::text_value::{IpMatch, PortText, PublicSocket, TextValueError};
-use crate::vps::served::{Identity, Served};
+use crate::vps::served::{Identity, Served, UserExit, UserSource};
 use mooring_model::ports::SYSTEM_PORTS;
 
 /// `xray.json`.
@@ -470,16 +472,70 @@ impl TryFrom<Vec<XrayInbound>> for XrayInbounds {
 }
 
 /// An outbound tag; also the target of routing rules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum OutboundTag {
-    #[serde(rename = "deny")]
+    /// `deny`.
     Deny,
-    #[serde(rename = "exit")]
+    /// `exit`: the probe's and the DoH queries' way out, from the tunnel's
+    /// own address.
     Exit,
-    #[serde(rename = "camo-80-out")]
+    /// `camo-80-out`.
     CamoHttp,
-    #[serde(rename = "camo-u443-out")]
+    /// `camo-u443-out`.
     CamoQuic,
+    /// `exit-<address>`: one user's way out, from the user's source
+    /// address (design §11.8), which the tag names.
+    UserExit(UserSource),
+}
+
+const USER_EXIT_PREFIX: &str = "exit-";
+
+impl OutboundTag {
+    const fn fixed(self) -> Option<&'static str> {
+        match self {
+            Self::Deny => Some("deny"),
+            Self::Exit => Some("exit"),
+            Self::CamoHttp => Some("camo-80-out"),
+            Self::CamoQuic => Some("camo-u443-out"),
+            Self::UserExit(_) => None,
+        }
+    }
+}
+
+impl Serialize for OutboundTag {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match (self.fixed(), self) {
+            (Some(name), _) => serializer.serialize_str(name),
+            (None, Self::UserExit(source)) => {
+                serializer.collect_str(&format_args!("{USER_EXIT_PREFIX}{}", source.address()))
+            }
+            (None, _) => Err(serde::ser::Error::custom("an outbound tag without a name")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OutboundTag {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let fixed = [Self::Deny, Self::Exit, Self::CamoHttp, Self::CamoQuic]
+            .into_iter()
+            .find(|tag| tag.fixed() == Some(text.as_str()));
+        if let Some(tag) = fixed {
+            return Ok(tag);
+        }
+        text.strip_prefix(USER_EXIT_PREFIX)
+            .and_then(|address| address.parse::<Ipv4Addr>().ok())
+            .filter(|address| {
+                text.strip_prefix(USER_EXIT_PREFIX) == Some(address.to_string().as_str())
+            })
+            .and_then(UserSource::new)
+            .map(Self::UserExit)
+            .ok_or_else(|| {
+                de::Error::custom(format_args!(
+                    "outbound tag {text:?} is not deny, exit, a camouflage tag or exit-<user source>"
+                ))
+            })
+    }
 }
 
 /// An outbound protocol (`infra/conf/xray.go:40-49`).
@@ -610,19 +666,24 @@ pub(crate) struct RedirectSettings {
     pub(crate) user_level: PolicyLevel,
 }
 
-/// One outbound as written (`infra/conf/xray.go:220-229`).
+/// One outbound as written (`infra/conf/xray.go:220-229`; `sendThrough`
+/// at `:222`, applied as the dial's local address by
+/// `app/proxyman/outbound/handler.go:281-305` and
+/// `transport/internet/system_dialer.go:120-125`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OutboundWire {
     tag: OutboundTag,
     protocol: OutboundProtocol,
+    #[serde(rename = "sendThrough", skip_serializing_if = "Option::is_none")]
+    send_through: Option<Ipv4Addr>,
     #[serde(skip_serializing_if = "Option::is_none")]
     settings: Option<RedirectSettings>,
     #[serde(rename = "streamSettings", skip_serializing_if = "Option::is_none")]
     stream_settings: Option<ExitStream>,
 }
 
-/// An outbound: the only three Mooring ever renders.
+/// An outbound: the only four kinds Mooring ever renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "OutboundWire", into = "OutboundWire")]
 pub(crate) enum XrayOutbound {
@@ -630,6 +691,11 @@ pub(crate) enum XrayOutbound {
     Deny,
     /// `exit`: freedom bound to `wgexit`.
     Exit(ExitBinding),
+    /// `exit-<address>`: freedom bound to `wgexit`, from one user's source
+    /// address (design §11.8). A bind before the node's `local` route for
+    /// the range exists fails, so the user's flow fails rather than leave
+    /// unattributed.
+    UserExit(ExitBinding, UserSource),
     /// `camo-80-out` or `camo-u443-out`: freedom redirected to the target.
     CamoRedirect(CamoTarget),
 }
@@ -640,18 +706,28 @@ impl From<XrayOutbound> for OutboundWire {
             XrayOutbound::Deny => Self {
                 tag: OutboundTag::Deny,
                 protocol: OutboundProtocol::Blackhole,
+                send_through: None,
                 settings: None,
                 stream_settings: None,
             },
             XrayOutbound::Exit(binding) => Self {
                 tag: OutboundTag::Exit,
                 protocol: OutboundProtocol::Freedom,
+                send_through: None,
+                settings: None,
+                stream_settings: Some(binding.stream()),
+            },
+            XrayOutbound::UserExit(binding, source) => Self {
+                tag: OutboundTag::UserExit(source),
+                protocol: OutboundProtocol::Freedom,
+                send_through: Some(source.address()),
                 settings: None,
                 stream_settings: Some(binding.stream()),
             },
             XrayOutbound::CamoRedirect(target) => Self {
                 tag: target.port.tag(),
                 protocol: OutboundProtocol::Freedom,
+                send_through: None,
                 settings: Some(RedirectSettings {
                     redirect: PublicSocket {
                         ip: target.ip,
@@ -676,33 +752,52 @@ impl TryFrom<OutboundWire> for XrayOutbound {
                     port,
                 }))
         };
-        let outbound = match (wire.tag, wire.protocol, wire.settings, wire.stream_settings) {
-            (OutboundTag::Deny, OutboundProtocol::Blackhole, None, None) => Some(Self::Deny),
-            (OutboundTag::Exit, OutboundProtocol::Freedom, None, Some(stream))
-                if stream == ExitBinding::WGEXIT.stream() =>
+        let exit = |stream: ExitStream| stream == ExitBinding::WGEXIT.stream();
+        let outbound = match (
+            wire.tag,
+            wire.protocol,
+            wire.send_through,
+            wire.settings,
+            wire.stream_settings,
+        ) {
+            (OutboundTag::Deny, OutboundProtocol::Blackhole, None, None, None) => Some(Self::Deny),
+            (OutboundTag::Exit, OutboundProtocol::Freedom, None, None, Some(stream))
+                if exit(stream) =>
             {
                 Some(Self::Exit(ExitBinding::WGEXIT))
             }
-            (OutboundTag::CamoHttp, OutboundProtocol::Freedom, Some(settings), None) => {
+            (
+                OutboundTag::UserExit(source),
+                OutboundProtocol::Freedom,
+                Some(through),
+                None,
+                Some(stream),
+            ) if exit(stream) && through == source.address() => {
+                Some(Self::UserExit(ExitBinding::WGEXIT, source))
+            }
+            (OutboundTag::CamoHttp, OutboundProtocol::Freedom, None, Some(settings), None) => {
                 camo(CamoPort::Http, settings)
             }
-            (OutboundTag::CamoQuic, OutboundProtocol::Freedom, Some(settings), None) => {
+            (OutboundTag::CamoQuic, OutboundProtocol::Freedom, None, Some(settings), None) => {
                 camo(CamoPort::Quic, settings)
             }
             _ => None,
         };
         outbound.ok_or(TextValueError(
-            "a deny blackhole, the wgexit exit or a camouflage redirect",
+            "a deny blackhole, the wgexit exit, a user's exit from its source or a camouflage redirect",
         ))
     }
 }
 
 /// `outbounds`: `deny` first, which makes it the default, then `exit`, then
-/// the camouflage redirects to the target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// each served user's exit in served order (design §11.8), then the
+/// camouflage redirects to the target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "Vec<XrayOutbound>", into = "Vec<XrayOutbound>")]
 pub(crate) struct XrayOutbounds {
     pub(crate) exit: ExitBinding,
+    /// The users' source addresses, one exit each, all distinct.
+    pub(crate) users: Vec<UserSource>,
     /// The target the camouflage outbounds redirect to, when camouflage
     /// forwarding is on.
     pub(crate) camo: Option<PublicIpv4>,
@@ -711,6 +806,12 @@ pub(crate) struct XrayOutbounds {
 impl From<XrayOutbounds> for Vec<XrayOutbound> {
     fn from(outbounds: XrayOutbounds) -> Self {
         let mut list = vec![XrayOutbound::Deny, XrayOutbound::Exit(outbounds.exit)];
+        list.extend(
+            outbounds
+                .users
+                .iter()
+                .map(|source| XrayOutbound::UserExit(outbounds.exit, *source)),
+        );
         if let Some(ip) = outbounds.camo {
             for port in [CamoPort::Http, CamoPort::Quic] {
                 list.push(XrayOutbound::CamoRedirect(CamoTarget { ip, port }));
@@ -724,29 +825,44 @@ impl TryFrom<Vec<XrayOutbound>> for XrayOutbounds {
     type Error = TextValueError;
 
     fn try_from(list: Vec<XrayOutbound>) -> Result<Self, Self::Error> {
-        match list.as_slice() {
-            [XrayOutbound::Deny, XrayOutbound::Exit(exit)] => Ok(Self {
-                exit: *exit,
-                camo: None,
-            }),
+        const SHAPE: &str = "deny, exit, each user's exit from a distinct source, then optionally camo-80-out and camo-u443-out to one target";
+        let [XrayOutbound::Deny, XrayOutbound::Exit(exit), rest @ ..] = list.as_slice() else {
+            return Err(TextValueError(SHAPE));
+        };
+        let users_end = rest
+            .iter()
+            .position(|outbound| !matches!(outbound, XrayOutbound::UserExit(..)))
+            .unwrap_or(rest.len());
+        let (user_exits, tail) = rest.split_at(users_end);
+        let mut users = Vec::with_capacity(user_exits.len());
+        for outbound in user_exits {
+            match outbound {
+                XrayOutbound::UserExit(binding, source)
+                    if binding == exit && !users.contains(source) =>
+                {
+                    users.push(*source);
+                }
+                _ => return Err(TextValueError(SHAPE)),
+            }
+        }
+        let camo = match tail {
+            [] => None,
             [
-                XrayOutbound::Deny,
-                XrayOutbound::Exit(exit),
                 XrayOutbound::CamoRedirect(http),
                 XrayOutbound::CamoRedirect(quic),
             ] if http.port == CamoPort::Http
                 && quic.port == CamoPort::Quic
                 && http.ip == quic.ip =>
             {
-                Ok(Self {
-                    exit: *exit,
-                    camo: Some(http.ip),
-                })
+                Some(http.ip)
             }
-            _ => Err(TextValueError(
-                "deny, exit, then optionally camo-80-out and camo-u443-out to one target",
-            )),
-        }
+            _ => return Err(TextValueError(SHAPE)),
+        };
+        Ok(Self {
+            exit: *exit,
+            users,
+            camo,
+        })
     }
 }
 
@@ -833,6 +949,8 @@ pub(crate) struct XrayInput<'a> {
     pub(crate) target: &'a TargetSpec,
     pub(crate) private_key: &'a RealityPrivateKey,
     pub(crate) served: &'a [Served],
+    /// Each served user's way out, in served order (design §11.8).
+    pub(crate) user_exits: &'a [UserExit],
     pub(crate) reach: &'a NodeReach,
     pub(crate) policy: &'a TrafficPolicy,
 }
@@ -852,6 +970,7 @@ pub(crate) fn config(input: &XrayInput<'_>) -> Result<XrayConfig, RenderError> {
         inbounds: inbounds(input)?,
         outbounds: XrayOutbounds {
             exit: ExitBinding::WGEXIT,
+            users: input.user_exits.iter().map(|exit| exit.source).collect(),
             camo: input.policy.camo_forward.then_some(input.target.ipv4()),
         },
         routing: XrayRouting {
@@ -1074,8 +1193,18 @@ fn rules(input: &XrayInput<'_>) -> Result<Vec<XrayRule>, RenderError> {
             ..XrayRule::to(OutboundTag::Deny)
         });
     }
+    // Each user leaves from its own source address (design §11.8), where
+    // the final rule sent every user to `exit`. The probe alone still
+    // leaves through `exit`, and a flow no rule names falls to `deny`, the
+    // first outbound.
+    for exit in input.user_exits {
+        rules.push(XrayRule {
+            user: Some(exit.emails.to_vec()),
+            ..XrayRule::to(OutboundTag::UserExit(exit.source))
+        });
+    }
     rules.push(XrayRule {
-        inbound_tag: Some(vec![RuleInbound::Reality, RuleInbound::Loopback]),
+        user: Some(probe),
         ..XrayRule::to(OutboundTag::Exit)
     });
     Ok(rules)

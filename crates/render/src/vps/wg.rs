@@ -6,8 +6,12 @@
 //! The `PostUp` lines enable `accept_local` (the in-chain probe's replies
 //! carry the VPS's own address as source) and steer device-bound sockets
 //! with an `oif` rule into table 77, whose only route is the default
-//! route through `wgexit`. The peer has no `Endpoint`: the Mac dials out
-//! and the VPS learns its address by roaming.
+//! route through `wgexit`. A `local` route makes every address of the users'
+//! source range (`198.18.0.0/15`, design §11.8) local while the tunnel
+//! exists, so Xray can bind each user's address; it goes with the
+//! interface, and a bind before it exists fails, so no user's flow leaves
+//! unattributed. The peer has no `Endpoint`: the Mac dials out and the VPS
+//! learns its address by roaming.
 //!
 //! The rule hooks are idempotent: wg-quick runs no `PreDown` for an `up`
 //! that fails after a hook (its exit trap only deletes the interface),
@@ -20,7 +24,7 @@
 //! (lon1, 2026-10-25).
 
 use ipnet::Ipv4Net;
-use mooring_agent_proto::{EXIT_ROUTE_TABLE, EXIT_RULE_PRIORITY};
+use mooring_agent_proto::{EXIT_ROUTE_TABLE, EXIT_RULE_PRIORITY, USER_SOURCE_NET};
 use mooring_model::keys::WgKey;
 use mooring_model::ports::Port;
 use mooring_model::secret::WgPrivateKey;
@@ -72,11 +76,12 @@ pub(crate) fn write(input: &WgExitInput<'_>, sink: &mut dyn TextSink) {
     sink.put("\nAllowedIPs = 0.0.0.0/0\n");
 }
 
-/// The routing hooks: the rule and the route added on up, removed on down.
-/// The rule's hooks test for it first (the module doc says why); `grep`
-/// reads its input to the end instead of quitting at the match, so `ip`
-/// never gets `SIGPIPE` under wg-quick's `pipefail`.
-fn hook_lines() -> [(&'static str, String); 4] {
+/// The routing hooks: the rule and the routes added on up, the rule and
+/// table 77 removed on down; the users' `local` route is removed with the
+/// interface. The rule's hooks test for it first (the module doc says
+/// why); `grep` reads its input to the end instead of quitting at the
+/// match, so `ip` never gets `SIGPIPE` under wg-quick's `pipefail`.
+fn hook_lines() -> [(&'static str, String); 5] {
     let listed =
         format!("^{EXIT_RULE_PRIORITY}:[[:space:]]*from all oif %i lookup {EXIT_ROUTE_TABLE}$");
     let rule = format!("pref {EXIT_RULE_PRIORITY} oif %i lookup {EXIT_ROUTE_TABLE}");
@@ -88,6 +93,10 @@ fn hook_lines() -> [(&'static str, String); 4] {
         (
             "PostUp",
             format!("ip -4 route replace default dev %i table {EXIT_ROUTE_TABLE}"),
+        ),
+        (
+            "PostUp",
+            format!("ip -4 route replace local {USER_SOURCE_NET} dev %i table local"),
         ),
         (
             "PreDown",
