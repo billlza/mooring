@@ -64,12 +64,12 @@ fn inactive_users_are_refused() {
         };
         parts.users[0].per_node = BTreeMap::new();
     });
+    // A suspension at expiry is no refusal: see the next test.
     let suspended: Vec<Deployment> = [
         SuspendReason::Operator,
         SuspendReason::QuotaExceeded {
             cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
         },
-        SuspendReason::Expired,
         SuspendReason::AbuseReview,
     ]
     .into_iter()
@@ -84,6 +84,33 @@ fn inactive_users_are_refused() {
         assert_eq!(error.kind(), ExportErrorKind::UserNotActive);
         assert!(matches!(error, ExportError::UserNotActive { user: ref u } if *u == user));
     }
+}
+
+/// A user suspended at expiry is exported, with exactly the file it has
+/// while active: no node serves it until a payment lifts the suspension,
+/// so a user added before their first payment (`user add --unpaid`) is
+/// given the file that serves once they have paid. The agreement is still
+/// required.
+#[test]
+fn a_user_suspended_at_expiry_is_exported_as_when_active() {
+    let fixture = two_nodes();
+    let user = first_user(&fixture);
+    let unpaid = edited(&fixture.deployment, |parts| {
+        parts.users[0]
+            .suspend(SuspendReason::Expired, FIXTURE_NOW)
+            .unwrap();
+        parts.users[0].policy.expires_at = Some(FIXTURE_NOW);
+    });
+    for format in [ExportFormat::SingBoxJson, ExportFormat::ClashYaml] {
+        let active = export(&fixture, &fixture.deployment, &user, format);
+        let suspended = export(&fixture, &unpaid, &user, format);
+        assert_eq!(suspended.expose_bytes(), active.expose_bytes());
+    }
+    let without_agreement = edited(&unpaid, |parts| parts.users[0].agreement = None);
+    assert_eq!(
+        refusal(&without_agreement, &user).kind(),
+        ExportErrorKind::AgreementNotAccepted
+    );
 }
 
 /// Decision F9: a file goes only to a user who accepted the agreement

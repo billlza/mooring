@@ -4,7 +4,8 @@
 //! against the fixture deployment and scripted node sessions: the window,
 //! the policy step's suspensions and resumes, the cap that holds a resume
 //! back, a clock that stepped back, the 13-month removal's boundary, a
-//! node that cannot be reached, and the log that names no user.
+//! node that cannot be reached, and the log that names no user. The
+//! hourly firings outside the window are `apply_hourly`'s.
 
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
@@ -29,9 +30,9 @@ use crate::daemon::deployed::ENGINES_DIRECTORY;
 use crate::error::EXIT_LOCAL;
 use crate::node::NodeError;
 
-const FIRST: &str = "fxuseraaab";
-const SECOND: &str = "fxuseraaac";
-const THIRD: &str = "fxuseraaad";
+pub(super) const FIRST: &str = "fxuseraaab";
+pub(super) const SECOND: &str = "fxuseraaac";
+pub(super) const THIRD: &str = "fxuseraaad";
 
 fn id(text: &str) -> UserId {
     UserId::parse(text).unwrap()
@@ -41,7 +42,7 @@ fn node(text: &str) -> NodeId {
     NodeId::parse(text).unwrap()
 }
 
-fn at(secs: u64) -> UnixTime {
+pub(super) fn at(secs: u64) -> UnixTime {
     UnixTime::from_secs(secs)
 }
 
@@ -59,7 +60,7 @@ fn unapplied(edit: impl FnOnce(&mut DeploymentParts)) -> Deployment {
 }
 
 /// `user` in `parts`.
-fn user<'p>(parts: &'p mut DeploymentParts, user: &str) -> &'p mut User {
+pub(super) fn user<'p>(parts: &'p mut DeploymentParts, user: &str) -> &'p mut User {
     parts
         .users
         .iter_mut()
@@ -77,18 +78,18 @@ fn revoke(parts: &mut DeploymentParts, text: &str, since: UnixTime) {
 /// A harness for the job: the deployed daemon's (the M7 pinned, the
 /// egress resolving to lo0, the fixture's secrets) with stand-in engines
 /// in the support directory, where the job takes them from.
-fn job(deployment: Deployment) -> Harness {
+pub(super) fn job(deployment: Deployment) -> Harness {
     let mut harness = deployed_with(deployment);
     let engines = harness.support_dir().join(ENGINES_DIRECTORY);
     stand_in_engines(&mut harness, &engines);
     harness
 }
 
-fn deployment(harness: &Harness) -> Deployment {
+pub(super) fn deployment(harness: &Harness) -> Deployment {
     store(harness).load().unwrap().deployment
 }
 
-fn status(harness: &Harness, text: &str) -> UserStatus {
+pub(super) fn status(harness: &Harness, text: &str) -> UserStatus {
     deployment(harness).users()[&id(text)].status
 }
 
@@ -100,12 +101,12 @@ fn log_path(harness: &Harness) -> PathBuf {
         .join("apply.log")
 }
 
-fn log(harness: &Harness) -> String {
+pub(super) fn log(harness: &Harness) -> String {
     fs::read_to_string(log_path(harness)).unwrap()
 }
 
 /// The node's `Hello` fails as ssh does when the node cannot be reached.
-fn unreachable(harness: &Harness) {
+pub(super) fn unreachable(harness: &Harness) {
     harness.nodes.expect(
         Expected::Request {
             identity: "ops_ed25519",
@@ -119,13 +120,16 @@ fn unreachable(harness: &Harness) {
     );
 }
 
-/// A firing outside 19:15 to 19:45 UTC, as launchd delivers one late after
-/// a sleep, does nothing: no state change, no node asked, no log; the
-/// window's edges are 19:15:00 in and 19:45:00 out.
+/// A firing outside 19:15 to 19:45 UTC that finds no suspension at expiry
+/// lifted by a payment does nothing: no state change, no node asked, no
+/// log, no lock; an active user whose expiry has passed is suspended only
+/// by the night's run, and an unpaid user stays suspended. The window's
+/// edges are 19:15:00 in and 19:45:00 out.
 #[test]
 fn a_firing_outside_the_window_does_nothing() {
     let mut harness = job(fixture(|parts| {
         user(parts, FIRST).policy.expires_at = Some(at(NOW - 86_400));
+        added_unpaid(parts, SECOND, at(NOW - 86_400));
         parts.config_generation = ConfigGeneration::new(2).unwrap();
     }));
     let before = state_bytes(&harness);
@@ -140,13 +144,13 @@ fn a_firing_outside_the_window_does_nothing() {
         assert_eq!(
             outcome.stdout,
             format!(
-                "apply: 2026-10-13 {clock} UTC is outside the apply window (19:15 to 19:45 UTC); nothing done\n"
+                "apply: 2026-10-13 {clock} UTC is outside the apply window (19:15 to 19:45 UTC), and no payment has lifted a suspension at expiry; nothing done\n"
             )
         );
         let outcome = harness.run(&["apply", "--pending", "--json"]);
         assert_eq!(
             outcome.stdout,
-            format!("{{\"version\":1,\"at\":{now},\"ran\":false}}\n")
+            format!("{{\"version\":2,\"at\":{now},\"ran\":false}}\n")
         );
     }
     assert_eq!(state_bytes(&harness), before);
@@ -474,6 +478,17 @@ fn only_a_lapsed_suspension_at_expiry_is_resumed_once_paid() {
     );
 }
 
+/// `text` as `user add --unpaid` added it at `since`: suspended at expiry,
+/// its expiry the time it was added.
+pub(super) fn added_unpaid(parts: &mut DeploymentParts, text: &str, since: UnixTime) {
+    let found = user(parts, text);
+    found.policy.expires_at = Some(since);
+    found.status = UserStatus::Suspended {
+        reason: SuspendReason::Expired,
+        since,
+    };
+}
+
 /// A paid month refunded in full counts until the time the portal recorded
 /// the refund (design §9.6): the user's paid time ends there, and the job,
 /// reading what the user may use as it always does, suspends them at
@@ -534,9 +549,10 @@ fn the_json_outcome_names_each_part() {
     assert_eq!(
         value,
         serde_json::json!({
-            "version": 1,
+            "version": 2,
             "at": NOW,
             "ran": true,
+            "form": "full",
             "policy": {"carried_out": {
                 "suspended": [{"user": FIRST, "reason": "expired"}],
                 "resumed": [],

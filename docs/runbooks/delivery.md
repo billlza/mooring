@@ -28,13 +28,14 @@ The last command must print `[Excluded]`.
    - The CFM build must be a 0.5-line release that has the mainland China direct switch (F10): CFM 0.5.0 (build 50030, tag `v0.5.0`, released 2026-10-18) or a later 0.5.x. The switch is `d828f92`; 0.5.0 is the first release with it.
    - Do not deliver a file to an older CFM. Without the switch, mainland sites fail, because the nodes deny `geoip:cn` and `geosite:cn` (§8.2).
 2. **Add the user.** `mooringctl user add`, typing the user's label at its prompt (never as an argument, which the shell history keeps), with the client line CFM 0.5 (`Cfm05`). A user without an alias gets one with `user alias <uid>`: files are named after the alias, never the label.
+   - A user who will pay at the portal and has not paid yet is added with `mooringctl user add --unpaid` (the operator's decision of 2026-11-14): suspended at expiry from the moment of the add, so no node serves them and the cap does not count them. Their file is exported and delivered as for any user (section 2). Once the portal's payment is pulled (every 5 minutes), the apply job's next hourly firing resumes them and applies their nodes, so they are served within about an hour of paying, with no step of yours (design §9.6, §13.6). Until then the console's Users screen shows them as **Suspended (expired)**, and they count among the suspended users of the console's alerts.
 3. **Hand over the two documents:** [user-onboarding.md](user-onboarding.md) and [user-agreement.md](user-agreement.md).
    - Send the text from each title on. The operator notes in the comment at the top are not for users.
    - They hold no secrets, but they describe the service, so they never cross WeChat, QQ or any other mainland-China service, encrypted or not. Hand them over in person by AirDrop (never on paper, which a search finds), or put them in an encrypted image of their own, made and sent as in section 4 with its own passphrase.
 4. **Get the user's acceptance on the call.**
    - On a FaceTime Audio call, the user says 「我已阅读并同意《Mooring 使用约定》第 N 版」, where N is the revision the build ships (`AgreementVersion::CURRENT`, now 1).
    - Then run `mooringctl user agree <uid>`. It records the revision and the UTC day, and takes neither as an argument. It is a bookkeeping record: it keeps the generation, so it needs no apply (§7).
-5. **Apply in the window.** `user add` changed the configuration, so every node the user holds needs `node apply` before the export. The apply restarts the engines and drops every user's connections for a few seconds, so run `node apply` yourself between 03:00 and 03:45 China time (19:00 to 19:45 UTC), before the nodes' 04:00 reboot; the nightly job that is to do it at 03:20 (§13.6) is not built yet. While no user is connected, as for the first users before the pilot starts, apply at any time. Deliver after the apply.
+5. **Apply in the window.** `user add` changed the configuration, so every node the user holds needs `node apply` before the export. The apply restarts the engines and drops every user's connections for a few seconds, so run `node apply` yourself between 03:00 and 03:45 China time (19:00 to 19:45 UTC), before the nodes' 04:00 reboot, or leave it to the nightly apply job at 03:20 (§13.6) and deliver the next day. While no user is connected, as for the first users before the pilot starts, apply at any time. For a user added with `--unpaid` the apply restarts nothing (no node serves the user yet), so run it at any time. Deliver after the apply.
 
 ## 2. Export
 
@@ -50,7 +51,7 @@ Refusals and what to do about each:
 
 | Refusal | Meaning | Action |
 |---|---|---|
-| `UserNotActive` | The user is suspended, being revoked or revoked | Resume the user, or stop: a revoked user gets nothing |
+| `UserNotActive` | The user is suspended for a reason other than expiry, being revoked or revoked (a user suspended at expiry, an unpaid one included, is exported) | Resume the user, or stop: a revoked user gets nothing |
 | `AgreementNotAccepted` | No agreement record, or a record of another revision; the message names the recorded revision | Hand over the current agreement text, take the acceptance on the call and run `user agree`. A record of a newer revision than the build ships means the build is older than the one that recorded it: upgrade, never record a lower revision |
 | `CapabilityUnsupported` | The user's client line does not accept a capability on the profile | Fix the user's client profile |
 | `NothingToExport` | The user holds no credentials | Add the user to a node |

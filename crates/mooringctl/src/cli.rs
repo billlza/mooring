@@ -84,8 +84,10 @@ pub(crate) enum Command {
     /// hour; it logs to ~/Library/Logs/Mooring/apply.log, by counts.
     #[command(group(clap::ArgGroup::new("when").required(true).args(["pending", "now"])))]
     Apply {
-        /// Run only between 19:15 and 19:45 UTC (03:15 to 03:45 Beijing
-        /// time), as launchd's hourly firing does; outside it, do nothing.
+        /// Run the whole job only between 19:15 and 19:45 UTC (03:15 to
+        /// 03:45 Beijing time), as launchd's hourly firing does; outside
+        /// it, only resume the users a payment has lifted a suspension at
+        /// expiry of, and then apply the nodes behind.
         #[arg(long)]
         pending: bool,
         /// Run at once, whatever the time.
@@ -100,9 +102,10 @@ pub(crate) enum Command {
 /// A user command.
 #[derive(Debug, Subcommand)]
 pub(crate) enum UserCommand {
-    /// Add an active user with fresh credentials on every node that is not
-    /// retiring. The label is asked at the terminal, never taken from an
-    /// argument; it stays on this Mac. Every node then needs `node apply`.
+    /// Add a user, active or (with --unpaid) suspended until paid, with
+    /// fresh credentials on every node that is not retiring. The label is
+    /// asked at the terminal, never taken from an argument; it stays on
+    /// this Mac. Every node then needs `node apply`.
     Add {
         /// The user's CFM line.
         #[arg(long, value_enum, default_value_t = ClientArg::Cfm05)]
@@ -111,6 +114,11 @@ pub(crate) enum UserCommand {
         /// (CFM 0.5 only).
         #[arg(long)]
         mlkem: bool,
+        /// Add the user suspended at expiry, its expiry now: no node serves
+        /// them until their payment is granted, and the apply job resumes
+        /// them within the hour after it. Their file can be exported before.
+        #[arg(long)]
+        unpaid: bool,
     },
     /// Give a user without one a random public alias (xxxx-xxxx), to quote
     /// instead of a name. Every node then needs `node apply`.

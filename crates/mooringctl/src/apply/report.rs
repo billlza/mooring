@@ -4,8 +4,13 @@
 //! standard output, which names users by id; the log's lines, which count
 //! users and name none (design §15.7: a log line can outlive the 13 months
 //! the agreement keeps a user's records); and, with `--json`, one JSON line
-//! (version 1): `{"version":1,"at":<secs>,"ran":false}` for a firing outside
-//! the window, otherwise `ran: true` with `policy`, `removals` and `nodes`.
+//! (version 2): `{"version":2,"at":<secs>,"ran":false}` for a firing outside
+//! the window that found nothing to resume, otherwise `ran: true` with
+//! `form`, `policy`, `removals` and `nodes`. The `form` is `full` for the
+//! whole job, and `expiry_resumes` for an hourly firing outside the window,
+//! whose `removals` is `null`, and whose `nodes` is `null` when it resumed
+//! no one and so applied no node. Version 1 had no `form`, and every run it
+//! reported was the whole job.
 
 use std::io::Write;
 
@@ -19,7 +24,7 @@ use crate::payments::notes::stamp;
 use crate::state::output;
 
 /// The version of the `--json` outcome.
-pub(crate) const OUTCOME_VERSION: u32 = 1;
+pub(crate) const OUTCOME_VERSION: u32 = 2;
 
 /// What refused the policy step, in words that name no user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -212,6 +217,12 @@ impl PolicyOutcome {
         }
     }
 
+    /// Whether a user was resumed, so that the nodes behind have someone
+    /// new to serve.
+    pub(crate) fn resumed_any(&self) -> bool {
+        matches!(self, Self::CarriedOut(done) if !done.resumed.is_empty())
+    }
+
     fn failures(&self) -> usize {
         match self {
             Self::Refused(_) => 1,
@@ -338,6 +349,34 @@ impl NodeOutcome {
     }
 }
 
+/// Which form of the job ran, and what it did after the policy step.
+#[derive(Debug)]
+pub(crate) enum Form {
+    /// The whole job, in the window or at the operator's `--now`.
+    Full {
+        /// The removals.
+        removals: Removals,
+        /// The applies of the nodes behind.
+        nodes: Vec<NodeOutcome>,
+    },
+    /// An hourly firing outside the window, which only resumes the
+    /// suspensions at expiry that a payment has lifted.
+    ExpiryResumes {
+        /// The applies of the nodes behind, made only once a user was
+        /// resumed: `None` when the firing resumed no one, so that a node
+        /// left behind otherwise waits for the night's run.
+        nodes: Option<Vec<NodeOutcome>>,
+    },
+}
+
+/// A form's name in the `--json` outcome.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FormName {
+    Full,
+    ExpiryResumes,
+}
+
 /// What one run did.
 #[derive(Debug)]
 pub(crate) struct Outcome {
@@ -345,10 +384,8 @@ pub(crate) struct Outcome {
     pub(crate) at: UnixTime,
     /// The policy step.
     pub(crate) policy: PolicyOutcome,
-    /// The removals.
-    pub(crate) removals: Removals,
-    /// The node applies.
-    pub(crate) nodes: Vec<NodeOutcome>,
+    /// Which form ran, and what it did after the policy step.
+    pub(crate) form: Form,
 }
 
 #[derive(Serialize)]
@@ -356,9 +393,10 @@ struct Ran<'a> {
     version: u32,
     at: UnixTime,
     ran: bool,
+    form: FormName,
     policy: &'a PolicyOutcome,
-    removals: &'a Removals,
-    nodes: &'a [NodeOutcome],
+    removals: Option<&'a Removals>,
+    nodes: Option<&'a [NodeOutcome]>,
 }
 
 #[derive(Serialize)]
@@ -372,32 +410,51 @@ impl Outcome {
     /// How many parts of the run failed: the policy step as a whole when it
     /// was refused, each change, removal and node apply that failed.
     pub(crate) fn failures(&self) -> usize {
+        let removals = match &self.form {
+            Form::Full { removals, .. } => removals.failures(),
+            Form::ExpiryResumes { .. } => 0,
+        };
         self.policy.failures()
-            + self.removals.failures()
+            + removals
             + self
-                .nodes
+                .nodes()
                 .iter()
                 .filter(|node| matches!(node.result, NodeResult::Failed { .. }))
                 .count()
+    }
+
+    /// The node applies made, if any.
+    fn nodes(&self) -> &[NodeOutcome] {
+        match &self.form {
+            Form::Full { nodes, .. } | Form::ExpiryResumes { nodes: Some(nodes) } => nodes,
+            Form::ExpiryResumes { nodes: None } => &[],
+        }
     }
 
     /// Writes the end of the report: each node's line and the summary, or
     /// the whole outcome as one JSON line.
     pub(crate) fn finish(&self, out: &mut dyn Write, json: bool) -> Result<(), CommandError> {
         if json {
+            let (form, removals, nodes) = match &self.form {
+                Form::Full { removals, nodes } => {
+                    (FormName::Full, Some(removals), Some(nodes.as_slice()))
+                }
+                Form::ExpiryResumes { nodes } => (FormName::ExpiryResumes, None, nodes.as_deref()),
+            };
             return json_line(
                 out,
                 &Ran {
                     version: OUTCOME_VERSION,
                     at: self.at,
                     ran: true,
+                    form,
                     policy: &self.policy,
-                    removals: &self.removals,
-                    nodes: &self.nodes,
+                    removals,
+                    nodes,
                 },
             );
         }
-        let mut lines: Vec<String> = self.nodes.iter().map(NodeOutcome::log_line).collect();
+        let mut lines: Vec<String> = self.nodes().iter().map(NodeOutcome::log_line).collect();
         lines.push(self.summary());
         write_lines(out, &lines, &[])
     }
@@ -412,25 +469,43 @@ impl Outcome {
                 done.kept.len(),
             ),
         };
-        let removed = match &self.removals {
-            Removals::Skipped => 0,
-            Removals::Done(done) => done.removed.len(),
-        };
-        let applied = self
-            .nodes
-            .iter()
-            .filter(|node| node.result == NodeResult::Applied)
-            .count();
-        format!(
-            "apply at {}: {suspended} suspended, {resumed} resumed, {held_back} held back, {kept} kept suspended, {removed} removed, {applied} of {} node(s) behind applied; {} failure(s)",
-            stamp(self.at),
-            self.nodes.len(),
-            self.failures()
-        )
+        let failures = self.failures();
+        let at = stamp(self.at);
+        match &self.form {
+            Form::Full { removals, nodes } => {
+                let removed = match removals {
+                    Removals::Skipped => 0,
+                    Removals::Done(done) => done.removed.len(),
+                };
+                format!(
+                    "apply at {at}: {suspended} suspended, {resumed} resumed, {held_back} held back, {kept} kept suspended, {removed} removed, {}; {failures} failure(s)",
+                    applied(nodes)
+                )
+            }
+            Form::ExpiryResumes { nodes } => {
+                let nodes = nodes.as_deref().map_or_else(
+                    || "no node applied, as no one was resumed".to_owned(),
+                    applied,
+                );
+                format!(
+                    "apply at {at}, outside the window: {resumed} resumed at expiry, {held_back} held back, {kept} kept suspended, {nodes}; {failures} failure(s)"
+                )
+            }
+        }
     }
 }
 
-/// Reports a firing outside the window, which does nothing.
+/// How many of the node applies made went through, in the summary's words.
+fn applied(nodes: &[NodeOutcome]) -> String {
+    let applied = nodes
+        .iter()
+        .filter(|node| node.result == NodeResult::Applied)
+        .count();
+    format!("{applied} of {} node(s) behind applied", nodes.len())
+}
+
+/// Reports a firing outside the window that found no suspension at expiry
+/// a payment has lifted, and did nothing.
 pub(crate) fn outside_window(
     out: &mut dyn Write,
     at: UnixTime,
@@ -449,7 +524,7 @@ pub(crate) fn outside_window(
     write_lines(
         out,
         &[format!(
-            "apply: {} is outside the apply window (19:15 to 19:45 UTC); nothing done",
+            "apply: {} is outside the apply window (19:15 to 19:45 UTC), and no payment has lifted a suspension at expiry; nothing done",
             stamp(at)
         )],
         &[],
