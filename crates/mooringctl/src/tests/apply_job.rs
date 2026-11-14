@@ -1172,7 +1172,9 @@ fn confirmed(deployment: &Deployment, text: &str) -> AppliedConfig {
 /// takes a new generation with nothing else changed, and every applied
 /// node is applied, as `node apply` applies it. The node that confirmed
 /// this build's bundle is sent that same bundle, which its agent answers
-/// `Unchanged`, restarting nothing; the other runs a transaction.
+/// `Unchanged`, restarting nothing; the other runs a transaction. What
+/// each node then confirmed is the bundle the step renders, so the next
+/// night's run finds no node to apply and makes no generation.
 #[test]
 fn a_node_on_another_builds_bundle_is_applied_in_the_window() {
     let before = at_generation(&["ams1"]);
@@ -1252,6 +1254,24 @@ fn a_node_on_another_builds_bundle_is_applied_in_the_window() {
         outcome.stdout
     );
     assert!(log(&harness).contains(&format!("mooringctl apply: {drift}\n")));
+
+    let after = state_bytes(&harness);
+    let asked = harness.nodes.seen.borrow().len();
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "spare users: 3 ready\n\
+         no node that confirmed the configuration generation is on another build's bundle\n\
+         apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, \
+         0 spare user(s) drawn, 0 of 0 node(s) behind applied; 0 failure(s)\n"
+    );
+    assert_eq!(
+        state_bytes(&harness),
+        after,
+        "the next night changes nothing"
+    );
+    assert_eq!(harness.nodes.seen.borrow().len(), asked, "and asks no node");
 }
 
 /// A run outside the window, the operator's `apply --now` by day, leaves a
