@@ -269,11 +269,37 @@ pub(crate) fn payments(env: &Env<'_>, out: &mut dyn Write, json: bool) -> Result
 pub(crate) fn entitlements(
     support: &Path,
 ) -> Result<mooring_daemon_core::payments::Entitlements, PaymentFileError> {
-    let rehearsal = settings(support)?
-        .as_ref()
-        .is_some_and(PullSettings::rehearsal);
-    Ok(ledger(support)?.map_or_else(
+    entitlements_known(support).map(|(paid, _)| paid)
+}
+
+/// What the users' paid orders give, as [`entitlements`] reads it, and how
+/// far the pull is known to reach, for the apply job's revocations at
+/// expiry: with the pull set up (connected to a portal), the last pull that
+/// succeeded, if any; without, no payment reaches Mooring.
+pub(crate) fn entitlements_known(
+    support: &Path,
+) -> Result<
+    (
+        mooring_daemon_core::payments::Entitlements,
+        mooring_daemon_core::apply::PaymentsKnown,
+    ),
+    PaymentFileError,
+> {
+    use mooring_daemon_core::apply::PaymentsKnown;
+    let settings = settings(support)?;
+    let ledger = ledger(support)?;
+    let rehearsal = settings.as_ref().is_some_and(PullSettings::rehearsal);
+    let paid = ledger.as_ref().map_or_else(
         mooring_daemon_core::payments::Entitlements::none,
         |ledger| ledger.entitlements(rehearsal),
-    ))
+    );
+    let known = if settings
+        .as_ref()
+        .is_some_and(|settings| settings.origin().is_some())
+    {
+        PaymentsKnown::Pulled(ledger.as_ref().and_then(PaymentLedger::pulled_at))
+    } else {
+        PaymentsKnown::NoPull
+    };
+    Ok((paid, known))
 }

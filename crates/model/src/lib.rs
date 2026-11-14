@@ -40,6 +40,7 @@ pub mod portal;
 pub mod ports;
 pub mod quota;
 pub mod removal;
+pub mod revocation;
 pub mod secret;
 pub mod sim;
 pub mod state;
@@ -82,6 +83,7 @@ pub use portal::{
 pub use ports::{HopInterval, Hy2Listener, Hy2Obfs, ListenerIdx, Port, PortPlan, PortRange};
 pub use quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
 pub use removal::{ForgottenUser, NODE_MONTH_TOTALS_DAYS, REVOKED_RETENTION_MONTHS};
+pub use revocation::{EXPIRED_REVOCATION_MONTHS, EXPIRY_REVOCATION_SINCE, ExpiryRevocation};
 pub use secret::{
     MAX_ROUTER_ADMIN_PASSWORD_BYTES, PORTAL_PULL_TOKEN_CHARS, PortalPullToken, RouterAdminPassword,
     Secret, SecretEntry, SecretKind, SecretKindMismatch, SecretMaterial, SecretRef, SecretSnapshot,

@@ -119,6 +119,20 @@ pub(crate) enum UserCommand {
         #[arg(value_name = "USER_ID")]
         user: UserId,
     },
+    /// End an active or suspended user's service for good: no node serves
+    /// it from the configuration this makes. Each node holding its
+    /// credentials commits the revocation when it is applied (the nightly
+    /// apply job, `apply --now` or `node apply`), and its credentials there
+    /// are then deleted from the keychain; a user holding none is revoked
+    /// at once. It cannot be undone, so it asks first.
+    Revoke {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// Do not ask before revoking.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Remove a revoked user at once, on the user's request, with its
     /// label, alias and agreement record; the daemon then deletes its usage
     /// history and payment orders. The bare id stays while a node may still

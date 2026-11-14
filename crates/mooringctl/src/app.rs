@@ -85,6 +85,10 @@ pub(crate) struct Env<'a> {
     /// How the payment pull reaches the portal (`/usr/bin/curl` in the
     /// binary).
     pub(crate) portal: &'a dyn crate::payments::PortalLink,
+    /// Which users the agreement lets the apply job revoke three months
+    /// after their service expired (`ExpiryRevocation::SHIPPED` in the
+    /// binary): none until a revision this build ships provides for it.
+    pub(crate) expiry_revocation: mooring_model::ExpiryRevocation,
 }
 
 /// The system clock, in whole seconds since the epoch.
@@ -122,6 +126,9 @@ pub(crate) fn run(
         }
         Command::User(UserCommand::Alias { user }) => crate::user::alias(env, out, &user),
         Command::User(UserCommand::Agree { user }) => crate::user::agree(env, out, &user),
+        Command::User(UserCommand::Revoke { user, yes }) => {
+            crate::user_revoke::revoke(env, out, &user, yes)
+        }
         Command::User(UserCommand::Forget { user, yes }) => {
             crate::user_forget::forget(env, out, &user, yes)
         }
@@ -398,9 +405,9 @@ fn execute(
     }
 }
 
-/// `daemon`: opens its log, which standard error then points at too, and
-/// runs it there; its last error, which [`run`] prints to `err`, lands in
-/// the log as well.
+/// `daemon`: opens its log, which standard error then points at too, says
+/// there which of the log's modes the open set back, and runs it there;
+/// its last error, which [`run`] prints to `err`, lands in the log as well.
 fn daemon(env: &mut Env<'_>) -> Result<(), CommandError> {
     let dir = crate::daemon::log::log_dir(env.home.clone())?;
     let mut log = crate::daemon::log::RotatingLog::open(
@@ -409,6 +416,10 @@ fn daemon(env: &mut Env<'_>) -> Result<(), CommandError> {
         crate::daemon::log::ROTATE_AT_BYTES,
         env.redirect_stderr,
     )?;
+    let restored: Vec<String> = log.restored().iter().map(|mode| mode.line()).collect();
+    for line in restored {
+        crate::daemon::say(&mut log, (env.clock)()?, &line)?;
+    }
     crate::daemon::run(env, &mut log)
 }
 

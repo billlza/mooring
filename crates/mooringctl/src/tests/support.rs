@@ -22,10 +22,10 @@ use mooring_daemon_core::meter::CounterReading;
 use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::status::PowerSource;
 use mooring_macsys::{DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
-use mooring_model::PortalAgreement;
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry, SecretMaterial, SecretRef};
 use mooring_model::time::UnixTime;
+use mooring_model::{ExpiryRevocation, PortalAgreement};
 use mooring_store::{
     InMemorySecretStore, RouterPin, SecretOp, SecretStore, SecretStoreError, Store,
     write_router_pin,
@@ -994,6 +994,9 @@ pub(crate) struct Harness {
     /// The seconds the clock advances at each reading: none unless a test
     /// sets them.
     pub(crate) clock_step: Cell<u64>,
+    /// Which users the apply job may revoke at expiry: the binary's gate,
+    /// closed, unless a test opens it.
+    pub(crate) expiry_revocation: ExpiryRevocation,
 }
 
 /// One request the payment pull made, as the portal saw it.
@@ -1078,6 +1081,7 @@ impl Harness {
             portal: FakePortal::default(),
             now: Cell::new(NOW),
             clock_step: Cell::new(0),
+            expiry_revocation: ExpiryRevocation::SHIPPED,
         }
     }
 
@@ -1218,6 +1222,7 @@ impl Harness {
             redirect_stderr: &redirect,
             portal_agreement: self.portal_agreement,
             portal: &self.portal,
+            expiry_revocation: self.expiry_revocation,
         };
         work(&mut env)
     }

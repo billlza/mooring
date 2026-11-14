@@ -365,6 +365,20 @@ pub(crate) enum LocalError {
         /// How many parts failed.
         failures: usize,
     },
+    /// The node applied and its confirmation is recorded, but recording a
+    /// revocation it settled, or deleting the keychain items of one, failed
+    /// for some users (design §13.5); the lines before say which. A
+    /// revocation not recorded stays pending, and the node's next apply or
+    /// the apply job's next run records it.
+    #[error(
+        "{node} is applied, but {failures} of the revocations it settled could not be recorded or left keychain items; the lines above say which"
+    )]
+    RevocationsNotRecorded {
+        /// The node applied.
+        node: NodeId,
+        /// How many revocations failed.
+        failures: usize,
+    },
     /// The exit site refused the interfaces resolved for it.
     #[error("the interfaces resolved for the exit were refused")]
     ExitSite(#[source] ModelError),
