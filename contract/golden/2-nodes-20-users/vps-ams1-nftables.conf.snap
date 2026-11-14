@@ -84,6 +84,9 @@ table inet mooring {
 		meta skuid "mooring-xray" ct direction original counter name xray_guard reject
 		meta skuid "mooring-hy2" ct direction original ip daddr 127.0.0.1 tcp dport 10443 accept
 		meta skuid "mooring-hy2" ct direction original counter name hy2_guard reject
+		meta skuid "root" ct direction original ip daddr 127.0.0.1 tcp dport 10085 accept
+		meta skuid "mooring-watch" ct direction original ip daddr 127.0.0.1 tcp dport 10085 accept
+		ct direction original ip daddr 127.0.0.1 tcp dport 10085 reject
 	}
 
 	chain exit_flow {
