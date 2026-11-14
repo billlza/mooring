@@ -187,14 +187,16 @@ fn cloud_init_golden_matches() {
     cloud_init_goldens().iter().for_each(Golden::assert);
 }
 
-/// A suspended user is in no VPS config, yet the state still references
-/// its secrets (design §7). The fixtures derive each user's credentials
-/// from its number alone, so suspending the second and third users of
-/// `1-node-3-users` must render exactly the `1-node-1-user` goldens:
-/// `xray.json`, `hy2.json` and `watch.json` (its accounting emails) lose
-/// both users, and the other files, which list no users, are unchanged.
+/// A suspended user is served nowhere, yet its node keeps it in the files
+/// its engines read at start, and the state still references its secrets
+/// (design §7, §13.6). The fixtures derive each user's credentials from
+/// its number alone, so suspending the second and third users of
+/// `1-node-3-users` leaves `hy2.json` and every file that lists no users
+/// as `1-node-3-users` has them; `watch.json` (its accounting emails) is
+/// exactly the `1-node-1-user` golden; and `xray.json` is the
+/// `1-node-3-users` golden with the clients of `1-node-1-user`.
 #[test]
-fn suspended_users_render_the_goldens_of_a_deployment_without_them() {
+fn suspended_users_stay_in_the_start_time_files_but_lose_their_clients() {
     let three = mooring_fixtures::one_node_three_users().unwrap();
     let lon1 = node("lon1");
     let suspended: Vec<_> = three.deployment.users().keys().skip(1).cloned().collect();
@@ -206,17 +208,33 @@ fn suspended_users_render_the_goldens_of_a_deployment_without_them() {
     });
     let rendered = bundle(&deployment, &lon1, &three.secrets, &engines()).unwrap();
     let before = vps(&three, &lon1);
+    let one = mooring_fixtures::one_node_one_user().unwrap();
+    let alone = vps(&one, &lon1);
     for (file, bytes) in rendered.files() {
-        Golden::managed("1-node-1-user", &lon1, file, bytes.expose_bytes()).assert();
-        let lists_users = matches!(
-            file,
-            ManagedFile::XrayConfig | ManagedFile::Hy2Config | ManagedFile::WatchConfig
-        );
-        assert_eq!(
-            bytes.expose_bytes() == before.file(file).expose_bytes(),
-            !lists_users,
-            "{file:?}"
-        );
+        let bytes = bytes.expose_bytes();
+        match file {
+            ManagedFile::WatchConfig => {
+                Golden::managed("1-node-1-user", &lon1, file, bytes).assert();
+                assert_ne!(bytes, before.file(file).expose_bytes());
+            }
+            ManagedFile::XrayConfig => {
+                let json =
+                    |bytes: &[u8]| -> serde_json::Value { serde_json::from_slice(bytes).unwrap() };
+                let (mut now, mut then, mut lone) = (
+                    json(bytes),
+                    json(before.file(file).expose_bytes()),
+                    json(alone.file(file).expose_bytes()),
+                );
+                for inbound in 0..2 {
+                    let clients = format!("/inbounds/{inbound}/settings/clients");
+                    let taken = now.pointer_mut(&clients).unwrap().take();
+                    assert_eq!(&taken, lone.pointer_mut(&clients).unwrap(), "{clients}");
+                    then.pointer_mut(&clients).unwrap().take();
+                }
+                assert_eq!(now, then, "only the clients differ");
+            }
+            _ => Golden::managed("1-node-3-users", &lon1, file, bytes).assert(),
+        }
     }
     let required = deployment.required_secrets();
     assert_eq!(required, three.deployment.required_secrets());

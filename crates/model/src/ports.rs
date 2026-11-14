@@ -431,7 +431,8 @@ pub struct SystemPorts {
     /// TCP REALITY and the UDP `camo-u443` forward; also the REALITY
     /// target's port.
     pub https: Port,
-    /// TCP on loopback, the Xray StatsService.
+    /// TCP on loopback, Xray's API: `StatsService` and, since 2026-11-14,
+    /// `HandlerService`.
     pub xray_stats: Port,
     /// TCP on loopback, Xray's `hy2-loop-in`.
     pub hy2_loopback: Port,

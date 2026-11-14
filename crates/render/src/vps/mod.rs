@@ -207,14 +207,15 @@ fn files(
 ) -> Result<Files, RenderError> {
     let id = &node.id;
     let NodeAddress::Public(vps4) = site.address;
-    let served = served::served(deployment, node, secrets)?;
+    let identities = served::identities(deployment, node, secrets)?;
     let reach = NodeReach::of(deployment)?;
     let policy = deployment.policy();
     let xray = xray::config(&xray::XrayInput {
         vps4,
         target,
         private_key: secrets.reality_private(id)?,
-        served: &served,
+        kept: &identities.kept,
+        served: &identities.served,
         reach: &reach,
         policy,
     })?;
@@ -234,7 +235,7 @@ fn files(
         listeners,
         certificate: &node.hy2.certificate,
         key: secrets.hy2_key(id)?,
-        served: &served,
+        kept: &identities.kept,
     });
     let wg = wg::WgExitInput {
         index: node.wg_index,
@@ -263,7 +264,11 @@ fn files(
         hy2: RenderedFile::new(encode::json(&hy2)?),
         wg: RenderedFile::new(encode::text(|sink| wg::write(&wg, sink))),
         nftables: RenderedFile::new(encode::text(|sink| nft::write(&nft, sink))),
-        watch: RenderedFile::new(encode::json(&watch::config(node, target, &served)?)?),
+        watch: RenderedFile::new(encode::json(&watch::config(
+            node,
+            target,
+            &identities.served,
+        )?)?),
         viewer_keys: RenderedFile::new(viewers::file(deployment.viewers())?),
     })
 }

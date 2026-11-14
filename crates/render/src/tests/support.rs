@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Shared test helpers: fixtures, an engine catalog, deployment edits and
-//! users added with freshly generated credentials.
+//! Shared test helpers: fixtures, an engine catalog, deployment edits, and
+//! users and spare users added with freshly generated credentials.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,6 +16,7 @@ use mooring_model::iface::{
 };
 use mooring_model::keys::Ed25519Pub;
 use mooring_model::secret::{SecretEntry, SecretMaterial, SecretRef, SecretSnapshot};
+use mooring_model::spare::SpareUser;
 use mooring_model::user::{
     ClientLine, ClientProfile, User, UserNodePublic, UserPolicy, UserStatus,
 };
@@ -78,9 +79,9 @@ pub(crate) fn edit(
     Deployment::try_from(parts).unwrap()
 }
 
-/// Adds an active CFM 0.5 user holding fresh credentials on every node the
-/// fixture's users hold credentials on; returns its id.
-pub(crate) fn add_user(fixture: &mut Fixture) -> UserId {
+/// Fresh credentials for a new id on every node of `fixture`, their
+/// secrets added to the fixture's; returns the id and its public part.
+fn fresh_credentials(fixture: &mut Fixture) -> (UserId, BTreeMap<NodeId, UserNodePublic>) {
     let id = credentials::user_id().unwrap();
     let nodes: BTreeSet<NodeId> = fixture.deployment.nodes().keys().cloned().collect();
     let mut per_node = BTreeMap::new();
@@ -112,8 +113,37 @@ pub(crate) fn add_user(fixture: &mut Fixture) -> UserId {
                 .unwrap();
         }
     }
-    let user = User {
-        id: id.clone(),
+    (id, per_node)
+}
+
+/// Adds an active CFM 0.5 user holding fresh credentials on every node of
+/// the fixture; returns its id.
+pub(crate) fn add_user(fixture: &mut Fixture) -> UserId {
+    let (id, per_node) = fresh_credentials(fixture);
+    fixture.deployment = edit(&fixture.deployment, |parts| {
+        parts.users.push(taken(id.clone(), per_node));
+    });
+    id
+}
+
+/// Adds a spare user holding fresh credentials on every node of the
+/// fixture; returns its id.
+pub(crate) fn add_spare(fixture: &mut Fixture) -> UserId {
+    let (id, per_node) = fresh_credentials(fixture);
+    fixture.deployment = edit(&fixture.deployment, |parts| {
+        parts.spares.push(SpareUser {
+            id: id.clone(),
+            per_node,
+        });
+    });
+    id
+}
+
+/// The active CFM 0.5 user `id` holding `per_node`, as `user add` makes
+/// one, from a spare or with fresh credentials.
+pub(crate) fn taken(id: UserId, per_node: BTreeMap<NodeId, UserNodePublic>) -> User {
+    User {
+        id,
         label: LocalLabel::parse("Added user").unwrap(),
         client: ClientProfile {
             line: ClientLine::Cfm05,
@@ -124,9 +154,7 @@ pub(crate) fn add_user(fixture: &mut Fixture) -> UserId {
         policy: UserPolicy::NONE,
         alias: None,
         agreement: None,
-    };
-    fixture.deployment = edit(&fixture.deployment, |parts| parts.users.push(user));
-    id
+    }
 }
 
 /// Gives `fixture` a separate tunnel uplink (`en0`) beside its egress.

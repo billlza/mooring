@@ -6,6 +6,7 @@ mod bookkeeping;
 mod credentials;
 mod goldens;
 mod invariants;
+mod opening;
 mod properties;
 mod refusals;
 mod roundtrip;

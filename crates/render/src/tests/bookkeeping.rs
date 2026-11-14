@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use mooring_agent_proto::ManagedFile;
 use mooring_export::{ExportFormat, export_user};
 use mooring_fixtures::{FIXTURE_NOW, Fixture};
 use mooring_model::node::{AppliedConfig, NodeLifecycle};
@@ -274,9 +275,10 @@ fn recording_the_carrier_changes_no_bundle_and_no_export() {
 }
 
 /// Suspending a user is not bookkeeping: every bundle the user was served
-/// in changes, exactly as if the user were gone, so it bumps the
-/// generation. The user's credentials stay referenced, so resuming renders
-/// the original bundles and exports again.
+/// in changes, so it bumps the generation. The node keeps the user in the
+/// files its engines read at start (design §13.6), so those are unchanged,
+/// and the user's credentials stay referenced; resuming renders the
+/// original bundles and exports again.
 #[test]
 fn suspending_a_user_changes_the_bundles_and_resuming_restores_them() {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
@@ -289,18 +291,32 @@ fn suspending_a_user_changes_the_bundles_and_resuming_restores_them() {
     });
     let during = rendered(&fixture, &suspended);
     assert_eq!(during.bundles.len(), before.bundles.len());
+    let catalog = engines();
     for (node, digest) in &before.bundles {
         assert_ne!(
             &during.bundles[node], digest,
             "{node} still serves the user"
         );
+        let file = |deployment: &Deployment, file: ManagedFile| {
+            bundle(deployment, node, &fixture.secrets, &catalog)
+                .unwrap()
+                .file(file)
+                .expose_bytes()
+                .to_vec()
+        };
+        assert_eq!(
+            file(&suspended, ManagedFile::Hy2Config),
+            file(&fixture.deployment, ManagedFile::Hy2Config),
+            "{node} keeps the user"
+        );
+        assert_ne!(
+            file(&suspended, ManagedFile::XrayConfig),
+            file(&fixture.deployment, ManagedFile::XrayConfig),
+            "{node} has the user's clients"
+        );
     }
     assert!(during.exports.keys().all(|(id, _)| *id != user));
     assert_eq!(during.exports.len(), before.exports.len() - 2);
-    let without = edit(&fixture.deployment, |parts| {
-        parts.users.remove(0);
-    });
-    assert_eq!(during.bundles, rendered(&fixture, &without).bundles);
     assert_eq!(
         suspended.required_secrets(),
         fixture.deployment.required_secrets()
