@@ -32,7 +32,9 @@ use crate::keychain::CommandSecrets;
 const PLENTY: Duration = Duration::from_secs(60);
 
 /// The wait of the tests whose reads are held: short, so the test does
-/// not wait long for the store to give up.
+/// not wait long for the store to give up. Their reads that are not held
+/// are taken with [`answered`], since a loaded machine may answer them
+/// after so short a wait.
 const SHORT: Duration = Duration::from_millis(50);
 
 /// A keychain whose held reads wait until the test releases them, and
@@ -138,9 +140,9 @@ fn unanswered(secret_ref: SecretRef) -> SecretStoreError {
     SecretStoreError::Unanswered { secret_ref }
 }
 
-/// What `get` gives once the waiting read of `secret_ref` has its answer:
-/// until then each `get` is `Unanswered` (for at most 5 s).
-fn answer_after_release(
+/// What `get` gives once the keychain has answered the read of
+/// `secret_ref`: until then each `get` is `Unanswered` (for at most 5 s).
+fn answered(
     store: &DaemonSecrets<InMemorySecretStore>,
     secret_ref: &SecretRef,
 ) -> Result<SecretMaterial, SecretStoreError> {
@@ -234,7 +236,7 @@ fn a_read_not_answered_within_the_wait_goes_on_and_its_answer_is_the_next_reads(
     assert_eq!(keychain.begun(), [SecretRef::RouterAdmin]);
     keychain.release(&SecretRef::RouterAdmin);
     assert_eq!(
-        password_text(answer_after_release(&store, &SecretRef::RouterAdmin)),
+        password_text(answered(&store, &SecretRef::RouterAdmin)),
         PASSWORD
     );
     assert_eq!(keychain.begun(), [SecretRef::RouterAdmin]);
@@ -245,7 +247,8 @@ fn a_read_not_answered_within_the_wait_goes_on_and_its_answer_is_the_next_reads(
     );
 }
 
-/// One reference's waiting read holds up no other reference's.
+/// One reference's waiting read holds up no other reference's: the other
+/// is answered while the first still waits.
 #[test]
 fn a_waiting_read_holds_up_no_other_reference() {
     let keychain = with_password();
@@ -255,7 +258,14 @@ fn a_waiting_read_holds_up_no_other_reference() {
         store.get(&SecretRef::PortalPullToken).unwrap_err(),
         unanswered(SecretRef::PortalPullToken)
     );
-    assert_eq!(password_text(store.get(&SecretRef::RouterAdmin)), PASSWORD);
+    assert_eq!(
+        password_text(answered(&store, &SecretRef::RouterAdmin)),
+        PASSWORD
+    );
+    assert_eq!(
+        store.get(&SecretRef::PortalPullToken).unwrap_err(),
+        unanswered(SecretRef::PortalPullToken)
+    );
     keychain.release_all();
 }
 
@@ -280,11 +290,14 @@ fn a_read_whose_thread_ends_without_an_answer_fails_and_the_next_reads_again() {
     );
     keychain.release(&SecretRef::RouterAdmin);
     assert_eq!(
-        answer_after_release(&store, &SecretRef::RouterAdmin).unwrap_err(),
+        answered(&store, &SecretRef::RouterAdmin).unwrap_err(),
         ended
     );
     keychain.panicking.lock().unwrap().clear();
-    assert_eq!(password_text(store.get(&SecretRef::RouterAdmin)), PASSWORD);
+    assert_eq!(
+        password_text(answered(&store, &SecretRef::RouterAdmin)),
+        PASSWORD
+    );
     assert_eq!(keychain.begun().len(), 3);
 }
 
