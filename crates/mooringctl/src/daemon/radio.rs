@@ -24,7 +24,8 @@ use mooring_store::{Pruned, append_radio_line, prune_radio_days};
 
 use crate::error::{CommandError, LocalError};
 
-use super::{chain, say};
+use super::chain;
+use super::noted::Noted;
 
 /// How many day files are kept: the newest 90, which is 90 days when the
 /// daemon runs every day (count-based, so a clock that steps forward costs
@@ -33,45 +34,6 @@ pub(crate) const RADIO_HISTORY_DAYS: u32 = 90;
 
 /// [`RADIO_HISTORY_DAYS`] as the store counts files.
 const KEEP_FILES: usize = RADIO_HISTORY_DAYS as usize;
-
-/// A condition logged once while it lasts, and once when it ends.
-#[derive(Debug, Default)]
-struct Noted {
-    text: Option<String>,
-}
-
-impl Noted {
-    /// The condition holds with `text`: logged as `what: text` unless the
-    /// same text was logged already.
-    fn holds(
-        &mut self,
-        log: &mut dyn Write,
-        now: UnixTime,
-        what: &str,
-        text: String,
-    ) -> Result<(), CommandError> {
-        if self.text.as_deref() != Some(text.as_str()) {
-            say(log, now, &format!("{what}: {text}"))?;
-            self.text = Some(text);
-        }
-        Ok(())
-    }
-
-    /// The condition no longer holds: `said` is logged if it did.
-    fn ended(
-        &mut self,
-        log: &mut dyn Write,
-        now: UnixTime,
-        said: Option<&str>,
-    ) -> Result<(), CommandError> {
-        if self.text.take().is_some()
-            && let Some(said) = said
-        {
-            say(log, now, said)?;
-        }
-        Ok(())
-    }
-}
 
 /// The writer: what it carries from one poll to the next.
 #[derive(Debug, Default)]

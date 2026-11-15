@@ -123,6 +123,19 @@ impl CalendarDate {
         if days > MAX_DAYS_SINCE_EPOCH {
             return Err(ModelError::InvalidDate);
         }
+        Ok(Self::civil_from_days(days))
+    }
+
+    /// The date `days` earlier, or 1970-01-01 when that is earlier still.
+    #[must_use]
+    pub const fn saturating_sub_days(self, days: u32) -> Self {
+        // At most this date's own number, so never past 9999-12-31.
+        Self::civil_from_days(self.days_since_epoch().saturating_sub(days))
+    }
+
+    /// The date `days` after 1970-01-01, for `days` at most
+    /// [`MAX_DAYS_SINCE_EPOCH`], which the callers check or bound.
+    const fn civil_from_days(days: u32) -> Self {
         let shifted = days as u64 + EPOCH_SHIFT_DAYS;
         let era = shifted / DAYS_PER_ERA;
         let day_of_era = shifted - era * DAYS_PER_ERA;
@@ -139,11 +152,11 @@ impl CalendarDate {
         let year = year_of_era + era * 400 + if month <= 2 { 1 } else { 0 };
         // Bounded by MAX_DAYS_SINCE_EPOCH: the year is 1970..=9999, the
         // month 1..=12 and the day a real day of that month.
-        Ok(Self {
+        Self {
             year: year as u16,
             month: month as u8,
             day: day as u8,
-        })
+        }
     }
 
     /// The UTC date of `time`: the day whose UTC midnight is the latest one
@@ -393,6 +406,40 @@ mod tests {
         assert_eq!(date("2026-10-01").first_of_month(), date("2026-10-01"));
     }
 
+    #[test]
+    fn days_are_taken_away_down_to_the_epoch() {
+        let date = |text: &str| CalendarDate::parse(text).unwrap();
+        assert_eq!(
+            date("2026-03-01").saturating_sub_days(1),
+            date("2026-02-28")
+        );
+        assert_eq!(
+            date("2028-03-01").saturating_sub_days(1),
+            date("2028-02-29")
+        );
+        assert_eq!(
+            date("2027-01-01").saturating_sub_days(1),
+            date("2026-12-31")
+        );
+        assert_eq!(
+            date("2027-10-09").saturating_sub_days(366),
+            date("2026-10-08")
+        );
+        assert_eq!(
+            date("2026-11-15").saturating_sub_days(0),
+            date("2026-11-15")
+        );
+        let epoch = date("1970-01-01");
+        assert_eq!(date("1970-01-02").saturating_sub_days(1), epoch);
+        assert_eq!(date("1970-01-02").saturating_sub_days(2), epoch);
+        assert_eq!(
+            CalendarDate::new(9999, 12, 31)
+                .unwrap()
+                .saturating_sub_days(u32::MAX),
+            epoch
+        );
+    }
+
     proptest! {
         #[test]
         fn day_numbers_round_trip_and_count_up_by_one(days in 0..MAX_DAYS_SINCE_EPOCH) {
@@ -401,6 +448,7 @@ mod tests {
             let next = CalendarDate::from_days_since_epoch(days + 1).unwrap();
             prop_assert!(date < next);
             prop_assert_eq!(date.checked_add_days(1).unwrap(), next);
+            prop_assert_eq!(next.saturating_sub_days(1), date);
             // The next day is the next day of the month, or the first of the
             // next month.
             if next.day() == 1 {

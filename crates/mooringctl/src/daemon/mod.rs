@@ -19,8 +19,11 @@
 
 pub(crate) mod capacity;
 pub(crate) mod deployed;
+pub(crate) mod events;
 pub(crate) mod hub;
 pub(crate) mod log;
+pub(crate) mod node_events;
+pub(crate) mod noted;
 pub(crate) mod peer;
 pub(crate) mod pending;
 pub(crate) mod radio;
@@ -66,8 +69,9 @@ pub(crate) const POLL_INTERVAL: Duration = Duration::from_secs(60);
 /// How often the daemon's loops do what they do on a timer (design §10.1):
 /// the deployed loop's tick, the polls of the M7 and of the nodes, the
 /// longest the console goes without a new status, the power helper's
-/// restart, the SIM meter's readings and writes, and the writes of the
-/// record of direct-probe round trips. The daemon runs on
+/// restart, the SIM meter's readings and writes, the writes of the record
+/// of direct-probe round trips, and the reads of the nodes' event
+/// journals. The daemon runs on
 /// [`Intervals::DAEMON`]; the tests shorten them instead of waiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Intervals {
@@ -90,6 +94,8 @@ pub(crate) struct Intervals {
     /// The longest a change to the record of direct-probe round trips
     /// waits to be written.
     pub(crate) round_trips_persist: Duration,
+    /// Each node's event journal's read, and the wait before the first.
+    pub(crate) node_events: Duration,
 }
 
 impl Intervals {
@@ -104,6 +110,7 @@ impl Intervals {
         meter_tick: METER_TICK,
         meter_persist: PERSIST_EVERY,
         round_trips_persist: Duration::from_secs(600),
+        node_events: Duration::from_secs(300),
     };
 }
 

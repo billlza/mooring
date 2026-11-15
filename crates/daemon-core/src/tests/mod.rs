@@ -11,6 +11,7 @@ mod canary;
 mod collected_usage;
 mod control;
 mod egress_rates;
+mod events;
 mod exit;
 mod forgotten_usage;
 mod lifetime_origin;
