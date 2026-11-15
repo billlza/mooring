@@ -496,7 +496,8 @@ fn traffic_counts_in_its_billing_cycle_alone() {
 /// A refund in full moves a make-up's period earlier as it moves any
 /// period that follows the time it takes back, and the periods that follow
 /// the make-up with it; the next make-up builds on the moved ones, with the
-/// quota of the period that ends last, which may be a make-up's.
+/// quota of the period that ends last, which may be a make-up's. Traffic
+/// made up has no period, and no refund moves it.
 #[test]
 fn a_refund_in_full_moves_a_make_up_and_what_follows_it() {
     let now = NOW.as_secs();
@@ -541,6 +542,7 @@ fn a_refund_in_full_moves_a_make_up_and_what_follows_it() {
         made.record.gift,
         period(now + 37 * DAY, now + 39 * DAY, 200)
     );
+    let made = make_up(&made.ledger, &a, traffic(5), now + 3 * HOUR).unwrap();
     // The first month is refunded in full ten days in: the refunded month,
     // both make-ups and what follows them move as much earlier.
     let (ledger, _) = step(&made.ledger, month_of(C, 100).grant(4), now + 3 * HOUR);
@@ -584,6 +586,16 @@ fn a_refund_in_full_moves_a_make_up_and_what_follows_it() {
     assert_eq!(
         own.period_at(secs(now + 18 * DAY)).unwrap().granted,
         Granted::MakeUp(number(2))
+    );
+    assert_eq!(
+        own.packs(),
+        [PaidPack {
+            granted: Granted::MakeUp(number(3)),
+            granted_at: secs(now + 3 * HOUR),
+            bytes: bytes(5),
+            livemode: true,
+            refund: None,
+        }]
     );
 }
 

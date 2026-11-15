@@ -15,7 +15,9 @@
 //! came, whether it was recorded is not known, and the command says so
 //! rather than guess ([`LocalError::MakeUpUnanswered`]); `portal payments`
 //! lists every make-up recorded. A daemon it could not reach heard
-//! nothing, and is reported as such.
+//! nothing, and is reported as such. A make-up recorded whose line cannot
+//! be written is reported as recorded ([`LocalError::MadeUpUnsaid`]), so
+//! that no one asks for it again.
 
 use std::io::Write;
 use std::num::{NonZeroU32, NonZeroU64};
@@ -88,7 +90,10 @@ pub(crate) fn make_up(
                 "recorded {}; the console shows it from the daemon's next status, and the portal once `portal export` is imported there again; no node apply is needed",
                 made_up(&record, suspended)
             )
-            .map_err(output)?;
+            .map_err(|source| LocalError::MadeUpUnsaid {
+                number: record.number,
+                source,
+            })?;
             Ok(())
         }
         DaemonReply::Refused { reason } => Err(LocalError::DaemonRefused { reason }.into()),

@@ -30,7 +30,7 @@ use mooring_daemon_core::payments::{
 use mooring_model::ids::PublicAlias;
 use mooring_model::user::SuspendReason;
 use mooring_model::{Deployment, UnixTime, UserId, UserStatus};
-use mooring_store::{PAYMENT_LEDGER_FILE, PAYMENTS_DIRECTORY, write_payment_ledger};
+use mooring_store::{PAYMENT_LEDGER_FILE, PAYMENTS_DIRECTORY, STATE_FILE, write_payment_ledger};
 
 use super::daemon::Running;
 use super::deployed::{CARRIER, deployed_with, statuses, with_exit_on};
@@ -38,13 +38,13 @@ use super::payments::{FIRST, SECOND, connect, grant, harness, ledger_on_disk, pa
 use super::sim_accept::{
     BRIEF, DEADLINE, PATIENT, changed, daemon_answering, deployed_control, files_under, reply,
 };
-use super::support::{Harness, NOW};
+use super::support::{FailingLog, Harness, NOW, Refusing};
 use super::user::{fixture, holding};
 use crate::cli::Cli;
 use crate::daemon::deployed::{self, Stopped};
 use crate::daemon::serve::{End, Limits, MAX_CLIENTS, serve};
 use crate::daemon::{Control, Handover, Intervals, MakeUpOutcome, MakeUpRequest, RunPaths};
-use crate::error::{EXIT_LOCAL, EXIT_USAGE, LocalError};
+use crate::error::{CommandError, EXIT_LOCAL, EXIT_USAGE, LocalError};
 use crate::payments::notes::{made_up, stamp};
 use crate::payments::pull::{Gate, Puller};
 use crate::prompt::Answer;
@@ -467,6 +467,61 @@ fn the_served_loop_answers_a_make_up_that_waits() {
     assert_eq!(ledger_on_disk(&harness).unwrap().make_ups().len(), 1);
 }
 
+/// A state the loop cannot read when it comes to a make-up stops it with
+/// that error, as a tick's does: nothing is recorded, and the connection
+/// that asked hears no decision.
+#[test]
+fn a_state_the_loop_cannot_read_stops_it_and_records_nothing() {
+    let mut harness = deployed_with(fixture(|_| {}));
+    write_ledger(&harness, &month_for_first());
+    let support = harness.support_dir();
+    let (result, before, after, heard) =
+        with_exit_on(&mut harness, Intervals::DAEMON, |exit, log| {
+            fs::write(support.join(STATE_FILE), b"{}").unwrap();
+            let before = files_under(&support);
+            let (requests, waiting) = mpsc::channel();
+            let (request, heard) = asking(FIRST, days(7), Asker::Waits);
+            requests.send(request).unwrap();
+            let result = exit.make_ups(log, &waiting);
+            (
+                result,
+                before,
+                files_under(&support),
+                heard.unwrap().result(),
+            )
+        });
+    assert!(
+        matches!(result, Err(CommandError::Local(LocalError::StateRead(_)))),
+        "{result:?}"
+    );
+    assert_eq!(heard, (Err(mpsc::RecvTimeoutError::Disconnected), None));
+    assert_eq!(changed(&before, &after), Vec::<PathBuf>::new());
+}
+
+/// A log that refuses the make-up's line stops the loop with that error,
+/// as any line the disk no longer takes does; by then the make-up is
+/// recorded, and the connection that asked has heard it.
+#[test]
+fn a_log_that_refuses_the_make_ups_line_stops_the_loop_once_it_is_recorded() {
+    let mut harness = deployed_with(fixture(|_| {}));
+    write_ledger(&harness, &month_for_first());
+    let (result, heard) = with_exit_on(&mut harness, Intervals::DAEMON, |exit, _| {
+        let (requests, waiting) = mpsc::channel();
+        let (request, heard) = asking(FIRST, days(7), Asker::Waits);
+        requests.send(request).unwrap();
+        let mut log = FailingLog::at("make-up 1");
+        let result = exit.make_ups(&mut log, &waiting);
+        assert!(log.failed());
+        (result, heard.unwrap().result())
+    });
+    assert!(
+        matches!(result, Err(CommandError::Local(LocalError::Output(_)))),
+        "{result:?}"
+    );
+    assert_eq!(heard, (Ok(Ok(())), Some(Ok(Ok((week_for_first(), None))))));
+    assert_eq!(ledger_on_disk(&harness).unwrap().make_ups().len(), 1);
+}
+
 // --- The connection -----------------------------------------------------
 
 /// The request for a week for [`FIRST`], for an outage.
@@ -675,6 +730,21 @@ fn a_write_whose_outcome_does_not_come_leaves_the_client_without_a_reply() {
     assert!(request.recorded.send(Ok((week_for_first(), None))).is_err());
 }
 
+/// A client that leaves while the loop records its make-up gets no reply,
+/// and its connection ends as one whose client left; the make-up stays
+/// recorded. So a command interrupted once it has asked cannot tell
+/// whether its make-up was recorded.
+#[test]
+fn a_client_that_leaves_before_the_reply_has_left() {
+    let (control, asked) = deployed_control();
+    let (reader, served) = asked_to_make_up(&control, PATIENT);
+    let request = asked.make_ups.recv_timeout(DEADLINE).unwrap();
+    drop(reader);
+    assert!(request.decided.send(Ok(())).is_ok());
+    assert!(request.recorded.send(Ok((week_for_first(), None))).is_ok());
+    assert_eq!(served.result(), End::ClientLeft);
+}
+
 /// A loop that has ended, before the request, with it in hand, or after
 /// its decision, ends the connection without a reply.
 #[test]
@@ -864,6 +934,47 @@ fn an_answer_other_than_yes_sends_the_daemon_nothing() {
         assert_eq!(outcome.stderr, stderr);
         assert_eq!(harness.console.asked, [QUESTION]);
     }
+}
+
+/// Output that cannot be written stops the command before it asks or
+/// sends anything. Once the daemon has recorded the make-up, the command
+/// says that it was recorded, by its number, even when it cannot print
+/// it, so that no one asks for it again.
+#[test]
+fn output_that_cannot_be_written_is_said_before_and_after_the_make_up() {
+    let args = [
+        "user", "make-up", FIRST, "--days", "7", "--reason", "outage",
+    ];
+    let mut harness = command_harness(fixture(|_| {}));
+    let mut err = Vec::new();
+    // No daemon listens: the command never gets as far as asking for one.
+    let code = harness.run_to(&args, &mut Refusing, &mut err);
+    assert_eq!(code, EXIT_LOCAL);
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "mooringctl: writing the output failed\n  caused by: broken pipe\n"
+    );
+    assert!(harness.console.asked.is_empty());
+
+    let mut harness = command_harness(fixture(|_| {}));
+    let daemon = daemon_answering(
+        &harness,
+        vec![DaemonReply::MadeUp {
+            record: week_for_first(),
+            suspended: None,
+        }],
+    );
+    harness.console.answers.push_back(Answer::Yes);
+    let mut out = FailingLog::at("recorded ");
+    let mut err = Vec::new();
+    let code = harness.run_to(&args, &mut out, &mut err);
+    assert_eq!(daemon.result(), [WEEK]);
+    assert_eq!(code, EXIT_LOCAL);
+    assert_eq!(String::from_utf8(out.kept).unwrap(), DESCRIBED);
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "mooringctl: make-up 1 was recorded, but writing the output failed; `mooringctl portal payments` lists it, so do not ask for it again\n  caused by: no space left for the log\n"
+    );
 }
 
 /// A user the deployment does not hold, or one being revoked or revoked,

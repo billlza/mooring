@@ -15,6 +15,7 @@ use mooring_daemon_core::RadioHistoryError;
 use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::MeterError;
+use mooring_daemon_core::payments::MakeUpNumber;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_daemon_core::sim_network::NotAccepted;
 use mooring_daemon_core::snapshot::SnapshotError;
@@ -640,6 +641,18 @@ pub(crate) enum LocalError {
         /// What came instead of the answer.
         #[source]
         source: Box<LocalError>,
+    },
+    /// The daemon recorded the make-up, and the command could not write
+    /// the line that says so: it was recorded all the same.
+    #[error(
+        "make-up {number} was recorded, but writing the output failed; `mooringctl portal payments` lists it, so do not ask for it again"
+    )]
+    MadeUpUnsaid {
+        /// The make-up's number.
+        number: MakeUpNumber,
+        /// Why the line could not be written.
+        #[source]
+        source: io::Error,
     },
     /// The daemon sent nothing for longer than a poll takes.
     #[error("the daemon sent no status for {secs} s")]

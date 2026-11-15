@@ -220,6 +220,15 @@ fn a_link_where_the_state_belongs_is_not_no_deployment() {
         &["user", "agree", "abcdefghij"][..],
         &["user", "alias", "abcdefghij"][..],
         &["user", "add"][..],
+        &[
+            "user",
+            "make-up",
+            "abcdefghij",
+            "--days",
+            "1",
+            "--reason",
+            "outage",
+        ][..],
     ] {
         let outcome = harness.run(args);
         assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
@@ -247,6 +256,15 @@ fn every_user_command_without_a_state_says_there_is_no_deployment() {
             &["user", "agree", "abcdefghij"][..],
             &["user", "alias", "abcdefghij"][..],
             &["user", "add"][..],
+            &[
+                "user",
+                "make-up",
+                "abcdefghij",
+                "--days",
+                "1",
+                "--reason",
+                "outage",
+            ][..],
             &[
                 "user",
                 "export",
