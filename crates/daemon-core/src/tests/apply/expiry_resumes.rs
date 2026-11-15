@@ -138,8 +138,11 @@ fn an_hourly_firing_tries_only_suspensions_at_expiry_a_payment_lifted() {
 }
 
 /// The cap holds an hourly resume back as it holds the night's, counting
-/// the users active when the firing began; and a paid user whose own quota
-/// this cycle is already used stays suspended and is reported.
+/// the users active when the firing began; and a paid user whose quota this
+/// cycle is already used stays suspended and is reported. With a paid month
+/// that quota is the larger of the user's own and the month's (design
+/// §9.6): an own quota of 1 GB used twice over keeps no one out while the
+/// month's 100 GB covers it.
 #[test]
 fn the_cap_and_a_quota_already_used_bound_an_hourly_resume() {
     let full = holding(vec![active(7), added_unpaid(PAID)], Some(1));
@@ -150,13 +153,20 @@ fn the_cap_and_a_quota_already_used_bound_an_hourly_resume() {
     let room = holding(vec![active(7), added_unpaid(PAID)], Some(2));
     let plan = plan_expiry_resumes(&room, &paid(&room), None, later()).unwrap();
     assert_eq!(plan.resumes, [paid_lapsed()]);
-    let mut over = added_unpaid(PAID);
-    over.policy.quota = Some(quota(GB));
-    let deployment = holding(vec![over], None);
-    let mut used = usage(&deployment, later(), &[]);
-    used.served
-        .insert(UserId::parse(PAID).unwrap(), Some(2 * GB));
-    let plan = plan_expiry_resumes(&deployment, &paid(&deployment), Some(&used), later()).unwrap();
+    let mut own = added_unpaid(PAID);
+    own.policy.quota = Some(quota(GB));
+    let deployment = holding(vec![own], None);
+    let paid = paid(&deployment);
+    let used = |bytes: u64| {
+        let mut used = usage(&deployment, later(), &[]);
+        used.served
+            .insert(UserId::parse(PAID).unwrap(), Some(bytes));
+        used
+    };
+    let plan = plan_expiry_resumes(&deployment, &paid, Some(&used(2 * GB)), later()).unwrap();
+    assert_eq!(plan.resumes, [paid_lapsed()]);
+    assert_eq!(plan.kept, []);
+    let plan = plan_expiry_resumes(&deployment, &paid, Some(&used(101 * GB)), later()).unwrap();
     assert_eq!(plan.resumes, []);
     assert_eq!(
         plan.kept,
