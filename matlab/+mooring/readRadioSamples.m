@@ -31,8 +31,8 @@ function samples = readRadioSamples(file)
 %   error and nothing is returned (see mooring.internal.readCsv).
 %
 %   See also mooring.readRadioEvents, mooring.radioHistory,
-%   mooring.radioHourly, mooring.radioDegradation, mooring.radioForecast,
-%   mooring.plotRadio.
+%   mooring.radioHourly, mooring.radioNetworks, mooring.radioDegradation,
+%   mooring.radioForecast, mooring.plotRadio.
 
 % SPDX-License-Identifier: GPL-3.0-or-later
 
