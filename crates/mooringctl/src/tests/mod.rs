@@ -12,6 +12,7 @@ mod answered;
 mod app;
 mod apply;
 mod apply_job;
+mod apply_restarts;
 mod canary;
 mod cancel;
 mod capture;

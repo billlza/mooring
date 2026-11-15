@@ -8,7 +8,7 @@
 
 use std::fs;
 
-use mooring_agent_proto::{AgentError, Generation, IoOp, ManagedFile, TxnState};
+use mooring_agent_proto::{AgentError, Generation, IoOp, ManagedFile, Restarts, TxnState};
 
 use super::world::{World, assert_unswitched, idle, same};
 use crate::tests::{EACCES, EEXIST, EISDIR, ENOENT, ENOTDIR, EPERM, ModeFault, own_ids};
@@ -163,7 +163,12 @@ fn a_previous_header_that_cannot_be_read_fails_the_change_before_the_swap() {
     world.commit(&world.node(1000), world.bundle(1, same));
     let node = world.node(2000);
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(2, idle(301))),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(2, idle(301)),
+            Restarts::Allowed
+        ),
         Ok(Launched::Launched(Generation::new(2)))
     );
     let header = world

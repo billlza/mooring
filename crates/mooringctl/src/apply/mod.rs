@@ -35,6 +35,10 @@
 //!    confirmed generation is older than the deployment's, by id, through
 //!    the exit's egress as the daemon resolves it, with the engines in the
 //!    support directory; one that fails is reported, and the next one runs.
+//!    They may restart what serves users inside the window only (design
+//!    §13.6): `apply --now` outside it applies only what the running
+//!    engines take as they run, and a node whose change needs a restart is
+//!    refused, changing nothing, and reported.
 //!
 //! The report names users by id, on standard output; the log,
 //! `~/Library/Logs/Mooring/apply.log`, counts them and names none, since a
@@ -56,6 +60,7 @@ use std::os::fd::BorrowedFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
+use mooring_agent_proto::Restarts;
 use mooring_daemon_core::apply::in_window;
 use mooring_macsys::MacsysError;
 use mooring_store::Store;
@@ -134,7 +139,12 @@ pub(crate) fn apply(
     }
     let mut progress = Vec::new();
     let sink: &mut dyn Write = if json { &mut progress } else { out };
-    let nodes = nodes::apply_behind(env, sink, &store, &support, &mut |node, at| {
+    let restarts = if in_window(now) {
+        Restarts::Allowed
+    } else {
+        Restarts::Refused
+    };
+    let nodes = nodes::apply_behind(env, sink, &store, &support, restarts, &mut |node, at| {
         say_as(&mut log, at, "apply", &node.log_line())
     })?;
     let outcome = Outcome {

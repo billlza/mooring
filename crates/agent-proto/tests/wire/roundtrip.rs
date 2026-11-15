@@ -17,12 +17,12 @@ use mooring_agent_proto::{
     HostFact, HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion,
     IfName, Inbound, InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MAX_BLOB_BYTES,
     MacDrainHold, OpaqueUserId, OperatorHold, PortRange, Principal, PriorState, ReadError,
-    RedirectUrl, Reply, Request, RequestKind, Resolution, Response, ResponseKind, Role,
-    RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason, SshEd25519Key,
-    SshdDirective, StatsEmail, StatusV1, StderrTail, StoredMacReport, SystemdOp, TargetFacts,
-    TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage,
-    TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1,
-    ValidationTool, WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
+    RedirectUrl, Reply, Request, RequestKind, Resolution, Response, ResponseKind, RestartNeed,
+    Restarts, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason,
+    SshEd25519Key, SshdDirective, StatsEmail, StatusV1, StderrTail, StoredMacReport, SystemdOp,
+    TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic,
+    TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1,
+    UsageV1, ValidationTool, WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
     expect_end_of_input, read_blob, read_reply, read_request, write_put_blob, write_reply,
     write_request,
 };
@@ -624,6 +624,10 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
         (generation(), rollback_cause())
             .prop_map(|(generation, cause)| AgentError::RollbackFailed { generation, cause }),
         generation().prop_map(|generation| AgentError::RevertedUnconfirmed { generation }),
+        btree_set(select(RestartNeed::ALL), 1..=RestartNeed::ALL.len())
+            .prop_map(|needs| AgentError::RestartNotAllowed { needs }),
+        (generation(), rollback_cause())
+            .prop_map(|(generation, cause)| AgentError::LiveRollbackFailed { generation, cause }),
         stderr_tail().prop_map(|stderr_tail| AgentError::AgentSelfTestFailed { stderr_tail }),
         (digest(), digest())
             .prop_map(|(expected, actual)| AgentError::AgentShaMismatch { expected, actual }),
@@ -688,7 +692,12 @@ fn line_request() -> impl Strategy<Value = LineRequest> {
             }
         ),
         Just(LineRequest::RevokeBootstrap),
-        bundle_header().prop_map(|header| LineRequest::Apply(Box::new(header))),
+        (bundle_header(), select(Restarts::ALL)).prop_map(|(header, restarts)| {
+            LineRequest::Apply {
+                bundle: Box::new(header),
+                restarts,
+            }
+        }),
         generation().prop_map(|generation| LineRequest::TxnStatus { generation }),
         Just(LineRequest::Rollback),
         Just(LineRequest::Status),

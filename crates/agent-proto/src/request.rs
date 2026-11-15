@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::macros::closed_enum;
 use crate::{
     AgentError, BlobLen, BundleHeader, ClearableHold, EventSeq, GateReason, Generation,
-    MacReportV1, Role, SeriesRange, Sha256Hex, ShutdownReason, SshEd25519Key, TargetHost,
+    MacReportV1, Restarts, Role, SeriesRange, Sha256Hex, ShutdownReason, SshEd25519Key, TargetHost,
     UsageMonth,
 };
 
@@ -86,8 +86,14 @@ pub enum LineRequest {
     },
     /// Remove the bootstrap key's `authorized_keys` line.
     RevokeBootstrap,
-    /// Launch a transaction installing this bundle (§11.2).
-    Apply(Box<BundleHeader>),
+    /// Launch a transaction installing `bundle` (§11.2), restarting what it
+    /// needs only as `restarts` allows (§13.6; protocol 3).
+    Apply {
+        /// The bundle's header.
+        bundle: Box<BundleHeader>,
+        /// Whether the transaction may restart what serves users.
+        restarts: Restarts,
+    },
     /// Report the state of the transaction for `generation`.
     TxnStatus {
         /// The transaction's generation.
@@ -265,7 +271,7 @@ impl LineRequest {
             Self::Confirm { .. } => RequestKind::Confirm,
             Self::Bootstrap { .. } => RequestKind::Bootstrap,
             Self::RevokeBootstrap => RequestKind::RevokeBootstrap,
-            Self::Apply(_) => RequestKind::Apply,
+            Self::Apply { .. } => RequestKind::Apply,
             Self::TxnStatus { .. } => RequestKind::TxnStatus,
             Self::Rollback => RequestKind::Rollback,
             Self::Status => RequestKind::Status,

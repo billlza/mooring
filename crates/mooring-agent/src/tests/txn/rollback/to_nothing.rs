@@ -19,6 +19,7 @@ use super::{assert_rollback_failed, assert_stopped_safe, step_failed};
 use crate::host::Tool;
 use crate::tests::txn::world::{TUNNEL_START_FAILED, World, index_of, same};
 use crate::tests::{EEXIST, EISDIR};
+use crate::txn::live::Way;
 use crate::txn::record::pending;
 use crate::txn::{self, Why};
 
@@ -283,7 +284,13 @@ fn a_current_that_cannot_be_removed_fails_the_revert_to_nothing() {
     fs::create_dir_all(current.join("entry")).unwrap();
     let node = world.node(1050);
     assert_eq!(
-        txn::rollback::revert(&world.paths, &node, Generation::new(1), Generation::ZERO),
+        txn::rollback::revert(
+            &world.paths,
+            &node,
+            Generation::new(1),
+            Generation::ZERO,
+            Way::Restarting
+        ),
         Err(RollbackCause::Swap { errno })
     );
     assert_stopped_safe(&node.calls());

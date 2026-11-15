@@ -20,12 +20,12 @@ use mooring_agent_proto::{
     ReportCapacity, ReportDataService, ReportExit, ReportForecast, ReportLteSignal, ReportNrSignal,
     ReportPlanLine, ReportRadio, ReportRadioSystem, ReportRouter, ReportSaturation, ReportSeverity,
     ReportSim, ReportUsage, ReportUser, ReportUserId, ReportUserStatus, Request, RequestKind,
-    Resolution, Response, ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex,
-    ShutdownReason, SshEd25519Key, SshdDirective, StatusV1, StderrTail, StoredMacReport, SystemdOp,
-    TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic,
-    TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1,
-    UsageV1, VIEWER_STOP_WAIT_SECS, ValidationTool, WatchConditions, WatchConfig, WatchError,
-    WatchErrorKind, WatchTarget,
+    Resolution, Response, ResponseKind, RestartNeed, Restarts, Role, RollbackCause, SeriesRange,
+    SeriesSpan, Sha256Hex, ShutdownReason, SshEd25519Key, SshdDirective, StatusV1, StderrTail,
+    StoredMacReport, SystemdOp, TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe,
+    TlsSession, TlsVersion, Traffic, TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer,
+    UsageBin, UsageMonth, UsageSeriesV1, UsageV1, VIEWER_STOP_WAIT_SECS, ValidationTool,
+    WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
 };
 
 pub(crate) fn digest(byte: u8) -> Sha256Hex {
@@ -511,7 +511,10 @@ pub(crate) fn line_request(kind: RequestKind) -> LineRequest {
             ops_pubkey: ops_key(),
         },
         RequestKind::RevokeBootstrap => LineRequest::RevokeBootstrap,
-        RequestKind::Apply => LineRequest::Apply(Box::new(bundle_header())),
+        RequestKind::Apply => LineRequest::Apply {
+            bundle: Box::new(bundle_header()),
+            restarts: Restarts::Refused,
+        },
         RequestKind::TxnStatus => LineRequest::TxnStatus {
             generation: Generation::new(7),
         },
@@ -669,6 +672,16 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         },
         AgentErrorKind::RevertedUnconfirmed => AgentError::RevertedUnconfirmed {
             generation: Generation::new(8),
+        },
+        AgentErrorKind::RestartNotAllowed => AgentError::RestartNotAllowed {
+            needs: BTreeSet::from([RestartNeed::Nftables, RestartNeed::XrayConfig]),
+        },
+        AgentErrorKind::LiveRollbackFailed => AgentError::LiveRollbackFailed {
+            generation: Generation::new(8),
+            cause: RollbackCause::Apply {
+                step: ApplyStep::XrayUndo,
+                stderr_tail: tail("failed to dial 127.0.0.1:10085"),
+            },
         },
         AgentErrorKind::AgentSelfTestFailed => AgentError::AgentSelfTestFailed {
             stderr_tail: tail("self-test: bad profile"),

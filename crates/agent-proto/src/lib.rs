@@ -67,6 +67,7 @@ mod profile;
 mod report;
 mod request;
 mod response;
+mod restarts;
 mod role;
 mod runtime;
 mod scalar;
@@ -120,6 +121,7 @@ pub use report::{
 };
 pub use request::{LineRequest, Request, RequestKind};
 pub use response::{HelloInfo, Reply, Response, ResponseKind, TxnStage, TxnState};
+pub use restarts::{RestartNeed, Restarts};
 pub use role::{AGENT_CURRENT_PATH, Role};
 pub use scalar::{Generation, PortRange, UnixTime};
 pub use series::{
@@ -147,8 +149,10 @@ pub use watch::{
 };
 
 /// The protocol version this crate speaks, reported in
-/// [`HelloInfo::protocol`].
-pub const PROTOCOL: u32 = 2;
+/// [`HelloInfo::protocol`]. Version 3 (2026-11-15, design §13.6) gave
+/// [`LineRequest::Apply`] its [`Restarts`]: an agent of version 2 cannot
+/// decode the request, so the Mac sends it to none.
+pub const PROTOCOL: u32 = 3;
 
 /// The frozen self-test success marker used by the upgrade core. This
 /// remains version 1 so an already deployed protocol-1 agent can validate

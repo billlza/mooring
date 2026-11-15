@@ -195,36 +195,55 @@ impl Applied {
     }
 }
 
-/// Installs every file staged in `staged` whose text differs from the
-/// installed one (atomically, 0644, creating its directory 0755), records
-/// the staged profile version as the installed one, and returns the files
-/// it changed.
-pub(crate) fn install(paths: &Paths, staged: &Path) -> Result<BTreeSet<HostFile>, AgentError> {
-    let fail = |error: io::Error| io_error(IoOp::WriteState, &error);
-    let mut changed = BTreeSet::new();
+/// Each file staged in `staged` whose text differs from the installed one
+/// (or that is not installed), with the staged text, in [`HostFile::ALL`]
+/// order.
+fn changes(paths: &Paths, staged: &Path) -> Result<Vec<(HostFile, Vec<u8>)>, AgentError> {
+    let mut changes = Vec::new();
     for &file in HostFile::ALL {
         let text = fs::read(staged.join(file.staged_name()))
             .map_err(|error| io_error(IoOp::ReadState, &error))?;
-        let target = paths.host_file(file);
-        let installed = match fs::read(&target) {
+        let installed = match fs::read(paths.host_file(file)) {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(io_error(IoOp::ReadState, &error)),
         };
         if installed.as_deref() != Some(text.as_slice()) {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o755)
-                .create(parent_of(&target).map_err(fail)?)
-                .map_err(fail)?;
-            write_atomic(&target, &text, 0o644).map_err(fail)?;
-            changed.insert(file);
+            changes.push((file, text));
         }
+    }
+    Ok(changes)
+}
+
+/// The files [`install`] would change, installing none: those staged in
+/// `staged` whose text differs from the installed one.
+pub(crate) fn differing(paths: &Paths, staged: &Path) -> Result<BTreeSet<HostFile>, AgentError> {
+    Ok(changes(paths, staged)?
+        .into_iter()
+        .map(|(file, _)| file)
+        .collect())
+}
+
+/// Installs every file staged in `staged` whose text differs from the
+/// installed one (atomically, 0644, creating its directory 0755), records
+/// the staged profile version as the installed one, and returns the files
+/// it changed. Every staged file is read before any is written.
+pub(crate) fn install(paths: &Paths, staged: &Path) -> Result<BTreeSet<HostFile>, AgentError> {
+    let fail = |error: io::Error| io_error(IoOp::WriteState, &error);
+    let changes = changes(paths, staged)?;
+    for (file, text) in &changes {
+        let target = paths.host_file(*file);
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o755)
+            .create(parent_of(&target).map_err(fail)?)
+            .map_err(fail)?;
+        write_atomic(&target, text, 0o644).map_err(fail)?;
     }
     let version: HostProfileVersion = read_json(&staged.join(VERSION_FILE))?
         .ok_or_else(|| crate::store::malformed(IoOp::ReadState))?;
     write_json(&paths.host_profile(), &version, VERSION_MODE)?;
-    Ok(changed)
+    Ok(changes.into_iter().map(|(file, _)| file).collect())
 }
 
 /// Whether `file` is read by systemd's manager, so a change needs a

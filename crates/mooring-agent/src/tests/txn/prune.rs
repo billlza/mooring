@@ -7,7 +7,7 @@
 
 use std::fs;
 
-use mooring_agent_proto::{AgentError, Generation, IoOp, ManagedFile, TxnState};
+use mooring_agent_proto::{AgentError, Generation, IoOp, ManagedFile, Restarts, TxnState};
 
 use super::world::{World, assert_unswitched, idle, same};
 use crate::tests::{EISDIR, ENOTDIR};
@@ -32,7 +32,12 @@ fn generations_that_cannot_be_listed_fail_the_change_before_staging() {
     let world = World::new();
     let node = world.node(1000);
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(1, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(1, same),
+            Restarts::Allowed
+        ),
         Ok(Launched::Launched(Generation::new(1)))
     );
     fs::write(world.paths.etc(), "").unwrap();

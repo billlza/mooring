@@ -109,10 +109,12 @@ pub(crate) fn line_reply(
         LineRequest::MacReport => read_json::<StoredMacReport>(&paths.mac_report())?
             .map(|stored| Response::MacReport(Box::new(stored)))
             .ok_or(AgentError::MacReportMissing),
-        LineRequest::Apply(header) => Ok(match txn::apply(paths, node, *header)? {
-            txn::Launched::Launched(generation) => Response::TxnLaunched { generation },
-            txn::Launched::Unchanged(generation) => Response::Unchanged { generation },
-        }),
+        LineRequest::Apply { bundle, restarts } => {
+            Ok(match txn::apply(paths, node, *bundle, restarts)? {
+                txn::Launched::Launched(generation) => Response::TxnLaunched { generation },
+                txn::Launched::Unchanged(generation) => Response::Unchanged { generation },
+            })
+        }
         LineRequest::TxnStatus { generation } => Ok(Response::TxnStatus {
             generation,
             state: txn::status(paths, generation)?,

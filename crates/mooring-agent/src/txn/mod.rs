@@ -16,11 +16,17 @@
 //! The pending change's phase (launched, armed, awaiting confirmation)
 //! says what a revert has to undo, so that a transaction unit that died,
 //! or a reboot that lost the timer, cannot leave the node stuck `Busy`.
+//!
+//! An `Apply` that refuses restarts (design §13.6) goes live or not at all
+//! ([`live`]): a change the running engines cannot take as they run is
+//! refused right after staging, one they can is applied by the live step
+//! alone, and it is undone live, with nothing stopped if that fails.
 
 pub(crate) mod activate;
 mod changes;
 pub(crate) mod health;
 pub(crate) mod links;
+pub(crate) mod live;
 mod prune;
 pub(crate) mod record;
 pub(crate) mod resume;
@@ -34,18 +40,18 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use mooring_agent_proto::{
-    AgentError, BundleHeader, EngineUser, Generation, HostProfile, RollbackCause, SystemdOp,
-    TxnStage, TxnState, UnitName,
+    AgentError, BundleHeader, EngineUser, Generation, HostProfile, Restarts, RollbackCause,
+    SystemdOp, TxnStage, TxnState, UnitName,
 };
 
 use crate::gate;
 use crate::hello;
 use crate::host::{Node, Tool, run_ok};
-use crate::hostfiles::Applied;
 use crate::paths::Paths;
 use crate::store::{Lock, errno};
-use changes::{Restarts, apply_changes, install_host};
+use changes::{Mode, applied, apply_changes, install_host};
 use links::swap;
+use live::Way;
 use prune::prune;
 use record::{
     Change, Pending, Phase, TxnRecord, clear_pending, pending, set_pending, set_record, set_state,
@@ -103,11 +109,13 @@ pub(crate) enum Launched {
     Unchanged(Generation),
 }
 
-/// `Apply`: the checks that need no work, then the transaction's unit.
+/// `Apply`: the checks that need no work, then the transaction's unit, which
+/// restarts what serves users only as `restarts` allows (design §13.6).
 pub(crate) fn apply(
     paths: &Paths,
     node: &dyn Node,
     header: BundleHeader,
+    restarts: Restarts,
 ) -> Result<Launched, AgentError> {
     let _lock = exclusive(paths)?;
     let current = gate::current_generation(paths)?;
@@ -136,7 +144,7 @@ pub(crate) fn apply(
     // Once recorded, a change that cannot be launched is recorded as
     // failed and leaves nothing pending: nothing will run it, and the node
     // is free for the next change.
-    match launch(paths, node, generation, current) {
+    match launch(paths, node, generation, current, restarts) {
         Ok(()) => Ok(Launched::Launched(generation)),
         Err(error) => {
             end(
@@ -161,12 +169,13 @@ fn launch(
     node: &dyn Node,
     generation: Generation,
     previous: Generation,
+    restarts: Restarts,
 ) -> Result<(), AgentError> {
     set_pending(
         paths,
         &Pending {
             generation,
-            change: Change::Apply { previous },
+            change: Change::Apply { previous, restarts },
             phase: Phase::Launched,
         },
     )?;
@@ -202,7 +211,7 @@ pub(crate) fn run(
 ) -> Result<(), AgentError> {
     let _lock = Lock::exclusive(&paths.txn_lock())?;
     let Some(Pending {
-        change: Change::Apply { previous },
+        change: Change::Apply { previous, restarts },
         phase: Phase::Launched,
         ..
     }) = pending(paths)?.filter(|pending| pending.generation == generation)
@@ -211,7 +220,9 @@ pub(crate) fn run(
     };
     let header = record::record(paths, generation)?.header;
     let mut armed = false;
-    match attempt(paths, node, generation, previous, &header, &mut armed) {
+    match attempt(
+        paths, node, generation, previous, restarts, &header, &mut armed,
+    ) {
         // Should either write fail, the change stays pending with its timer
         // armed, which then reverts it, as when the unit dies.
         Ok(()) => {
@@ -220,7 +231,7 @@ pub(crate) fn run(
                 paths,
                 &Pending {
                     generation,
-                    change: Change::Apply { previous },
+                    change: Change::Apply { previous, restarts },
                     phase: Phase::AwaitingConfirm,
                 },
             )
@@ -268,12 +279,14 @@ fn running(paths: &Paths, generation: Generation, stage: TxnStage) -> Result<(),
 /// the swap a failure removes what was staged; from the swap on, every
 /// failure is rolled back. `armed` is set once the confirm timer is armed,
 /// so that the change's end stops it even when the phase that says so
-/// could not be recorded.
+/// could not be recorded. Under `Refused` (design §13.6) a change the
+/// running engines cannot take as they run is refused right after staging.
 fn attempt(
     paths: &Paths,
     node: &dyn Node,
     generation: Generation,
     previous: Generation,
+    restarts: Restarts,
     header: &BundleHeader,
     armed: &mut bool,
 ) -> Result<(), AgentError> {
@@ -284,7 +297,11 @@ fn attempt(
     // before anything is staged or switched; pruning keeps its engines.
     let before = stage::installed_header(paths, previous)?;
     prune(paths, previous, before.as_ref())?;
+    let way = Way::of(restarts, previous);
     let staged = stage::stage(paths, generation, header).and_then(|dir| {
+        if way == Way::Live {
+            live::refuse_restarts(paths, node, before.as_ref(), header, &dir)?;
+        }
         running(paths, generation, TxnStage::Validate)?;
         validate::validate(paths, node, &dir)?;
         arm_revert(
@@ -297,7 +314,7 @@ fn attempt(
             paths,
             &Pending {
                 generation,
-                change: Change::Apply { previous },
+                change: Change::Apply { previous, restarts },
                 phase: Phase::Armed,
             },
         )?;
@@ -314,12 +331,13 @@ fn attempt(
             return Err(error);
         }
     };
-    switch(paths, node, generation, header, before.as_ref(), &dir)
-        .map_err(|cause| roll_back(paths, node, generation, previous, cause))
+    switch(paths, node, generation, header, before.as_ref(), &dir, way)
+        .map_err(|cause| roll_back(paths, node, generation, previous, way, cause))
 }
 
 /// The swap and what follows it (design §11.2 steps 4 to 6), each failure
-/// with the cause the rollback reports.
+/// with the cause the rollback reports; a change applied live runs only the
+/// live step.
 fn switch(
     paths: &Paths,
     node: &dyn Node,
@@ -327,28 +345,25 @@ fn switch(
     header: &BundleHeader,
     before: Option<&BundleHeader>,
     dir: &Path,
+    way: Way,
 ) -> Result<(), RollbackCause> {
     swap(paths, generation).map_err(|error| RollbackCause::Swap {
         errno: error.raw_os_error(),
     })?;
-    // A node's first generation applies its whole profile: one rolled back
-    // to nothing left the files it installed, never applied.
-    let applied = if before.is_none() {
-        Applied::Every
-    } else {
-        Applied::Changed
-    };
-    let host = install_host(paths, dir, applied)?;
+    let host = install_host(paths, dir, applied(before))?;
     progress(paths, generation, TxnStage::Apply)?;
-    apply_changes(
-        paths,
-        node,
-        before,
-        header,
-        dir,
-        &host,
-        Restarts::UnlessUsersOnly,
-    )?;
+    match way {
+        Way::Restarting => apply_changes(
+            paths,
+            node,
+            before,
+            header,
+            dir,
+            &host,
+            Mode::UnlessUsersOnly,
+        )?,
+        Way::Live => live::apply(paths, node, before, header, dir, &host)?,
+    }
     progress(paths, generation, TxnStage::HealthGate)?;
     health::wait(paths, node, dir, health::BUDGET)
         .map_err(|failed| RollbackCause::HealthGate { failed })
@@ -447,11 +462,16 @@ pub(crate) enum Why {
 /// cannot be removed is the request's error, the change reverted all the
 /// same. A revert that fails is `RollbackFailed` with the revert's own
 /// cause (a transaction's rollback reports the failure that made it roll
-/// back instead), after the node was stopped. An activation ends only
-/// once the forced command is back on the previous agent; a link that
-/// cannot be put back leaves it pending with its timer. A requested
-/// revert stops the timer last, as every change ends (`end`); an
-/// unconfirmed change's timer has fired, and a reboot lost it.
+/// back instead), after the node was stopped. A change applied live is
+/// undone live, and an undo that fails is `LiveRollbackFailed`, with
+/// nothing stopped (design §13.6); but after a reboot every change is
+/// reverted by restarting, live or not: the reboot dropped every
+/// connection, and `txn-recover` runs as soon as the engines have started,
+/// before Xray's API need answer. An activation ends only once the forced
+/// command is back on the previous agent; a link that cannot be put back
+/// leaves it pending with its timer. A requested revert stops the timer
+/// last, as every change ends (`end`); an unconfirmed change's timer has
+/// fired, and a reboot lost it.
 pub(crate) fn revert_pending(
     paths: &Paths,
     node: &dyn Node,
@@ -469,11 +489,15 @@ pub(crate) fn revert_pending(
     let generation = pending.generation;
     let disarm = why == Why::Requested && pending.phase.armed();
     let (state, outcome) = match pending.change {
-        Change::Apply { previous } if pending.phase.armed() => {
-            match revert(paths, node, generation, previous) {
+        Change::Apply { previous, restarts } if pending.phase.armed() => {
+            let way = match why {
+                Why::Rebooted => Way::Restarting,
+                Why::Requested | Why::Unconfirmed(_) => Way::of(restarts, previous),
+            };
+            match revert(paths, node, generation, previous, way) {
                 Ok(()) => (Some(reverted(why, generation)), Ok(())),
                 Err(cause) => {
-                    let error = AgentError::RollbackFailed { generation, cause };
+                    let error = way.failed(generation, cause);
                     let failed = TxnState::Failed {
                         error: error.clone(),
                     };

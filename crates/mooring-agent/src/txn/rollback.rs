@@ -2,22 +2,24 @@
 
 //! The rollback (design §11.2 step 8): the previous generation put back in
 //! place of a failed one, or the node back to serving nothing, and the safe
-//! stop when that fails too. Whether a pending change is reverted, for
-//! `Rollback`, `txn-revert` and `txn-recover`, is decided by
-//! [`super::revert_pending`].
+//! stop when that fails too; a change applied live is undone live, and an
+//! undo that fails stops nothing (design §13.6). Whether a pending change
+//! is reverted, for `Rollback`, `txn-revert` and `txn-recover`, is decided
+//! by [`super::revert_pending`].
 
 use std::fs;
 use std::io;
 
 use mooring_agent_proto::{
-    AcceptLocal, AgentError, ApplyStep, BundleHeader, EngineUser, Generation, RollbackCause,
-    UnitName, WG_INTERFACE,
+    AcceptLocal, AgentError, ApplyStep, BundleHeader, EngineUser, Generation, ManagedFile,
+    RollbackCause, UnitName, WG_INTERFACE,
 };
 
-use super::changes::{Restarts, Step, apply_changes, install_host};
+use super::changes::{Mode, Step, apply_changes, install_host};
 use super::links::swap;
+use super::live::Way;
 use super::stage::{self, remove_generation};
-use super::{generation_units, health};
+use super::{generation_units, health, xray_users};
 use crate::gate;
 use crate::hello;
 use crate::host::{Node, Tool, run_ok};
@@ -25,43 +27,47 @@ use crate::hostfiles::Applied;
 use crate::paths::Paths;
 use crate::store::{Lock, errno};
 
-/// Rolls back the transaction for `generation` (design §11.2 step 8) and
-/// returns the error the transaction ends with.
+/// Rolls back the transaction for `generation`, applied `way` (design
+/// §11.2 step 8), and returns the error the transaction ends with.
 pub(super) fn roll_back(
     paths: &Paths,
     node: &dyn Node,
     generation: Generation,
     previous: Generation,
+    way: Way,
     cause: RollbackCause,
 ) -> AgentError {
-    match revert(paths, node, generation, previous) {
+    match revert(paths, node, generation, previous, way) {
         Ok(()) => AgentError::RolledBack { generation, cause },
-        Err(_) => AgentError::RollbackFailed { generation, cause },
+        Err(_) => way.failed(generation, cause),
     }
 }
 
-/// Puts `previous` back in place of `failed`: the links, what changed, and
-/// the health gate. With no previous generation the node goes back to
-/// serving nothing: no `current`, engines and tunnel stopped, and the
-/// ruleset it had before Mooring's first one reloaded. The failed
-/// generation's directory is removed once `current` no longer names it: a
-/// revert that could not switch back keeps it, so that `current` and the
-/// fixed links into it stay whole. If any of it fails, both engines are
-/// stopped and the gate closed, and the first failure is returned. Done
-/// again, it puts back only what still differs.
+/// Puts `previous` back in place of `failed`, as `way` says. Restarting:
+/// the links, what changed, and the health gate; with no previous
+/// generation the node goes back to serving nothing: no `current`, engines
+/// and tunnel stopped, and the ruleset it had before Mooring's first one
+/// reloaded. Live: the links, the host profile's files as text, and the
+/// running Xray's clients ([`to_previous_live`]). The failed generation's
+/// directory is removed once `current` no longer names it: a revert that
+/// could not switch back keeps it, so that `current` and the fixed links
+/// into it stay whole. If any of it fails, the first failure is returned;
+/// restarting, both engines are first stopped and the gate closed, live,
+/// nothing is. Done again, it puts back only what still differs.
 pub(crate) fn revert(
     paths: &Paths,
     node: &dyn Node,
     failed: Generation,
     previous: Generation,
+    way: Way,
 ) -> Result<(), RollbackCause> {
     // A failed generation whose header cannot be read counts as having
     // changed everything, so everything of the previous one is re-applied.
     let failed_header = stage::installed_header(paths, failed).ok().flatten();
-    let reverted = if previous == Generation::ZERO {
-        to_nothing(paths, node)
-    } else {
-        to_previous(paths, node, failed_header.as_ref(), previous)
+    let reverted = match (previous == Generation::ZERO, way) {
+        (true, _) => to_nothing(paths, node),
+        (false, Way::Restarting) => to_previous(paths, node, failed_header.as_ref(), previous),
+        (false, Way::Live) => to_previous_live(paths, node, failed_header.as_ref(), previous),
     };
     let removed = match gate::current_generation(paths) {
         Ok(current) if current == failed => Ok(()),
@@ -73,7 +79,7 @@ pub(crate) fn revert(
         }),
     };
     let outcome = reverted.and(removed);
-    if outcome.is_err() {
+    if outcome.is_err() && way == Way::Restarting {
         safe_stop(paths, node);
     }
     outcome
@@ -102,9 +108,40 @@ fn to_previous(
         })?
         .ok_or(RollbackCause::Swap { errno: None })?;
     let host = install_host(paths, &dir, Applied::Changed)?;
-    apply_changes(paths, node, failed, &header, &dir, &host, Restarts::Always)?;
+    apply_changes(paths, node, failed, &header, &dir, &host, Mode::Always)?;
     health::wait(paths, node, &dir, health::BUDGET)
         .map_err(|failed| RollbackCause::HealthGate { failed })
+}
+
+/// The live undo of `failed`, applied live after `previous` (design
+/// §13.6): the links back; the previous generation's host-profile files
+/// back as text, with no command run, since a change applied live applied
+/// none; and, if Xray's configuration differed, the running Xray brought to
+/// hold exactly the previous file's clients through its API
+/// ([`xray_users::take_back`]). Nothing restarts or stops, and no health
+/// gate runs: the engines kept running what they ran, and a gate failure
+/// that was not the change's would only stop them.
+fn to_previous_live(
+    paths: &Paths,
+    node: &dyn Node,
+    failed: Option<&BundleHeader>,
+    previous: Generation,
+) -> Result<(), RollbackCause> {
+    swap(paths, previous).map_err(|error| RollbackCause::Swap {
+        errno: error.raw_os_error(),
+    })?;
+    let dir = paths.generation(previous);
+    let header = stage::installed_header(paths, previous)
+        .map_err(|error| RollbackCause::Swap {
+            errno: errno(&error),
+        })?
+        .ok_or(RollbackCause::Swap { errno: None })?;
+    install_host(paths, &dir, Applied::Changed)?;
+    let xray = ManagedFile::XrayConfig;
+    if failed.is_none_or(|failed| failed.files.get(xray) != header.files.get(xray)) {
+        xray_users::take_back(paths, node, &dir)?;
+    }
+    Ok(())
 }
 
 /// The node back to serving nothing (design §11.2 step 8): both engines and

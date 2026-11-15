@@ -9,7 +9,7 @@ use std::os::unix::fs::symlink;
 
 use mooring_agent_proto::{
     AgentError, AgentEvent, AgentEventKind, BlobLen, ClearableHold, EventSeq, GateReason,
-    Generation, Holds, IoOp, LineRequest, Reply, Request, RequestKind, Response, Role,
+    Generation, Holds, IoOp, LineRequest, Reply, Request, RequestKind, Response, Restarts, Role,
     ShutdownReason, TxnStage, TxnState, UnixTime, read_reply, write_put_blob, write_request,
 };
 
@@ -346,7 +346,12 @@ fn the_transaction_requests_reach_their_handlers() {
     let (_dir, paths) = scratch();
     let node = FakeNode::new(1_000);
     let one = Generation::new(1);
-    let apply = |generation| frame(&LineRequest::Apply(Box::new(header(generation))));
+    let apply = |generation| {
+        frame(&LineRequest::Apply {
+            bundle: Box::new(header(generation)),
+            restarts: Restarts::Allowed,
+        })
+    };
     let status = frame(&LineRequest::TxnStatus { generation: one });
     assert_eq!(
         ask(&paths, &node, Role::Ops, apply(1)),
@@ -394,6 +399,7 @@ fn the_transaction_requests_reach_their_handlers() {
             generation: Generation::new(2),
             change: Change::Apply {
                 previous: Generation::ZERO,
+                restarts: Restarts::Allowed,
             },
             phase: Phase::AwaitingConfirm,
         },
@@ -459,7 +465,10 @@ fn an_apply_of_the_bundle_the_node_runs_is_unchanged() {
             &paths,
             &node,
             Role::Ops,
-            frame(&LineRequest::Apply(Box::new(header(4))))
+            frame(&LineRequest::Apply {
+                bundle: Box::new(header(4)),
+                restarts: Restarts::Allowed,
+            })
         ),
         Ok(Response::Unchanged { generation: four })
     );

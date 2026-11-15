@@ -29,8 +29,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use mooring_agent_proto::{
-    AgentError, Generation, Halt, HostFact, HostProfile, KernelIdent, PortRange, Sha256Hex,
-    ShutdownReason, TxnState, UnixTime,
+    AgentError, Generation, Halt, HostFact, HostProfile, KernelIdent, PortRange, Restarts,
+    Sha256Hex, ShutdownReason, TxnState, UnixTime,
 };
 
 use crate::store::write_json;
@@ -152,7 +152,12 @@ fn a_halt_during_a_transaction_keeps_the_engines_stopped() {
     let world = World::new();
     let node = world.node(1000);
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(1, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(1, same),
+            Restarts::Allowed
+        ),
         Ok(Launched::Launched(Generation::new(1)))
     );
     write_json(
@@ -180,6 +185,7 @@ fn a_halt_during_a_transaction_keeps_the_engines_stopped() {
         generation: Generation::ZERO,
         change: Change::Apply {
             previous: Generation::ZERO,
+            restarts: Restarts::Allowed,
         },
         phase: Phase::AwaitingConfirm,
     };

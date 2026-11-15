@@ -504,7 +504,10 @@ fn apply_confirms_the_transaction_and_records_the_bundle() {
     let seen = harness.nodes.seen.borrow();
     assert_eq!(
         seen[2].1,
-        Sent::Request(mooring_agent_proto::LineRequest::Apply(Box::new(header)))
+        Sent::Request(mooring_agent_proto::LineRequest::Apply {
+            bundle: Box::new(header),
+            restarts: mooring_agent_proto::Restarts::Refused,
+        })
     );
     drop(seen);
     let after = store(&harness).load().unwrap().deployment;
