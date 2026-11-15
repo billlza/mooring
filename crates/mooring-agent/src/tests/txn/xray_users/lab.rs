@@ -11,7 +11,12 @@
 //! The lab's Xray runs the golden configuration's API, statistics, policy
 //! and two VLESS inbounds, on free loopback ports and without REALITY (a
 //! lab has no camouflage target), with a freedom outbound in place of the
-//! rendered routing. The test speaks VLESS itself, as the pinned
+//! rendered routing, which a final rule lets reach the echo server: the
+//! pinned freedom refuses a VLESS client every private address, the
+//! loopback's among them, unless a final rule allows it
+//! (`proxy/freedom/freedom.go` `getDefaultFinalRule`), and holds the
+//! connection unanswered for 30 to 90 seconds instead. The test speaks
+//! VLESS itself, as the pinned
 //! `proxy/vless/encoding` reads it: version 0, the client's UUID, no
 //! addons, the TCP command, the port then the IPv4 address of an echo
 //! server, then data; the engine answers version 0 and no addons ahead of
@@ -50,8 +55,9 @@ const API_PORT: u16 = 10085;
 
 /// The lab's `xray.json` before the opening: the golden configuration's
 /// API, statistics, policy and VLESS inbounds, these on the loopback ports
-/// `ports` and over plain TCP, with a freedom outbound.
-fn lab_config(ports: [u16; 2]) -> Value {
+/// `ports` and over plain TCP, with a freedom outbound that may reach the
+/// echo server `echo` and no other private address.
+fn lab_config(ports: [u16; 2], echo: SocketAddrV4) -> Value {
     let rendered: Value = serde_json::from_str(&golden(XRAY)).unwrap();
     let inbounds: Vec<Value> = LIVE_INBOUNDS
         .iter()
@@ -76,7 +82,15 @@ fn lab_config(ports: [u16; 2]) -> Value {
         "stats": rendered["stats"],
         "policy": rendered["policy"],
         "inbounds": inbounds,
-        "outbounds": [{"tag": "exit", "protocol": "freedom"}],
+        "outbounds": [{
+            "tag": "exit",
+            "protocol": "freedom",
+            "settings": {"finalRules": [{
+                "action": "allow",
+                "ip": [echo.ip().to_string()],
+                "port": echo.port(),
+            }]},
+        }],
     })
 }
 
@@ -328,7 +342,7 @@ fn users_opened_through_the_api_are_served_at_once_without_dropping_a_connection
     let echo = echo_server();
     let ports = [free_port(), free_port()];
     let loopback = ports[1];
-    let before = lab_config(ports);
+    let before = lab_config(ports, echo);
     let mut engine = Engine::start(&xray, root.path(), &before, &[API_PORT, ports[0], loopback]);
 
     // A client served from the start holds one connection throughout.
