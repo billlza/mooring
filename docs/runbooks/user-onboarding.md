@@ -8,6 +8,15 @@
     the two English messages quoted in section 4 and section 8
     (crates/cfw-engine-api/src/lib.rs). M6 still checks every CFM step
     against the real build (design §22).
+  - Section 2 follows the in-person channel the operator chose on
+    2026-11-15 (design §9.4; delivery.md, section 3): the file always
+    comes in an encrypted image, never by AirDrop. The installer in step 1
+    of section 1 is a public file and may still go by AirDrop, from a
+    device other than the exit Mac (delivery.md, section 1).
+  - The passphrase's call may be FaceTime, WhatsApp or Telegram (the
+    operator, 2026-11-15). The acceptance (section 0) and the call when
+    nothing connects (section 8) stay on FaceTime, as the agreement's text
+    says; they change only with a revision that names the others.
   - The 「凭据」 step in section 3 needs the core stopped, not just both
     switches off. The profile menu's 「凭据」 waits until the core is off
     (apps/cfw-tauri-shell/ui/src/app.js:1059 and 1098-1100 at v0.5.0, 1095
@@ -43,16 +52,17 @@
 
 ## 2. 接收配置文件
 
-- **当面：** 用隔空投送（AirDrop）接收，文件会出现在「下载」文件夹里；或者用 U 盘接收，U 盘里只有加密映像。
-- **远程：** 你会收到一个加密磁盘映像（.dmg 文件）。
-  - 它的口令是六个英文单词，由运营者在 FaceTime 语音通话中念给你；输入时全部用小写，单词之间各空一格。
-  - 不要通过微信、QQ 或普通电话索要口令，也不要把口令写下来发给任何人。
+配置文件总是放在一个加密磁盘映像（.dmg 文件）里交给你。
+
+- **映像：** 运营者会把映像发给你；当面时，也可能用 U 盘交给你。
+- **口令：** 六个英文单词，由运营者念给你：当面时当场念；不见面时在语音通话中念，FaceTime、WhatsApp 或 Telegram 的语音通话都可以。输入时全部用小写，单词之间各空一格。
+  - 口令只在通话中念，不会写在任何聊天里。不要通过微信、QQ 或普通电话索要口令，也不要把口令写下来发给任何人。
   - 双击映像输入口令时，**不要**勾选“在我的钥匙串中记住密码”。
 - **任何时候：** 映像、配置文件、本指南和《使用约定》都不要经过微信、QQ（包括文件传输助手和 QQ 邮箱）、其他国内邮箱或网盘，或中国大陆 Apple ID 的 iMessage 和 iCloud（包括同步到 iCloud 的「桌面」和「文稿」文件夹），也不要转发到手机。
 
 ## 3. 导入
 
-1. 打开 CFM，进入「配置文件」，点「导入文件」，选择映像里或「下载」文件夹里的 .json 文件（如果运营者给的是 .yaml，就选 .yaml）。
+1. 打开 CFM，进入「配置文件」，点「导入文件」，选择映像里的 .json 文件（如果运营者给的是 .yaml，就选 .yaml）。
 2. 在「配置文件」页右键点按（或双指点按）新导入的配置文件，选「凭据」，应能看到全部凭据都已存入「钥匙串凭据库」。这一项需要内核已经停止：「常规」页上的按钮是「停止内核」时，先点它。
 3. 不要用「导入链接」，也不要把文件内容粘贴进输入框。
 
@@ -84,7 +94,7 @@
 ## 6. 删除文件
 
 1. 推出映像。
-2. 删除 .dmg 和 .json（或 .yaml）文件，并清空废纸篓。
+2. 删除 .dmg 文件（如果从映像里拷出过 .json 或 .yaml 文件，也一起删掉），并清空废纸篓。
 3. 删除聊天记录里发送映像的那条消息。
 
 凭据已保存在 CFM 的钥匙串凭据库里，不会因此丢失。
