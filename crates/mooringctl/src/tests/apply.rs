@@ -16,7 +16,7 @@ use mooring_agent_proto::{
     TlsVersion, TxnStage, TxnState,
 };
 use mooring_model::secret::SecretEntry;
-use mooring_model::{Deployment, NodeId, Sha256Digest};
+use mooring_model::{AbuseGuardAgreement, AgreementVersion, Deployment, NodeId, Sha256Digest};
 use mooring_store::{InMemorySecretStore, SecretStore};
 
 use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent};
@@ -389,9 +389,29 @@ fn apply_refuses_an_acknowledgement_of_another_blob() {
 /// applied at the deployment's generation with the bundle's digest.
 #[test]
 fn apply_confirms_the_transaction_and_records_the_bundle() {
+    apply_confirms_under(AbuseGuardAgreement::SHIPPED);
+}
+
+/// The bundle `node apply` renders covers whom the build's abuse guard
+/// gate covers (design §11.8): with the gate open, every fixture user, so
+/// the node is sent another bundle than with it closed.
+#[test]
+fn apply_renders_the_bundle_with_the_builds_abuse_guard_gate() {
+    let open = AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT));
+    let closed = AbuseGuardAgreement::since(None);
+    assert_ne!(
+        apply_confirms_under(open).digest(),
+        apply_confirms_under(closed).digest()
+    );
+}
+
+/// [`apply_confirms_the_transaction_and_records_the_bundle`] with the
+/// build's abuse guard gate `guard`; returns the bundle applied.
+fn apply_confirms_under(guard: AbuseGuardAgreement) -> mooring_render::VpsBundle {
     let deployment = fixture(|_| {});
     let generation = deployment.config_generation();
     let (mut harness, engines) = ready(deployment.clone());
+    harness.abuse_guard = guard;
     let fixture_secrets = mooring_fixtures::two_nodes_three_users().unwrap().secrets;
     let catalog = crate::node::engines::Engines::open(
         &engines,
@@ -404,9 +424,14 @@ fn apply_confirms_the_transaction_and_records_the_bundle() {
     .unwrap()
     .catalog()
     .clone();
-    let bundle =
-        mooring_render::vps::bundle(&deployment, &node_id("lon1"), &fixture_secrets, &catalog)
-            .unwrap();
+    let bundle = mooring_render::vps::bundle(
+        &deployment,
+        &node_id("lon1"),
+        &fixture_secrets,
+        &catalog,
+        harness.abuse_guard,
+    )
+    .unwrap();
     let header = bundle
         .header(
             &match super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) {
@@ -506,6 +531,7 @@ fn apply_confirms_the_transaction_and_records_the_bundle() {
     assert_eq!(applied.config_generation, generation);
     assert_eq!(applied.digest, bundle.digest());
     assert_eq!(after.config_generation(), generation);
+    bundle
 }
 
 /// The bundle of `deployment`'s lon1 with the harness's engine pins, and
@@ -525,8 +551,14 @@ pub(crate) fn bundle_and_header(
         .catalog()
         .clone();
     let secrets = mooring_fixtures::two_nodes_three_users().unwrap().secrets;
-    let bundle =
-        mooring_render::vps::bundle(deployment, &node_id("lon1"), &secrets, &catalog).unwrap();
+    let bundle = mooring_render::vps::bundle(
+        deployment,
+        &node_id("lon1"),
+        &secrets,
+        &catalog,
+        harness.abuse_guard,
+    )
+    .unwrap();
     let Response::Hello(hello) = super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) else {
         unreachable!()
     };

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The findings (design §11.8): each served user's figures from one
+//! The findings (design §11.8): each guarded user's figures from one
 //! reading of the sets, and which findings reach their alert and cut
 //! levels. Pure functions of the reading, except the memory of settled
 //! datagram minutes that `DatagramFlood`'s cut needs (two in a row), which
@@ -41,10 +41,10 @@ pub(crate) struct SettledMinute {
 /// (a gap of about 120 s) never does.
 const NEXT_MINUTE_SECS: std::ops::RangeInclusive<u64> = 50..=90;
 
-/// The readings of every served user, by user, from `measured` at `now`.
-/// `served` maps each served user's source address to the user; an element
-/// whose address no served user has (a user removed since it was made)
-/// counts for no one.
+/// The readings of every user the guard covers, by user, from `measured`
+/// at `now`. `guarded` maps each such user's source address to the user;
+/// an element whose address no guarded user has (a user removed or no
+/// longer served since it was made) counts for no one.
 ///
 /// A user whose cut was lifted (`cleared`, the latest lift's time) is
 /// judged only on what they did after it: an element made or refreshed at
@@ -54,11 +54,11 @@ const NEXT_MINUTE_SECS: std::ops::RangeInclusive<u64> = 50..=90;
 /// judged again, it would cut the user at the next reading.
 pub(crate) fn readings(
     measured: &Measured,
-    served: &BTreeMap<Ipv4Addr, OpaqueUserId>,
+    guarded: &BTreeMap<Ipv4Addr, OpaqueUserId>,
     cleared: &BTreeMap<OpaqueUserId, UnixTime>,
     now: UnixTime,
 ) -> BTreeMap<OpaqueUserId, UserReading> {
-    served
+    guarded
         .iter()
         .map(|(source, user)| {
             let since_lift = cleared
@@ -192,17 +192,17 @@ pub(crate) struct Verdict {
 pub(crate) struct FloodMinutes(BTreeMap<OpaqueUserId, UnixTime>);
 
 impl FloodMinutes {
-    /// Forgets the users not in `served`, minutes too old to be followed by
-    /// the next, and minutes that began at or before the user's cut was
-    /// lifted (`cleared`, as for [`readings`]).
+    /// Forgets the users not in `guarded` (the reading's), minutes too old
+    /// to be followed by the next, and minutes that began at or before the
+    /// user's cut was lifted (`cleared`, as for [`readings`]).
     pub(crate) fn retain(
         &mut self,
-        served: &BTreeMap<OpaqueUserId, UserReading>,
+        guarded: &BTreeMap<OpaqueUserId, UserReading>,
         cleared: &BTreeMap<OpaqueUserId, UnixTime>,
         now: UnixTime,
     ) {
         self.0.retain(|user, began| {
-            served.contains_key(user)
+            guarded.contains_key(user)
                 && cleared.get(user).is_none_or(|lifted| *began > *lifted)
                 && now
                     .secs_since(*began)

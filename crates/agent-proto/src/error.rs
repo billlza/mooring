@@ -546,10 +546,15 @@ pub enum AgentError {
     /// cut. Nothing was changed; apply a current bundle first.
     #[error("the node's configuration carries no abuse guard; apply a current bundle first")]
     AbuseGuardNotInstalled,
-    /// `AbuseCut` named a user the node's current generation does not
-    /// serve. Nothing was changed.
-    #[error("the node does not serve user {user}")]
-    AbuseUserNotServed {
+    /// `AbuseCut` named a user the node's current abuse guard does not
+    /// cover ([`crate::WatchConfig::guarded_users`]): the generation does
+    /// not serve the user, or the user has not accepted an agreement
+    /// revision that states the guard, so their flows do not leave from an
+    /// address of their own and cannot be cut. Nothing was changed.
+    #[error(
+        "the node's abuse guard does not cover user {user}: the node does not serve the user, or the user has not accepted an agreement revision that states the guard"
+    )]
+    AbuseUserNotGuarded {
         /// The user named.
         user: crate::OpaqueUserId,
     },
@@ -695,8 +700,8 @@ closed_enum! {
         MacReportMissing,
         /// [`AgentError::AbuseGuardNotInstalled`].
         AbuseGuardNotInstalled,
-        /// [`AgentError::AbuseUserNotServed`].
-        AbuseUserNotServed,
+        /// [`AgentError::AbuseUserNotGuarded`].
+        AbuseUserNotGuarded,
         /// [`AgentError::AbuseCutsFull`].
         AbuseCutsFull,
         /// [`AgentError::AbuseSetFailed`].
@@ -756,7 +761,7 @@ impl AgentError {
             Self::SeriesNotRecorded { .. } => AgentErrorKind::SeriesNotRecorded,
             Self::MacReportMissing => AgentErrorKind::MacReportMissing,
             Self::AbuseGuardNotInstalled => AgentErrorKind::AbuseGuardNotInstalled,
-            Self::AbuseUserNotServed { .. } => AgentErrorKind::AbuseUserNotServed,
+            Self::AbuseUserNotGuarded { .. } => AgentErrorKind::AbuseUserNotGuarded,
             Self::AbuseCutsFull => AgentErrorKind::AbuseCutsFull,
             Self::AbuseSetFailed { .. } => AgentErrorKind::AbuseSetFailed,
             Self::GateStopUnconfirmed { .. } => AgentErrorKind::GateStopUnconfirmed,

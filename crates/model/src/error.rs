@@ -552,6 +552,19 @@ pub enum ModelError {
         /// The older revision offered.
         offered: AgreementVersion,
     },
+    /// An agreement record would bring the user under the abuse guard
+    /// (design §11.8): the guard's coverage is rendered into every bundle
+    /// that serves the user, so the acceptance is a configuration change,
+    /// not a bookkeeping record.
+    #[error(
+        "accepting agreement revision {revision} brings user {user} under the abuse guard, which changes every node serving the user; it is a configuration change, not a bookkeeping record"
+    )]
+    AgreementStartsGuard {
+        /// The user.
+        user: UserId,
+        /// The revision accepted.
+        revision: AgreementVersion,
+    },
     /// The carrier check is recorded already; replacing it is not a
     /// bookkeeping record.
     #[error("the exit's carrier check is recorded already; replacing it is a configuration change")]
@@ -768,6 +781,8 @@ kinds! {
         NoCredentialsOnNode,
         /// See [`ModelError::AgreementRegressed`].
         AgreementRegressed,
+        /// See [`ModelError::AgreementStartsGuard`].
+        AgreementStartsGuard,
         /// See [`ModelError::CarrierAlreadyRecorded`].
         CarrierAlreadyRecorded,
         /// See [`ModelError::NodeNotRetiring`].
@@ -874,6 +889,7 @@ impl ModelError {
             Self::RevocationAlreadyStarted { .. } => ModelErrorKind::RevocationAlreadyStarted,
             Self::NoCredentialsOnNode { .. } => ModelErrorKind::NoCredentialsOnNode,
             Self::AgreementRegressed { .. } => ModelErrorKind::AgreementRegressed,
+            Self::AgreementStartsGuard { .. } => ModelErrorKind::AgreementStartsGuard,
             Self::CarrierAlreadyRecorded => ModelErrorKind::CarrierAlreadyRecorded,
             Self::NodeNotRetiring { .. } => ModelErrorKind::NodeNotRetiring,
             Self::NodeNotPlanned { .. } => ModelErrorKind::NodeNotPlanned,
@@ -896,6 +912,7 @@ mod tests {
 
     /// The time the tests' revocations and records are made at.
     const REVOKED_AT: UnixTime = UnixTime::from_secs(1_791_417_600);
+    use crate::abuse_guard::AbuseGuardAgreement;
     use crate::alerting::{AlertSettings, WallClockTime};
     use crate::cert::{CertificatePem, Hy2Sni};
     use crate::collections::NonEmpty;
@@ -1337,8 +1354,23 @@ mod tests {
                         version: AgreementVersion::CURRENT,
                         accepted_on: CalendarDate::parse("2026-11-03").unwrap(),
                     },
+                    guard: AbuseGuardAgreement::SHIPPED,
                 })
                 .unwrap_err(),
+            ),
+            (
+                K::AgreementStartsGuard,
+                Deployment::try_from(two_node_parts())
+                    .unwrap()
+                    .record(Bookkeeping::AgreementRecorded {
+                        user: user_id(1),
+                        record: AgreementRecord {
+                            version: AgreementVersion::CURRENT,
+                            accepted_on: CalendarDate::parse("2026-11-15").unwrap(),
+                        },
+                        guard: AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT)),
+                    })
+                    .unwrap_err(),
             ),
             (
                 K::CarrierAlreadyRecorded,

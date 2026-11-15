@@ -3,6 +3,7 @@
 //! Tests of the renderers against the fixture deployments.
 
 mod bookkeeping;
+mod coverage;
 mod credentials;
 mod goldens;
 mod invariants;

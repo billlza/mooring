@@ -2,9 +2,10 @@
 
 //! The identities a node serves and their per-node credentials: every
 //! active user holding credentials on the node, in id order, then the
-//! Mac's probe identity. Before anything is rendered, the credentials of
-//! every identity holding them on the node are checked to be distinct as
-//! the engines key them.
+//! Mac's probe identity, each marked with whether the abuse guard covers
+//! it. Before anything is rendered, the credentials of every identity
+//! holding them on the node are checked to be distinct as the engines key
+//! them.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -18,7 +19,7 @@ use mooring_agent_proto::{
 };
 use mooring_model::ids::{NodeId, ShortId, UserId, Uuid};
 use mooring_model::secret::{Password, Secret, SecretSnapshot};
-use mooring_model::{Deployment, Node};
+use mooring_model::{AbuseGuardAgreement, Deployment, Node};
 
 use crate::error::{CredentialHolder, CredentialKind, RenderError, WireField};
 use crate::text_value::{TextValueError, display_serde};
@@ -40,16 +41,18 @@ impl Identity {
     pub(crate) fn email(&self, inbound: Inbound) -> Result<StatsEmail, RenderError> {
         let principal = match self {
             Self::Probe => Principal::Probe,
-            Self::User(user) => {
-                Principal::User(OpaqueUserId::new(user.as_str()).map_err(|_| {
-                    RenderError::WireValue {
-                        field: WireField::AccountingName(user.clone()),
-                    }
-                })?)
-            }
+            Self::User(user) => Principal::User(opaque(user)?),
         };
         Ok(StatsEmail { principal, inbound })
     }
+}
+
+/// `user`'s id as a node knows it: the same text, which every user id is a
+/// valid one of.
+fn opaque(user: &UserId) -> Result<OpaqueUserId, RenderError> {
+    OpaqueUserId::new(user.as_str()).map_err(|_| RenderError::WireValue {
+        field: WireField::AccountingName(user.clone()),
+    })
 }
 
 /// A user's source address inside the node (design §11.8): always inside
@@ -69,18 +72,24 @@ impl UserSource {
     }
 }
 
-/// One served user's way out of the node: the accounting emails of both
-/// inbounds, which its routing rule names, and its source address, which
-/// its outbound binds.
+/// One guarded user's way out of the node: the user as the node knows it,
+/// the accounting emails of both inbounds, which its routing rule names,
+/// and its source address, which its outbound binds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UserExit {
+    pub(crate) user: OpaqueUserId,
     pub(crate) emails: [StatsEmail; 2],
     pub(crate) source: UserSource,
 }
 
-/// The way out of every user `served` holds, in served order, refusing two
-/// users with one source address (`UserSourceCollision`, naming both).
-/// The probe has none: it leaves from the tunnel's own address.
+/// The way out of every user `served` holds whom the abuse guard covers
+/// ([`Served::guarded`]), in served order. The probe and the users it does
+/// not cover have none: they leave from the tunnel's own address.
+///
+/// Two served users with one source address are refused
+/// (`UserSourceCollision`, naming both) whether the guard covers them or
+/// not, so that a user's acceptance of the agreement never makes the node
+/// fail to render.
 pub(crate) fn user_exits(node: &NodeId, served: &[Served]) -> Result<Vec<UserExit>, RenderError> {
     let mut seen: BTreeMap<UserSource, &UserId> = BTreeMap::new();
     let mut exits = Vec::new();
@@ -88,15 +97,9 @@ pub(crate) fn user_exits(node: &NodeId, served: &[Served]) -> Result<Vec<UserExi
         let Identity::User(user) = &served.identity else {
             continue;
         };
-        let emails = [
-            served.identity.email(Inbound::Reality)?,
-            served.identity.email(Inbound::Hy2)?,
-        ];
-        let Principal::User(opaque) = &emails[0].principal else {
-            continue;
-        };
+        let opaque = opaque(user)?;
         let source =
-            UserSource::new(user_source(opaque)).ok_or_else(|| RenderError::WireValue {
+            UserSource::new(user_source(&opaque)).ok_or_else(|| RenderError::WireValue {
                 field: WireField::AccountingName(user.clone()),
             })?;
         if let Some(first) = seen.insert(source, user) {
@@ -106,7 +109,16 @@ pub(crate) fn user_exits(node: &NodeId, served: &[Served]) -> Result<Vec<UserExi
                 second: user.clone(),
             });
         }
-        exits.push(UserExit { emails, source });
+        if served.guarded {
+            exits.push(UserExit {
+                user: opaque,
+                emails: [
+                    served.identity.email(Inbound::Reality)?,
+                    served.identity.email(Inbound::Hy2)?,
+                ],
+                source,
+            });
+        }
     }
     Ok(exits)
 }
@@ -151,6 +163,11 @@ impl From<&Identity> for CredentialHolder {
 #[derive(Debug, Clone)]
 pub(crate) struct Served {
     pub(crate) identity: Identity,
+    /// Whether the abuse guard covers the identity (design §11.8): a user
+    /// who accepted an agreement revision that states it, as the render's
+    /// [`AbuseGuardAgreement`] has it, and never the probe. Only a covered
+    /// user leaves from a source address of its own ([`user_exits`]).
+    pub(crate) guarded: bool,
     /// The REALITY VLESS UUID (`reality-in`).
     pub(crate) vless: Secret<Uuid>,
     /// The REALITY short id.
@@ -170,7 +187,8 @@ struct Holder {
     credentials: Served,
 }
 
-/// Every identity `node` serves, users in id order, then the probe.
+/// Every identity `node` serves, users in id order, then the probe, each
+/// marked with whether `guard` covers it.
 ///
 /// First, every identity holding credentials on the node is checked
 /// against every other: each user with credentials there, whether active,
@@ -185,6 +203,7 @@ pub(crate) fn served(
     deployment: &Deployment,
     node: &Node,
     secrets: &SecretSnapshot,
+    guard: AbuseGuardAgreement,
 ) -> Result<Vec<Served>, RenderError> {
     let id: &NodeId = &node.id;
     let mut holders = Vec::new();
@@ -196,6 +215,7 @@ pub(crate) fn served(
             is_served: user.is_served_on(id),
             credentials: Served {
                 identity: Identity::User(user.id.clone()),
+                guarded: guard.covers(user),
                 vless: secrets.user_vless_uuid(&user.id, id)?.clone(),
                 short_id: public.short_id,
                 loopback: secrets.user_loop_uuid(&user.id, id)?.clone(),
@@ -207,6 +227,7 @@ pub(crate) fn served(
         is_served: true,
         credentials: Served {
             identity: Identity::Probe,
+            guarded: false,
             vless: secrets.probe_vless_uuid(id)?.clone(),
             short_id: node.reality.probe_short_id,
             loopback: secrets.probe_loop_uuid(id)?.clone(),

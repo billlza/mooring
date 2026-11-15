@@ -1193,10 +1193,11 @@ fn rules(input: &XrayInput<'_>) -> Result<Vec<XrayRule>, RenderError> {
             ..XrayRule::to(OutboundTag::Deny)
         });
     }
-    // Each user leaves from its own source address (design §11.8), where
-    // the final rule sent every user to `exit`. The probe alone still
-    // leaves through `exit`, and a flow no rule names falls to `deny`, the
-    // first outbound.
+    // Each user the abuse guard covers leaves from its own source address
+    // (design §11.8). Every other identity served, each user the guard does
+    // not cover and the probe, leaves through `exit`, as every user did
+    // before the guard, and a flow no rule names falls to `deny`, the first
+    // outbound.
     for exit in input.user_exits {
         rules.push(XrayRule {
             user: Some(exit.emails.to_vec()),
@@ -1204,8 +1205,20 @@ fn rules(input: &XrayInput<'_>) -> Result<Vec<XrayRule>, RenderError> {
         });
     }
     rules.push(XrayRule {
-        user: Some(probe),
+        user: Some(exit_emails(input.served)?),
         ..XrayRule::to(OutboundTag::Exit)
     });
     Ok(rules)
+}
+
+/// The accounting emails of every identity served that leaves through
+/// `exit`, on both inbounds: each user the abuse guard does not cover, in
+/// served order, then the probe, which is always served.
+fn exit_emails(served: &[Served]) -> Result<Vec<StatsEmail>, RenderError> {
+    let mut emails = Vec::new();
+    for served in served.iter().filter(|served| !served.guarded) {
+        emails.push(served.identity.email(Inbound::Reality)?);
+        emails.push(served.identity.email(Inbound::Hy2)?);
+    }
+    Ok(emails)
 }

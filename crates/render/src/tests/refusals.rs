@@ -16,8 +16,8 @@ use mooring_model::secret::{SecretRef, SecretSnapshotError};
 use crate::error::{HostKeyRule, RenderError, RenderErrorKind, WireField};
 use crate::mac::{exit, prober};
 use crate::tests::support::{
-    HOST_PRIVATE, HOST_PUBLIC, cloud_init_keys, ed25519_of, edit, engines, node, planned,
-    secrets_without, vps,
+    GUARD_OPEN, HOST_PRIVATE, HOST_PUBLIC, cloud_init_keys, ed25519_of, edit, engines, node,
+    planned, secrets_without, vps,
 };
 use crate::vps::{OpensshHostKey, bundle, cloud_init};
 
@@ -34,6 +34,7 @@ fn bundles_need_a_known_adopted_node_with_a_target_and_its_secrets() {
         &node("par1"),
         &fixture.secrets,
         &catalog,
+        GUARD_OPEN,
     )
     .unwrap_err();
     assert!(matches!(
@@ -48,6 +49,7 @@ fn bundles_need_a_known_adopted_node_with_a_target_and_its_secrets() {
         &node("lon1"),
         &planned.secrets,
         &catalog,
+        GUARD_OPEN,
     )
     .unwrap_err();
     assert!(matches!(
@@ -65,7 +67,14 @@ fn bundles_need_a_known_adopted_node_with_a_target_and_its_secrets() {
         lon1.lifecycle = NodeLifecycle::Adopted { site };
         lon1.reality.target = None;
     });
-    let error = bundle(&targetless, &node("lon1"), &fixture.secrets, &catalog).unwrap_err();
+    let error = bundle(
+        &targetless,
+        &node("lon1"),
+        &fixture.secrets,
+        &catalog,
+        GUARD_OPEN,
+    )
+    .unwrap_err();
     assert!(matches!(
         error,
         RenderError::Model(ModelError::TargetNotSet { .. })
@@ -83,7 +92,14 @@ fn bundles_need_a_known_adopted_node_with_a_target_and_its_secrets() {
         ),
     ] {
         let secrets = secrets_without(&fixture.secrets, &missing);
-        let error = bundle(&fixture.deployment, &node("lon1"), &secrets, &catalog).unwrap_err();
+        let error = bundle(
+            &fixture.deployment,
+            &node("lon1"),
+            &secrets,
+            &catalog,
+            GUARD_OPEN,
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), RenderErrorKind::Secret, "{missing}");
         let RenderError::Secret(SecretSnapshotError::Missing { secret_ref }) = error else {
             panic!("expected a missing secret");
@@ -95,7 +111,16 @@ fn bundles_need_a_known_adopted_node_with_a_target_and_its_secrets() {
         &fixture.secrets,
         &SecretRef::NodeRealityPrivate(node("lon1")),
     );
-    assert!(bundle(&fixture.deployment, &node("ams1"), &secrets, &catalog).is_ok());
+    assert!(
+        bundle(
+            &fixture.deployment,
+            &node("ams1"),
+            &secrets,
+            &catalog,
+            GUARD_OPEN
+        )
+        .is_ok()
+    );
 }
 
 #[test]

@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mooring_agent_proto::{EngineSet, Sha256Hex, SshEd25519Key};
+use mooring_agent_proto::{EngineSet, OpaqueUserId, Sha256Hex, SshEd25519Key, user_source};
 use mooring_fixtures::Fixture;
 use mooring_keys::credentials;
 use mooring_model::deployment::DeploymentParts;
@@ -19,7 +19,7 @@ use mooring_model::secret::{SecretEntry, SecretMaterial, SecretRef, SecretSnapsh
 use mooring_model::user::{
     ClientLine, ClientProfile, User, UserNodePublic, UserPolicy, UserStatus,
 };
-use mooring_model::{Deployment, Secret};
+use mooring_model::{AbuseGuardAgreement, AgreementVersion, Deployment, Secret};
 
 use crate::mac::{ExitConfig, ProberConfig, exit, prober};
 use crate::vps::{CloudInitKeys, EngineCatalog, OpensshHostKey, VpsBundle, bundle};
@@ -53,10 +53,39 @@ pub(crate) fn engines() -> EngineCatalog {
     }
 }
 
-/// The bundle of `node` in `fixture`.
+/// The bundle of `node` in `fixture`, with every served user under the
+/// abuse guard ([`GUARD_OPEN`]).
 pub(crate) fn vps(fixture: &Fixture, node_id: &NodeId) -> VpsBundle {
-    bundle(&fixture.deployment, node_id, &fixture.secrets, &engines()).unwrap()
+    vps_under(fixture, node_id, GUARD_OPEN)
 }
+
+/// Node `node_id`'s bundle of `fixture`, with the abuse guard covering
+/// whom `guard` covers.
+pub(crate) fn vps_under(
+    fixture: &Fixture,
+    node_id: &NodeId,
+    guard: AbuseGuardAgreement,
+) -> VpsBundle {
+    bundle(
+        &fixture.deployment,
+        node_id,
+        &fixture.secrets,
+        &engines(),
+        guard,
+    )
+    .unwrap()
+}
+
+/// The abuse guard's gate opened at the current agreement revision, which
+/// every fixture user accepted: the render of a build whose agreement
+/// states the guard (design §11.8), with every served user under it. The
+/// goldens are rendered with it.
+pub(crate) const GUARD_OPEN: AbuseGuardAgreement =
+    AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT));
+
+/// The abuse guard's gate while no agreement revision states the guard:
+/// it covers no user.
+pub(crate) const GUARD_CLOSED: AbuseGuardAgreement = AbuseGuardAgreement::since(None);
 
 /// The exit config of `fixture`.
 pub(crate) fn mac_exit(fixture: &Fixture) -> ExitConfig {
@@ -79,9 +108,16 @@ pub(crate) fn edit(
 }
 
 /// Adds an active CFM 0.5 user holding fresh credentials on every node the
-/// fixture's users hold credentials on; returns its id.
+/// fixture's users hold credentials on; returns its id. The id is drawn as
+/// `user add` draws one, again until no user of the fixture has its source
+/// address inside the nodes (design §11.8), so the renderer never meets
+/// two served users sharing one.
 pub(crate) fn add_user(fixture: &mut Fixture) -> UserId {
-    let id = credentials::user_id().unwrap();
+    let source = |user: &UserId| user_source(&OpaqueUserId::new(user.as_str()).unwrap());
+    let taken: BTreeSet<_> = fixture.deployment.users().keys().map(source).collect();
+    let id = std::iter::repeat_with(|| credentials::user_id().unwrap())
+        .find(|id| !taken.contains(&source(id)))
+        .unwrap();
     let nodes: BTreeSet<NodeId> = fixture.deployment.nodes().keys().cloned().collect();
     let mut per_node = BTreeMap::new();
     for node in &nodes {

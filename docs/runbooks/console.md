@@ -337,7 +337,7 @@ By hand, with any build: start the job twice, about 20 s apart, in the minute yo
 
 ## 8. Abuse cases (2026-11-11)
 
-The abuse guard (design §11.8) runs on each node by itself. A user whose connections look like a scan, a flood, password guessing or bulk mail is cut on that node at once: every flow of theirs is refused, and nobody else is touched. The console's node row then shows `Users cut off for abuse: 1`, and `Users with abuse findings below the cut level` for a user only alerted on. No content is read and no destination is kept: the records hold an opaque user id and counts.
+The abuse guard (design §11.8) runs on each node by itself, for the users who accepted an agreement revision that states it (revision 2 and later, once this build ships one): a user of revision 1 keeps their service as before, and the guard neither limits, measures nor cuts them. A covered user whose connections look like a scan, a flood, password guessing or bulk mail is cut on that node at once: every flow of theirs is refused, and nobody else is touched. The console's node row then shows `Users cut off for abuse: 1`, and `Users with abuse findings below the cut level` for a user only alerted on. No content is read and no destination is kept: the records hold an opaque user id and counts.
 
 Review each case from Terminal.app's own shell with the installed app's `mooringctl`, as section 1 says (`--interface` names the interface facing the M7):
 
@@ -351,11 +351,13 @@ It prints the users cut and every record the node keeps (30 days), with their fi
 - **To examine further:** `mooringctl user suspend <user> --reason abuse-review`, then `node apply` on each node the user holds, then `abuse clear` on each, once the apply has removed the user (the cut has nothing left to hold). `mooringctl user resume <user>` and `node apply` undo it.
 - **A confirmed case:** a ban, the operator's rule of 2026-11-06 with no refund: revoke the user (design §13.5), ban the account at the portal (`delivery.md` §11), and copy the records into the ban record. Lift the node's cut once the revocation has committed; `abuse clear` works for a user this Mac no longer holds.
 
-To cut a user yourself, on a complaint for example: `mooringctl abuse cut lon1 <user> --interface en9`.
+To cut a user yourself, on a complaint for example: `mooringctl abuse cut lon1 <user> --interface en9`. The node refuses a user its guard does not cover (`the node's abuse guard does not cover user …`): their flows leave from the node's own address, so there is nothing of theirs to cut. Suspend such a user instead (`user suspend`, then `node apply`), or stop the exit for everyone, below.
+
+When a user accepts a revision that states the guard, `mooringctl user agree <user>` says so and bumps the configuration generation: `… which states the abuse guard; every node it holds needs node apply before the guard covers it`. The nightly job applies it in its window; until then the user is served as before, and exports of the users on those nodes wait for the apply.
 
 If a node's SSH cannot be reached, its guard still cuts by itself, and the console shows it once the node answers again. To stop a user the node has not detected meanwhile, stop the exit for everyone: `mooringctl exit disable` on this Mac, or the phone's emergency stop. This Mac cannot stop one user alone: every user's flows reach it from the node's single tunnel address.
 
-**Rolling the guard out:** the users must first have accepted the agreement's revision 2, which states it (design §11.8, decision F21). The guard must not run on a node with users before then. Then `node upgrade-agent` before `node apply` on each node: an older agent cannot read the new `watch.json`. `node apply`, the nightly job's included, refuses a node whose agent is older than this Mac's build, and says to upgrade it first. The first apply restarts the tunnel once. Until it runs, the node shows `The abuse guard is not installed`.
+**Rolling the guard out:** it covers only the users who accepted the agreement's revision 2, which states it (design §11.8, decision F21), and none while this build ships no such revision, so it can be installed on a node with users of revision 1. `node upgrade-agent` comes before `node apply` on each node: an older agent cannot read the new `watch.json`. `node apply`, the nightly job's included, refuses a node whose agent is older than this Mac's build, and says to upgrade it first. The first apply restarts the tunnel once. Until it runs, the node shows `The abuse guard is not installed`.
 
 ## Troubleshooting
 

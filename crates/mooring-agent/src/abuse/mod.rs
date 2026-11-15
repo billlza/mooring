@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The abuse guard on the node (design §11.8). Each served user's flows
-//! leave Xray from the user's own source address inside the node
+//! The abuse guard on the node (design §11.8). The flows of each user it
+//! covers, a served user who accepted an agreement revision that states it
+//! ([`mooring_agent_proto::WatchConfig::guarded_users`]), leave Xray from
+//! the user's own source address inside the node
 //! ([`mooring_agent_proto::user_source`]), so the kernel limits, measures
 //! and cuts one user without seeing content or keeping a destination.
+//! Every other identity leaves from the tunnel's own address, which the
+//! guard never sees.
 //!
 //! - [`state`]: the cuts and records, one file, rewritten atomically under
 //!   `gate.lock`.
@@ -26,37 +30,36 @@ use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use mooring_agent_proto::{
-    AbuseCuts, AbuseSet, InstalledWatchConfig, NFT_GATE_SET, NFT_TABLE, OpaqueUserId, Principal,
-    WG_INTERFACE, user_source,
+    AbuseCuts, AbuseSet, InstalledWatchConfig, NFT_GATE_SET, NFT_TABLE, OpaqueUserId, WG_INTERFACE,
+    user_source,
 };
 
-/// The users the installed generation serves, by source address.
-pub(crate) fn served_sources(config: &InstalledWatchConfig) -> BTreeMap<Ipv4Addr, OpaqueUserId> {
+/// The users the installed generation's guard covers, by source address;
+/// none for a generation rendered before the guard.
+pub(crate) fn guarded_sources(config: &InstalledWatchConfig) -> BTreeMap<Ipv4Addr, OpaqueUserId> {
     config
-        .emails()
-        .iter()
-        .filter_map(|email| match &email.principal {
-            Principal::User(user) => Some((user_source(user), user.clone())),
-            Principal::Probe => None,
-        })
+        .guarded_users()
+        .into_iter()
+        .flatten()
+        .map(|user| (user_source(user), user.clone()))
         .collect()
 }
 
 /// The addresses the cut set holds: each cut user's, in address order. The
-/// one address left out is a cut user's that belongs to another served user
-/// who is not cut: the renderer refuses two served users with one address,
-/// so the cut user is not served then, and cutting the address would cut
-/// the other user instead.
+/// one address left out is a cut user's that belongs to another guarded
+/// user who is not cut: the renderer refuses two served users with one
+/// address, so the cut user is not served then, and cutting the address
+/// would cut the other user instead.
 pub(crate) fn cut_addresses(
     cuts: &AbuseCuts,
-    served: &BTreeMap<Ipv4Addr, OpaqueUserId>,
+    guarded: &BTreeMap<Ipv4Addr, OpaqueUserId>,
 ) -> Vec<Ipv4Addr> {
     let mut addresses: Vec<Ipv4Addr> = cuts
         .entries()
         .iter()
         .filter_map(|cut| {
             let address = user_source(&cut.user);
-            match served.get(&address) {
+            match guarded.get(&address) {
                 Some(holder) if *holder != cut.user && cuts.get(holder).is_none() => None,
                 _ => Some(address),
             }

@@ -21,7 +21,9 @@ use crate::mac::exit::ExitRule;
 use crate::tests::invariants::{
     exit_of, hy2_of, is_node_deny, is_probe_allow, is_special_deny, position, xray_of,
 };
-use crate::tests::support::{add_user, big, edit, engines, mac_exit, mac_prober, node, vps};
+use crate::tests::support::{
+    GUARD_OPEN, add_user, big, edit, engines, mac_exit, mac_prober, node, vps,
+};
 use crate::vps::hy2::{Hy2Rule, LoopTag};
 use crate::vps::served::Identity;
 use crate::vps::testing::{digest_with, digest_with_files};
@@ -315,8 +317,14 @@ fn the_bundle_digest_is_deterministic_and_binds_file_boundaries() {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
     let id = node("lon1");
     let first = vps(&fixture, &id);
-    let second =
-        crate::vps::bundle(&fixture.deployment, &id, &fixture.secrets, &engines()).unwrap();
+    let second = crate::vps::bundle(
+        &fixture.deployment,
+        &id,
+        &fixture.secrets,
+        &engines(),
+        GUARD_OPEN,
+    )
+    .unwrap();
     assert_eq!(first, second);
     assert_eq!(first.digest(), second.digest());
     // Two bundles whose files differ only in where one file ends and the
@@ -338,7 +346,14 @@ fn the_bundle_digest_is_deterministic_and_binds_file_boundaries() {
     // Engines and the architecture are part of the digest.
     let mut other = engines();
     other.amd64.geoip = other.arm64.geoip;
-    let changed = crate::vps::bundle(&fixture.deployment, &id, &fixture.secrets, &other).unwrap();
+    let changed = crate::vps::bundle(
+        &fixture.deployment,
+        &id,
+        &fixture.secrets,
+        &other,
+        GUARD_OPEN,
+    )
+    .unwrap();
     assert_ne!(changed.digest(), first.digest());
     for file in ManagedFile::ALL {
         assert_eq!(changed.file(*file), first.file(*file));

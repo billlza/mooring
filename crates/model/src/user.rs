@@ -367,6 +367,40 @@ impl User {
         }
     }
 
+    /// Records that the user accepted the revision in `record` (`user
+    /// agree`, design §7). A user pending revocation or revoked is refused
+    /// (`RevocationAlreadyStarted`), and so is a revision older than the one
+    /// recorded (`AgreementRegressed`). The same revision keeps the record
+    /// as it is, so its day stays the day of the first acceptance.
+    ///
+    /// The bookkeeping record `AgreementRecorded` applies this rule, and so
+    /// does the configuration change that records an acceptance bringing
+    /// the user under the abuse guard ([`crate::AbuseGuardAgreement`]).
+    pub fn accept_agreement(&mut self, record: AgreementRecord) -> Result<(), ModelError> {
+        if matches!(
+            self.status,
+            UserStatus::RevokePending | UserStatus::Revoked { .. }
+        ) {
+            return Err(ModelError::RevocationAlreadyStarted {
+                user: self.id.clone(),
+            });
+        }
+        match self.agreement {
+            Some(recorded) if record.version < recorded.version => {
+                Err(ModelError::AgreementRegressed {
+                    user: self.id.clone(),
+                    recorded: recorded.version,
+                    offered: record.version,
+                })
+            }
+            Some(recorded) if record.version == recorded.version => Ok(()),
+            Some(_) | None => {
+                self.agreement = Some(record);
+                Ok(())
+            }
+        }
+    }
+
     /// The nodes that still have to commit this user's revocation, in id
     /// order: every node holding credentials while `RevokePending`, and none
     /// otherwise.

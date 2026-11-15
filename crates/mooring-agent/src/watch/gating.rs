@@ -26,7 +26,7 @@ use mooring_agent_proto::{
 use super::nft::{counter, nft};
 use super::{Fatal, Watch};
 use crate::abuse::state::AbuseState;
-use crate::abuse::{as_args, cut_addresses, open_words, served_sources, sync_words};
+use crate::abuse::{as_args, cut_addresses, guarded_sources, open_words, sync_words};
 use crate::gate::{self, StopRequest};
 use crate::host::Node;
 use crate::paths::Paths;
@@ -129,7 +129,7 @@ impl Watch {
         let cut = match config.abuse_guard() {
             Some(_) => Some(cut_addresses(
                 AbuseState::read(paths)?.cuts(),
-                &served_sources(config),
+                &guarded_sources(config),
             )),
             None => None,
         };

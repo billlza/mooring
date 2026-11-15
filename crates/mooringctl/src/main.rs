@@ -205,6 +205,7 @@ fn main() -> ExitCode {
         probe: &runtime::probe::direct,
         redirect_stderr: &mooring_macsys::redirect_stderr,
         portal_agreement: mooring_model::PortalAgreement::SHIPPED,
+        abuse_guard: mooring_model::AbuseGuardAgreement::SHIPPED,
         portal: &curl,
     };
     let code = run(

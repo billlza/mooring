@@ -115,6 +115,40 @@ fn a_scan_cuts_the_user_at_the_next_reading() {
     assert_eq!(AbuseState::read(&world.paths).unwrap().records().len(), 1);
 }
 
+/// The guard judges only the users it covers: a served user who has not
+/// accepted a revision that states it leaves from the tunnel's address, and
+/// even elements at their address count for no one, while a covered user
+/// at the same figures is cut.
+#[test]
+fn a_served_user_the_guard_does_not_cover_is_never_judged() {
+    let world = World::new();
+    world.install_guarding(1, TxnState::Committed, &["u01", "u02"], &["u01"]);
+    let node = world.node(1_791_705_000);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    for _ in 0..2 {
+        world.traffic(&node, 1);
+        tick(&mut watch, &world, &node);
+    }
+    assert!(!world.net.closed.get(), "the gate opened");
+    let u02 = OpaqueUserId::new("u02").unwrap();
+    let cut_at = AbuseFinding::MassContact.cut_at();
+    set_listing(&world, "user_dst", &buckets(&u02, cut_at));
+    until_read(&mut watch, &world, &node);
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert!(state.records().is_empty(), "{:?}", state.records());
+    assert!(state.cuts().is_empty());
+    assert!(!in_kernel(&world, &u02));
+    assert!(world.conditions().is_empty());
+    let mut both = buckets(&u02, cut_at);
+    both.extend(buckets(&u01(), cut_at));
+    set_listing(&world, "user_dst", &both);
+    until_read(&mut watch, &world, &node);
+    let state = AbuseState::read(&world.paths).unwrap();
+    assert_eq!(state.cuts().entries().len(), 1);
+    assert!(state.cuts().get(&u01()).is_some());
+    assert!(in_kernel(&world, &u01()) && !in_kernel(&world, &u02));
+}
+
 #[test]
 fn an_alert_is_recorded_once_an_hour_and_counted_as_suspected() {
     let world = World::new();

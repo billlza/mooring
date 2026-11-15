@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use mooring_agent_proto::{
     AbuseGuardVersion, AbuseSet, AgentEventKind, BundleFiles, BundleHeader, EngineSet, EventSeq,
-    Generation, Halt, HostProfile, Sha256Hex, ShutdownReason, StatsEmail, TargetHost, Traffic,
-    TxnState, UnixTime, UsageMonth, WATCH_TICK_SECS, WatchConfig, WatchConfigBeforeGuard,
+    Generation, Halt, HostProfile, OpaqueUserId, Sha256Hex, ShutdownReason, StatsEmail, TargetHost,
+    Traffic, TxnState, UnixTime, UsageMonth, WATCH_TICK_SECS, WatchConfig, WatchConfigBeforeGuard,
     WatchError, WatchErrorKind, WatchTarget,
 };
 
@@ -217,19 +217,39 @@ impl World {
     }
 
     /// Installs generation `generation` with a 10 s keepalive and the
-    /// abuse guard, its record in `state`, as the current one.
+    /// abuse guard, its record in `state`, as the current one: it serves
+    /// `u01`, whom the guard covers.
     pub(crate) fn install(&self, generation: u64, state: TxnState) {
+        self.install_guarding(generation, state, &["u01"], &["u01"]);
+    }
+
+    /// Installs generation `generation` as [`World::install`] does, serving
+    /// the users `served` and the probe, the guard covering `guarded`.
+    pub(crate) fn install_guarding(
+        &self,
+        generation: u64,
+        state: TxnState,
+        served: &[&str],
+        guarded: &[&str],
+    ) {
         let config = WatchConfig {
             keepalive_secs: NonZeroU16::new(10).unwrap(),
             target: WatchTarget {
                 host: TargetHost::new("www.example.com").unwrap(),
                 ipv4: "198.51.100.7".parse().unwrap(),
             },
-            emails: ["u01@reality", "u01@hy2", "probe@reality", "probe@hy2"]
-                .into_iter()
+            emails: served
+                .iter()
+                .copied()
+                .chain(["probe"])
+                .flat_map(|identity| [format!("{identity}@reality"), format!("{identity}@hy2")])
                 .map(|email| email.parse().unwrap())
                 .collect(),
             abuse_guard: AbuseGuardVersion::V1,
+            guarded_users: guarded
+                .iter()
+                .map(|user| OpaqueUserId::new(*user).unwrap())
+                .collect(),
         };
         self.install_config(generation, state, &config);
     }

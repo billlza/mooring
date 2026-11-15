@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
 use crate::{
-    AbuseGuardFault, AbuseGuardVersion, InboundSet, StatsEmail, TargetHost, UnixTime, ValueError,
+    AbuseGuardFault, AbuseGuardVersion, InboundSet, OpaqueUserId, StatsEmail, TargetHost, UnixTime,
+    ValueError,
 };
 
 /// Seconds between watch ticks (§11.3).
@@ -75,11 +76,16 @@ pub struct WatchConfig {
     /// clients: every identity it serves, on each inbound. The watch keeps
     /// `StatusV1::last_active` for these only (design §11.5), and reads
     /// them here so that it never needs `xray.json`, which holds secrets.
-    /// The users among them are the users the generation serves, whose
-    /// source addresses ([`crate::user_source`]) the abuse guard measures.
     pub emails: BTreeSet<StatsEmail>,
     /// The abuse guard the generation's rules carry (design §11.8).
     pub abuse_guard: AbuseGuardVersion,
+    /// The users the abuse guard covers: those among the users served who
+    /// accepted an agreement revision that states the guard. Only these
+    /// leave Xray from a source address of their own
+    /// ([`crate::user_source`]), so the guard measures, limits and cuts
+    /// them and no one else; every other identity leaves from the tunnel's
+    /// own address, as before the guard.
+    pub guarded_users: BTreeSet<OpaqueUserId>,
 }
 
 impl WatchConfig {
@@ -149,6 +155,16 @@ impl InstalledWatchConfig {
     pub fn abuse_guard(&self) -> Option<AbuseGuardVersion> {
         match self {
             Self::Guarded(config) => Some(config.abuse_guard),
+            Self::BeforeGuard(_) => None,
+        }
+    }
+
+    /// The users the generation's abuse guard covers
+    /// ([`WatchConfig::guarded_users`]); `None` for a generation rendered
+    /// before the guard.
+    pub fn guarded_users(&self) -> Option<&BTreeSet<OpaqueUserId>> {
+        match self {
+            Self::Guarded(config) => Some(&config.guarded_users),
             Self::BeforeGuard(_) => None,
         }
     }
@@ -508,12 +524,13 @@ mod tests {
                 .map(|email| email.parse().unwrap())
                 .collect(),
             abuse_guard: AbuseGuardVersion::V1,
+            guarded_users: [OpaqueUserId::new("u01").unwrap()].into(),
         };
         assert_eq!(config.rx_growth_window_secs(), 30);
         let json = serde_json::to_string(&config).unwrap();
         assert_eq!(
             json,
-            r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"],"abuse_guard":1}"#
+            r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"],"abuse_guard":1,"guarded_users":["u01"]}"#
         );
         assert_eq!(serde_json::from_str::<WatchConfig>(&json).unwrap(), config);
         assert!(serde_json::from_str::<WatchConfig>(&json.replace(":10,", ":0,")).is_err());
@@ -525,14 +542,19 @@ mod tests {
     /// guard version as neither.
     #[test]
     fn an_installed_config_reads_as_exactly_one_shape() {
-        let guarded = r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"],"abuse_guard":1}"#;
+        let guarded = r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"],"abuse_guard":1,"guarded_users":["u01"]}"#;
         let before = r#"{"keepalive_secs":10,"target":{"host":"www.example.com","ipv4":"198.51.100.7"},"emails":["probe@hy2","u01@reality"]}"#;
         let installed: InstalledWatchConfig = serde_json::from_str(guarded).unwrap();
         assert!(matches!(installed, InstalledWatchConfig::Guarded(_)));
         assert_eq!(installed.abuse_guard(), Some(AbuseGuardVersion::V1));
+        assert_eq!(
+            installed.guarded_users(),
+            Some(&[OpaqueUserId::new("u01").unwrap()].into())
+        );
         let old: InstalledWatchConfig = serde_json::from_str(before).unwrap();
         assert!(matches!(old, InstalledWatchConfig::BeforeGuard(_)));
         assert_eq!(old.abuse_guard(), None);
+        assert_eq!(old.guarded_users(), None);
         for config in [&installed, &old] {
             assert_eq!(config.keepalive_secs().get(), 10);
             assert_eq!(config.target().host.as_str(), "www.example.com");
@@ -544,6 +566,8 @@ mod tests {
         for bad in [
             guarded.replace(r#""abuse_guard":1"#, r#""abuse_guard":2"#),
             guarded.replace(r#""abuse_guard":1"#, r#""abuse_guard":1,"x":1"#),
+            guarded.replace(r#","guarded_users":["u01"]"#, ""),
+            guarded.replace(r#"["u01"]}"#, r#"["probe"]}"#),
             before.replace(r#""emails""#, r#""mails""#),
         ] {
             assert!(

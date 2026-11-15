@@ -487,6 +487,7 @@ pub(crate) fn watch_config() -> WatchConfig {
             .map(|email| email.parse().unwrap())
             .collect(),
         abuse_guard: AbuseGuardVersion::V1,
+        guarded_users: [OpaqueUserId::new("u01").unwrap()].into(),
     }
 }
 
@@ -816,7 +817,7 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
         },
         AgentErrorKind::MacReportMissing => AgentError::MacReportMissing,
         AgentErrorKind::AbuseGuardNotInstalled => AgentError::AbuseGuardNotInstalled,
-        AgentErrorKind::AbuseUserNotServed => AgentError::AbuseUserNotServed {
+        AgentErrorKind::AbuseUserNotGuarded => AgentError::AbuseUserNotGuarded {
             user: abuse_user("u09"),
         },
         AgentErrorKind::AbuseCutsFull => AgentError::AbuseCutsFull,

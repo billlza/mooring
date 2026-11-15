@@ -9,8 +9,8 @@ use std::num::NonZeroU16;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 
 use mooring_model::{
-    AgreementRecord, AgreementVersion, CalendarDate, Deployment, DeploymentParts, RuntimeIntent,
-    StateV3, UnixTime, UserId, UserStatus,
+    AbuseGuardAgreement, AgreementRecord, AgreementVersion, CalendarDate, Deployment,
+    DeploymentParts, RuntimeIntent, StateV3, UnixTime, UserId, UserStatus,
 };
 use mooring_store::Store;
 
@@ -167,6 +167,98 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
         (fixture(|_| {}), &unknown, format!("unknown user {unknown}")),
     ] {
         let mut harness = harness_with(deployment);
+        let before = state_bytes(&harness);
+        let outcome = harness.run(&["user", "agree", target.as_str()]);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        assert_eq!(outcome.stdout, "");
+        assert_eq!(
+            outcome.stderr,
+            format!(
+                "mooringctl: the state was not changed\n  caused by: the new or changed deployment is invalid\n  caused by: {cause}\n"
+            )
+        );
+        assert_eq!(state_bytes(&harness), before);
+    }
+}
+
+/// The abuse guard's gate opened at the current revision, as a build whose
+/// agreement states the guard ships it.
+fn guard_open() -> AbuseGuardAgreement {
+    AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT))
+}
+
+/// With the guard's gate open, an acceptance that brings the user under the
+/// guard is a configuration change (design §11.8): the generation is
+/// bumped, every node's confirmation stays as it was, so each node the user
+/// holds is behind until its next apply, and the command says so.
+#[test]
+fn agree_that_starts_the_abuse_guard_bumps_the_generation() {
+    let deployment = fixture(|parts| parts.users[0].agreement = None);
+    let user = first_user(&deployment);
+    let mut harness = harness_with(deployment.clone());
+    harness.abuse_guard = guard_open();
+    let outcome = harness.run(&["user", "agree", user.as_str()]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stderr, "");
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "recorded: user {user} accepted agreement revision 1 on {} (UTC), which states the abuse guard; every node it holds needs `node apply` before the guard covers it\n",
+            today()
+        )
+    );
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(
+        after.config_generation(),
+        deployment.config_generation().next().unwrap()
+    );
+    assert_eq!(after.nodes(), deployment.nodes());
+    let mut expected = deployment.into_parts();
+    expected.users[0].agreement = Some(AgreementRecord {
+        version: AgreementVersion::CURRENT,
+        accepted_on: today(),
+    });
+    expected.config_generation = after.config_generation();
+    assert_eq!(after, Deployment::try_from(expected).unwrap());
+}
+
+/// With the gate open, a user the guard covers already keeps the record,
+/// and the generation, as with the gate closed; and the refusals are the
+/// same whichever way the acceptance would have been recorded.
+#[test]
+fn agree_with_the_gate_open_keeps_a_covered_record_and_its_refusals() {
+    let deployment = fixture(|_| {});
+    let user = first_user(&deployment);
+    let recorded = deployment.users()[&user].agreement.unwrap();
+    let mut harness = harness_with(deployment.clone());
+    harness.abuse_guard = guard_open();
+    let outcome = harness.run(&["user", "agree", user.as_str()]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "kept: user {user} already accepted agreement revision 1 on {}\n",
+            recorded.accepted_on
+        )
+    );
+    assert_eq!(store(&harness).load().unwrap().deployment, deployment);
+    // A revoking user without a record would start the guard, so its
+    // refusal comes from the configuration change: the same words.
+    let revoking = fixture(|parts| {
+        parts.users[0].status = UserStatus::RevokePending;
+        parts.users[0].agreement = None;
+    });
+    let unknown = UserId::parse("zzzzzzzzzz").unwrap();
+    for (deployment, target, cause) in [
+        (
+            revoking,
+            &user,
+            format!("user {user} is already pending revocation or revoked"),
+        ),
+        (fixture(|_| {}), &unknown, format!("unknown user {unknown}")),
+    ] {
+        let mut harness = harness_with(deployment);
+        harness.abuse_guard = guard_open();
         let before = state_bytes(&harness);
         let outcome = harness.run(&["user", "agree", target.as_str()]);
         assert_eq!(outcome.code, EXIT_LOCAL);

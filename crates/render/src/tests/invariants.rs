@@ -131,10 +131,12 @@ fn deny_is_first_then_exit_then_each_users_exit_then_camouflage() {
     }
 }
 
-/// Each served user's flows leave through their own exit, from their own
-/// source address, by one rule naming both of their accounting emails; the
-/// last rule sends the probe alone to `exit`, so no rule sends a user to
-/// `exit` and a flow no rule names falls to `deny`.
+/// With every served user under the abuse guard ([`vps`]), each served
+/// user's flows leave through their own exit, from their own source
+/// address, by one rule naming both of their accounting emails; the last
+/// rule sends the probe alone to `exit`, so no rule sends a user to `exit`
+/// and a flow no rule names falls to `deny`. Users the guard does not cover
+/// are `tests::coverage`'s.
 #[test]
 fn each_user_leaves_from_its_own_source_and_only_the_probe_through_exit() {
     for fixture in fixtures() {

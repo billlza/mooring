@@ -19,6 +19,7 @@ mod kinds;
 #[cfg(test)]
 mod testing;
 
+pub mod abuse_guard;
 pub mod alerting;
 pub mod cert;
 pub mod collections;
@@ -52,6 +53,7 @@ pub mod verdict;
 pub mod viewer;
 pub mod wg;
 
+pub use abuse_guard::{ABUSE_GUARD_SINCE, AbuseGuardAgreement};
 pub use alerting::{AlertSettings, PILOT_DIGEST_AT, WallClockTime, WallClockZone};
 pub use cert::{CertPins, CertificatePem, Hy2Sni};
 pub use collections::{NonEmpty, NonEmptySet};

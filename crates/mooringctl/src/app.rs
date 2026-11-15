@@ -84,6 +84,11 @@ pub(crate) struct Env<'a> {
     /// (`PortalAgreement::SHIPPED` in the binary): the portal's exports are
     /// refused until it does.
     pub(crate) portal_agreement: mooring_model::PortalAgreement,
+    /// Whom this build's abuse guard covers, by the agreement revision they
+    /// accepted (`AbuseGuardAgreement::SHIPPED` in the binary): the bundles
+    /// `node apply` renders, and whether `user agree` changes the
+    /// configuration (design §11.8).
+    pub(crate) abuse_guard: mooring_model::AbuseGuardAgreement,
     /// How the payment pull reaches the portal (`/usr/bin/curl` in the
     /// binary).
     pub(crate) portal: &'a dyn crate::payments::PortalLink,

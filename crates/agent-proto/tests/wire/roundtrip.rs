@@ -761,11 +761,22 @@ fn watch_config() -> impl Strategy<Value = WatchConfig> {
         any::<u32>().prop_map(Ipv4Addr::from),
         btree_set(stats_email(), 0..4),
     )
-        .prop_map(|(keepalive, host, ipv4, emails)| WatchConfig {
-            keepalive_secs: NonZeroU16::new(keepalive).unwrap(),
-            target: WatchTarget { host, ipv4 },
-            emails,
-            abuse_guard: AbuseGuardVersion::V1,
+        .prop_map(|(keepalive, host, ipv4, emails)| {
+            // The guard covers the users among the identities served.
+            let guarded_users = emails
+                .iter()
+                .filter_map(|email| match &email.principal {
+                    Principal::User(user) => Some(user.clone()),
+                    Principal::Probe => None,
+                })
+                .collect();
+            WatchConfig {
+                keepalive_secs: NonZeroU16::new(keepalive).unwrap(),
+                target: WatchTarget { host, ipv4 },
+                emails,
+                abuse_guard: AbuseGuardVersion::V1,
+                guarded_users,
+            }
         })
 }
 

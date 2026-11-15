@@ -7,16 +7,18 @@ use mooring_agent_proto::{AbuseGuardVersion, Inbound, TargetHost, WatchConfig, W
 use mooring_model::node::Node;
 use mooring_model::target::TargetSpec;
 
-use super::served::Served;
+use super::served::{Served, UserExit};
 use crate::error::{RenderError, WireField};
 
 /// Builds `watch.json` for `node` with its REALITY `target`, the
 /// accounting emails of the identities it `served`, written as `xray.json`
-/// writes them, and the abuse guard its rules carry (design §11.8).
+/// writes them, the abuse guard its rules carry, and the users the guard
+/// covers: those with a way out of their own (`user_exits`, design §11.8).
 pub(crate) fn config(
     node: &Node,
     target: &TargetSpec,
     served: &[Served],
+    user_exits: &[UserExit],
 ) -> Result<WatchConfig, RenderError> {
     let keepalive_secs = node.wg.keepalive.non_zero_seconds();
     let host = TargetHost::new(target.host().as_str()).map_err(|_| RenderError::WireValue {
@@ -38,5 +40,6 @@ pub(crate) fn config(
         },
         emails,
         abuse_guard: AbuseGuardVersion::CURRENT,
+        guarded_users: user_exits.iter().map(|exit| exit.user.clone()).collect(),
     })
 }

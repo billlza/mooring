@@ -19,10 +19,10 @@ use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::SecretEntry;
 use mooring_model::{
     AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Capability, ClientLine,
-    ClientProfile, Deployment, LocalLabel, ModelError, NodeId, StateV3, SuspendReason, User,
-    UserId, UserNodePublic, UserPolicy, UserStatus,
+    ClientProfile, Deployment, DeploymentParts, LocalLabel, ModelError, NodeId, StateV3,
+    SuspendReason, User, UserId, UserNodePublic, UserPolicy, UserStatus,
 };
-use mooring_store::{Store, read_snapshot, update_config_with_secrets};
+use mooring_store::{Store, StoreError, read_snapshot, update_config_with_secrets};
 
 use crate::app::{Env, support_dir};
 use crate::cli::SuspendArg;
@@ -319,10 +319,16 @@ fn change_status(
 }
 
 /// `user agree <uid>`: records that `user` accepted
-/// [`AgreementVersion::CURRENT`] on today's UTC date, as the bookkeeping
-/// record `AgreementRecorded` (design §7), which keeps the configuration
-/// generation. The store refuses a revoking or revoked user, an older
-/// revision and an unknown user, and then changes nothing.
+/// [`AgreementVersion::CURRENT`] on today's UTC date (design §7).
+///
+/// An acceptance that leaves the abuse guard's coverage as it was is the
+/// bookkeeping record `AgreementRecorded`, which keeps the configuration
+/// generation: no node needs an apply. One that brings the user under the
+/// guard (`env.abuse_guard`, design §11.8) changes every bundle that
+/// serves the user, so it is a configuration change: the generation is
+/// bumped, and each node the user holds covers them from its next
+/// `node apply`. Either way the store refuses a revoking or revoked user,
+/// an older revision and an unknown user, and then changes nothing.
 pub(crate) fn agree(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result<(), CommandError> {
     let store = Store::new(support_dir(env)?);
     let state = load(&store)?;
@@ -331,26 +337,42 @@ pub(crate) fn agree(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result
         version: AgreementVersion::CURRENT,
         accepted_on: today,
     };
-    let before = state
-        .deployment
-        .users()
-        .get(user)
-        .and_then(|record| record.agreement);
-    store
-        .record(
-            state.deployment.config_generation(),
-            Bookkeeping::AgreementRecorded {
-                user: user.clone(),
-                record: offered,
-            },
-        )
-        .map_err(store_failure)?;
+    let guard = env.abuse_guard;
+    let found = state.deployment.users().get(user);
+    let before = found.and_then(|record| record.agreement);
+    // An unknown user takes the record's path, where the store refuses it.
+    let starts_guard =
+        found.is_some_and(|found| !guard.covers(found) && guard.covers_revision(offered.version));
+    if starts_guard {
+        store
+            .update_config(state.deployment.config_generation(), |mut parts| {
+                accept_in(&mut parts, user, offered)
+                    .map_err(|source| store_failure(StoreError::InvalidChange { source }))?;
+                Ok(parts)
+            })
+            .map_err(refused_change)?;
+    } else {
+        store
+            .record(
+                state.deployment.config_generation(),
+                Bookkeeping::AgreementRecorded {
+                    user: user.clone(),
+                    record: offered,
+                    guard,
+                },
+            )
+            .map_err(store_failure)?;
+    }
     // The model keeps a record of the same revision with its first day
-    // (`Bookkeeping::AgreementRecorded`); the tests hold the two together.
+    // (`User::accept_agreement`); the tests hold the two together.
     let line = match before {
         Some(existing) if existing.version == offered.version => format!(
             "kept: user {user} already accepted agreement revision {} on {}\n",
             existing.version, existing.accepted_on
+        ),
+        Some(_) | None if starts_guard => format!(
+            "recorded: user {user} accepted agreement revision {} on {} (UTC), which states the abuse guard; every node it holds needs `node apply` before the guard covers it\n",
+            offered.version, offered.accepted_on
         ),
         Some(_) | None => format!(
             "recorded: user {user} accepted agreement revision {} on {} (UTC); no node apply is needed\n",
@@ -358,6 +380,22 @@ pub(crate) fn agree(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result
         ),
     };
     out.write_all(line.as_bytes()).map_err(output)
+}
+
+/// Records `user`'s acceptance of `record` in `parts` by the model's rule
+/// (`User::accept_agreement`); a user the parts do not hold is
+/// `UnknownUser`.
+fn accept_in(
+    parts: &mut DeploymentParts,
+    user: &UserId,
+    record: AgreementRecord,
+) -> Result<(), ModelError> {
+    parts
+        .users
+        .iter_mut()
+        .find(|candidate| candidate.id == *user)
+        .ok_or_else(|| ModelError::UnknownUser { id: user.clone() })?
+        .accept_agreement(record)
 }
 
 /// `user export <uid> [--format singbox|clash] --out <path>` (design §9.4):

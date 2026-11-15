@@ -10,7 +10,7 @@ use mooring_agent_proto::{OpaqueUserId, is_user_source, user_source};
 use mooring_model::ids::UserId;
 
 use crate::error::{RenderError, RenderErrorKind};
-use crate::tests::support::{fixtures, node};
+use crate::tests::support::{GUARD_OPEN, fixtures, node};
 use crate::vps::served::{Identity, served, user_exits};
 
 fn source_of(user: &UserId) -> Ipv4Addr {
@@ -30,13 +30,14 @@ fn colliding_pair() -> (UserId, UserId) {
     panic!("no two of a million ids share an address");
 }
 
-/// Every fixture node's served users get their own address, in served order,
-/// and the probe none: it leaves from the tunnel's own address.
+/// With every served user under the abuse guard, each gets their own
+/// address, in served order, and the probe none: it leaves from the
+/// tunnel's own address.
 #[test]
 fn each_served_user_has_its_own_source_and_the_probe_none() {
     for fixture in fixtures() {
         for (id, node) in fixture.deployment.nodes() {
-            let served = served(&fixture.deployment, node, &fixture.secrets).unwrap();
+            let served = served(&fixture.deployment, node, &fixture.secrets, GUARD_OPEN).unwrap();
             let exits = user_exits(id, &served).unwrap();
             let users: Vec<&UserId> = served
                 .iter()
@@ -71,6 +72,7 @@ fn two_users_sharing_an_address_on_a_node_are_refused() {
         &fixture.deployment,
         fixture.deployment.node(&lon1).unwrap(),
         &fixture.secrets,
+        GUARD_OPEN,
     )
     .unwrap();
     let template = served[0].clone();
@@ -98,5 +100,21 @@ fn two_users_sharing_an_address_on_a_node_are_refused() {
     );
     for alone in [&served[..1], &served[1..]] {
         assert_eq!(user_exits(&lon1, alone).unwrap().len(), 1);
+    }
+    // A user the guard does not cover has no exit of their own, yet sharing
+    // an address with one is refused all the same: an acceptance of the
+    // agreement must never make the node fail to render.
+    for uncovered in 0..2 {
+        let mut mixed = served.clone();
+        mixed[uncovered].guarded = false;
+        assert_eq!(
+            user_exits(&lon1, &mixed).unwrap_err().kind(),
+            RenderErrorKind::UserSourceCollision
+        );
+        assert!(
+            user_exits(&lon1, &mixed[uncovered..=uncovered])
+                .unwrap()
+                .is_empty()
+        );
     }
 }

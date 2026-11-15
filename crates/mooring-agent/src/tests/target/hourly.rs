@@ -32,6 +32,7 @@ fn configured() -> (tempfile::TempDir, Paths) {
             target: target(),
             emails: BTreeSet::new(),
             abuse_guard: mooring_agent_proto::AbuseGuardVersion::V1,
+            guarded_users: BTreeSet::new(),
         },
         0o640,
     )

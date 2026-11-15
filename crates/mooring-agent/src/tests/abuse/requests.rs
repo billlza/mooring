@@ -83,7 +83,7 @@ fn the_operator_cuts_a_served_user_at_once_and_once() {
 }
 
 #[test]
-fn a_cut_is_refused_without_the_guard_or_for_a_user_not_served() {
+fn a_cut_is_refused_without_the_guard_or_for_a_user_it_does_not_cover() {
     let world = World::new();
     let node = world.node(NOW);
     assert_eq!(
@@ -98,7 +98,15 @@ fn a_cut_is_refused_without_the_guard_or_for_a_user_not_served() {
     world.install(2, TxnState::Committed);
     assert_eq!(
         cut(&world, &node, "u09"),
-        Err(AgentError::AbuseUserNotServed { user: user("u09") })
+        Err(AgentError::AbuseUserNotGuarded { user: user("u09") })
+    );
+    // A user the generation serves but the guard does not cover (no
+    // acceptance of a revision that states it) leaves from the tunnel's
+    // address, so there is no address of theirs to cut.
+    world.install_guarding(3, TxnState::Committed, &["u01", "u02"], &["u01"]);
+    assert_eq!(
+        cut(&world, &node, "u02"),
+        Err(AgentError::AbuseUserNotGuarded { user: user("u02") })
     );
     assert_eq!(AbuseState::read(&world.paths).unwrap(), AbuseState::empty());
     assert!(world.net.cut.borrow().is_empty());

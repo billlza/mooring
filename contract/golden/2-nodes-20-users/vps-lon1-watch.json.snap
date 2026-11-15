@@ -52,5 +52,27 @@ description: "SPDX-License-Identifier: GPL-3.0-or-later. mooring-render watch.js
     "fxuseraaau@reality",
     "fxuseraaau@hy2"
   ],
-  "abuse_guard": 1
+  "abuse_guard": 1,
+  "guarded_users": [
+    "fxuseraaab",
+    "fxuseraaac",
+    "fxuseraaad",
+    "fxuseraaae",
+    "fxuseraaaf",
+    "fxuseraaag",
+    "fxuseraaah",
+    "fxuseraaai",
+    "fxuseraaaj",
+    "fxuseraaak",
+    "fxuseraaal",
+    "fxuseraaam",
+    "fxuseraaan",
+    "fxuseraaao",
+    "fxuseraaap",
+    "fxuseraaaq",
+    "fxuseraaar",
+    "fxuseraaas",
+    "fxuseraaat",
+    "fxuseraaau"
+  ]
 }

@@ -17,15 +17,17 @@ use mooring_agent_proto::{
 };
 
 use super::state::AbuseState;
-use super::{add_words, as_args, cut_addresses, served_sources, sync_words};
+use super::{add_words, as_args, cut_addresses, guarded_sources, sync_words};
 use crate::gate;
 use crate::host::{Node, Tool, run_ok};
 use crate::paths::Paths;
 use crate::store::{Lock, malformed, read_json};
 
-/// `AbuseCut{user}`: cuts a user the installed generation serves, with an
-/// `OperatorCut` record. A user cut already stays cut by the cut made
-/// first, which is answered, and nothing is recorded.
+/// `AbuseCut{user}`: cuts a user the installed generation's guard covers,
+/// with an `OperatorCut` record; any other user is refused
+/// ([`AgentError::AbuseUserNotGuarded`]), since their flows do not leave
+/// from an address of their own. A user cut already stays cut by the cut
+/// made first, which is answered, and nothing is recorded.
 pub(crate) fn cut(
     paths: &Paths,
     node: &dyn Node,
@@ -33,11 +35,11 @@ pub(crate) fn cut(
 ) -> Result<(AbuseSeq, AbuseCuts), AgentError> {
     let _lock = Lock::exclusive(&paths.gate_lock())?;
     let config = guarded_config(paths)?;
-    if !served_sources(&config)
+    if !guarded_sources(&config)
         .values()
-        .any(|served| served == user)
+        .any(|guarded| guarded == user)
     {
-        return Err(AgentError::AbuseUserNotServed { user: user.clone() });
+        return Err(AgentError::AbuseUserNotGuarded { user: user.clone() });
     }
     let mut state = AbuseState::read(paths)?;
     if let Some(existing) = state.cuts().get(user) {
@@ -78,7 +80,7 @@ pub(crate) fn clear(
     state.clear(user);
     state.write(paths)?;
     if let Some(config) = installed_config(paths)?.filter(|config| config.abuse_guard().is_some()) {
-        let addresses = cut_addresses(state.cuts(), &served_sources(&config));
+        let addresses = cut_addresses(state.cuts(), &guarded_sources(&config));
         set(node, &sync_words(&addresses))?;
     }
     Ok((Some(record), state.cuts().clone()))

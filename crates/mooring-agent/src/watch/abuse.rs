@@ -2,7 +2,8 @@
 
 //! The abuse guard's part of a tick (design §11.8). Every
 //! [`ABUSE_READ_EVERY_TICKS`] ticks, with a generation that carries the
-//! guard, the watch reads the measured sets and judges each served user.
+//! guard, the watch reads the measured sets and judges each user the
+//! guard covers (`guarded_users`).
 //! A finding at its cut level cuts the user at once, under `gate.lock`:
 //! the cut and its record are written to the abuse state, then the user's
 //! address is added to the cut set. A finding at its alert level is
@@ -35,7 +36,7 @@ use super::nft::nft;
 use super::{Fatal, Watch};
 use crate::abuse::detect::{FloodMinutes, UserReading, Verdict, judge, readings};
 use crate::abuse::state::AbuseState;
-use crate::abuse::{add_words, as_args, served_sources, sets};
+use crate::abuse::{add_words, as_args, guarded_sources, sets};
 use crate::host::Node;
 use crate::paths::Paths;
 use crate::store::{Lock, errno};
@@ -101,9 +102,9 @@ impl Watch {
                 None => self.abuse.read_failed = true,
                 Some(measured) => {
                     self.abuse.read_failed = false;
-                    let served = served_sources(config);
+                    let guarded = guarded_sources(config);
                     let cleared = state.cleared();
-                    let readings = readings(&measured, &served, &cleared, now);
+                    let readings = readings(&measured, &guarded, &cleared, now);
                     self.abuse.floods.retain(&readings, &cleared, now);
                     let verdicts: Vec<_> = readings
                         .iter()
