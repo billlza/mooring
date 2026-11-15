@@ -142,10 +142,11 @@ pub(crate) enum UserCommand {
     },
     /// Set the user's own quota: the traffic served to the user in one SIM
     /// billing cycle, both directions, every node, with a warning at 80 %
-    /// of it and a suspension at all of it. It takes the place of a paid
-    /// period's quota and of the automatic one. Nothing is suspended or
-    /// resumed now: the nightly apply job reads the quota, and `apply
-    /// --now` runs that job at once. It needs no node apply.
+    /// of it and a suspension at all of it. It takes the place of the
+    /// automatic quota; while a paid period covers the user, the larger of
+    /// it and the period's quota applies. Nothing is suspended or resumed
+    /// now: the nightly apply job reads the quota, and `apply --now` runs
+    /// that job at once. It needs no node apply.
     #[command(group(clap::ArgGroup::new("quota").required(true).args(["bytes", "none"])))]
     SetQuota {
         /// The user's id.

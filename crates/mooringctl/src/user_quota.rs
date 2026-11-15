@@ -4,8 +4,10 @@
 //! sets or removes a user's own quota, the bytes served to the user in one
 //! SIM billing cycle, as the bookkeeping record `QuotaRecorded`.
 //!
-//! A user's own quota takes the place of a paid period's and of the
-//! automatic one, and the cycle's traffic packs add to it
+//! A user's own quota takes the place of the automatic one, and of a paid
+//! period's quota where it lets the user use more (the operator's decision
+//! of 2026-11-15: a payment is never given less than it bought); the
+//! cycle's traffic packs add to whichever applies
 //! (`mooring_daemon_core::policy::effective_policy`). It is a record on
 //! this Mac: no node's bundle and no export carries it, so the record
 //! keeps the configuration generation and needs no `node apply`.
