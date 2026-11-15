@@ -6,8 +6,9 @@
 //! (`exit_interfaces`) and with the engines in the support directory, as
 //! the daemon runs them. A node not yet applied, or leaving, is not
 //! applied: its first apply is the operator's (design §13.2). A node that
-//! cannot be reached, or whose apply fails, is reported, and the next one
-//! runs; an egress that does not resolve fails each node without dialling.
+//! cannot be reached, or whose apply fails, is reported, naming no user
+//! ([`NodeFailure`]), and the next one runs; an egress that does not
+//! resolve fails each node without dialling.
 
 use std::io::Write;
 use std::path::Path;
@@ -16,7 +17,7 @@ use mooring_model::node::NodeLifecycle;
 use mooring_model::{Deployment, NodeId, UnixTime};
 use mooring_store::Store;
 
-use super::report::{NodeOutcome, NodeResult};
+use super::report::{NodeFailure, NodeOutcome, NodeResult};
 use crate::app::Env;
 use crate::daemon::chain;
 use crate::daemon::deployed::ENGINES_DIRECTORY;
@@ -53,10 +54,13 @@ pub(super) fn apply_behind(
     if behind.is_empty() {
         return Ok(Vec::new());
     }
+    let failure = |error: &dyn std::error::Error| {
+        NodeFailure::naming_no_user(&chain(error), deployment.users().keys())
+    };
     let egress = match exit_interfaces(env.router.link, deployment.exit()) {
         Ok(Ok(egress)) => Ok(egress.interfaces.egress().bsd_name.clone()),
-        Ok(Err(fault)) => Err(chain(&LocalError::NodeUnreachableWithoutEgress { fault })),
-        Err(error) => Err(chain(&error)),
+        Ok(Err(fault)) => Err(failure(&LocalError::NodeUnreachableWithoutEgress { fault })),
+        Err(error) => Err(failure(&error)),
     };
     let engines = support.join(ENGINES_DIRECTORY);
     let mut outcomes = Vec::new();
@@ -66,7 +70,7 @@ pub(super) fn apply_behind(
                 match crate::node::apply::apply(env, progress, &node, interface, &engines) {
                     Ok(()) => NodeResult::Applied,
                     Err(error) => NodeResult::Failed {
-                        error: chain(&error),
+                        error: failure(&error),
                     },
                 }
             }

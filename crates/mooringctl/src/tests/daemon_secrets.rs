@@ -35,13 +35,13 @@ const PLENTY: Duration = Duration::from_secs(60);
 /// not wait long for the store to give up. Their reads that are not held
 /// are taken with [`answered`], since a loaded machine may answer them
 /// after so short a wait.
-const SHORT: Duration = Duration::from_millis(50);
+pub(super) const SHORT: Duration = Duration::from_millis(50);
 
 /// A keychain whose held reads wait until the test releases them, and
 /// whose panicking ones panic; it answers from `materials` and records
 /// each read begun.
 #[derive(Default)]
-struct Keychain {
+pub(super) struct Keychain {
     materials: Mutex<InMemorySecretStore>,
     holds: Mutex<Holds>,
     released: Condvar,
@@ -57,12 +57,18 @@ struct Holds {
 }
 
 impl Keychain {
-    /// The keychain holding `materials`, whose reads are all held.
-    fn holding_all(materials: InMemorySecretStore) -> Self {
-        let keychain = Self {
+    /// The keychain holding `materials`, whose reads are answered at once
+    /// until the test holds them.
+    fn answering(materials: InMemorySecretStore) -> Self {
+        Self {
             materials: Mutex::new(materials),
             ..Self::default()
-        };
+        }
+    }
+
+    /// The keychain holding `materials`, whose reads are all held.
+    pub(super) fn holding_all(materials: InMemorySecretStore) -> Self {
+        let keychain = Self::answering(materials);
         keychain.holds.lock().unwrap().all = true;
         keychain
     }
@@ -90,7 +96,7 @@ impl Keychain {
         self.released.notify_all();
     }
 
-    fn release_all(&self) {
+    pub(super) fn release_all(&self) {
         *self.holds.lock().unwrap() = Holds::default();
         self.released.notify_all();
     }
@@ -99,13 +105,13 @@ impl Keychain {
         self.panicking.lock().unwrap().insert(secret_ref.clone());
     }
 
-    fn begun(&self) -> Vec<SecretRef> {
+    pub(super) fn begun(&self) -> Vec<SecretRef> {
         self.begun.lock().unwrap().clone()
     }
 }
 
 /// The read the store makes: the keychain's.
-fn reader(keychain: &Arc<Keychain>) -> Arc<Read> {
+pub(super) fn reader(keychain: &Arc<Keychain>) -> Arc<Read> {
     let keychain = Arc::clone(keychain);
     Arc::new(move |secret_ref: &SecretRef| keychain.read(secret_ref))
 }
@@ -114,10 +120,7 @@ fn reader(keychain: &Arc<Keychain>) -> Arc<Read> {
 fn with_password() -> Arc<Keychain> {
     let mut materials = InMemorySecretStore::default();
     materials.put(password_entry()).unwrap();
-    Arc::new(Keychain {
-        materials: Mutex::new(materials),
-        ..Keychain::default()
-    })
+    Arc::new(Keychain::answering(materials))
 }
 
 fn password_entry() -> SecretEntry {
@@ -159,12 +162,23 @@ fn answered(
     }
 }
 
-/// `mooringctl daemon` gets the daemon's store, which waits 3 s for each
-/// answer; a command run at the Mac gets the login keychain itself, whose
-/// reads wait for the operator's answer. Nothing here reads the keychain.
+/// What launchd runs, `mooringctl daemon` and the apply job's `apply
+/// --pending`, gets the daemon's store, which waits 3 s for each answer; a
+/// command run at the Mac, `apply --now` among them, gets the login
+/// keychain itself, whose reads wait for the operator's answer. Nothing
+/// here reads the keychain.
 #[test]
-fn only_the_daemon_reads_without_waiting_for_the_screen() {
+fn only_what_launchd_runs_reads_without_waiting_for_the_screen() {
     match CommandSecrets::for_command(&Command::Daemon) {
+        CommandSecrets::Daemon(store) => {
+            assert_eq!(format!("{store:?}"), "DaemonSecrets { within: 3s, .. }");
+        }
+        other @ CommandSecrets::Login(_) => panic!("{other:?}"),
+    }
+    let job = Cli::try_parse_from(["mooringctl", "apply", "--pending"])
+        .unwrap()
+        .command;
+    match CommandSecrets::for_command(&job) {
         CommandSecrets::Daemon(store) => {
             assert_eq!(format!("{store:?}"), "DaemonSecrets { within: 3s, .. }");
         }
@@ -173,6 +187,8 @@ fn only_the_daemon_reads_without_waiting_for_the_screen() {
     for args in [
         ["mooringctl", "status"].as_slice(),
         ["mooringctl", "router", "status", "--interface", "en9"].as_slice(),
+        ["mooringctl", "apply", "--now"].as_slice(),
+        ["mooringctl", "apply", "--now", "--json"].as_slice(),
     ] {
         let command = Cli::try_parse_from(args).unwrap().command;
         assert!(

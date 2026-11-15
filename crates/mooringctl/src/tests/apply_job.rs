@@ -645,6 +645,145 @@ fn apply_takes_exactly_one_form() {
     assert!(crate::cli::Cli::try_parse_from(["mooringctl", "apply", "--now", "--json"]).is_ok());
 }
 
+/// A node whose apply fails on a user's secret is reported naming no
+/// user, in the report and the log alike: the secret's reference names the
+/// user, and the line puts `<user>` in its place (§15.7). Each node's apply
+/// reads every secret the deployment requires, so both nodes behind fail
+/// so, and neither is asked anything.
+#[test]
+fn a_node_failing_on_a_users_secret_is_reported_naming_no_user() {
+    use mooring_model::secret::SecretRef;
+    use mooring_store::SecretStore;
+
+    let mut harness = job(fixture(|parts| {
+        parts.config_generation = ConfigGeneration::new(2).unwrap();
+    }));
+    harness
+        .secrets
+        .delete(&SecretRef::UserVlessUuid(id(FIRST), node("lon1")))
+        .unwrap();
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stderr);
+    let failed = "apply failed: reading the deployment's secrets from the keychain failed: \
+                  secret user/<user>/lon1/vless-uuid is missing";
+    assert!(
+        outcome
+            .stdout
+            .starts_with(&format!("ams1: {failed}\nlon1: {failed}\n")),
+        "{}",
+        outcome.stdout
+    );
+    let log = log(&harness);
+    for name in ["ams1", "lon1"] {
+        let line = format!("mooringctl apply: {name}: {failed}\n");
+        assert!(log.contains(&line), "{log}");
+    }
+    assert!(!outcome.stdout.contains("fxuser"), "{}", outcome.stdout);
+    assert!(!log.contains("fxuser"), "{log}");
+    assert!(harness.nodes.seen.borrow().is_empty());
+}
+
+/// launchd's run reads the keychain as the daemon does
+/// (`daemon::secrets`). While the keychain answers nothing, as a new
+/// build's first reads go unanswered while macOS asks at the Mac's screen,
+/// each node behind fails within the wait and is asked nothing: the first
+/// on its first read, the next at once on that same waiting read, which it
+/// does not make again. The run ends and lets its lock go instead of
+/// waiting for the answer.
+#[test]
+fn launchds_run_fails_the_nodes_whose_secrets_the_keychain_does_not_answer() {
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use mooring_model::secret::SecretRef;
+    use mooring_store::InMemorySecretStore;
+
+    use super::daemon_secrets::{Keychain, SHORT, reader};
+    use crate::apply::When;
+    use crate::daemon::secrets::DaemonSecrets;
+    use crate::error::{CommandError, LocalError};
+
+    let mut harness = job(fixture(|parts| {
+        parts.config_generation = ConfigGeneration::new(2).unwrap();
+    }));
+    let keychain = Arc::new(Keychain::holding_all(std::mem::take(&mut harness.secrets)));
+    let mut store = DaemonSecrets::new(reader(&keychain), InMemorySecretStore::default(), SHORT);
+    let mut report = Vec::new();
+    let result = harness.with_env_on(Some(&mut store), |env| {
+        crate::apply::apply(env, &mut report, When::Pending, false)
+    });
+    keychain.release_all();
+    assert!(
+        matches!(
+            result,
+            Err(CommandError::Local(LocalError::ApplyFailed { failures: 2 }))
+        ),
+        "{result:?}"
+    );
+    let report = String::from_utf8(report).unwrap();
+    assert!(
+        report.ends_with(
+            "apply at 2026-10-13 19:20:00 UTC: 0 suspended, 0 resumed, 0 held back, 0 kept suspended, 0 removed, 0 of 2 node(s) behind applied; 2 failure(s)\n"
+        ),
+        "{report}"
+    );
+    let log = log(&harness);
+    for name in ["ams1", "lon1"] {
+        let line = format!(
+            "mooringctl apply: {name}: apply failed: reading the deployment's secrets from the \
+             keychain failed: the keychain has not yet answered the read of \
+             node/ams1/reality-private (macOS may be asking at the Mac's screen)\n"
+        );
+        assert!(log.contains(&line), "{log}");
+    }
+    assert!(harness.nodes.seen.borrow().is_empty());
+    // The one read made, once its thread has run.
+    let waited = Instant::now();
+    while keychain.begun().is_empty() && waited.elapsed() < Duration::from_secs(5) {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        keychain.begun(),
+        [SecretRef::NodeRealityPrivate(node("ams1"))]
+    );
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            RunPaths::under(&harness.support_dir())
+                .dir
+                .join(APPLY_LOCK_FILE),
+        )
+        .unwrap();
+    lock.try_lock().unwrap();
+}
+
+/// A node's failure puts `<user>` for each of the deployment's users its
+/// error names, keeps the rest of the text, and is that text alone in the
+/// JSON outcome.
+#[test]
+fn a_node_failure_names_no_user() {
+    use crate::apply::report::{NodeFailure, NodeResult};
+
+    let users = [id(FIRST), id(SECOND)];
+    let failure = NodeFailure::naming_no_user(
+        "secret user/fxuseraaab/lon1/vless-uuid is missing / user/fxuseraaac/ams1/loop-uuid",
+        &users,
+    );
+    let text = "secret user/<user>/lon1/vless-uuid is missing / user/<user>/ams1/loop-uuid";
+    assert_eq!(failure.as_str(), text);
+    assert_eq!(
+        serde_json::to_value(NodeResult::Failed { error: failure }).unwrap(),
+        serde_json::json!({"failed": {"error": text}})
+    );
+    let unreachable = "ssh: connect to the node: Operation timed out";
+    assert_eq!(
+        NodeFailure::naming_no_user(unreachable, &users).as_str(),
+        unreachable
+    );
+}
+
 /// A plan made before the operator changed a user is not carried out over
 /// that change: a user the operator suspended meanwhile is not suspended
 /// again, and one whose suspension became another is not resumed. Each

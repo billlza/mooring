@@ -460,6 +460,10 @@ pub(crate) enum LocalError {
     /// The exit's keys could not be read from the keychain.
     #[error("reading the exit's keys from the keychain failed")]
     ExitSecrets(#[source] Box<SnapshotReadError>),
+    /// A node's apply could not read the secrets its bundle is rendered
+    /// from (every one the deployment requires) from the keychain.
+    #[error("reading the deployment's secrets from the keychain failed")]
+    NodeSecrets(#[source] Box<SnapshotReadError>),
     /// Waiting for or stopping the exit's engine failed.
     #[error("waiting for the exit's engine failed")]
     EngineWait(#[source] io::Error),

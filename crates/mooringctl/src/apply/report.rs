@@ -310,8 +310,38 @@ pub(crate) enum NodeResult {
     /// It did not.
     Failed {
         /// Why.
-        error: String,
+        error: NodeFailure,
     },
+}
+
+/// What stands in a node's failure for a user its error names.
+const A_USER: &str = "<user>";
+
+/// Why a node's apply failed, naming no user: the error's text with each
+/// of the deployment's user ids in it replaced by `<user>`. An error can
+/// name a user (a user's secret, `user/<user>/lon1/vless-uuid`), and the
+/// node's line goes to the log, which names none (§15.7). In the JSON
+/// outcome it is that text alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub(crate) struct NodeFailure(String);
+
+impl NodeFailure {
+    /// `error` with each of `users` replaced. A user id is ten random
+    /// base32 characters, so no other text is taken for one.
+    pub(crate) fn naming_no_user<'u>(
+        error: &str,
+        users: impl IntoIterator<Item = &'u UserId>,
+    ) -> Self {
+        Self(users.into_iter().fold(error.to_owned(), |text, user| {
+            text.replace(user.as_str(), A_USER)
+        }))
+    }
+
+    /// Its text.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// One node's apply.
@@ -324,15 +354,16 @@ pub(crate) struct NodeOutcome {
 }
 
 impl NodeOutcome {
-    /// Its line, in the report and the log alike: it names a node only,
-    /// and an error's lines (ssh's own, say) are joined into one.
+    /// Its line, in the report and the log alike: it names a node only
+    /// ([`NodeFailure`]), and an error's lines (ssh's own, say) are joined
+    /// into one.
     pub(crate) fn log_line(&self) -> String {
         match &self.result {
             NodeResult::Applied => format!("{}: applied", self.node),
             NodeResult::Failed { error } => format!(
                 "{}: apply failed: {}",
                 self.node,
-                error.split('\n').collect::<Vec<_>>().join(" / ")
+                error.as_str().split('\n').collect::<Vec<_>>().join(" / ")
             ),
         }
     }

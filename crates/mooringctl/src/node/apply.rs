@@ -46,7 +46,7 @@ pub(crate) fn apply(
     let target = deployed_node(deployment.nodes(), node)?;
     let engines = Engines::open(engines, env.engine_pins)?;
     let secrets = read_snapshot(&*env.secrets, &deployment.required_secrets())
-        .map_err(|error| LocalError::Secrets(Box::new(error)))?;
+        .map_err(|error| LocalError::NodeSecrets(Box::new(error)))?;
     let bundle =
         bundle(deployment, node, &secrets, engines.catalog()).map_err(LocalError::Render)?;
     let mut session = ops_session(env, target, interface, None)?;

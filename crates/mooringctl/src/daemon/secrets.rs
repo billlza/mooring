@@ -21,9 +21,16 @@
 //! one read per reference is in flight; the references the daemon reads
 //! bound the threads that wait.
 //!
-//! Writes are the inner store's own (the daemon writes no secret); a write
-//! drops the waiting read of its reference, whose answer would be the
-//! item from before it.
+//! launchd's apply job (`apply --pending`, design §13.6) reads through the
+//! same store, since no one watches it either: a node apply whose secrets
+//! are not answered fails, each node after it fails at once on the same
+//! waiting read, and the run ends, releasing its lock, instead of waiting
+//! with it until someone answers. A read still waiting ends with the
+//! process; the next run reads again.
+//!
+//! Writes are the inner store's own, made on the caller's thread with no
+//! wait (the daemon writes no secret); a write drops the waiting read of
+//! its reference, whose answer would be the item from before it.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
