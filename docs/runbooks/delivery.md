@@ -3,7 +3,7 @@
 
 This runbook is for the operator. It covers a user's first file, every later file, and what to do after a leak or a seizure.
 
-The rules come from design §9.2, §9.4, §13.4, §13.5 and §13.6, and from decisions F9–F11. The operator delegated those decisions to the recommended default on 2026-10-15 (§20.2).
+The rules come from design §9.2, §9.4, §13.4, §13.5 and §13.6, and from decisions F9–F11. The operator delegated those decisions to the recommended default on 2026-10-15 (§20.2). The in-person channel changed on 2026-11-15: no AirDrop (section 3).
 
 Of the commands named here `hdiutil`, `tmutil` and `mooringctl user add | alias | agree | export` exist today (the `mooringctl` ones since 2026-10-18, in the development build, which keeps its secrets in the login keychain until M5's data-protection keychain; they need the state that `exit init` will create). The other `mooringctl` commands below (`user reissue`, `node apply`, `apply`, `doctor`) arrive in M5, and so does the console's rotation tracker. Until then this runbook is the procedure they will follow. The portal's `mooringctl portal export` and `user export-profiles` (2026-11-06) exist too, but refuse to run until the agreement covers the portal (section 11). `mooringctl user usage` (2026-11-07), which section 10 uses, exists too.
 
@@ -27,10 +27,11 @@ The last command must print `[Excluded]`.
    - The user runs CFM on an Apple-silicon Mac with macOS 15 or later: CFM is arm64 only from 15.0.
    - The CFM build must be a 0.5-line release that has the mainland China direct switch (F10): CFM 0.5.0 (build 50030, tag `v0.5.0`, released 2026-10-18) or a later 0.5.x. The switch is `d828f92`; 0.5.0 is the first release with it.
    - Do not deliver a file to an older CFM. Without the switch, mainland sites fail, because the nodes deny `geoip:cn` and `geosite:cn` (§8.2).
+   - A user who cannot download the installer (the guide's section 1) gets it from you in person by AirDrop, from a device of yours other than the exit Mac (section 3). It is a public file, so it needs no image. On campus not from your phone either, whose Wi-Fi stays off there (design §10.2, F15).
 2. **Add the user.** `mooringctl user add`, typing the user's label at its prompt (never as an argument, which the shell history keeps), with the client line CFM 0.5 (`Cfm05`). A user without an alias gets one with `user alias <uid>`: files are named after the alias, never the label.
 3. **Hand over the two documents:** [user-onboarding.md](user-onboarding.md) and [user-agreement.md](user-agreement.md).
    - Send the text from each title on. The operator notes in the comment at the top are not for users.
-   - They hold no secrets, but they describe the service, so they never cross WeChat, QQ or any other mainland-China service, encrypted or not. Hand them over in person by AirDrop (never on paper, which a search finds), or put them in an encrypted image of their own, made and sent as in section 4 with its own passphrase.
+   - They hold no secrets, but they describe the service, so they never cross WeChat, QQ or any other mainland-China service, encrypted or not. Put them in an encrypted image of their own, with its own passphrase, made as in section 4 and handed over as in section 3 or 4; never on paper, which a search finds.
 4. **Get the user's acceptance on the call.**
    - On a FaceTime Audio call, the user says 「我已阅读并同意《Mooring 使用约定》第 N 版」, where N is the revision the build ships (`AgreementVersion::CURRENT`, now 1).
    - Then run `mooringctl user agree <uid>`. It records the revision and the UTC day, and takes neither as an argument. It is a bookkeeping record: it keeps the generation, so it needs no apply (§7).
@@ -62,9 +63,13 @@ Refusals and what to do about each:
 
 ## 3. Channel A: in person
 
-- **AirDrop:** with "Contacts Only" on the user's Mac. The file lands in the user's Downloads folder.
-- **USB stick:** carry the encrypted image of section 4, never the plain file: erasing flash memory does not reliably remove a file.
+In person, too, the file goes in the encrypted image of section 4 (steps 1 to 3). Only the way its passphrase reaches the user is different.
+
+- **The image:** send it as step 4 of section 4 says, or carry it on a USB stick. Never put the plain file on a stick: erasing flash memory does not reliably remove a file.
+- **The passphrase:** say it there, once, instead of on a call, and spell it if needed. Never write it down. The user must not tick "Remember password in my keychain".
 - Watch the import happen.
+- **Not by AirDrop.** AirDrop needs the exit Mac's Wi-Fi on, and the Mac's Wi-Fi stays off (`swap-day.md`, section 0.6). Turned on, it joins by itself a network it remembers, unless that network's Auto-Join is off. A network you did not declare as your own (`exit allow-network`) takes the exit down at the next check, at most two seconds later, and every user's connections with it, until the Mac leaves that network (`ForeignNetworkAttached`, design §10.2). The Mac also joins no university network while the exit runs (design P0-2).
+- **Not by SSH either.** A session into the exit Mac would be a way in, which the design counts as total compromise (§1.2); one into the user's Mac would need it to accept remote logins. And today no network joins the two Macs: the exit Mac's one network is the M7's, whose Wi-Fi is off (design D-4).
 
 ## 4. Channel B: encrypted disk image
 
@@ -88,7 +93,7 @@ Refusals and what to do about each:
 - Screenshots, photos or QR images of an export.
 - The file's text, or any URI, pasted into a chat, a mail or a document.
 - iMessage to a mainland-China Apple ID, for anything about the service. GCBD keeps Messages in iCloud for such accounts.
-- The plain file over the internet: AirDrop in person is the only network that carries it.
+- The plain file over any network, AirDrop included: it leaves the Mac only inside an encrypted image.
 - The documents, or any words about the service, over WeChat, QQ or another mainland-China service. Messages there arrange a call and nothing else.
 
 ## 6. After import
@@ -97,7 +102,7 @@ Refusals and what to do about each:
    - The user checks that CFM's credentials dialog shows every credential stored in the Keychain vault.
    - The user then ejects the image, deletes the file and the image, empties the Trash, and deletes the message that carried the image.
 2. **The operator's side.**
-   - Delete the file, the image and the folder under `<exports>`.
+   - Delete the file, the image and the folder under `<exports>`, and the image on the USB stick if one carried it.
    - Confirm the first bytes on the node in the console's rotation tracker (§15.3).
 
 ## 7. Re-delivery
