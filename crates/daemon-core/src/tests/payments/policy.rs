@@ -160,13 +160,6 @@ fn a_paid_period_gives_its_quota_and_its_end() {
             at: secs(now + 30 * DAY)
         }
     );
-    // The user's own quota still wins over a paid one.
-    let mut own = a.clone();
-    own.policy.quota = Some(quota(GB, 90, QuotaAction::Warn));
-    assert_eq!(
-        policy_of(&own, automatic, &paid, NOW).quota,
-        Some(quota(GB, 90, QuotaAction::Warn))
-    );
     // An own expiry later than the paid time is kept.
     let mut later = a.clone();
     later.policy.expires_at = Some(secs(now + 45 * DAY));
@@ -174,6 +167,113 @@ fn a_paid_period_gives_its_quota_and_its_end() {
         policy_of(&later, automatic, &paid, NOW).expires_at,
         Some(secs(now + 45 * DAY))
     );
+}
+
+/// While a paid period covers the instant, the user's own quota counts only
+/// where it allows more than the period's (the operator's decision of
+/// 2026-11-15): a payment is never given less than it bought, and the
+/// operator's own quota only adds. A quota that only warns allows any use,
+/// so it wins over the period's whatever its bytes; of two that suspend,
+/// the one of more bytes wins, and the user's own a tie, its warning share
+/// included. Outside the period the user's own quota holds again, in place
+/// of the automatic one, and the cycle's packs add to whichever applies.
+#[test]
+fn a_paid_period_and_the_users_own_quota_give_the_larger() {
+    let users = by_id(vec![user("pilotusera", UserStatus::Active, None)]);
+    let with_own = |own: UserQuota| {
+        let mut user = users[&id("pilotusera")].clone();
+        user.policy.quota = Some(own);
+        user
+    };
+    let month = granted(
+        &users,
+        vec![Terms::month("aaaaaaaaaaaaaaaaaaaa", "pilotusera").grant(1)],
+        NOW,
+    )
+    .entitlements(false);
+    let automatic = Some(quota(19 * GB, 80, QuotaAction::Suspend));
+    let paid = paid_quota(NonZeroU64::new(100 * GB).unwrap());
+    let less = quota(50 * GB, 80, QuotaAction::Suspend);
+    let just_less = quota(100 * GB - 1, 99, QuotaAction::Suspend);
+    let as_much = quota(100 * GB, 90, QuotaAction::Suspend);
+    let more = quota(150 * GB, 70, QuotaAction::Suspend);
+    let warns_only = quota(GB, 90, QuotaAction::Warn);
+    for (own, expected) in [
+        (less, paid),
+        (just_less, paid),
+        (as_much, as_much),
+        (more, more),
+        (warns_only, warns_only),
+    ] {
+        assert_eq!(
+            policy_of(&with_own(own), automatic, &month, NOW).quota,
+            Some(expected),
+            "{own:?}"
+        );
+    }
+    // Past the period's end the user's own quota holds, not the automatic
+    // one, and the period's end is still the expiry.
+    let after = secs(NOW.as_secs() + 31 * DAY);
+    assert_eq!(
+        policy_of(&with_own(less), automatic, &month, after),
+        EffectivePolicy {
+            quota: Some(less),
+            expires_at: Some(secs(NOW.as_secs() + 30 * DAY)),
+        }
+    );
+    // A 50 GB pack adds to the period's quota where that is the larger,
+    // and to the user's own where that is.
+    let with_pack = granted(
+        &users,
+        vec![
+            Terms::month("aaaaaaaaaaaaaaaaaaaa", "pilotusera").grant(1),
+            Terms::pack("bbbbbbbbbbbbbbbbbbbb", "pilotusera").grant(2),
+        ],
+        NOW,
+    )
+    .entitlements(false);
+    assert_eq!(
+        policy_of(&with_own(less), automatic, &with_pack, NOW).quota,
+        Some(quota(150 * GB, 80, QuotaAction::Suspend))
+    );
+    assert_eq!(
+        policy_of(&with_own(more), automatic, &with_pack, NOW).quota,
+        Some(quota(200 * GB, 70, QuotaAction::Suspend))
+    );
+}
+
+/// The apply job's evaluation reads the larger quota: a user whose own
+/// quota is 50 GB and whose paid month gives 100 GB is not suspended at
+/// 60 GB, and is at 100 GB.
+#[test]
+fn evaluate_suspends_at_the_larger_of_the_own_and_the_paid_quota() {
+    let mut parts = super::super::support::deployment().into_parts();
+    parts.users[0].policy.quota = Some(quota(50 * GB, 80, QuotaAction::Suspend));
+    let deployment = mooring_model::Deployment::try_from(parts).unwrap();
+    let ids: Vec<UserId> = deployment.users().keys().cloned().collect();
+    let mut terms = Terms::month("aaaaaaaaaaaaaaaaaaaa", "pilotusera");
+    terms.user = Box::leak(ids[0].as_str().to_owned().into_boxed_str());
+    let paid = granted(deployment.users(), vec![terms.grant(1)], NOW).entitlements(false);
+    let cycle = BillingCycle::of_instant(deployment.exit().sim.cycle(), NOW).unwrap();
+    let usage = |served: u64| CycleUsage {
+        cycle,
+        through: NOW,
+        served: ids.iter().map(|id| (id.clone(), Some(served))).collect(),
+        reality_downlink: BTreeMap::new(),
+    };
+    let suspended = UserAction {
+        user: ids[0].clone(),
+        action: PolicyAction::Suspend(mooring_model::SuspendReason::QuotaExceeded {
+            cycle_start: cycle.start(),
+        }),
+    };
+    let within = evaluate(&deployment, &paid, Some(&usage(60 * GB)), NOW).unwrap();
+    assert!(
+        !within.iter().any(|action| action.user == ids[0]),
+        "{within:?}"
+    );
+    let over = evaluate(&deployment, &paid, Some(&usage(100 * GB)), NOW).unwrap();
+    assert!(over.contains(&suspended), "{over:?}");
 }
 
 /// A pack adds its bytes to the quota that applies, in the billing cycle

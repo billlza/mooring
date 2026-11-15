@@ -230,7 +230,8 @@ pub struct UserQuota {
 /// operator sets it, so [`UserPolicy::NONE`] is the only implicit value.
 /// The expiry default is a pending operator decision; a quota set here
 /// overrides the deployment's automatic quota
-/// ([`crate::quota::AutoQuotaPolicy`], decision F4).
+/// ([`crate::quota::AutoQuotaPolicy`], decision F4), and a paid period's
+/// quota where it lets the user use more (design §9.6).
 ///
 /// The policy is a record, not an enforcement point: exports and renders
 /// look only at [`UserStatus`]. Moving an expired or over-quota user to
@@ -241,9 +242,11 @@ pub struct UserPolicy {
     /// When the user's access expires, if it does. The key is required.
     #[serde(deserialize_with = "Option::deserialize")]
     pub expires_at: Option<UnixTime>,
-    /// This user's own quota, which overrides the automatic one; `None`:
-    /// the automatic quota applies when automatic quotas are on and enough
-    /// users are active, and otherwise there is no quota. The key is
+    /// This user's own quota, which overrides the automatic one, and a paid
+    /// period's quota where it lets the user use more (design §9.6);
+    /// `None`: a paid period's quota applies while one covers the instant,
+    /// otherwise the automatic quota when automatic quotas are on and
+    /// enough users are active, and otherwise there is no quota. The key is
     /// required.
     #[serde(deserialize_with = "Option::deserialize")]
     pub quota: Option<UserQuota>,

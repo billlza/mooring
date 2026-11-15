@@ -6,11 +6,12 @@
 //! still serves exactly what the exports describe.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use mooring_export::{ExportFormat, export_user};
 use mooring_fixtures::{FIXTURE_NOW, Fixture};
 use mooring_model::node::{AppliedConfig, NodeLifecycle};
-use mooring_model::user::{SuspendReason, UserStatus};
+use mooring_model::user::{QuotaAction, SuspendReason, UserQuota, UserStatus, WarnPercent};
 use mooring_model::{
     AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Deployment, NodeId, Sha256Digest,
     UserId,
@@ -214,6 +215,51 @@ fn recording_an_agreement_changes_no_bundle_and_no_export() {
         },
     );
     assert_eq!(exports, (4, 6));
+}
+
+/// A user's own quota (`QuotaRecorded`, `user set-quota`) is a record on the
+/// Mac that the apply job reads (design §13.6): setting one, replacing it
+/// and removing it change no bundle and no export, so the record needs no
+/// `node apply` and every user's file stays the one delivered. Neither Mac
+/// config changes either, which the daemon renders once per generation.
+#[test]
+fn recording_a_quota_changes_no_bundle_no_export_and_neither_mac_config() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let user = fixture.deployment.users().keys().next().unwrap().clone();
+    let limit = |bytes: u64, action| UserQuota {
+        cycle_served_bytes: NonZeroU64::new(bytes).unwrap(),
+        warn_percent: WarnPercent::new(80).unwrap(),
+        action,
+    };
+    let record = |quota| Bookkeeping::QuotaRecorded {
+        user: user.clone(),
+        quota,
+    };
+    let first = Some(limit(100_000_000_000, QuotaAction::Suspend));
+    // Every user exports both formats before and after each record.
+    assert_eq!(
+        assert_neutral(&fixture, &fixture.deployment, record(first)),
+        (6, 6)
+    );
+    let limited = fixture.deployment.clone().record(record(first)).unwrap();
+    for next in [
+        Some(limit(1, QuotaAction::Suspend)),
+        Some(limit(100_000_000_000, QuotaAction::Warn)),
+        None,
+    ] {
+        assert_eq!(assert_neutral(&fixture, &limited, record(next)), (6, 6));
+    }
+    let exit = |deployment: &Deployment| {
+        crate::mac::exit(deployment, &fixture.interfaces, &fixture.secrets).unwrap()
+    };
+    let prober = |deployment: &Deployment| {
+        crate::mac::prober(deployment, &fixture.interfaces, &fixture.secrets).unwrap()
+    };
+    assert_eq!(exit(&limited), exit(&fixture.deployment));
+    assert_eq!(
+        prober(&limited).digest(),
+        prober(&fixture.deployment).digest()
+    );
 }
 
 /// Removing a revoked user (`RevokedUserRemoved`, design §15.7) changes no
