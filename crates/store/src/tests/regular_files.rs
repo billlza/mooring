@@ -11,7 +11,7 @@ use std::fs::{self, OpenOptions};
 use std::os::unix::fs::{FileTypeExt, symlink};
 use std::path::{Path, PathBuf};
 
-use mooring_model::CalendarDate;
+use mooring_model::{CalendarDate, NodeId};
 
 use super::allowed_networks::{home, label};
 use super::builders::deployment_init;
@@ -24,6 +24,10 @@ use crate::allowed_networks::{
 };
 use crate::durable::{existing_regular_file, regular_file};
 use crate::error::{IoOp, StoreError};
+use crate::events::{
+    append_mac_events, append_node_events, mac_events_path, node_events_path, read_mac_events,
+    read_node_events,
+};
 use crate::latch::{LATCH_FILE, read_latch, write_latch};
 use crate::pending_applies::{PENDING_APPLIES_FILE, read_pending_applies, write_pending_applies};
 use crate::radio_history::{append_radio_line, radio_day_path, read_radio_day};
@@ -49,11 +53,16 @@ fn day() -> CalendarDate {
     CalendarDate::parse("2026-10-24").unwrap()
 }
 
+fn lon1() -> NodeId {
+    NodeId::parse("lon1").unwrap()
+}
+
 /// Every read of a store file: the exit's latch, the router identity, the
 /// own-network declarations, the state, the SIM meter, a radio history day
-/// file, the record of pending applies, the record of the SIM's network
-/// and the record of direct-probe round trips.
-const READS: [Read; 9] = [
+/// file, the record of pending applies, the record of the SIM's network,
+/// the record of direct-probe round trips, and a day file of the Mac's
+/// event journal and of a node's.
+const READS: [Read; 11] = [
     Read {
         path: |dir| dir.join(LATCH_FILE),
         write: |dir| write_latch(dir, &latch()).unwrap(),
@@ -101,6 +110,16 @@ const READS: [Read; 9] = [
         path: |dir| dir.join(ROUND_TRIPS_FILE),
         write: |dir| write_round_trips(dir, b"{\"version\":1,\"nodes\":{}}\n").unwrap(),
         read: |dir| read_round_trips(dir, 64).map(|found| format!("{found:?}")),
+    },
+    Read {
+        path: |dir| mac_events_path(dir, day()),
+        write: |dir| append_mac_events(dir, day(), b"a\n").unwrap(),
+        read: |dir| read_mac_events(dir, day()).map(|found| format!("{found:?}")),
+    },
+    Read {
+        path: |dir| node_events_path(dir, &lon1(), day()),
+        write: |dir| append_node_events(dir, &lon1(), day(), b"a\n").unwrap(),
+        read: |dir| read_node_events(dir, &lon1(), day()).map(|found| format!("{found:?}")),
     },
 ];
 

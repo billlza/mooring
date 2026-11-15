@@ -8,7 +8,9 @@
 import MooringKit
 import SwiftUI
 
-extension ExitState {
+/// A phase, as the overview shows the exit's state and the Events screen
+/// the changes of it: one headline, symbol and tint for both.
+extension ExitPhase {
     var headline: String {
         switch self {
         case .disabled: String(localized: "Exit disabled")
@@ -42,6 +44,23 @@ extension ExitState {
         case .preflight, .starting, .verifying: .blue
         }
     }
+
+    /// What the phase says beyond its headline: its reasons' kinds.
+    var details: String? {
+        switch self {
+        case .degraded(let reasons): ListFormatter.localizedString(byJoining: reasons.map(\.text))
+        case .down(let reason): reason.text
+        case .disabled, .preflight, .starting, .verifying, .serving, .paused: nil
+        }
+    }
+}
+
+extension ExitState {
+    var headline: String { phase.headline }
+
+    var symbol: String { phase.symbol }
+
+    var tint: Color { phase.tint }
 
     /// What the state says beyond its headline: the verified address, the
     /// reasons, or why the exit is down.
@@ -168,6 +187,38 @@ extension DownReason {
                 localized:
                     "The Mac is attached to another network: \(ListFormatter.localizedString(byJoining: findings.map(\.text)))."
             )
+        }
+    }
+}
+
+/// A down reason's kind, as the Mac's journal keeps it: the reason's text
+/// without the interface, node or engine it names.
+extension DownReasonKind {
+    var text: String {
+        switch self {
+        case .egressInterfaceAbsent:
+            String(localized: "No interface matches the egress: the M7's Ethernet adapter is not attached.")
+        case .egressAmbiguous: String(localized: "Several interfaces match the egress; exactly one must.")
+        case .egressNoIpv4: String(localized: "The egress has no IPv4 address.")
+        case .egressSubnetMismatch: String(localized: "The egress's IPv4 address is outside the M7's subnet.")
+        case .uplinkAbsent: String(localized: "The separate uplink is absent.")
+        case .uplinkEqualsEgress: String(localized: "The separate uplink is the egress.")
+        case .noAppliedNode:
+            String(localized: "No node has confirmed a configuration yet (`mooringctl node apply`).")
+        case .directProbeFailed: String(localized: "No direct probe succeeded.")
+        case .carrierCheckUnrecorded:
+            String(localized: "The line's carrier check is not recorded (`mooringctl exit record-carrier`).")
+        case .simPlanUnrecorded: String(localized: "The SIM plan is not recorded (`mooringctl sim set-plan`).")
+        case .secretsUnavailable: String(localized: "The keychain could not be read.")
+        case .agentNotEnabled: String(localized: "A node's agent is not enabled.")
+        case .engineSpawnFailed: String(localized: "An engine could not be started.")
+        case .engineConfigRejected: String(localized: "An engine rejected its configuration.")
+        case .engineStartFailed: String(localized: "An engine exited within 10 s of starting.")
+        case .engineCrashLoop: String(localized: "An engine crashed five times within 10 minutes.")
+        case .violation: String(localized: "An egress check failed, so the exit stopped itself.")
+        case .simCapReached:
+            String(localized: "The SIM's hard stop was reached; the exit stays down until the next cycle.")
+        case .foreignNetworkAttached: String(localized: "The Mac is attached to another network.")
         }
     }
 }

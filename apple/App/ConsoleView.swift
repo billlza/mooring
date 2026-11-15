@@ -11,7 +11,8 @@ import SwiftUI
 struct ConsoleView: View {
     let model: ConsoleModel
     let daemon: DaemonService
-    let history: HistoryModel
+    let history: DocumentModel<RadioHistory>
+    let events: DocumentModel<EventsDocument>
     /// The screen shown, kept across launches.
     @AppStorage("screen") private var screen: Screen = .overview
     @State private var selectedUser: UserId?
@@ -35,7 +36,7 @@ struct ConsoleView: View {
                     case (.exit, let deployed?): ExitView(status: deployed)
                     case (.sim, let deployed?): SimView(status: deployed)
                     case (.capacity, let deployed?): CapacityView(status: deployed)
-                    case (.events, _?): EventsNotBuiltView()
+                    case (.events, _?): EventsView(events: events)
                     case (let other, nil): NeedsDeploymentView(screen: other)
                     }
                 }
@@ -96,18 +97,6 @@ struct ConsoleView: View {
 }
 
 /// The events screen: the event journals are not read by this build.
-struct EventsNotBuiltView: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label("Events", systemImage: "list.bullet.rectangle")
-        } description: {
-            Text(
-                "The Mac's and the nodes' event journals are not read by this build yet; the open alerts are on the overview."
-            )
-        }
-    }
-}
-
 /// A screen that needs a deployment.
 struct NeedsDeploymentView: View {
     let screen: Screen

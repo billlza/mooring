@@ -1,41 +1,41 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The Router screen's history: the last run of `router history --json` and
-// where it stands. One-shot: run when the screen first asks and on Reload;
-// a run that failed keeps the command's own words on screen until the
-// next.
+// A screen's one-shot document (the Router screen's history, the Events
+// screen's journals): the last run of its command and where it stands.
+// Run when the screen first asks and on Reload; a run that failed keeps
+// the command's own words on screen until the next.
 
 import Foundation
 import Observation
 
-/// Where the history stands.
-public enum HistoryState: Hashable, Sendable {
+/// Where a document stands.
+public enum DocumentState<Document: CommandDocument>: Hashable, Sendable {
     /// Not asked for yet.
     case idle
     /// The command runs.
     case loading
     /// The document, and when the command returned it.
-    case loaded(RadioHistory, at: Date)
+    case loaded(Document, at: Date)
     /// Why there is no document, and when the command said so.
-    case failed(HistoryFailure, at: Date)
+    case failed(DocumentFailure, at: Date)
     /// There is no `mooringctl` to run.
     case noCommand
 }
 
 @MainActor
 @Observable
-public final class HistoryModel {
-    /// Where the history stands.
-    public private(set) var state: HistoryState
+public final class DocumentModel<Document: CommandDocument> {
+    /// Where the document stands.
+    public private(set) var state: DocumentState<Document>
 
-    private let command: HistoryCommand?
+    private let command: DocumentCommand<Document>?
     /// The run in progress. Only the main actor sets it; `deinit` cancels
     /// it, so a released model stops waiting on its command.
     @ObservationIgnored nonisolated(unsafe) private var runner: Task<Void, Never>?
 
     /// A model running `command`; `nil` (no `mooringctl` in the bundle) is
     /// shown as such.
-    public init(command: HistoryCommand?) {
+    public init(command: DocumentCommand<Document>?) {
         self.command = command
         state = command == nil ? .noCommand : .idle
     }
@@ -57,11 +57,11 @@ public final class HistoryModel {
     }
 
     /// Applies a run's result.
-    func apply(_ result: Result<RadioHistory, HistoryFailure>) {
+    func apply(_ result: Result<Document, DocumentFailure>) {
         runner = nil
         switch result {
-        case .success(let history):
-            state = .loaded(history, at: Date())
+        case .success(let document):
+            state = .loaded(document, at: Date())
         case .failure(let failure):
             state = .failed(failure, at: Date())
         }

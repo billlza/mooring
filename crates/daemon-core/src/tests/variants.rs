@@ -195,7 +195,7 @@ fn violations() -> Vec<Violation> {
     ]
 }
 
-fn degraded_reasons() -> Vec<DegradedReason> {
+pub(super) fn degraded_reasons() -> Vec<DegradedReason> {
     vec![
         DegradedReason::NodeProbeFailed {
             node: node("lon1"),
@@ -210,6 +210,51 @@ fn degraded_reasons() -> Vec<DegradedReason> {
             input: OwnNetworkInput::Declarations,
         },
     ]
+}
+
+/// One of each reason the exit is down for, in declaration order.
+pub(super) fn down_reasons() -> Vec<DownReason> {
+    let mut reasons = vec![
+        DownReason::EgressInterfaceAbsent,
+        DownReason::EgressAmbiguous { matches: 2 },
+        DownReason::EgressNoIpv4 {
+            interface: interface("en8"),
+        },
+        DownReason::EgressSubnetMismatch,
+        DownReason::UplinkAbsent,
+        DownReason::UplinkEqualsEgress,
+        DownReason::NoAppliedNode,
+        DownReason::DirectProbeFailed {
+            node: node("lon1"),
+            stage: ProbeStage::Connect,
+        },
+        DownReason::CarrierCheckUnrecorded,
+        DownReason::SimPlanUnrecorded,
+        DownReason::SecretsUnavailable,
+        DownReason::AgentNotEnabled { node: node("ams1") },
+        DownReason::EngineSpawnFailed {
+            engine: MacEngine::Exit,
+        },
+        DownReason::EngineConfigRejected {
+            engine: MacEngine::Probe,
+        },
+        DownReason::EngineStartFailed {
+            engine: MacEngine::Exit,
+        },
+        DownReason::EngineCrashLoop {
+            engine: MacEngine::Probe,
+        },
+    ];
+    reasons.push(DownReason::Violation(violations().remove(3)));
+    reasons.push(DownReason::SimCapReached {
+        cycle_start: cycle_start(),
+    });
+    let mut all_findings = findings();
+    let first = all_findings.remove(0);
+    reasons.push(DownReason::ForeignNetworkAttached {
+        findings: NonEmpty::from_parts(first, all_findings),
+    });
+    reasons
 }
 
 fn cycle_start() -> CalendarDate {
@@ -268,46 +313,7 @@ fn variants() -> Variants {
         reason: ShutdownReason::Operator,
     });
     let report = NodeReport::of(UnixTime::from_secs(now.as_secs() + 1), &held);
-    let mut down_reasons = vec![
-        DownReason::EgressInterfaceAbsent,
-        DownReason::EgressAmbiguous { matches: 2 },
-        DownReason::EgressNoIpv4 {
-            interface: interface("en8"),
-        },
-        DownReason::EgressSubnetMismatch,
-        DownReason::UplinkAbsent,
-        DownReason::UplinkEqualsEgress,
-        DownReason::NoAppliedNode,
-        DownReason::DirectProbeFailed {
-            node: node("lon1"),
-            stage: ProbeStage::Connect,
-        },
-        DownReason::CarrierCheckUnrecorded,
-        DownReason::SimPlanUnrecorded,
-        DownReason::SecretsUnavailable,
-        DownReason::AgentNotEnabled { node: node("ams1") },
-        DownReason::EngineSpawnFailed {
-            engine: MacEngine::Exit,
-        },
-        DownReason::EngineConfigRejected {
-            engine: MacEngine::Probe,
-        },
-        DownReason::EngineStartFailed {
-            engine: MacEngine::Exit,
-        },
-        DownReason::EngineCrashLoop {
-            engine: MacEngine::Probe,
-        },
-    ];
-    down_reasons.push(DownReason::Violation(violations().remove(3)));
-    down_reasons.push(DownReason::SimCapReached {
-        cycle_start: cycle_start(),
-    });
-    let mut all_findings = findings();
-    let first = all_findings.remove(0);
-    down_reasons.push(DownReason::ForeignNetworkAttached {
-        findings: NonEmpty::from_parts(first, all_findings),
-    });
+    let down_reasons = down_reasons();
     let mut reasons = degraded_reasons();
     let first_reason = reasons.remove(0);
     Variants {
@@ -571,7 +577,7 @@ fn variants() -> Variants {
 }
 
 /// One watch condition of every kind.
-fn watch_errors() -> Vec<WatchError> {
+pub(super) fn watch_errors() -> Vec<WatchError> {
     use mooring_agent_proto::{InboundSet, UnixTime as WireTime};
     vec![
         WatchError::WgReadFailed,
@@ -1253,7 +1259,9 @@ fn every_object_of_every_status_document_denies_unknown_keys() {
 /// Decodes `bytes` as `T`, then adds an unknown key to each of its JSON
 /// objects in turn and requires the decode to fail. Returns the number of
 /// objects tried.
-fn each_object_denies_unknown_keys<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> usize {
+pub(super) fn each_object_denies_unknown_keys<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> usize {
     let json: Value = serde_json::from_slice(bytes).unwrap();
     assert!(serde_json::from_value::<T>(json.clone()).is_ok());
     let mut pointers = Vec::new();

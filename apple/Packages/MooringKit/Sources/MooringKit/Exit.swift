@@ -192,6 +192,18 @@ public enum DegradedReason: Decodable, Hashable, Sendable {
             throw decoder.unknownVariant(tag)
         }
     }
+
+    /// The reason's kind, without its data.
+    public var kind: DegradedReasonKind {
+        switch self {
+        case .nodeProbeFailed: .nodeProbeFailed
+        case .reachabilitySuspect: .reachabilitySuspect
+        case .watchStale: .watchStale
+        case .onBattery: .onBattery
+        case .powerHelperExited: .powerHelperExited
+        case .ownNetworksUnreadable: .ownNetworksUnreadable
+        }
+    }
 }
 
 /// Why the exit is down: its engine is stopped.
@@ -258,6 +270,55 @@ public enum DownReason: Decodable, Hashable, Sendable {
             throw decoder.unknownVariant(tag)
         }
     }
+
+    /// The reason's kind, without its data.
+    public var kind: DownReasonKind {
+        switch self {
+        case .egressInterfaceAbsent: .egressInterfaceAbsent
+        case .egressAmbiguous: .egressAmbiguous
+        case .egressNoIpv4: .egressNoIpv4
+        case .egressSubnetMismatch: .egressSubnetMismatch
+        case .uplinkAbsent: .uplinkAbsent
+        case .uplinkEqualsEgress: .uplinkEqualsEgress
+        case .noAppliedNode: .noAppliedNode
+        case .directProbeFailed: .directProbeFailed
+        case .carrierCheckUnrecorded: .carrierCheckUnrecorded
+        case .simPlanUnrecorded: .simPlanUnrecorded
+        case .secretsUnavailable: .secretsUnavailable
+        case .agentNotEnabled: .agentNotEnabled
+        case .engineSpawnFailed: .engineSpawnFailed
+        case .engineConfigRejected: .engineConfigRejected
+        case .engineStartFailed: .engineStartFailed
+        case .engineCrashLoop: .engineCrashLoop
+        case .violation: .violation
+        case .simCapReached: .simCapReached
+        case .foreignNetworkAttached: .foreignNetworkAttached
+        }
+    }
+}
+
+/// The kind of a reason the exit is down, without its data, as the Mac's
+/// event journal keeps it.
+public enum DownReasonKind: String, Decodable, Sendable, CaseIterable {
+    case egressInterfaceAbsent = "EgressInterfaceAbsent"
+    case egressAmbiguous = "EgressAmbiguous"
+    case egressNoIpv4 = "EgressNoIpv4"
+    case egressSubnetMismatch = "EgressSubnetMismatch"
+    case uplinkAbsent = "UplinkAbsent"
+    case uplinkEqualsEgress = "UplinkEqualsEgress"
+    case noAppliedNode = "NoAppliedNode"
+    case directProbeFailed = "DirectProbeFailed"
+    case carrierCheckUnrecorded = "CarrierCheckUnrecorded"
+    case simPlanUnrecorded = "SimPlanUnrecorded"
+    case secretsUnavailable = "SecretsUnavailable"
+    case agentNotEnabled = "AgentNotEnabled"
+    case engineSpawnFailed = "EngineSpawnFailed"
+    case engineConfigRejected = "EngineConfigRejected"
+    case engineStartFailed = "EngineStartFailed"
+    case engineCrashLoop = "EngineCrashLoop"
+    case violation = "Violation"
+    case simCapReached = "SimCapReached"
+    case foreignNetworkAttached = "ForeignNetworkAttached"
 }
 
 /// The exit's state (design §10.1).

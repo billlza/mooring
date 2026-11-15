@@ -11,13 +11,13 @@ use std::path::PathBuf;
 use mooring_agent_proto::{AgentError, Sha256Hex};
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::PortalError;
-use mooring_daemon_core::RadioHistoryError;
 use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::MeterError;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_daemon_core::sim_network::NotAccepted;
 use mooring_daemon_core::snapshot::SnapshotError;
+use mooring_daemon_core::{EventsError, RadioHistoryError};
 use mooring_export::{ExportError, ProfilesError};
 use mooring_keys::{KeysError, SshPublicKey};
 use mooring_macsys::MacsysError;
@@ -434,6 +434,26 @@ pub(crate) enum LocalError {
         /// Why the decoder refused it.
         #[source]
         source: RadioHistoryError,
+    },
+    /// The event journals' files (`events/…/<day>.jsonl`) failed. (Boxed,
+    /// as `StateRead` is.)
+    #[error("the event journals' files failed")]
+    EventsFile(#[source] Box<StoreError>),
+    /// An event journal's entry could not be encoded as its line.
+    #[error("an event journal entry could not be encoded")]
+    EventsEncode(#[source] EventsError),
+    /// A line of an event journal's day file is not an entry this build
+    /// reads, or names an event after which no number follows; the file is
+    /// left as it is.
+    #[error("event journal file {} cannot be read at line {line}", path.display())]
+    EventsLine {
+        /// The day file.
+        path: PathBuf,
+        /// The line, counted from 1.
+        line: usize,
+        /// Why the decoder refused it.
+        #[source]
+        source: EventsError,
     },
     /// The SIM meter could not count a reading or read its document.
     /// (Boxed, as `StateRead` is, to keep `CommandError` small.)

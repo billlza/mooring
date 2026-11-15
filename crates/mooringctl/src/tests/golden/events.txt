@@ -1,0 +1,94 @@
+events 2026-11-15 to 2026-11-15 UTC: 91 entries
+  2026-11-15 00:00:00 UTC  mac           the daemon started
+  2026-11-15 00:01:00 UTC  mac           power: mains
+  2026-11-15 00:02:00 UTC  mac           power: battery
+  2026-11-15 00:03:00 UTC  mac           the Mac slept; the exit's drain completed
+  2026-11-15 00:04:00 UTC  mac           the Mac slept; the exit's drain ran out of time
+  2026-11-15 00:05:00 UTC  mac           the Mac slept; the exit's drain could not reach a node
+  2026-11-15 00:06:00 UTC  mac           the Mac woke
+  2026-11-15 00:07:00 UTC  mac           exit: disabled
+  2026-11-15 00:08:00 UTC  mac           exit: preflight
+  2026-11-15 00:09:00 UTC  mac           exit: starting
+  2026-11-15 00:10:00 UTC  mac           exit: verifying
+  2026-11-15 00:11:00 UTC  mac           exit: serving
+  2026-11-15 00:12:00 UTC  mac           exit: degraded (NodeProbeFailed, ReachabilitySuspect, WatchStale, OnBattery, PowerHelperExited, OwnNetworksUnreadable)
+  2026-11-15 00:13:00 UTC  mac           exit: down (EgressInterfaceAbsent)
+  2026-11-15 00:14:00 UTC  mac           exit: down (EgressAmbiguous)
+  2026-11-15 00:15:00 UTC  mac           exit: down (EgressNoIpv4)
+  2026-11-15 00:16:00 UTC  mac           exit: down (EgressSubnetMismatch)
+  2026-11-15 00:17:00 UTC  mac           exit: down (UplinkAbsent)
+  2026-11-15 00:18:00 UTC  mac           exit: down (UplinkEqualsEgress)
+  2026-11-15 00:19:00 UTC  mac           exit: down (NoAppliedNode)
+  2026-11-15 00:20:00 UTC  mac           exit: down (DirectProbeFailed)
+  2026-11-15 00:21:00 UTC  mac           exit: down (CarrierCheckUnrecorded)
+  2026-11-15 00:22:00 UTC  mac           exit: down (SimPlanUnrecorded)
+  2026-11-15 00:23:00 UTC  mac           exit: down (SecretsUnavailable)
+  2026-11-15 00:24:00 UTC  mac           exit: down (AgentNotEnabled)
+  2026-11-15 00:25:00 UTC  mac           exit: down (EngineSpawnFailed)
+  2026-11-15 00:26:00 UTC  mac           exit: down (EngineConfigRejected)
+  2026-11-15 00:27:00 UTC  mac           exit: down (EngineStartFailed)
+  2026-11-15 00:28:00 UTC  mac           exit: down (EngineCrashLoop)
+  2026-11-15 00:29:00 UTC  mac           exit: down (Violation)
+  2026-11-15 00:30:00 UTC  mac           exit: down (SimCapReached)
+  2026-11-15 00:31:00 UTC  mac           exit: down (ForeignNetworkAttached)
+  2026-11-15 00:32:00 UTC  mac           exit: paused
+  2026-11-15 00:33:00 UTC  mac           lon1's agent cannot be polled: ssh could not be started
+  2026-11-15 00:34:00 UTC  mac           lon1's agent cannot be polled: its host key does not match the pin
+  2026-11-15 00:35:00 UTC  mac           lon1's agent cannot be polled: it refused the key
+  2026-11-15 00:36:00 UTC  mac           lon1's agent cannot be polled: the connection failed
+  2026-11-15 00:37:00 UTC  mac           lon1's agent cannot be polled: no answer in time
+  2026-11-15 00:38:00 UTC  mac           lon1's agent cannot be polled: it speaks another protocol version
+  2026-11-15 00:39:00 UTC  mac           lon1's agent cannot be polled: its answer could not be decoded
+  2026-11-15 00:40:00 UTC  mac           lon1's agent cannot be polled: its answer was too large
+  2026-11-15 00:41:00 UTC  mac           lon1's agent cannot be polled: its forced command is not active
+  2026-11-15 00:42:00 UTC  mac           lon1's agent answers again
+  2026-11-15 00:43:00 UTC  lon1          raised: reading WireGuard state failed; the gate is closed
+  2026-11-15 00:44:00 UTC  lon1          raised: nft failed; the watch restarts with the gate closed
+  2026-11-15 00:45:00 UTC  lon1          raised: the Xray stats query failed
+  2026-11-15 00:46:00 UTC  lon1          raised: the REALITY target is degraded
+  2026-11-15 00:47:00 UTC  lon1          raised: reading the hourly target check's result failed (errno 13)
+  2026-11-15 00:48:00 UTC  lon1          raised: the exit flow cap has rejected 14 flows
+  2026-11-15 00:49:00 UTC  lon1          raised: writing watch state failed (errno 28)
+  2026-11-15 00:50:00 UTC  lon1          raised: no handshake from the Mac for over 600 s
+  2026-11-15 00:51:00 UTC  lon1          raised: only 950000000 bytes are free on the agent's filesystem
+  2026-11-15 00:52:00 UTC  lon1          raised: the clock is not synchronised by NTP
+  2026-11-15 00:53:00 UTC  lon1          raised: a reboot has been required since 1791331200
+  2026-11-15 00:54:00 UTC  lon1          raised: the probe's traffic on reality, hy2 is not being counted
+  2026-11-15 00:55:00 UTC  lon1          raised: 1 users are cut off on this node for abuse
+  2026-11-15 00:56:00 UTC  lon1          raised: 2 users have abuse findings below their cut levels
+  2026-11-15 00:57:00 UTC  lon1          raised: the abuse guard cannot measure: its sets could not be read
+  2026-11-15 00:58:00 UTC  lon1          cleared: WgReadFailed
+  2026-11-15 00:59:00 UTC  lon1          cleared: NftFailed
+  2026-11-15 01:00:00 UTC  lon1          cleared: StatsQueryFailed
+  2026-11-15 01:01:00 UTC  lon1          cleared: TargetDegraded
+  2026-11-15 01:02:00 UTC  lon1          cleared: TargetReadFailed
+  2026-11-15 01:03:00 UTC  lon1          cleared: ExitFlowCapHit
+  2026-11-15 01:04:00 UTC  lon1          cleared: StateWrite
+  2026-11-15 01:05:00 UTC  lon1          cleared: MacSilent
+  2026-11-15 01:06:00 UTC  lon1          cleared: DiskLow
+  2026-11-15 01:07:00 UTC  lon1          cleared: ClockUnsynced
+  2026-11-15 01:08:00 UTC  lon1          cleared: RebootPending
+  2026-11-15 01:09:00 UTC  lon1          cleared: AccountingCanaryMissing
+  2026-11-15 01:10:00 UTC  lon1          cleared: AbuseCut
+  2026-11-15 01:11:00 UTC  lon1          cleared: AbuseSuspected
+  2026-11-15 01:12:00 UTC  lon1          cleared: AbuseGuardUnavailable
+  2026-11-15 01:13:00 UTC  lon1          the gate opened
+  2026-11-15 01:14:00 UTC  lon1          the gate closed
+  2026-11-15 01:15:00 UTC  lon1          hold recorded: the Mac's sleep drain
+  2026-11-15 01:16:00 UTC  lon1          hold recorded: an egress violation
+  2026-11-15 01:17:00 UTC  lon1          hold recorded: the operator's
+  2026-11-15 01:18:00 UTC  lon1          hold cleared: the Mac's sleep drain
+  2026-11-15 01:19:00 UTC  lon1          hold cleared: an egress violation
+  2026-11-15 01:20:00 UTC  lon1          hold cleared: the operator's
+  2026-11-15 01:21:00 UTC  lon1          halted: the egress was a node's address
+  2026-11-15 01:22:00 UTC  lon1          halted: by the operator
+  2026-11-15 01:23:00 UTC  lon1          halted: being retired
+  2026-11-15 01:24:00 UTC  lon1          resumed, running generation 7
+  2026-11-15 01:25:00 UTC  lon1          generation 8 committed
+  2026-11-15 01:26:00 UTC  lon1          mooring-xray restarted
+  2026-11-15 01:27:00 UTC  lon1          mooring-hy2 restarted
+  2026-11-15 01:28:00 UTC  lon1          the host booted
+  2026-11-15 01:29:00 UTC  lon1          events 0 to 1 were pruned before the Mac read them
+  2026-11-15 01:29:00 UTC  lon1          the journal was started anew (it ends before event 42); read again from its start
+2026-11-15, the Mac's journal: the last line is incomplete (the daemon may be writing it, or stopped while writing it)
+2026-11-15, lon1's copy: the last line is incomplete (the daemon may be writing it, or stopped while writing it)

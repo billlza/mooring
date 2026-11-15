@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Mooring.app (design §5.1, §15): the operator's console. It runs the
-// `mooringctl` inside its own bundle, reads `status --follow --json` and,
-// for the Router screen, `router history --json`, and never touches a
-// secret or a daemon file. The one other program it runs is the system's
-// `/bin/launchctl`, for its own two launch agents only: it reads launchd's
-// records of them and, while a start is carried through after a new build,
-// starts the apply job (DaemonService). It is a menu-bar app (LSUIElement);
-// the console window opens at launch and from the menu, which raises it in
-// front of other apps' windows (ConsoleWindowFront).
+// `mooringctl` inside its own bundle, reads `status --follow --json`, for
+// the Router screen `router history --json` and for the Events screen
+// `events --json`, and never touches a secret or a daemon file. The one
+// other program it runs is the system's `/bin/launchctl`, for its own two
+// launch agents only: it reads launchd's records of them and, while a
+// start is carried through after a new build, starts the apply job
+// (DaemonService). It is a menu-bar app (LSUIElement); the console window
+// opens at launch and from the menu, which raises it in front of other
+// apps' windows (ConsoleWindowFront).
 
 import MooringKit
 import SwiftUI
@@ -16,23 +17,25 @@ import SwiftUI
 @main
 struct MooringApp: App {
     @State private var model: ConsoleModel
-    @State private var history: HistoryModel
+    @State private var history: DocumentModel<RadioHistory>
+    @State private var events: DocumentModel<EventsDocument>
     @State private var daemon = DaemonService()
     @State private var consoleFront = ConsoleWindowFront()
 
     /// The model reads from launch, whether or not the window is shown: the
-    /// menu bar's summary needs it too. The history is read when the
-    /// Router screen asks.
+    /// menu bar's summary needs it too. The history and the journals are
+    /// read when the Router and Events screens ask.
     init() {
         let model = ConsoleModel.forMainBundle()
         model.start()
         _model = State(initialValue: model)
-        _history = State(initialValue: HistoryModel.forMainBundle())
+        _history = State(initialValue: DocumentModel.forMainBundle())
+        _events = State(initialValue: DocumentModel.forMainBundle())
     }
 
     var body: some Scene {
         Window("Mooring", id: ConsoleWindow.id) {
-            ConsoleView(model: model, daemon: daemon, history: history)
+            ConsoleView(model: model, daemon: daemon, history: history, events: events)
                 .frame(minWidth: 780, minHeight: 540)
                 .background(
                     HostingWindowReader { [consoleFront] window in
@@ -67,11 +70,11 @@ extension ConsoleModel {
 
 }
 
-extension HistoryModel {
+extension DocumentModel {
     /// The model for the `mooringctl` this app carries, or one that says it
     /// is missing.
-    static func forMainBundle() -> HistoryModel {
-        HistoryModel(command: Bundle.main.url(forAuxiliaryExecutable: "mooringctl").map(HistoryCommand.init))
+    static func forMainBundle() -> DocumentModel {
+        DocumentModel(command: Bundle.main.url(forAuxiliaryExecutable: "mooringctl").map(DocumentCommand.init))
     }
 }
 

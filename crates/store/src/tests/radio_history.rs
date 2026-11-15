@@ -19,10 +19,11 @@ use super::{
     assert_dir_not_directory, assert_io_error, assert_not_regular, make_fifo, make_socket, mode_of,
     without_blocking,
 };
+use crate::day_files::{DAY_FILE_SUFFIX, DayLines, Pruned};
 use crate::error::{IoOp, RadioHistoryFault, StoreError, StoreErrorKind};
 use crate::radio_history::{
-    MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
-    prune_radio_days, radio_day_path, read_radio_day,
+    MAX_RADIO_DAY_BYTES, RADIO_DIRECTORY, append_radio_line, prune_radio_days, radio_day_path,
+    read_radio_day,
 };
 
 fn date(text: &str) -> CalendarDate {
@@ -42,7 +43,7 @@ fn lines_are_appended_under_a_private_radio_directory_in_order() {
     let support = tempfile::tempdir().unwrap();
     let day = date("2026-10-24");
     assert_eq!(RADIO_DIRECTORY, "radio");
-    assert_eq!(RADIO_DAY_SUFFIX, ".jsonl");
+    assert_eq!(DAY_FILE_SUFFIX, ".jsonl");
     assert_eq!(
         radio_day_path(support.path(), day),
         support.path().join("radio").join("2026-10-24.jsonl")
@@ -55,7 +56,7 @@ fn lines_are_appended_under_a_private_radio_directory_in_order() {
     assert_eq!(day_bytes(support.path(), "2026-10-24"), b"a\nb\n");
     assert_eq!(
         read_radio_day(support.path(), day).unwrap(),
-        Some(RadioDay {
+        Some(DayLines {
             lines: b"a\nb\n".to_vec(),
             torn: false,
         })
@@ -83,7 +84,7 @@ fn a_torn_tail_is_cut_before_the_next_append_and_reported_by_the_reader() {
     fs::write(&path, b"a\nb\n{\"ver").unwrap();
     assert_eq!(
         read_radio_day(support.path(), day).unwrap(),
-        Some(RadioDay {
+        Some(DayLines {
             lines: b"a\nb\n".to_vec(),
             torn: true,
         })
@@ -94,7 +95,7 @@ fn a_torn_tail_is_cut_before_the_next_append_and_reported_by_the_reader() {
     fs::write(&path, b"{\"ver").unwrap();
     assert_eq!(
         read_radio_day(support.path(), day).unwrap(),
-        Some(RadioDay {
+        Some(DayLines {
             lines: Vec::new(),
             torn: true,
         })
@@ -105,7 +106,7 @@ fn a_torn_tail_is_cut_before_the_next_append_and_reported_by_the_reader() {
     fs::write(&path, b"").unwrap();
     assert_eq!(
         read_radio_day(support.path(), day).unwrap(),
-        Some(RadioDay {
+        Some(DayLines {
             lines: Vec::new(),
             torn: false,
         })

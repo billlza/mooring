@@ -23,6 +23,7 @@ mod cas;
 mod concurrency;
 mod decode;
 mod durability;
+mod events;
 mod latch;
 mod migration;
 mod ordering;

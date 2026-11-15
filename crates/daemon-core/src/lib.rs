@@ -15,6 +15,9 @@
 //! - [`capacity`]: whether the uplink over the mobile line is saturated.
 //! - [`usage`]: per-user usage from the agents' usage series, and activity.
 //! - [`alert`]: alert conditions and the alert state machine.
+//! - [`events`]: the event journals: the Mac's events, the lines of each
+//!   node's journal as the Mac reads it, the number it asks from next,
+//!   and the document `mooringctl events` prints.
 //! - [`notify`]: the push notices and the daily digest (Level 0).
 //! - [`network`]: the foreign-network check.
 //! - [`policy`]: quota (own and automatic) and expiry evaluation.
@@ -73,6 +76,7 @@ pub mod capacity;
 pub mod console;
 pub mod control;
 pub mod error;
+pub mod events;
 pub mod exit;
 pub mod forecast;
 pub mod meter;
@@ -107,12 +111,13 @@ pub use console::{ConsoleStatus, UNDEPLOYED_STATUS_VERSION, UndeployedStatus};
 pub use control::{DaemonReply, DaemonRequest, Refusal};
 pub use error::{
     AlertError, AlertErrorKind, CapacityError, CapacityErrorKind, CarrierFaultKind, ConsoleError,
-    ConsoleErrorKind, ControlError, ControlErrorKind, FieldFaultKind, FigureError, FigureErrorKind,
-    ForecastError, ForecastErrorKind, NotifyError, NotifyErrorKind, PolicyError, PolicyErrorKind,
-    RadioHistoryError, RadioHistoryErrorKind, ReportError, ReportErrorKind, RouterParseError,
-    RouterParseErrorKind, RouterValueError, RouterValueErrorKind, StatusError, StatusErrorKind,
-    UsageError, UsageErrorKind,
+    ConsoleErrorKind, ControlError, ControlErrorKind, EventsError, EventsErrorKind, FieldFaultKind,
+    FigureError, FigureErrorKind, ForecastError, ForecastErrorKind, NotifyError, NotifyErrorKind,
+    PolicyError, PolicyErrorKind, RadioHistoryError, RadioHistoryErrorKind, ReportError,
+    ReportErrorKind, RouterParseError, RouterParseErrorKind, RouterValueError,
+    RouterValueErrorKind, StatusError, StatusErrorKind, UsageError, UsageErrorKind,
 };
+pub use events::{EventsDocument, MacEvent, MacSeen};
 pub use forecast::{DailySimBytes, SimForecast};
 pub use network::{
     AllowedNetwork, ForeignNetworkFinding, NetworkCheck, NetworkSnapshot, network_check,
