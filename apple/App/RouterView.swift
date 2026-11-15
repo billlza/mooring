@@ -12,7 +12,7 @@ import SwiftUI
 
 struct RouterView: View {
     let model: ConsoleModel
-    let history: HistoryModel
+    let history: DocumentModel<RadioHistory>
 
     var body: some View {
         Form {
@@ -47,7 +47,7 @@ struct RouterView: View {
 /// The signal over the last 24 hours: `router history --json` run once
 /// when the screen first shows and on Reload, charted with its events.
 struct SignalHistorySection: View {
-    let history: HistoryModel
+    let history: DocumentModel<RadioHistory>
 
     var body: some View {
         Section {
@@ -131,20 +131,6 @@ extension RadioEventKind {
         case .bandChanged(let from, let to): Text("Band \(from.text) → \(to.text)")
         case .plmnChanged(let from, let to): Text("Network \(from.mcc)-\(from.mnc) → \(to.mcc)-\(to.mnc)")
         case .sessionRestarted: Text("Data session restarted (shorter than at the last read)")
-        }
-    }
-}
-
-extension HistoryFailure {
-    /// Why there is no history, in the user's language, then what the
-    /// command said (`mooringctl`'s own words).
-    var text: String {
-        switch self {
-        case .ended(let end): end.text
-        case .tooLong: String(localized: "The history is longer than 4 MiB, so the app stopped reading it.")
-        case .unsupportedVersion(let version):
-            String(localized: "The history document is version \(version); this build reads version 1.")
-        case .unreadable(let why): String(localized: "The history could not be read: \(why)")
         }
     }
 }

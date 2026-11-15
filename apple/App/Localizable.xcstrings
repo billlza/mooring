@@ -344,6 +344,26 @@
         }
       }
     },
+    "%@'s agent answers again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 的节点代理恢复应答"
+          }
+        }
+      }
+    },
+    "%@'s agent cannot be polled: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 的节点代理无法轮询：%2$@"
+          }
+        }
+      }
+    },
     "%@'s clock is not synchronised": {
       "localizations": {
         "zh-Hans": {
@@ -394,12 +414,32 @@
         }
       }
     },
+    "%@, %@'s copy: the last line is incomplete; the daemon may be writing it, or stopped while writing it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@，%2$@ 的副本：最后一行不完整；守护进程可能正在写入，或在写入时停止了。"
+          }
+        }
+      }
+    },
     "%@, since %@": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "%1$@，自 %2$@ 起"
+          }
+        }
+      }
+    },
+    "%@, the Mac's journal: the last line is incomplete; the daemon may be writing it, or stopped while writing it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@，Mac 的事件日志：最后一行不完整；守护进程可能正在写入，或在写入时停止了。"
           }
         }
       }
@@ -516,6 +556,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "mooringctl 输出的一行超过了 1 MiB，应用已停止读取。"
+          }
+        }
+      }
+    },
+    "A node's agent is not enabled.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "某个节点上的节点代理没有启用。"
           }
         }
       }
@@ -660,6 +710,16 @@
         }
       }
     },
+    "An egress check failed, so the exit stopped itself.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口检查没有通过，出口已自动停止。"
+          }
+        }
+      }
+    },
     "An egress check failed, so the exit stopped itself: %@": {
       "localizations": {
         "zh-Hans": {
@@ -676,6 +736,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "已锁存出口异常：%@"
+          }
+        }
+      }
+    },
+    "An engine could not be started.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一个引擎无法启动。"
+          }
+        }
+      }
+    },
+    "An engine crashed five times within 10 minutes.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一个引擎在 10 分钟内崩溃了五次。"
+          }
+        }
+      }
+    },
+    "An engine exited within 10 s of starting.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一个引擎启动后 10 秒内就退出了。"
+          }
+        }
+      }
+    },
+    "An engine rejected its configuration.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有一个引擎拒绝了它的配置。"
           }
         }
       }
@@ -910,6 +1010,16 @@
         }
       }
     },
+    "Condition raised: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出现状况：%@"
+          }
+        }
+      }
+    },
     "Conditions": {
       "localizations": {
         "zh-Hans": {
@@ -1080,12 +1190,32 @@
         }
       }
     },
+    "Days (UTC)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "日期（UTC）"
+          }
+        }
+      }
+    },
     "Device": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "设备"
+          }
+        }
+      }
+    },
+    "Disk space is no longer low": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "磁盘空间不再不足"
           }
         }
       }
@@ -1140,6 +1270,16 @@
         }
       }
     },
+    "Entries": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "条目"
+          }
+        }
+      }
+    },
     "Ethernet offload": {
       "localizations": {
         "zh-Hans": {
@@ -1156,6 +1296,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "事件"
+          }
+        }
+      }
+    },
+    "Events %llu to %llu were pruned on the node before the Mac read them": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "第 %1$llu 至 %2$llu 条事件在 Mac 读取之前已在节点上被清理"
           }
         }
       }
@@ -1370,12 +1520,32 @@
         }
       }
     },
+    "Generation %llu committed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配置版本 %llu 已确认"
+          }
+        }
+      }
+    },
     "Halted": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "已停机"
+          }
+        }
+      }
+    },
+    "Halted: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停机：%@"
           }
         }
       }
@@ -1396,6 +1566,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "硬性上限 %@"
+          }
+        }
+      }
+    },
+    "Hold cleared: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已解除暂停：%@"
+          }
+        }
+      }
+    },
+    "Hold recorded: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已设暂停：%@"
           }
         }
       }
@@ -1519,6 +1709,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "超过了 %lld 秒。"
+          }
+        }
+      }
+    },
+    "Journals": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "事件日志"
           }
         }
       }
@@ -1719,6 +1919,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在加载历史…"
+          }
+        }
+      }
+    },
+    "Loading the journals…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在加载事件日志…"
           }
         }
       }
@@ -1926,12 +2136,32 @@
         }
       }
     },
+    "No direct probe succeeded.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有一次直连探测成功。"
+          }
+        }
+      }
+    },
     "No direct probe succeeded; the last, to %@, failed (%@).": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "没有一次直连探测成功；最后一次（到 %1$@）失败（%2$@）。"
+          }
+        }
+      }
+    },
+    "No events in these days.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这几天没有事件。"
           }
         }
       }
@@ -2052,6 +2282,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "无配额"
+          }
+        }
+      }
+    },
+    "No reboot is required any more": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不再需要重启"
           }
         }
       }
@@ -2202,6 +2442,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "当前"
+          }
+        }
+      }
+    },
+    "Older entries left out: %llu. `mooringctl events --since <date> --until <date>` reads fewer days at a time.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未列出的较早条目：%llu。`mooringctl events --since <date> --until <date>` 可以一次读取更少的天数。"
           }
         }
       }
@@ -2456,6 +2706,16 @@
         }
       }
     },
+    "Power source: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电源：%@"
+          }
+        }
+      }
+    },
     "Preflight": {
       "localizations": {
         "zh-Hans": {
@@ -2559,6 +2819,16 @@
         }
       }
     },
+    "Read at": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读取于"
+          }
+        }
+      }
+    },
     "Reading WireGuard state failed; the gate is closed": {
       "localizations": {
         "zh-Hans": {
@@ -2655,6 +2925,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "现在报告"
+          }
+        }
+      }
+    },
+    "Resumed; the engines run generation %llu": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已恢复；引擎运行配置版本 %llu"
           }
         }
       }
@@ -2888,6 +3168,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "本次数据连接时长"
+          }
+        }
+      }
+    },
+    "Several interfaces match the egress; exactly one must.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有多个接口与出口匹配；必须恰好一个。"
           }
         }
       }
@@ -3372,6 +3662,16 @@
         }
       }
     },
+    "The Mac is attached to another network.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 连着其他网络。"
+          }
+        }
+      }
+    },
     "The Mac is attached to another network: %@.": {
       "localizations": {
         "zh-Hans": {
@@ -3392,12 +3692,32 @@
         }
       }
     },
-    "The Mac's and the nodes' event journals are not read by this build yet; the open alerts are on the overview.": {
+    "The Mac went to sleep; draining the nodes %@": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这个版本还不读取 Mac 和各节点的事件日志；未解决的告警显示在概览页。"
+            "value": "Mac 已睡眠；排空各节点%@"
+          }
+        }
+      }
+    },
+    "The Mac woke": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 已唤醒"
+          }
+        }
+      }
+    },
+    "The Mac's handshakes reach the node again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 的握手恢复到达节点"
           }
         }
       }
@@ -3408,6 +3728,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "REALITY 目标降级"
+          }
+        }
+      }
+    },
+    "The REALITY target is no longer degraded": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "REALITY 目标不再降级"
           }
         }
       }
@@ -3472,12 +3802,32 @@
         }
       }
     },
+    "The SIM's hard stop was reached; the exit stays down until the next cycle.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIM 已达到硬性上限；出口停止到下个周期。"
+          }
+        }
+      }
+    },
     "The Xray stats query failed": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "Xray 统计查询失败"
+          }
+        }
+      }
+    },
+    "The Xray stats query works again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xray 统计查询恢复正常"
           }
         }
       }
@@ -3498,6 +3848,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "时钟没有经 NTP 同步"
+          }
+        }
+      }
+    },
+    "The clock is synchronised by NTP again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "时钟重新经 NTP 同步"
           }
         }
       }
@@ -3552,6 +3912,16 @@
         }
       }
     },
+    "The daemon journals the Mac's events as its status shows them, and reads each node's journal every 5 minutes; a node's events carry the node's clock. The journals keep the newest 393 days (`mooringctl events --since <date> --until <date>` prints them).": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程按状态的变化记录 Mac 的事件，每 5 分钟读取一次各节点的事件日志；节点的事件按节点自己的时钟计时。事件日志保留最近 393 天（`mooringctl events --since <date> --until <date>` 可打印它们）。"
+          }
+        }
+      }
+    },
     "The daemon reports after its first poll of the M7, which waits while macOS asks you to allow keychain or local network access.": {
       "localizations": {
         "zh-Hans": {
@@ -3568,6 +3938,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "出口探测期间，守护进程读满一分钟出口计数后才开始采样。"
+          }
+        }
+      }
+    },
+    "The daemon started": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "守护进程已启动"
           }
         }
       }
@@ -3642,12 +4022,32 @@
         }
       }
     },
+    "The egress has no IPv4 address.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口接口没有 IPv4 地址。"
+          }
+        }
+      }
+    },
     "The egress's IPv4 address is outside the M7's subnet.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "出口接口的 IPv4 地址不在 M7 的子网内。"
+          }
+        }
+      }
+    },
+    "The exit flow cap rejects no more flows": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口连接上限不再拒绝连接"
           }
         }
       }
@@ -3682,6 +4082,26 @@
         }
       }
     },
+    "The gate closed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "闸门已关闭"
+          }
+        }
+      }
+    },
+    "The gate opened": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "闸门已打开"
+          }
+        }
+      }
+    },
     "The gateway is not the pinned M7": {
       "localizations": {
         "zh-Hans": {
@@ -3692,32 +4112,12 @@
         }
       }
     },
-    "The history could not be read: %@": {
+    "The host booted": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "无法读取历史记录：%@"
-          }
-        }
-      }
-    },
-    "The history document is version %u; this build reads version 1.": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "历史记录文档是第 %u 版；这个版本只能读取第 1 版。"
-          }
-        }
-      }
-    },
-    "The history is longer than 4 MiB, so the app stopped reading it.": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "历史记录超过 4 MiB，应用已停止读取。"
+            "value": "主机已启动"
           }
         }
       }
@@ -3728,6 +4128,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "无法解码每小时目标检查的结果"
+          }
+        }
+      }
+    },
+    "The hourly target check's result is read again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每小时目标检查的结果恢复读取"
           }
         }
       }
@@ -3782,6 +4192,16 @@
         }
       }
     },
+    "The node's journal was started anew (it ends before event %llu); the Mac reads it again from its start": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点的事件日志已重新开始（结束于第 %llu 条事件之前）；Mac 从头重新读取"
+          }
+        }
+      }
+    },
     "The own-network declarations cannot be read; no declared network matches.": {
       "localizations": {
         "zh-Hans": {
@@ -3798,6 +4218,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "电源助手已退出。"
+          }
+        }
+      }
+    },
+    "The probe's traffic is counted again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "探测流量恢复统计"
           }
         }
       }
@@ -4282,6 +4712,16 @@
         }
       }
     },
+    "Watch state is written again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "监视状态恢复写入"
+          }
+        }
+      }
+    },
     "Web app": {
       "localizations": {
         "zh-Hans": {
@@ -4298,6 +4738,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "launchctl 为 %@ 打印的内容不是这个版本能读的记录。开头是：%@"
+          }
+        }
+      }
+    },
+    "What mooringctl printed could not be read: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法读取 mooringctl 的输出：%@"
           }
         }
       }
@@ -4338,6 +4788,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Wi-Fi 射频"
+          }
+        }
+      }
+    },
+    "WireGuard state is read again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WireGuard 状态恢复读取"
           }
         }
       }
@@ -4671,6 +5131,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在使用"
+          }
+        }
+      }
+    },
+    "an egress violation": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出口异常"
           }
         }
       }
@@ -5205,6 +5675,26 @@
         }
       }
     },
+    "mooringctl printed a document of version %u; this build reads version %u.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mooringctl 输出的文档是第 %1$u 版；这个版本只能读取第 %2$u 版。"
+          }
+        }
+      }
+    },
+    "mooringctl printed more than %lld MiB, so the app stopped reading it.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mooringctl 的输出超过 %lld MiB，应用已停止读取。"
+          }
+        }
+      }
+    },
     "mooringctl was ended by signal %d.": {
       "localizations": {
         "zh-Hans": {
@@ -5241,6 +5731,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "nft 失败；监视以闸门关闭的状态重启"
+          }
+        }
+      }
+    },
+    "nft works again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nft 恢复正常"
           }
         }
       }
@@ -5585,6 +6085,16 @@
         }
       }
     },
+    "systemd restarted %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "systemd 重启了 %@"
+          }
+        }
+      }
+    },
     "the Mac's sleep drain": {
       "localizations": {
         "zh-Hans": {
@@ -5761,6 +6271,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "节点的强制命令没有生效"
+          }
+        }
+      }
+    },
+    "the operator": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "运营者"
           }
         }
       }
