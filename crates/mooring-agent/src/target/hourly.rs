@@ -3,12 +3,18 @@
 //! The hourly target check (design §11.3): `target-watch`, which
 //! `mooring-target-check.service` and its timer run as a unit of their
 //! own, because `xray tls ping` sets no time limit and a target that does
-//! not answer must not hold up the watch's loop. It probes the configured
+//! not answer must not hold up the watch's loop, and as an account of its
+//! own, because its probes read a third party's replies and must reach
+//! neither Xray's API nor the watch's files. It probes the configured
 //! address, not the first of the set the name resolves to, through the
 //! current generation's Xray and without the handshake sampler, and
 //! records its verdict, which the watch reads at every tick through
-//! [`verdict`]. A result the watch cannot read is [`Verdict::Unreadable`]:
-//! a verdict neither way, and no reason for the watch to stop.
+//! [`verdict`]. The watch does not trust the check's account, which owns
+//! the reading's directory: it reads the reading as [`read_foreign_json`]
+//! does, without following a link, waiting on a FIFO or reading more than
+//! [`READING_LIMIT`]. A result the watch cannot read is
+//! [`Verdict::Unreadable`]: a verdict neither way, and no reason for the
+//! watch to stop.
 
 use mooring_agent_proto::{
     AgentError, HttpProbe, HttpVersion, IoOp, UnixTime, WatchConfig, WatchTarget,
@@ -18,12 +24,12 @@ use serde::{Deserialize, Serialize};
 use super::probes::{TlsPing, http_probe, resolve, tls_ping};
 use crate::host::Node;
 use crate::paths::Paths;
-use crate::store::{errno, read_json, write_json};
+use crate::store::{errno, read_foreign_json, read_json, write_json};
 use crate::txn::stage::{self, XRAY};
 
-/// The hourly check's latest result (`/var/lib/mooring/watch/target.json`),
-/// with the target it checked: a result about another target than the
-/// configured one says nothing.
+/// The hourly check's latest result
+/// (`/var/lib/mooring/target/reading.json`), with the target it checked: a
+/// result about another target than the configured one says nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TargetReading {
@@ -37,6 +43,9 @@ pub(crate) struct TargetReading {
 
 /// The reading's mode: the state group reads it.
 const READING_MODE: u32 = 0o640;
+
+/// The most of a reading the watch reads: one is a few hundred bytes.
+pub(crate) const READING_LIMIT: usize = 64 * 1024;
 
 /// `target-watch`, the hourly unit: checks the configured target with the
 /// current generation's Xray and records the result. The target is
@@ -93,7 +102,7 @@ pub(crate) enum Verdict {
 
 /// The latest hourly check's verdict on `target`.
 pub(crate) fn verdict(paths: &Paths, target: &WatchTarget) -> Verdict {
-    match read_json::<TargetReading>(&paths.target_reading()) {
+    match read_foreign_json::<TargetReading>(&paths.target_reading(), READING_LIMIT) {
         Ok(None) => Verdict::Unchecked,
         Ok(Some(reading)) if reading.target != *target => Verdict::Unchecked,
         Ok(Some(reading)) if reading.degraded => Verdict::Degraded,

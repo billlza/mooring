@@ -644,6 +644,9 @@ pub(crate) fn agent_error(kind: AgentErrorKind) -> AgentError {
             step: BootstrapStep::Accounts,
             stderr_tail: tail("useradd: group 'mooring' does not exist"),
         },
+        AgentErrorKind::Accounts => AgentError::Accounts {
+            stderr_tail: tail("useradd: cannot lock /etc/passwd; try again later."),
+        },
         AgentErrorKind::AccountMissing => AgentError::AccountMissing {
             account: HostAccount::Xray,
         },

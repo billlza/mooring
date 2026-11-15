@@ -34,11 +34,12 @@ use mooring_agent_proto::{
     Sha256Hex, SshEd25519Key, StderrTail,
 };
 
+use crate::accounts::{self, Converging};
 use crate::host::{Node, Tool, run_ok};
 use crate::hostfiles::{self, Applied, HostStep, SSHD_UNIT};
+use crate::layout;
 use crate::paths::Paths;
 use crate::store::{io_error, malformed, read_json, write_atomic, write_json};
-use crate::{accounts, layout};
 
 /// The keys `Bootstrap` authorises.
 #[derive(Debug, Clone, Copy)]
@@ -67,7 +68,7 @@ pub(crate) fn bootstrap(
         return Err(AgentError::HostRanMooring { found });
     }
     packages(node)?;
-    accounts::converge(paths, node)?;
+    accounts::converge(paths, node, Converging::Bootstrap)?;
     layout::converge(paths, &HostProfile::CURRENT)?;
     crate::txn::activate::install(paths, &actual, &paths.own_executable())?;
     crate::txn::links::replace_link(&paths.agent_current(), Path::new(&actual.to_string()))

@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use crate::VIEWER_ACCOUNT;
+use crate::{TARGET_CHECK_ACCOUNT, VIEWER_ACCOUNT};
 
 const PROFILE: HostProfile = HostProfile::CURRENT;
 
-const HEADER: &str = "# Managed by Mooring host profile 2. Local changes are overwritten.\n";
+const HEADER: &str = "# Managed by Mooring host profile 3. Local changes are overwritten.\n";
 
 #[test]
-fn the_current_profile_is_version_2() {
-    assert_eq!(PROFILE.version, HostProfileVersion::new(2));
+fn the_current_profile_is_version_3() {
+    assert_eq!(PROFILE.version, HostProfileVersion::new(3));
 }
 
 /// Only the viewer can log in (sshd runs its forced command through
-/// its shell); the watch and the viewer share the state group and no
-/// one else is in it; each engine has a group of its own.
+/// its shell); the watch, the viewer and the target check share the
+/// state group and no one else is in it; each engine has a group of its
+/// own; the target check, profile 3's, comes last.
 #[test]
 fn the_accounts_are_the_designed_ones() {
     let accounts: Vec<(&str, &str, &str, &str)> = HostAccount::ALL
@@ -50,9 +51,16 @@ fn the_accounts_are_the_designed_ones() {
                 "/nonexistent",
                 "/usr/sbin/nologin"
             ),
+            (
+                "mooring-target-check",
+                "mooring",
+                "/nonexistent",
+                "/usr/sbin/nologin"
+            ),
         ]
     );
     assert_eq!(HostAccount::Viewer.name(), VIEWER_ACCOUNT);
+    assert_eq!(HostAccount::TargetCheck.name(), TARGET_CHECK_ACCOUNT);
     for engine in EngineUser::ALL {
         assert!(
             HostAccount::ALL
@@ -91,6 +99,13 @@ fn the_layout_keeps_the_viewer_away_from_the_holds_and_the_secrets() {
     assert!(dirs.iter().all(|dir| dir.owner != VIEWER_ACCOUNT));
     assert_eq!(dir("/var/lib/mooring/gate").owner, WATCH_ACCOUNT);
     assert_eq!(dir("/var/lib/mooring/gate").mode & 0o070, 0o050);
+    // The target check owns its reading's directory and nothing else.
+    let checks: Vec<&str> = dirs
+        .iter()
+        .filter(|dir| dir.owner == TARGET_CHECK_ACCOUNT)
+        .map(|dir| dir.path)
+        .collect();
+    assert_eq!(checks, ["/var/lib/mooring/target"]);
     for state in dirs
         .iter()
         .filter(|dir| dir.path.starts_with("/var/lib/mooring") && !dir.path.ends_with("blobs"))
@@ -119,6 +134,37 @@ fn the_layout_keeps_the_viewer_away_from_the_holds_and_the_secrets() {
         dir("/usr/local/lib/mooring/agent").path == AGENT_CURRENT_PATH.rsplit_once('/').unwrap().0
     );
     assert!(XRAY_ASSET_DIR.starts_with(dir("/opt/mooring/engines/geodata").path));
+}
+
+/// The check writes its reading and nothing else, not even the state
+/// group's stop directory; the watch cannot write the reading.
+#[test]
+fn the_target_check_writes_only_its_reading() {
+    assert_eq!(PROFILE.target_check_writable(), ["/var/lib/mooring/target"]);
+    assert!(
+        !PROFILE
+            .watch_writable()
+            .contains(&"/var/lib/mooring/target")
+    );
+}
+
+/// The run directory holds the gate's lock, which the state group may
+/// open: the check, in that group, could hold the watch's gating up by
+/// taking it. Its unit hides the directory, and with it every entry
+/// `tmpfiles.d` makes.
+#[test]
+fn the_target_check_cannot_reach_the_run_directory() {
+    let hidden = PROFILE.target_check_hidden();
+    assert_eq!(hidden, ["/run/mooring"]);
+    for entry in PROFILE.tmpfiles {
+        assert!(
+            hidden
+                .iter()
+                .any(|dir| entry.path == *dir || entry.path.starts_with(&format!("{dir}/"))),
+            "{} is not hidden from the check",
+            entry.path
+        );
+    }
 }
 
 #[test]
@@ -284,10 +330,11 @@ fn the_watch_reflector_and_recovery_units_have_their_fixed_text() {
                  \n\
                  [Service]\n\
                  Type=oneshot\n\
-                 User=mooring-watch\n\
+                 User=mooring-target-check\n\
                  Group=mooring\n\
                  ExecStart=/usr/local/lib/mooring/agent/current target-watch\n\
-                 ReadWritePaths=/var/lib/mooring/watch\n\
+                 ReadWritePaths=/var/lib/mooring/target\n\
+                 InaccessiblePaths=-/run/mooring\n\
                  CapabilityBoundingSet=\n\
                  {sandbox}"
         )
@@ -349,7 +396,7 @@ fn the_units_are_named_by_their_files_and_enabled() {
 fn sysctl_file_carries_the_section_8_6_values() {
     assert_eq!(
         PROFILE.render(HostFile::Sysctl),
-        "# Managed by Mooring host profile 2. Local changes are overwritten.\n\
+        "# Managed by Mooring host profile 3. Local changes are overwritten.\n\
              net.core.default_qdisc = fq\n\
              net.ipv4.tcp_congestion_control = bbr\n\
              net.ipv4.tcp_slow_start_after_idle = 0\n\
@@ -377,7 +424,7 @@ fn sysctl_file_carries_the_section_8_6_values() {
 fn sshd_drop_in_sets_every_directive_once() {
     assert_eq!(
         PROFILE.render(HostFile::SshdDropIn),
-        "# Managed by Mooring host profile 2. Local changes are overwritten.\n\
+        "# Managed by Mooring host profile 3. Local changes are overwritten.\n\
              PasswordAuthentication no\n\
              KbdInteractiveAuthentication no\n\
              PermitRootLogin forced-commands-only\n\

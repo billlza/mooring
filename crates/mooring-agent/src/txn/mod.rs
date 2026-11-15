@@ -34,16 +34,16 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use mooring_agent_proto::{
-    AgentError, BundleHeader, EngineUser, Generation, HostProfile, RollbackCause, SystemdOp,
-    TxnStage, TxnState, UnitName,
+    AgentError, BundleHeader, EngineUser, Generation, HostProfile, HostProfileVersion,
+    RollbackCause, SystemdOp, TxnStage, TxnState, UnitName,
 };
 
-use crate::gate;
-use crate::hello;
+use crate::accounts::{self, Converging};
 use crate::host::{Node, Tool, run_ok};
 use crate::hostfiles::Applied;
 use crate::paths::Paths;
-use crate::store::{Lock, errno};
+use crate::store::{Lock, errno, read_json};
+use crate::{gate, hello, layout};
 use changes::{Restarts, apply_changes, install_host};
 use links::swap;
 use prune::prune;
@@ -280,6 +280,7 @@ fn attempt(
     running(paths, generation, TxnStage::Preconditions)?;
     preconditions(paths, node, header)?;
     running(paths, generation, TxnStage::Stage)?;
+    converge_accounts(paths, node)?;
     // What the change changes, read once from the previous generation
     // before anything is staged or switched; pruning keeps its engines.
     let before = stage::installed_header(paths, previous)?;
@@ -316,6 +317,24 @@ fn attempt(
     };
     switch(paths, node, generation, header, before.as_ref(), &dir)
         .map_err(|cause| roll_back(paths, node, generation, previous, cause))
+}
+
+/// The accounts and directories of the profile this agent installs, before
+/// anything is staged, when the host's installed profile is older or not
+/// recorded: a node bootstrapped at an older profile lacks those a later
+/// one adds (design §8.6), and the units staged with the generation run as
+/// them. A host at this profile has them already (from `Bootstrap`, or the
+/// transaction that installed it), so nothing is run or changed. No
+/// rollback removes them: an older generation's units never use them, and
+/// the next transaction, finding the older profile put back, converges
+/// again with nothing left to do.
+fn converge_accounts(paths: &Paths, node: &dyn Node) -> Result<(), AgentError> {
+    let installed: Option<HostProfileVersion> = read_json(&paths.host_profile())?;
+    if installed.is_some_and(|version| version >= HostProfile::CURRENT.version) {
+        return Ok(());
+    }
+    accounts::converge(paths, node, Converging::Transaction)?;
+    layout::converge(paths, &HostProfile::CURRENT)
 }
 
 /// The swap and what follows it (design §11.2 steps 4 to 6), each failure

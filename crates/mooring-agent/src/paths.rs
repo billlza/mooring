@@ -211,10 +211,18 @@ impl Paths {
         self.watch_dir().join("status.json")
     }
 
+    /// The hourly target check's directory, `/var/lib/mooring/target`
+    /// (design §11.3), the only one its account writes.
+    pub(crate) fn target_dir(&self) -> PathBuf {
+        self.var_lib().join("target")
+    }
+
     /// The hourly target check's latest result,
-    /// `/var/lib/mooring/watch/target.json` (design §11.3).
+    /// `/var/lib/mooring/target/reading.json` (design §11.3), which the
+    /// watch reads. Until host profile 3 it was the watch's
+    /// `watch/target.json`, which nothing reads any more.
     pub(crate) fn target_reading(&self) -> PathBuf {
-        self.watch_dir().join("target.json")
+        self.target_dir().join("reading.json")
     }
 
     /// The node's event journal, `/var/lib/mooring/watch/journal.jsonl`

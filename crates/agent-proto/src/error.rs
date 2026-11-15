@@ -311,6 +311,15 @@ pub enum AgentError {
         /// The tool's scrubbed stderr.
         stderr_tail: StderrTail,
     },
+    /// A transaction could not converge the host profile's accounts
+    /// (design §8.6): `groupadd`, `useradd` or `usermod` failed, or an
+    /// account still differs from the profile after them. A transaction
+    /// converges them before it stages anything, so nothing was switched.
+    #[error("converging the host profile's accounts failed")]
+    Accounts {
+        /// The tool's scrubbed stderr, or what still differs.
+        stderr_tail: StderrTail,
+    },
     /// An account of the host profile is missing: the node was never
     /// bootstrapped, or the account was removed since.
     #[error("the host has no account {account:?}")]
@@ -572,6 +581,8 @@ closed_enum! {
         Apt,
         /// [`AgentError::Bootstrap`].
         Bootstrap,
+        /// [`AgentError::Accounts`].
+        Accounts,
         /// [`AgentError::AccountMissing`].
         AccountMissing,
         /// [`AgentError::Systemd`].
@@ -652,6 +663,7 @@ impl AgentError {
             Self::StageValidation { .. } => AgentErrorKind::StageValidation,
             Self::Apt { .. } => AgentErrorKind::Apt,
             Self::Bootstrap { .. } => AgentErrorKind::Bootstrap,
+            Self::Accounts { .. } => AgentErrorKind::Accounts,
             Self::AccountMissing { .. } => AgentErrorKind::AccountMissing,
             Self::Systemd { .. } => AgentErrorKind::Systemd,
             Self::HealthGate { .. } => AgentErrorKind::HealthGate,

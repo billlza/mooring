@@ -9,6 +9,7 @@
 mod activation;
 mod changes;
 mod ending;
+mod host_accounts;
 mod host_profile;
 mod launch;
 mod links;
