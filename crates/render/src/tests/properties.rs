@@ -21,7 +21,9 @@ use crate::mac::exit::ExitRule;
 use crate::tests::invariants::{
     exit_of, hy2_of, is_node_deny, is_probe_allow, is_special_deny, position, xray_of,
 };
-use crate::tests::support::{add_user, big, edit, engines, mac_exit, mac_prober, node, vps};
+use crate::tests::support::{
+    add_spare, add_user, big, edit, engines, mac_exit, mac_prober, node, vps,
+};
 use crate::vps::hy2::{Hy2Rule, LoopTag};
 use crate::vps::served::Identity;
 use crate::vps::testing::{digest_with, digest_with_files};
@@ -56,17 +58,24 @@ fn fate() -> impl Strategy<Value = Fate> {
 proptest! {
     #![proptest_config(config())]
 
-    /// Every active user holding credentials on a node appears exactly once
-    /// in each place that node's configs list identities, in id order and
-    /// followed by the probe; no other user (suspended, pending revocation or
-    /// revoked) appears at all, though a suspended user keeps its credentials.
+    /// Every active user holding credentials on a node, and only those,
+    /// is a client of both of that node's Xray inbounds and in its watch's
+    /// emails, in id order and followed by the probe. Every active or
+    /// suspended user and every spare user holding credentials there has a
+    /// REALITY short id and a sing-box user, loopback outbound and route
+    /// rule, in id order and followed by the probe (design §13.6). A user
+    /// pending revocation or revoked appears in no file at all, and a
+    /// suspended user or a spare in neither Xray's clients nor the watch's
+    /// emails.
     #[test]
     fn every_served_identity_appears_exactly_once_per_inbound(
-        fates in proptest::collection::vec(fate(), 20)
+        fates in proptest::collection::vec(fate(), 20),
+        spares in 0_usize..3,
     ) {
         let mut fixture = big();
         let fates: BTreeMap<UserId, Fate> =
             fixture.deployment.users().keys().cloned().zip(fates).collect();
+        let spare_ids: Vec<UserId> = (0..spares).map(|_| add_spare(&mut fixture)).collect();
         fixture.deployment = edit(&fixture.deployment, |parts| {
             for user in &mut parts.users {
                 match fates[&user.id] {
@@ -88,6 +97,16 @@ proptest! {
             .map(|(id, _)| Identity::User(id.clone()))
             .collect();
         served.push(Identity::Probe);
+        let mut kept: Vec<Identity> = fates
+            .iter()
+            .filter(|(_, fate)| matches!(fate, Fate::Active | Fate::Suspended))
+            .map(|(id, _)| id.clone())
+            .chain(spare_ids.iter().cloned())
+            .collect::<std::collections::BTreeSet<UserId>>()
+            .into_iter()
+            .map(Identity::User)
+            .collect();
+        kept.push(Identity::Probe);
         let names: Vec<String> = served.iter().map(ToString::to_string).collect();
         for id in ["ams1", "lon1"] {
             let xray = xray_of(&fixture, id);
@@ -99,30 +118,40 @@ proptest! {
             prop_assert_eq!(&loopback, &names.iter().map(|n| format!("{n}@hy2")).collect::<Vec<_>>());
             prop_assert_eq!(
                 xray.inbounds.reality.stream_settings.reality_settings.short_ids.len(),
-                served.len()
+                kept.len()
             );
             let hy2 = hy2_of(&fixture, id);
             for inbound in &hy2.inbounds {
                 let users: Vec<&Identity> = inbound.users.iter().map(|user| &user.name).collect();
-                prop_assert_eq!(users, served.iter().collect::<Vec<_>>());
+                prop_assert_eq!(users, kept.iter().collect::<Vec<_>>());
             }
             let outbounds: Vec<LoopTag> =
                 hy2.outbounds.iter().map(|outbound| outbound.tag.clone()).collect();
             let expected: Vec<LoopTag> =
-                served.iter().map(|identity| LoopTag(identity.clone())).collect();
+                kept.iter().map(|identity| LoopTag(identity.clone())).collect();
             prop_assert_eq!(outbounds, expected);
             let routed: Vec<&Identity> = hy2.route.rules.iter().filter_map(|rule| match rule {
                 Hy2Rule::Route(route) => Some(&route.auth_user[0]),
                 Hy2Rule::Reject(_) => None,
             }).collect();
-            prop_assert_eq!(routed, served.iter().collect::<Vec<_>>());
+            prop_assert_eq!(routed, kept.iter().collect::<Vec<_>>());
             prop_assert!(matches!(hy2.route.rules.last(), Some(Hy2Rule::Reject(_))));
             let bundle = vps(&fixture, &node(id));
-            for (user, fate) in &fates {
-                if !matches!(fate, Fate::Active) {
-                    for (_, file) in bundle.files() {
-                        prop_assert!(!file.expose_text().contains(user.as_str()));
-                    }
+            let unserved = fates
+                .iter()
+                .filter(|(_, fate)| !matches!(fate, Fate::Active))
+                .map(|(user, fate)| (user, matches!(fate, Fate::Suspended)))
+                .chain(spare_ids.iter().map(|spare| (spare, true)));
+            for (user, is_kept) in unserved {
+                for (file, text) in bundle.files() {
+                    let named = text.expose_text().contains(user.as_str());
+                    prop_assert_eq!(
+                        named,
+                        is_kept && file == ManagedFile::Hy2Config,
+                        "{} in {:?}",
+                        user,
+                        file
+                    );
                 }
             }
         }

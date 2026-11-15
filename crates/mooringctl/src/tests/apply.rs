@@ -50,21 +50,30 @@ pub(crate) fn ready(deployment: Deployment) -> (Harness, PathBuf) {
     (harness, dir)
 }
 
+/// The bytes of the stand-in file for the pinned engine `path`.
+fn stand_in(path: &str) -> String {
+    format!("stand-in for {path}")
+}
+
+/// The pins of the stand-in files [`stand_in_engines`] writes.
+pub(crate) fn stand_in_pins() -> Vec<(&'static str, String)> {
+    PINS.iter()
+        .map(|(path, _)| {
+            let digest = Sha256Digest::of(stand_in(path).as_bytes());
+            (*path, Sha256Hex::from_bytes(*digest.as_bytes()).to_string())
+        })
+        .collect()
+}
+
 /// Writes a stand-in file for every pinned engine path under `dir`, and
 /// pins those files for the harness.
 pub(crate) fn stand_in_engines(harness: &mut Harness, dir: &std::path::Path) {
-    let mut pins = Vec::new();
     for (path, _) in PINS {
         let file = dir.join(path);
         fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let bytes = format!("stand-in for {path}");
-        fs::write(&file, &bytes).unwrap();
-        pins.push((
-            path,
-            Sha256Hex::from_bytes(*Sha256Digest::of(bytes.as_bytes()).as_bytes()).to_string(),
-        ));
+        fs::write(&file, stand_in(path)).unwrap();
     }
-    harness.engine_pins = pins;
+    harness.engine_pins = stand_in_pins();
 }
 
 pub(crate) fn pin_of(harness: &Harness, path: &str) -> Sha256Hex {
@@ -524,7 +533,7 @@ pub(crate) fn bundle_and_header(
         .unwrap()
         .catalog()
         .clone();
-    let secrets = mooring_fixtures::two_nodes_three_users().unwrap().secrets;
+    let secrets = super::apply_job::spare_secrets();
     let bundle =
         mooring_render::vps::bundle(deployment, &node_id("lon1"), &secrets, &catalog).unwrap();
     let Response::Hello(hello) = super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) else {

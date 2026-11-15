@@ -5,7 +5,7 @@
 //! makes `user export` require, `user export`, and `user export-profiles`,
 //! the portal's bundle of every served user's file (design §9.5).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -15,12 +15,9 @@ use mooring_export::{
 };
 use mooring_keys::credentials;
 use mooring_model::ids::MAX_LABEL_CHARS;
-use mooring_model::node::NodeLifecycle;
-use mooring_model::secret::SecretEntry;
 use mooring_model::{
     AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Capability, ClientLine,
-    ClientProfile, LocalLabel, ModelError, NodeId, User, UserId, UserNodePublic, UserPolicy,
-    UserStatus,
+    ClientProfile, LocalLabel, ModelError, NodeId, User, UserId, UserPolicy, UserStatus,
 };
 use mooring_store::{Store, read_snapshot, update_config_with_secrets};
 
@@ -28,7 +25,8 @@ use crate::app::{Env, support_dir};
 use crate::error::{CommandError, LocalError};
 use crate::export_file;
 use crate::prompt::{Console, Line};
-use crate::state::{load, output, state_change, store_failure};
+use crate::state::{load, model_change, output, state_change, store_failure};
+use crate::{user_opening, user_spares};
 
 /// The most bytes read for a label: [`MAX_LABEL_CHARS`] characters of at
 /// most four UTF-8 bytes each.
@@ -42,13 +40,16 @@ const fn line_name(line: ClientLine) -> &'static str {
     }
 }
 
-/// `user add [--client cfm05|cfm04] [--mlkem]` (design §9.4, §15.3): adds
-/// an active user on `line`, with fresh credentials (a short id, a VLESS
-/// UUID, a Hysteria2 password and a loopback UUID) on every node that is
-/// not retiring, so that the user holds every node it can be served by.
-/// The label is read at the terminal, never from an argument, which the
-/// shell history would keep, and is never printed. The user has no alias
-/// and no agreement record yet.
+/// `user add [--client cfm05|cfm04] [--mlkem]` (design §9.4, §13.6,
+/// §15.3): adds an active user on `line`, with credentials (a short id, a
+/// VLESS UUID, a Hysteria2 password and a loopback UUID) on every node
+/// that is not retiring, so that the user holds every node it can be
+/// served by. The user takes the spare user with the lowest id, and with
+/// it the spare's credentials, which the nodes' engines already hold
+/// (`user_spares::new_user`); with no spare ready it has a fresh id and
+/// fresh credentials. The label is read at the terminal, never from an
+/// argument, which the shell history would keep, and is never printed.
+/// The user has no alias and no agreement record yet.
 ///
 /// A Mac with no deployment, or a state that cannot be read, is refused
 /// before the label is asked for. The label may wait as long as the
@@ -58,11 +59,18 @@ const fn line_name(line: ClientLine) -> &'static str {
 /// credentials on it from an earlier read would be refused by the store
 /// (`UnknownNode`), after the label was typed.
 ///
-/// The credentials are written to the keychain before the state that
-/// references them (`update_config_with_secrets`); the model refuses a
-/// user over the cap, and then nothing is written. Adding a user is a
+/// The credentials minted are written to the keychain before the state
+/// that references them (`update_config_with_secrets`); the model refuses
+/// a user over the cap, and then nothing is written. A taken spare's
+/// credentials on a retiring node are deleted after the commit: should
+/// that fail, the user is added and reported all the same, and the
+/// command fails with `StateCommitted`. Adding a user is a
 /// configuration change, so every node needs `node apply` before the
-/// user's file can be exported.
+/// user's file can be exported. Each applied node's line says whether that
+/// apply opens the user without restarting the node's engines
+/// ([`user_opening::lines`]), decided before the add: a deployment whose
+/// secrets cannot be read or that cannot be rendered refuses it, with
+/// nothing written.
 pub(crate) fn add(
     env: &mut Env<'_>,
     out: &mut dyn Write,
@@ -81,38 +89,12 @@ pub(crate) fn add(
     load(&store)?;
     let label = read_label(env.console)?;
     let state = load(&store)?;
-    let id = credentials::user_id().map_err(LocalError::Keys)?;
-    let mut per_node = BTreeMap::new();
-    let mut secrets = Vec::new();
-    for node in state.deployment.nodes().values().filter(|node| {
-        matches!(
-            node.lifecycle,
-            NodeLifecycle::Planned | NodeLifecycle::Adopted { .. } | NodeLifecycle::Applied { .. }
-        )
-    }) {
-        per_node.insert(
-            node.id.clone(),
-            UserNodePublic {
-                short_id: credentials::short_id().map_err(LocalError::Keys)?,
-            },
-        );
-        secrets.push(SecretEntry::UserVlessUuid(
-            id.clone(),
-            node.id.clone(),
-            credentials::credential_uuid().map_err(LocalError::Keys)?,
-        ));
-        secrets.push(SecretEntry::UserHy2Password(
-            id.clone(),
-            node.id.clone(),
-            credentials::password().map_err(LocalError::Keys)?,
-        ));
-        secrets.push(SecretEntry::UserLoopUuid(
-            id.clone(),
-            node.id.clone(),
-            credentials::credential_uuid().map_err(LocalError::Keys)?,
-        ));
-    }
-    let nodes = per_node
+    let deployment = &state.deployment;
+    let new = user_spares::new_user(deployment)?;
+    let openings = user_opening::lines(env, store.dir(), deployment, &new)?;
+    let id = new.id.clone();
+    let nodes = new
+        .per_node
         .keys()
         .map(NodeId::as_str)
         .collect::<Vec<_>>()
@@ -122,35 +104,62 @@ pub(crate) fn add(
         label,
         client: ClientProfile { line, capabilities },
         status: UserStatus::Active,
-        per_node,
+        per_node: new.per_node.clone(),
         policy: UserPolicy::NONE,
         alias: None,
         agreement: None,
     };
-    update_config_with_secrets(
+    let takes_spare = new.takes_spare;
+    let cleanup = match update_config_with_secrets(
         &store,
         env.secrets,
-        state.deployment.config_generation(),
-        secrets,
+        deployment.config_generation(),
+        new.secrets,
         |mut parts| {
+            if takes_spare {
+                parts.take_spare(&id)?;
+            }
             parts.users.push(user);
-            Ok(parts)
+            Ok::<_, ModelError>(parts)
         },
     )
-    .map_err(state_change)?;
+    .map_err(model_change)
+    {
+        Ok(_) => None,
+        Err(LocalError::StateCommitted(failure)) => Some(failure),
+        Err(error) => return Err(error.into()),
+    };
     let held = if nodes.is_empty() {
         "no credentials yet: no node is active".to_owned()
     } else {
         format!("credentials on {nodes}")
     };
-    out.write_all(
+    let spares = if takes_spare {
         format!(
-            "added user {id}: {}, {held}\nnext: `mooringctl user alias {id}`, then `node apply` each of those nodes, then `user agree` and `user export`\n",
-            line_name(line)
+            "a spare user, {} left",
+            deployment.spares().len().saturating_sub(1)
         )
-        .as_bytes(),
-    )
-    .map_err(output)
+    } else {
+        "no spare user was ready; the nightly apply job draws them in its window".to_owned()
+    };
+    let mut lines = vec![format!(
+        "added user {id}: {}, {held} ({spares})",
+        line_name(line)
+    )];
+    lines.extend(openings);
+    lines.push(format!(
+        "next: `mooringctl user alias {id}`, then `node apply` each of those nodes, then `user agree` and `user export`"
+    ));
+    // The user is added. Keychain items its change left behind, a taken
+    // spare's on a retiring node, are the failure to report, whatever
+    // becomes of the lines that say it is done.
+    let written = out
+        .write_all(format!("{}\n", lines.join("\n")).as_bytes())
+        .map_err(output);
+    match cleanup {
+        None => written,
+        Some(failure) => Err(LocalError::StateCommitted(failure).into()),
+    }
 }
 
 /// Reads the user's label at the terminal; it is never taken from an

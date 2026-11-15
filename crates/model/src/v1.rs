@@ -277,6 +277,7 @@ impl TryFrom<DeploymentV1Parts> for DeploymentV1 {
             config_generation: parts.config_generation,
             nodes: &nodes,
             users: &users,
+            spares: &BTreeMap::new(),
             next_wg_index: parts.next_wg_index,
             capacity: CapacityPolicy::UNLIMITED,
             alerting: None,
@@ -454,7 +455,7 @@ mod tests {
 
     use super::*;
     use crate::deployment::Deployment;
-    use crate::state::StateV3;
+    use crate::state::StateV4;
     use crate::testing::{TEST_FAIR_USE_BYTES, exit_site, two_node_parts};
     use crate::time::UnixTime;
     use crate::user::UserStatus;
@@ -465,7 +466,7 @@ mod tests {
 
     /// `state` lifted through version 2 to the current version at
     /// [`LIFTED_AT`].
-    fn lift(state: StateV1) -> Result<StateV3, ModelError> {
+    fn lift(state: StateV1) -> Result<StateV4, ModelError> {
         StateV2::try_from(state)?.lift(LIFTED_AT)
     }
 

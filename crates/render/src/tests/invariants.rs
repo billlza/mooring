@@ -421,12 +421,20 @@ fn nftables_guards_the_engines_and_scopes_every_public_rule() {
                 .filter(|line| line.contains("meta skuid"))
                 .map(str::trim)
                 .collect();
-            assert_eq!(guard.len(), 6);
+            assert_eq!(guard.len(), 8);
             assert!(
                 guard[0].ends_with("oifname \"wgexit\" ip daddr != 10.77.0.0/16 jump exit_flow")
             );
             assert!(guard[3].ends_with("counter name xray_guard reject"));
             assert!(guard[5].ends_with("counter name hy2_guard reject"));
+            assert_eq!(
+                guard[6..],
+                [
+                    "meta skuid \"root\" ct direction original ip daddr 127.0.0.1 tcp dport 10085 accept",
+                    "meta skuid \"mooring-watch\" ct direction original ip daddr 127.0.0.1 tcp dport 10085 accept",
+                ],
+                "the API takes the agent and the watch"
+            );
             // Each per-source set carries one kind of stateful expression.
             let set_of = |needle: &str| {
                 let line = text.lines().find(|line| line.contains(needle)).unwrap();
@@ -626,6 +634,18 @@ fn nftables_drops_by_default_and_gates_exit_traffic_first() {
                 "the gate comes before any owner-guard accept"
             );
             assert!(output[3].starts_with("meta skuid"));
+            // Xray's API adds users (design §13.6): the agent and the watch
+            // may connect to it, and every other connection is rejected,
+            // after the engines' own guards.
+            assert_eq!(
+                output[output.len() - 3..],
+                [
+                    "meta skuid \"root\" ct direction original ip daddr 127.0.0.1 tcp dport 10085 accept",
+                    "meta skuid \"mooring-watch\" ct direction original ip daddr 127.0.0.1 tcp dport 10085 accept",
+                    "ct direction original ip daddr 127.0.0.1 tcp dport 10085 reject",
+                ],
+                "the API's rules end the output chain"
+            );
 
             let reflector = input
                 .iter()

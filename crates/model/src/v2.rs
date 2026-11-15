@@ -33,7 +33,7 @@ use crate::exit::{ExitSite, TrafficPolicy};
 use crate::ids::{LocalLabel, NodeId, PublicAlias, UserId};
 use crate::node::Node;
 use crate::quota::AutoQuotaPolicy;
-use crate::state::{RuntimeIntent, StateV3};
+use crate::state::{RuntimeIntent, StateV4};
 use crate::time::UnixTime;
 use crate::user::{
     AgreementRecord, ClientProfile, SuspendReason, User, UserNodePublic, UserPolicy, UserStatus,
@@ -169,6 +169,7 @@ impl DeploymentV2Parts {
                 .into_iter()
                 .map(|user| user.lift(revoked_since))
                 .collect(),
+            spares: Vec::new(),
             forgotten: Vec::new(),
             next_wg_index: self.next_wg_index,
         })
@@ -232,10 +233,11 @@ impl StateV2 {
     }
 
     /// The current state: every field as version 2 holds it, a revoked
-    /// user revoked since `revoked_since` (the lift's time), and no
-    /// forgotten id.
-    pub fn lift(self, revoked_since: UnixTime) -> Result<StateV3, ModelError> {
-        Ok(StateV3 {
+    /// user revoked since `revoked_since` (the lift's time), no forgotten
+    /// id, and no spare user (version 4's, which [`crate::v3`] lifts with
+    /// none either).
+    pub fn lift(self, revoked_since: UnixTime) -> Result<StateV4, ModelError> {
+        Ok(StateV4 {
             deployment: self.deployment.0.lift(revoked_since)?,
             runtime: self.runtime,
         })

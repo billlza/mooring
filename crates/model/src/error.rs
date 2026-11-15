@@ -384,6 +384,12 @@ pub enum ModelError {
         /// The missing user id.
         id: UserId,
     },
+    /// No spare user has this id (design §13.6).
+    #[error("no spare user {id}")]
+    UnknownSpare {
+        /// The missing spare's id.
+        id: UserId,
+    },
     /// The id is already taken.
     #[error("duplicate {id}")]
     DuplicateId {
@@ -724,6 +730,8 @@ kinds! {
         UnknownNode,
         /// See [`ModelError::UnknownUser`].
         UnknownUser,
+        /// See [`ModelError::UnknownSpare`].
+        UnknownSpare,
         /// See [`ModelError::DuplicateId`].
         DuplicateId,
         /// See [`ModelError::TooManyNodes`].
@@ -852,6 +860,7 @@ impl ModelError {
             Self::TargetNotAttested => ModelErrorKind::TargetNotAttested,
             Self::UnknownNode { .. } => ModelErrorKind::UnknownNode,
             Self::UnknownUser { .. } => ModelErrorKind::UnknownUser,
+            Self::UnknownSpare { .. } => ModelErrorKind::UnknownSpare,
             Self::DuplicateId { .. } => ModelErrorKind::DuplicateId,
             Self::TooManyNodes { .. } => ModelErrorKind::TooManyNodes,
             Self::DuplicateNodeAddress { .. } => ModelErrorKind::DuplicateNodeAddress,
@@ -1178,6 +1187,14 @@ mod tests {
                 deployment.node(&node_id("par1")).unwrap_err(),
             ),
             (K::UnknownUser, deployment.user(&user_id(99)).unwrap_err()),
+            (
+                K::UnknownSpare,
+                deployment
+                    .clone()
+                    .into_parts()
+                    .take_spare(&user_id(99))
+                    .unwrap_err(),
+            ),
             (
                 K::DuplicateId,
                 deployment_error(|parts| parts.users.push(user(1, &[]))),

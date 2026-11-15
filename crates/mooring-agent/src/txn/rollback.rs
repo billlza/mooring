@@ -14,7 +14,7 @@ use mooring_agent_proto::{
     UnitName, WG_INTERFACE,
 };
 
-use super::changes::{Step, apply_changes, install_host};
+use super::changes::{Restarts, Step, apply_changes, install_host};
 use super::links::swap;
 use super::stage::{self, remove_generation};
 use super::{generation_units, health};
@@ -102,7 +102,7 @@ fn to_previous(
         })?
         .ok_or(RollbackCause::Swap { errno: None })?;
     let host = install_host(paths, &dir, Applied::Changed)?;
-    apply_changes(paths, node, failed, &header, &dir, &host)?;
+    apply_changes(paths, node, failed, &header, &dir, &host, Restarts::Always)?;
     health::wait(paths, node, &dir, health::BUDGET)
         .map_err(|failed| RollbackCause::HealthGate { failed })
 }

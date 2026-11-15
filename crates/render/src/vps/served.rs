@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The identities a node serves and their per-node credentials: every
-//! active user holding credentials on the node, in id order, then the
-//! Mac's probe identity. Before anything is rendered, the credentials of
-//! every identity holding them on the node are checked to be distinct as
-//! the engines key them.
+//! The identities a node keeps and serves, and their per-node credentials
+//! (design §13.6). A node keeps, in the files its engines read only at
+//! start (the REALITY short ids, and sing-box's users, outbounds and route
+//! rules), every active or suspended user and every spare user holding
+//! credentials on it, in id order, then the Mac's probe identity; it serves,
+//! through Xray's clients, which the running engine can take, the active
+//! users and the probe, in the same order. So taking a spare or resuming a
+//! user changes only the clients. Before anything is rendered, the
+//! credentials of every identity holding them on the node are checked to be
+//! distinct as the engines key them.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -15,6 +20,7 @@ use std::str::FromStr;
 use mooring_agent_proto::{Inbound, OpaqueUserId, Principal, StatsEmail};
 use mooring_model::ids::{NodeId, ShortId, UserId, Uuid};
 use mooring_model::secret::{Password, Secret, SecretSnapshot};
+use mooring_model::user::UserNodePublic;
 use mooring_model::{Deployment, Node};
 
 use crate::error::{CredentialHolder, CredentialKind, RenderError, WireField};
@@ -99,50 +105,104 @@ pub(crate) struct Served {
     pub(crate) hy2: Password,
 }
 
-/// One identity holding credentials on the node, and whether the node
-/// serves it.
+/// What a node does with an identity holding credentials on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Standing {
+    /// Kept and served: an active user, and the probe.
+    Served,
+    /// Kept in the start-time files, served by no Xray client: a suspended
+    /// user, or a spare user nobody holds yet.
+    Kept,
+    /// Neither: a user pending revocation, whose client still holds the
+    /// credentials.
+    Held,
+}
+
+/// One identity holding credentials on the node, and what the node does
+/// with it.
 struct Holder {
-    /// Whether the engines list the identity: the probe, and a user that
-    /// is active (`User::is_served_on`).
-    is_served: bool,
+    standing: Standing,
     credentials: Served,
 }
 
-/// Every identity `node` serves, users in id order, then the probe.
+/// The identities one node keeps and serves (see the module).
+#[derive(Debug, Clone)]
+pub(crate) struct Identities {
+    /// Every identity whose credentials the node's start-time files hold:
+    /// active and suspended users and spare users, in id order, then the
+    /// probe.
+    pub(crate) kept: Vec<Served>,
+    /// The identities Xray's clients admit: active users, in id order, then
+    /// the probe.
+    pub(crate) served: Vec<Served>,
+}
+
+/// Every identity `node` keeps and serves.
 ///
 /// First, every identity holding credentials on the node is checked
 /// against every other: each user with credentials there, whether active,
-/// suspended or pending revocation, and the probe. No two may share a
-/// VLESS UUID, a loopback UUID or a Hysteria2 password as the engines key
-/// them (`DuplicateCredential`). An identity that is not served is
-/// included because its client still holds the credential: were it equal
-/// to a served identity's, a suspended or revoked client would keep
-/// working as that identity. The secrets of those identities are therefore
+/// suspended or pending revocation, each spare user, and the probe. No two
+/// may share a VLESS UUID, a loopback UUID or a Hysteria2 password as the
+/// engines key them (`DuplicateCredential`). An identity that is not
+/// served is included because its client still holds the credential: were
+/// it equal to a served identity's, a suspended or revoked client would
+/// keep working as that identity. (A spare's are held by nobody yet, and
+/// will be its user's.) The secrets of those identities are therefore
 /// required too, as `Deployment::required_secrets` lists them.
-pub(crate) fn served(
+pub(crate) fn identities(
     deployment: &Deployment,
     node: &Node,
     secrets: &SecretSnapshot,
-) -> Result<Vec<Served>, RenderError> {
+) -> Result<Identities, RenderError> {
     let id: &NodeId = &node.id;
-    let mut holders = Vec::new();
+    let user_credentials =
+        |user: &UserId, public: &UserNodePublic| -> Result<Served, RenderError> {
+            Ok(Served {
+                identity: Identity::User(user.clone()),
+                vless: secrets.user_vless_uuid(user, id)?.clone(),
+                short_id: public.short_id,
+                loopback: secrets.user_loop_uuid(user, id)?.clone(),
+                hy2: secrets.user_hy2_password(user, id)?.clone(),
+            })
+        };
+    // Users and spares in one id order: a spare taken by `user add` keeps
+    // its place, so the start-time files do not change.
+    let mut by_id: BTreeMap<&UserId, Holder> = BTreeMap::new();
     for user in deployment.users().values() {
         let Some(public) = user.per_node.get(id) else {
             continue;
         };
-        holders.push(Holder {
-            is_served: user.is_served_on(id),
-            credentials: Served {
-                identity: Identity::User(user.id.clone()),
-                vless: secrets.user_vless_uuid(&user.id, id)?.clone(),
-                short_id: public.short_id,
-                loopback: secrets.user_loop_uuid(&user.id, id)?.clone(),
-                hy2: secrets.user_hy2_password(&user.id, id)?.clone(),
+        let standing = if user.is_served_on(id) {
+            Standing::Served
+        } else if user.is_kept_on(id) {
+            Standing::Kept
+        } else {
+            Standing::Held
+        };
+        by_id.insert(
+            &user.id,
+            Holder {
+                standing,
+                credentials: user_credentials(&user.id, public)?,
             },
-        });
+        );
     }
+    for spare in deployment.spares().values() {
+        let Some(public) = spare.per_node.get(id) else {
+            continue;
+        };
+        // The model refuses a spare whose id is a user's.
+        by_id.insert(
+            &spare.id,
+            Holder {
+                standing: Standing::Kept,
+                credentials: user_credentials(&spare.id, public)?,
+            },
+        );
+    }
+    let mut holders: Vec<Holder> = by_id.into_values().collect();
     holders.push(Holder {
-        is_served: true,
+        standing: Standing::Served,
         credentials: Served {
             identity: Identity::Probe,
             vless: secrets.probe_vless_uuid(id)?.clone(),
@@ -152,11 +212,17 @@ pub(crate) fn served(
         },
     });
     require_distinct(id, &holders)?;
-    Ok(holders
+    let served = holders
+        .iter()
+        .filter(|holder| holder.standing == Standing::Served)
+        .map(|holder| holder.credentials.clone())
+        .collect();
+    let kept = holders
         .into_iter()
-        .filter(|holder| holder.is_served)
+        .filter(|holder| holder.standing != Standing::Held)
         .map(|holder| holder.credentials)
-        .collect())
+        .collect();
+    Ok(Identities { kept, served })
 }
 
 /// Refuses `DuplicateCredential`, naming both holders, when two holders

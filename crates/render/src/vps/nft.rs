@@ -11,7 +11,10 @@
 //!   connections out of `wgexit` to non-tunnel addresses (through the exit
 //!   flow cap) or to the REALITY target's ports, and `mooring-hy2` only the
 //!   loopback handoff. Every other engine-originated connection is
-//!   counted and rejected.
+//!   counted and rejected. Xray's API takes only the agent (`root`), which
+//!   adds users to the running engine through it (design §13.6), and the
+//!   watch, which reads the counters (§11.5): every other connection to it
+//!   is rejected.
 //! - `exit_flow` counts the exit flows to `$VPS4`'s reflector, which only
 //!   the Mac's in-chain probes open (the accounting canary's evidence,
 //!   design §11.5), then applies the flow cap. The cap is written as the
@@ -20,7 +23,9 @@
 //!   only for traffic addressed to `$VPS4`.
 
 use ipnet::Ipv4Net;
-use mooring_agent_proto::{EngineUser, NFT_GATE_SET, NFT_TABLE, NftCounter, WG_INTERFACE};
+use mooring_agent_proto::{
+    EngineUser, NFT_GATE_SET, NFT_TABLE, NftCounter, WATCH_ACCOUNT, WG_INTERFACE,
+};
 use mooring_model::exit::FlowCap;
 use mooring_model::ipv4::PublicIpv4;
 use mooring_model::ports::{Port, PortRange};
@@ -31,6 +36,11 @@ use mooring_model::ports::SYSTEM_PORTS;
 
 /// Connections one source may hold to the TCP/80 camouflage forward.
 pub(crate) const CAMO_TCP_PER_SOURCE: u32 = 64;
+
+/// The accounts that may connect to Xray's API: the agent, which runs as
+/// root and adds users through `HandlerService`, and the watch, which
+/// reads `StatsService`.
+pub(crate) const API_CLIENTS: [&str; 2] = ["root", WATCH_ACCOUNT];
 
 /// One Hysteria2 listener and the hop range redirected to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,6 +252,19 @@ fn write_output(input: &NftInput, sink: &mut dyn TextSink) {
         sink.put(NftCounter::Hy2Guard.name());
         sink.put(" reject");
     });
+    let api = |sink: &mut dyn TextSink| {
+        sink.put("ip daddr 127.0.0.1 tcp dport ");
+        sink.show(&SYSTEM_PORTS.xray_stats);
+    };
+    for account in API_CLIENTS {
+        owned(sink, account, &|sink| {
+            api(sink);
+            sink.put(" accept");
+        });
+    }
+    sink.put("\t\tct direction original ");
+    api(sink);
+    sink.put(" reject\n");
     sink.put("\t}\n\n");
 }
 
@@ -250,8 +273,14 @@ const TUNNEL: Ipv4Net = WG_SUPERNET;
 
 /// One owner-guard rule: `meta skuid "<user>" ct direction original <body>`.
 fn guard(sink: &mut dyn TextSink, user: EngineUser, body: &dyn Fn(&mut dyn TextSink)) {
+    owned(sink, user.name(), body);
+}
+
+/// A rule for the connections `account` originates:
+/// `meta skuid "<account>" ct direction original <body>`.
+fn owned(sink: &mut dyn TextSink, account: &str, body: &dyn Fn(&mut dyn TextSink)) {
     sink.put("\t\tmeta skuid \"");
-    sink.put(user.name());
+    sink.put(account);
     sink.put("\" ct direction original ");
     body(sink);
     sink.put("\n");

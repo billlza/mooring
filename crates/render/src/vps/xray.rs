@@ -87,17 +87,24 @@ literal!(
     ApiTag = "api"
 );
 literal!(
-    /// The one API service: per-user traffic counters for accounting.
+    /// The API service through which the agent adds the users a generation
+    /// opens to the running Xray (`app/proxyman/command`, design §13.6).
+    HandlerService = "HandlerService"
+);
+literal!(
+    /// The API service of per-user traffic counters, for accounting.
     StatsService = "StatsService"
 );
 
-/// `api` (`infra/conf/api.go:16-20`): StatsService on loopback only.
+/// `api` (`infra/conf/api.go:16-44`): HandlerService and StatsService on
+/// loopback only. Xray skips a service name it does not know without a
+/// word, so each is a closed literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct XrayApi {
     pub(crate) tag: ApiTag,
     pub(crate) listen: SocketAddrV4,
-    pub(crate) services: [StatsService; 1],
+    pub(crate) services: (HandlerService, StatsService),
 }
 
 /// `stats`: an empty object enables the stats manager (`infra/conf/xray.go:387`).
@@ -832,6 +839,10 @@ pub(crate) struct XrayInput<'a> {
     pub(crate) vps4: PublicIpv4,
     pub(crate) target: &'a TargetSpec,
     pub(crate) private_key: &'a RealityPrivateKey,
+    /// Every identity the node keeps: each has a REALITY short id (design
+    /// §13.6).
+    pub(crate) kept: &'a [Served],
+    /// The identities Xray serves: each is a client of both VLESS inbounds.
     pub(crate) served: &'a [Served],
     pub(crate) reach: &'a NodeReach,
     pub(crate) policy: &'a TrafficPolicy,
@@ -844,7 +855,7 @@ pub(crate) fn config(input: &XrayInput<'_>) -> Result<XrayConfig, RenderError> {
         api: XrayApi {
             tag: ApiTag::Value,
             listen: SocketAddrV4::new(Ipv4Addr::LOCALHOST, SYSTEM_PORTS.xray_stats.get()),
-            services: [StatsService::Value],
+            services: (HandlerService::Value, StatsService::Value),
         },
         stats: XrayStats {},
         policy: policy(),
@@ -957,7 +968,7 @@ fn inbounds(input: &XrayInput<'_>) -> Result<XrayInbounds, RenderError> {
                 private_key: Rendered::new(input.private_key.clone()),
                 min_client_ver: MinClientVer::Value,
                 max_time_diff: 60_000,
-                short_ids: input.served.iter().map(|served| served.short_id).collect(),
+                short_ids: input.kept.iter().map(|kept| kept.short_id).collect(),
             },
         },
         sniffing: sniffing(),

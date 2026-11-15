@@ -84,29 +84,10 @@ impl<'p> Engines<'p> {
         for (path, _) in pins {
             read_pinned(dir, pins, path)?;
         }
-        let pin = |path: &str| -> Result<Sha256Hex, LocalError> {
-            pins.iter()
-                .find(|(pinned, _)| *pinned == path)
-                .and_then(|(_, hex)| parse_hex(hex))
-                .ok_or_else(|| LocalError::EngineFile {
-                    path: dir.join(path),
-                })
-        };
-        let set = |arch: &str| -> Result<EngineSet, LocalError> {
-            Ok(EngineSet {
-                xray: pin(&format!("linux-{arch}/xray"))?,
-                hy2: pin(&format!("linux-{arch}/mooring-hy2"))?,
-                geoip: pin("geodata/geoip.dat")?,
-                geosite: pin("geodata/geosite.dat")?,
-            })
-        };
         Ok(Self {
             dir: dir.to_path_buf(),
             pins,
-            catalog: EngineCatalog {
-                amd64: set("amd64")?,
-                arm64: set("arm64")?,
-            },
+            catalog: pinned_catalog(dir, pins)?,
         })
     }
 
@@ -125,6 +106,32 @@ impl<'p> Engines<'p> {
         }
         Ok(None)
     }
+}
+
+/// The engines `pins` name for every architecture: the catalog of an
+/// engine directory `dir` that holds every pinned file, as a bundle records
+/// it, read from the pins alone. A file with no pin is `EngineFile`.
+pub(crate) fn pinned_catalog(dir: &Path, pins: Pins<'_>) -> Result<EngineCatalog, LocalError> {
+    let pin = |path: &str| -> Result<Sha256Hex, LocalError> {
+        pins.iter()
+            .find(|(pinned, _)| *pinned == path)
+            .and_then(|(_, hex)| parse_hex(hex))
+            .ok_or_else(|| LocalError::EngineFile {
+                path: dir.join(path),
+            })
+    };
+    let set = |arch: &str| -> Result<EngineSet, LocalError> {
+        Ok(EngineSet {
+            xray: pin(&format!("linux-{arch}/xray"))?,
+            hy2: pin(&format!("linux-{arch}/mooring-hy2"))?,
+            geoip: pin("geodata/geoip.dat")?,
+            geosite: pin("geodata/geosite.dat")?,
+        })
+    };
+    Ok(EngineCatalog {
+        amd64: set("amd64")?,
+        arm64: set("arm64")?,
+    })
 }
 
 /// The file `path` in `dir`, which must hash to its pin.

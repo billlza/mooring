@@ -4,8 +4,9 @@
 //! standard output, which names users by id; the log's lines, which count
 //! users and name none (design §15.7: a log line can outlive the 13 months
 //! the agreement keeps a user's records); and, with `--json`, one JSON line
-//! (version 1): `{"version":1,"at":<secs>,"ran":false}` for a firing outside
-//! the window, otherwise `ran: true` with `policy`, `removals` and `nodes`.
+//! (version 2): `{"version":2,"at":<secs>,"ran":false}` for a firing outside
+//! the window, otherwise `ran: true` with `policy`, `removals`, `spares`
+//! and `nodes`. Version 2 added `spares` (2026-11-14).
 
 use std::io::Write;
 
@@ -19,7 +20,7 @@ use crate::payments::notes::stamp;
 use crate::state::output;
 
 /// The version of the `--json` outcome.
-pub(crate) const OUTCOME_VERSION: u32 = 1;
+pub(crate) const OUTCOME_VERSION: u32 = 2;
 
 /// What refused the policy step, in words that name no user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -301,6 +302,102 @@ impl Removals {
 
 const SKIPPED: &str = "removals skipped: the clock stepped back";
 
+/// What the spare users' step changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct SparesDone {
+    /// The spare users drawn.
+    pub(crate) drawn: usize,
+    /// The credentials given to spare users drawn earlier, one per spare
+    /// and node.
+    pub(crate) credentials: usize,
+    /// The spare users ready once it ran.
+    pub(crate) ready: usize,
+}
+
+/// Which part of the spare users' step failed. The log says this alone,
+/// since the error may name a spare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SparesFailure {
+    /// The state cannot be read.
+    State,
+    /// Their ids or credentials could not be made.
+    Credentials,
+    /// Their credentials or the configuration change could not be written.
+    Change,
+}
+
+impl SparesFailure {
+    const fn words(self) -> &'static str {
+        match self {
+            Self::State => "the state cannot be read",
+            Self::Credentials => "their ids or credentials could not be made",
+            Self::Change => "their credentials or the configuration change could not be written",
+        }
+    }
+}
+
+/// The spare users' step's outcome. It counts spares and names none: each
+/// id is a user's to come. Only a failure's error, in the report, may name
+/// one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Spares {
+    /// Not run: the run is outside the window (`apply --now`).
+    OutsideWindow,
+    /// It ran.
+    Done(SparesDone),
+    /// It failed, and changed nothing.
+    Failed {
+        /// Which part failed.
+        kind: SparesFailure,
+        /// Why, which may name a spare.
+        error: String,
+    },
+}
+
+impl Spares {
+    /// Its line in the report: a failure with its error.
+    pub(crate) fn line(&self) -> String {
+        match self {
+            Self::Failed { error, .. } => format!("spare users not topped up: {error}"),
+            Self::OutsideWindow | Self::Done(_) => self.log_line(),
+        }
+    }
+
+    /// Its line in the log, which names no spare: a failure by its kind.
+    pub(crate) fn log_line(&self) -> String {
+        match self {
+            Self::OutsideWindow => {
+                "spare users left as they are: outside the apply window, where the restart they need is expected"
+                    .to_owned()
+            }
+            Self::Done(done) if done.drawn == 0 && done.credentials == 0 => {
+                format!("spare users: {} ready", done.ready)
+            }
+            Self::Done(done) => format!(
+                "spare users: {} drawn, {} credential set(s) given on nodes that lacked them; {} ready",
+                done.drawn, done.credentials, done.ready
+            ),
+            Self::Failed { kind, .. } => format!("spare users not topped up: {}", kind.words()),
+        }
+    }
+
+    const fn failures(&self) -> usize {
+        match self {
+            Self::Failed { .. } => 1,
+            Self::OutsideWindow | Self::Done(_) => 0,
+        }
+    }
+
+    const fn drawn(&self) -> usize {
+        match self {
+            Self::Done(done) => done.drawn,
+            Self::OutsideWindow | Self::Failed { .. } => 0,
+        }
+    }
+}
+
 /// How one node's apply ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -347,6 +444,8 @@ pub(crate) struct Outcome {
     pub(crate) policy: PolicyOutcome,
     /// The removals.
     pub(crate) removals: Removals,
+    /// The spare users.
+    pub(crate) spares: Spares,
     /// The node applies.
     pub(crate) nodes: Vec<NodeOutcome>,
 }
@@ -358,6 +457,7 @@ struct Ran<'a> {
     ran: bool,
     policy: &'a PolicyOutcome,
     removals: &'a Removals,
+    spares: &'a Spares,
     nodes: &'a [NodeOutcome],
 }
 
@@ -370,10 +470,12 @@ struct NotRan {
 
 impl Outcome {
     /// How many parts of the run failed: the policy step as a whole when it
-    /// was refused, each change, removal and node apply that failed.
+    /// was refused, each change, removal and node apply that failed, and the
+    /// spare users' step.
     pub(crate) fn failures(&self) -> usize {
         self.policy.failures()
             + self.removals.failures()
+            + self.spares.failures()
             + self
                 .nodes
                 .iter()
@@ -393,6 +495,7 @@ impl Outcome {
                     ran: true,
                     policy: &self.policy,
                     removals: &self.removals,
+                    spares: &self.spares,
                     nodes: &self.nodes,
                 },
             );
@@ -422,8 +525,9 @@ impl Outcome {
             .filter(|node| node.result == NodeResult::Applied)
             .count();
         format!(
-            "apply at {}: {suspended} suspended, {resumed} resumed, {held_back} held back, {kept} kept suspended, {removed} removed, {applied} of {} node(s) behind applied; {} failure(s)",
+            "apply at {}: {suspended} suspended, {resumed} resumed, {held_back} held back, {kept} kept suspended, {removed} removed, {} spare user(s) drawn, {applied} of {} node(s) behind applied; {} failure(s)",
             stamp(self.at),
+            self.spares.drawn(),
             self.nodes.len(),
             self.failures()
         )

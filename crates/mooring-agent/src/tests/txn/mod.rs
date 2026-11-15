@@ -19,6 +19,7 @@ mod staging;
 mod units;
 mod validation;
 mod world;
+mod xray_users;
 
 pub(super) use world::{WATCH, facts, golden};
 use world::{WG, World, XRAY, index_of, same};

@@ -34,7 +34,10 @@ The last command must print `[Excluded]`.
 4. **Get the user's acceptance on the call.**
    - On a FaceTime Audio call, the user says 「我已阅读并同意《Mooring 使用约定》第 N 版」, where N is the revision the build ships (`AgreementVersion::CURRENT`, now 1).
    - Then run `mooringctl user agree <uid>`. It records the revision and the UTC day, and takes neither as an argument. It is a bookkeeping record: it keeps the generation, so it needs no apply (§7).
-5. **Apply in the window.** `user add` changed the configuration, so every node the user holds needs `node apply` before the export. The apply restarts the engines and drops every user's connections for a few seconds, so run `node apply` yourself between 03:00 and 03:45 China time (19:00 to 19:45 UTC), before the nodes' 04:00 reboot; the nightly job that is to do it at 03:20 (§13.6) is not built yet. While no user is connected, as for the first users before the pilot starts, apply at any time. Deliver after the apply.
+5. **Apply.** `user add` changed the configuration, so every node the user holds needs `node apply` before the export, and `user add` says for each node what that apply does (§13.6).
+   - "adds the user to the running Xray, with no restart": the user took a spare user, and the node runs exactly what this build renders for the deployment: its generation, and the very bundle `node apply` last confirmed there. Run `node apply` at once; no one's connection drops. This needs the node's agent of this build (`node upgrade-agent`) and a first night's apply with it; an older agent restarts the engines all the same.
+   - Any other line: the apply restarts the engines and drops every user's connections for a few seconds. Run `node apply` yourself between 03:00 and 03:45 China time (19:00 to 19:45 UTC), before the nodes' 04:00 reboot, or leave it to the nightly apply job at 03:20, and deliver after it. While no user is connected, as for the first users before the pilot started, apply at any time.
+   - Deliver after the apply.
 
 ## 2. Export
 

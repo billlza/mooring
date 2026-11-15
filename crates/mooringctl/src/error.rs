@@ -154,6 +154,26 @@ pub(crate) enum LocalError {
     /// The user's secrets could not be read from the keychain.
     #[error("no file was written: reading the user's secrets from the keychain failed")]
     Secrets(#[source] Box<SnapshotReadError>),
+    /// `user add` could not read the deployment's secrets, from which it
+    /// renders each node's bundle to tell what the node's next apply does
+    /// for the user (`user_opening`); it added no one.
+    #[error(
+        "the user was not added: reading the deployment's secrets from the keychain, to tell what each node's next apply does, failed"
+    )]
+    OpeningSecrets(#[source] Box<SnapshotReadError>),
+    /// `user add` could not render a node's bundle, which tells what the
+    /// node's next apply does for the user (`user_opening`); it added no
+    /// one.
+    #[error(
+        "the user was not added: {node}'s bundle could not be rendered, to tell what its next apply does"
+    )]
+    OpeningRender {
+        /// The node.
+        node: NodeId,
+        /// Why: the engines this build pins, or a value of the deployment.
+        #[source]
+        source: Box<LocalError>,
+    },
     /// The export's file could not be written; what was written of it has
     /// been removed.
     #[error("cannot write the export to {}; no part of it is left", path.display())]

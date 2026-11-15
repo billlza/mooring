@@ -6,18 +6,26 @@
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
+use std::path::Path;
 
 use mooring_export::{ExportErrorKind, export_secret_refs};
 use mooring_model::deployment::Bookkeeping;
+use mooring_model::node::AppliedConfig;
+use mooring_model::secret::{SecretEntry, SecretSnapshot};
 use mooring_model::{
-    Capability, ClientLine, Deployment, NodeId, NodeLifecycle, SecretRef, UnixTime, User, UserId,
-    UserPolicy, UserStatus,
+    Capability, ClientLine, Deployment, DeploymentParts, NodeId, NodeLifecycle, SecretRef,
+    Sha256Digest, UnixTime, User, UserId, UserPolicy, UserStatus,
 };
+use mooring_render::vps::bundle;
 use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_with_secrets};
 
-use super::support::{CAP_RAISED_MEANWHILE, Harness, NOW, change_the_configuration_meanwhile};
+use super::apply::stand_in_pins;
+use super::support::{
+    CAP_RAISED_MEANWHILE, Harness, NOW, Refusals, change_the_configuration_meanwhile,
+};
 use super::user::{fixture, harness_with, state_bytes, store};
 use crate::error::EXIT_LOCAL;
+use crate::node::engines::pinned_catalog;
 
 const LABEL: &str = "Cousin in Chengdu";
 
@@ -104,7 +112,10 @@ fn add_creates_an_active_user_with_credentials_on_every_node() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "added user {}: CFM 0.5, credentials on ams1, lon1\nnext: `mooringctl user alias {}`, then `node apply` each of those nodes, then `user agree` and `user export`\n",
+            "added user {}: CFM 0.5, credentials on ams1, lon1 (no spare user was ready; the nightly apply job draws them in its window)\n\
+             ams1: its next apply restarts its engines: the user's credentials there are new\n\
+             lon1: its next apply restarts its engines: the user's credentials there are new\n\
+             next: `mooringctl user alias {}`, then `node apply` each of those nodes, then `user agree` and `user export`\n",
             user.id, user.id
         )
     );
@@ -186,7 +197,7 @@ fn a_user_added_with_no_active_node_holds_no_credentials() {
     assert!(harness.secrets.is_empty());
     assert!(
         outcome.stdout.starts_with(&format!(
-            "added user {}: CFM 0.5, no credentials yet: no node is active\n",
+            "added user {}: CFM 0.5, no credentials yet: no node is active (no spare user was ready; the nightly apply job draws them in its window)\nnext: ",
             user.id
         )),
         "{}",
@@ -243,7 +254,7 @@ fn a_node_cancelled_while_the_label_is_typed_is_not_one_the_user_is_added_to() {
     assert_eq!(harness.secrets.refs(), user_refs(&user.id, &["lon1"]));
     assert!(
         outcome.stdout.starts_with(&format!(
-            "added user {}: CFM 0.5, credentials on lon1\n",
+            "added user {}: CFM 0.5, credentials on lon1 (no spare user was ready; the nightly apply job draws them in its window)\n",
             user.id
         )),
         "{}",
@@ -391,4 +402,297 @@ fn alias_gives_a_user_a_random_alias_once() {
     assert_eq!(unknown.code, EXIT_LOCAL);
     assert_eq!(unknown.stderr, "mooringctl: unknown user zzzzzzzzzz\n");
     assert_eq!(state_bytes(&harness), bytes);
+}
+
+/// `deployment` with each applied node having confirmed the bundle this
+/// build renders for it from `secrets`, with the stand-in engines.
+fn confirmed_as_rendered(deployment: Deployment, secrets: &SecretSnapshot) -> Deployment {
+    let pins = stand_in_pins();
+    let pins: Vec<(&str, &str)> = pins
+        .iter()
+        .map(|(path, hex)| (*path, hex.as_str()))
+        .collect();
+    let catalog = pinned_catalog(Path::new("engines"), &pins).unwrap();
+    let digest = |deployment: &Deployment, node: &NodeId| -> Sha256Digest {
+        bundle(deployment, node, secrets, &catalog)
+            .unwrap()
+            .digest()
+    };
+    let mut parts = deployment.clone().into_parts();
+    for node in &mut parts.nodes {
+        if let NodeLifecycle::Applied { applied, .. } = &mut node.lifecycle {
+            applied.digest = digest(&deployment, &node.id);
+        }
+    }
+    let confirmed = Deployment::try_from(parts).unwrap();
+    for (id, node) in confirmed.nodes() {
+        if let Some(applied) = node.lifecycle.applied() {
+            // What a node confirmed is not rendered into its bundle.
+            assert_eq!(applied.digest, digest(&confirmed, id), "{id}");
+        }
+    }
+    confirmed
+}
+
+/// A harness holding the fixture with its three spare users, as `edit`
+/// leaves it, each applied node having confirmed the bundle this build
+/// renders for it with the stand-in engines the harness pins, and their
+/// secrets in the keychain, with `LABEL` typed at the prompt.
+fn adding_with_spares(edit: impl FnOnce(&mut DeploymentParts)) -> (Deployment, Harness) {
+    let fixture = mooring_fixtures::two_nodes_three_users()
+        .unwrap()
+        .with_spares(3)
+        .unwrap();
+    let mut parts = fixture.deployment.into_parts();
+    edit(&mut parts);
+    let before = confirmed_as_rendered(Deployment::try_from(parts).unwrap(), &fixture.secrets);
+    let mut harness = adding(before.clone(), Some(LABEL));
+    harness.engine_pins = stand_in_pins();
+    for secret_ref in before.required_secrets() {
+        let material = fixture.secrets.material(&secret_ref).unwrap();
+        harness
+            .secrets
+            .put(SecretEntry::new(secret_ref, material).unwrap())
+            .unwrap();
+    }
+    (before, harness)
+}
+
+fn spare_ids(deployment: &Deployment) -> Vec<&str> {
+    deployment.spares().keys().map(UserId::as_str).collect()
+}
+
+/// The user takes the spare with the lowest id, and with it the spare's
+/// credentials, which the keychain holds already under that id: nothing is
+/// minted, nothing deleted. Each node had confirmed the deployment's
+/// generation, so each next apply adds the user to the running Xray.
+#[test]
+fn add_takes_the_spare_with_the_lowest_id_and_its_credentials() {
+    let (before, mut harness) = adding_with_spares(|_| {});
+    let keychain = harness.secrets.refs();
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let after = store(&harness).load().unwrap().deployment;
+    let user = added(&before, &after);
+    assert_eq!(user.id.as_str(), "fxuseraaga");
+    assert_eq!(user.per_node, before.spares()[&user.id].per_node);
+    assert_eq!(user.status, UserStatus::Active);
+    assert_eq!(spare_ids(&after), ["fxuseraagb", "fxuseraagc"]);
+    assert_eq!(harness.secrets.refs(), keychain);
+    assert_eq!(
+        after.config_generation(),
+        before.config_generation().next().unwrap()
+    );
+    assert_eq!(
+        outcome.stdout,
+        "added user fxuseraaga: CFM 0.5, credentials on ams1, lon1 (a spare user, 2 left)\n\
+         ams1: its next apply adds the user to the running Xray, with no restart\n\
+         lon1: its next apply adds the user to the running Xray, with no restart\n\
+         next: `mooringctl user alias fxuseraaga`, then `node apply` each of those nodes, then `user agree` and `user export`\n"
+    );
+}
+
+/// A node the spare holds no credentials on (one planned since it was
+/// drawn) gets fresh ones under the spare's id, and its next apply
+/// restarts its engines; a node behind the deployment carries other
+/// changes; a node not yet applied gets no line.
+#[test]
+fn each_node_says_what_its_next_apply_does() {
+    let (before, mut harness) = adding_with_spares(|parts| {
+        parts.config_generation = parts.config_generation.next().unwrap();
+        for spare in &mut parts.spares {
+            spare.per_node.remove(&node("ams1"));
+        }
+    });
+    let keychain = harness.secrets.refs();
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let user = added(&before, &store(&harness).load().unwrap().deployment);
+    assert_eq!(user.id.as_str(), "fxuseraaga");
+    let minted: BTreeSet<SecretRef> = harness
+        .secrets
+        .refs()
+        .difference(&keychain)
+        .cloned()
+        .collect();
+    assert_eq!(minted, user_refs(&user.id, &["ams1"]));
+    assert_eq!(
+        outcome.stdout.lines().nth(1).unwrap(),
+        "ams1: its next apply restarts its engines: the user's credentials there are new"
+    );
+    assert_eq!(
+        outcome.stdout.lines().nth(2).unwrap(),
+        "lon1: its next apply also carries changes it has not applied yet, and restarts its engines if any of them needs it"
+    );
+    let (_, mut harness) = adding_with_spares(|parts| {
+        for node in &mut parts.nodes {
+            if let NodeLifecycle::Applied { site, .. } = &node.lifecycle
+                && node.id == self::node("lon1")
+            {
+                node.lifecycle = NodeLifecycle::Adopted { site: site.clone() };
+            }
+        }
+    });
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let lines: Vec<&str> = outcome.stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "{}", outcome.stdout);
+    assert_eq!(
+        lines[1],
+        "ams1: its next apply adds the user to the running Xray, with no restart"
+    );
+}
+
+/// A node whose last apply was of another build's bundle carries what
+/// this build renders differently: its next apply may restart its
+/// engines, whatever the user holds there.
+#[test]
+fn a_node_that_confirmed_another_build_s_bundle_carries_the_difference() {
+    let (before, mut harness) = adding_with_spares(|_| {});
+    store(&harness)
+        .record(
+            before.config_generation(),
+            Bookkeeping::Applied {
+                node: node("lon1"),
+                applied: AppliedConfig {
+                    config_generation: before.config_generation(),
+                    digest: Sha256Digest::of(b"the bundle another build rendered"),
+                },
+            },
+        )
+        .unwrap();
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let lines: Vec<&str> = outcome.stdout.lines().collect();
+    assert_eq!(
+        lines[1..3],
+        [
+            "ams1: its next apply adds the user to the running Xray, with no restart",
+            "lon1: its next apply also carries what this build renders differently from what it last applied, \
+             and restarts its engines if any of that needs it",
+        ],
+        "{}",
+        outcome.stdout
+    );
+}
+
+/// What each node's next apply does is decided before the add, from the
+/// secrets and the engines this build pins: a keychain that refuses to be
+/// read, or a build pinning no engine, refuses the add with nothing
+/// written.
+#[test]
+fn a_node_that_cannot_be_rendered_refuses_the_add() {
+    let (_, mut harness) = adding_with_spares(|_| {});
+    let (state, keychain) = (state_bytes(&harness), harness.secrets.refs());
+    *harness.keychain.lock().unwrap() = Refusals {
+        get: Some(-25308),
+        ..Refusals::default()
+    };
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+    assert_eq!(outcome.stdout, "");
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: the user was not added: reading the deployment's secrets from the keychain, \
+         to tell what each node's next apply does, failed\n  \
+         caused by: keychain get failed with OSStatus -25308\n"
+    );
+    assert_eq!(state_bytes(&harness), state);
+    assert_eq!(harness.secrets.refs(), keychain);
+
+    let (_, mut harness) = adding_with_spares(|_| {});
+    harness.engine_pins = Vec::new();
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: the user was not added: ams1's bundle could not be rendered, \
+             to tell what its next apply does\n  \
+             caused by: no pinned engine file at {}\n",
+            harness
+                .support_dir()
+                .join("engines/linux-amd64/xray")
+                .display()
+        )
+    );
+    assert_eq!(state_bytes(&harness), state);
+}
+
+/// A spare's credentials on a node now retiring are no new user's: they
+/// are left out, and the store deletes them from the keychain; the other
+/// spares keep theirs.
+#[test]
+fn a_spare_s_credentials_on_a_retiring_node_are_deleted() {
+    let (before, mut harness) = adding_with_spares(|parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|candidate| candidate.id == node("ams1"))
+            .unwrap();
+        let site = ams1.lifecycle.site().unwrap().clone();
+        ams1.lifecycle = NodeLifecycle::Retiring { site };
+    });
+    let keychain = harness.secrets.refs();
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let after = store(&harness).load().unwrap().deployment;
+    let user = added(&before, &after);
+    let held: Vec<&str> = user.per_node.keys().map(NodeId::as_str).collect();
+    assert_eq!(held, ["lon1"]);
+    let deleted: BTreeSet<SecretRef> = keychain
+        .difference(&harness.secrets.refs())
+        .cloned()
+        .collect();
+    assert_eq!(deleted, user_refs(&user.id, &["ams1"]));
+    for spare in after.spares().values() {
+        let held: Vec<&str> = spare.per_node.keys().map(NodeId::as_str).collect();
+        assert_eq!(held, ["ams1", "lon1"]);
+    }
+}
+
+/// Should the keychain refuse to delete a taken spare's credentials on a
+/// retiring node, the user is added all the same: the report says so,
+/// with the user's id, and the command fails for what was left behind.
+#[test]
+fn a_spare_s_credentials_left_behind_still_report_the_user() {
+    let (before, mut harness) = adding_with_spares(|parts| {
+        let ams1 = parts
+            .nodes
+            .iter_mut()
+            .find(|candidate| candidate.id == node("ams1"))
+            .unwrap();
+        let site = ams1.lifecycle.site().unwrap().clone();
+        ams1.lifecycle = NodeLifecycle::Retiring { site };
+    });
+    let keychain = harness.secrets.refs();
+    *harness.keychain.lock().unwrap() = Refusals {
+        delete: Some(-25308),
+        ..Refusals::default()
+    };
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+    let user = added(&before, &store(&harness).load().unwrap().deployment);
+    assert_eq!(
+        outcome.stdout,
+        format!(
+            "added user {id}: CFM 0.5, credentials on lon1 (a spare user, 2 left)\n\
+             lon1: its next apply adds the user to the running Xray, with no restart\n\
+             next: `mooringctl user alias {id}`, then `node apply` each of those nodes, then `user agree` and `user export`\n",
+            id = user.id
+        )
+    );
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: the change is committed, but deleting the keychain items it no longer references \
+             failed for those named below; nothing uses them, and any that is still there can be deleted by hand\n  \
+             caused by: state committed at config generation 2, but deleting secrets failed: \
+             user/{id}/ams1/vless-uuid: keychain delete failed with OSStatus -25308; \
+             user/{id}/ams1/hy2-password: keychain delete failed with OSStatus -25308; \
+             user/{id}/ams1/loop-uuid: keychain delete failed with OSStatus -25308\n",
+            id = user.id
+        )
+    );
+    assert_eq!(harness.secrets.refs(), keychain);
 }

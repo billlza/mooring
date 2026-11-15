@@ -5,9 +5,10 @@
 //! several topics share.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use mooring_agent_proto::{
@@ -16,8 +17,10 @@ use mooring_agent_proto::{
     ShutdownReason, TxnState, UnixTime,
 };
 
+use serde_json::{Value, json};
+
 use crate::blobs::{digest_of, put};
-use crate::host::Tool;
+use crate::host::{Tool, ToolOutput};
 use crate::paths::Paths;
 use crate::store::write_json;
 use crate::tests::{
@@ -96,6 +99,123 @@ pub(super) struct Tunnel {
     pub(super) active: Cell<bool>,
 }
 
+/// The running Xray's VLESS users as the stand-in node follows them: a
+/// restart of its unit loads the current generation's clients, `xray api
+/// adu` adds a request's (refusing an email the inbound holds, in any case,
+/// and exiting 0 all the same), and `xray api inbounduser` prints an
+/// inbound's, each as the pinned source does (`txn::xray_users`).
+#[derive(Debug, Default)]
+pub(super) struct StandInXray {
+    /// The clients each inbound holds, by tag.
+    pub(super) held: RefCell<BTreeMap<String, Vec<Value>>>,
+    /// It is not running: `systemctl is-active` says so until a restart.
+    pub(super) stopped: Cell<bool>,
+    /// It is reloading: `systemctl is-active` says so, exiting 0, as
+    /// systemd does for a unit reloading.
+    pub(super) reloading: bool,
+    /// `adu` adds nothing: the engine refuses each user.
+    pub(super) refuses: bool,
+    /// `adu` cannot reach the API and exits 1.
+    pub(super) unreachable: bool,
+    /// `systemctl is-active mooring-xray.service`, as the users' step asks
+    /// it, cannot be started (`ENOENT`); the health check's, over every
+    /// unit, can.
+    pub(super) unstartable: bool,
+    /// `inbounduser` prints this instead.
+    pub(super) prints: Option<String>,
+    /// The requests `adu` was given, as it read them.
+    pub(super) requests: RefCell<Vec<String>>,
+}
+
+impl StandInXray {
+    /// A restart, which reads the configuration in `generation`.
+    fn restart(&self, generation: &Path) {
+        let text =
+            fs::read_to_string(generation.join(ManagedFile::XrayConfig.file_name())).unwrap();
+        let config: Value = serde_json::from_str(&text).unwrap();
+        let mut held = self.held.borrow_mut();
+        held.clear();
+        for inbound in config["inbounds"].as_array().unwrap() {
+            if let Some(clients) = inbound["settings"]["clients"].as_array() {
+                held.insert(inbound["tag"].as_str().unwrap().to_owned(), clients.clone());
+            }
+        }
+        self.stopped.set(false);
+    }
+
+    /// `xray api adu` with `request`, which must be root's alone.
+    fn add(&self, request: &str) -> ToolOutput {
+        assert_eq!(mode(request), 0o600, "{request}");
+        let text = fs::read_to_string(request).unwrap();
+        self.requests.borrow_mut().push(text.clone());
+        if self.unreachable {
+            return failed(b"failed to dial 127.0.0.1:10085\n");
+        }
+        let request: Value = serde_json::from_str(&text).unwrap();
+        let mut printed = String::new();
+        let mut added = 0;
+        let mut held = self.held.borrow_mut();
+        for inbound in request["inbounds"].as_array().unwrap() {
+            let tag = inbound["tag"].as_str().unwrap();
+            printed += &format!("processing inbound: {tag}\n");
+            let users = held.entry(tag.to_owned()).or_default();
+            for client in inbound["settings"]["clients"].as_array().unwrap() {
+                let email = client["email"].as_str().unwrap();
+                printed += &format!("add user: {email}\n");
+                let holds =
+                    |user: &Value| user["email"].as_str().unwrap().eq_ignore_ascii_case(email);
+                if self.refuses {
+                    printed += "rpc error: code = Unknown desc = failed to add user\n";
+                } else if users.iter().any(holds) {
+                    printed +=
+                        &format!("rpc error: code = Unknown desc = User {email} already exists.\n");
+                } else {
+                    users.push(client.clone());
+                    printed += "result: ok\n";
+                    added += 1;
+                }
+            }
+        }
+        printed += &format!("Added {added} user(s) in total.\n");
+        ok(printed.as_bytes())
+    }
+
+    /// `xray api inbounduser -tag=<tag>`: the users last first, as the
+    /// engine's map keeps no order, with every zero or empty field left out.
+    fn list(&self, tag: &str) -> ToolOutput {
+        if let Some(text) = &self.prints {
+            return ok(text.as_bytes());
+        }
+        let held = self.held.borrow();
+        let users: Vec<Value> = held
+            .get(tag)
+            .into_iter()
+            .flatten()
+            .rev()
+            .map(|client| {
+                let mut account = json!({
+                    "_TypedMessage_": "xray.proxy.vless.Account",
+                    "id": client["id"],
+                });
+                if client["flow"] != "" {
+                    account["flow"] = client["flow"].clone();
+                }
+                let mut user = json!({ "email": client["email"], "account": account });
+                if client["level"] != 0 {
+                    user["level"] = client["level"].clone();
+                }
+                user
+            })
+            .collect();
+        let reply = if users.is_empty() {
+            json!({})
+        } else {
+            json!({ "users": users })
+        };
+        ok(format!("{}\n\n", serde_json::to_string_pretty(&reply).unwrap()).as_bytes())
+    }
+}
+
 /// How a tool fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ToolFault {
@@ -166,6 +286,8 @@ pub(super) struct Faults {
     pub(super) xray_copy: RefCell<Option<String>>,
     /// Staged programs (an engine, a new agent) cannot be started.
     pub(super) unstartable_programs: bool,
+    /// The running Xray's users.
+    pub(super) xray: StandInXray,
 }
 
 pub(super) struct World {
@@ -216,6 +338,7 @@ impl World {
         let interface = self.paths.wgexit_accept_local();
         let conf = self.paths.wg_conf_link();
         let validate = self.paths.validate_dir();
+        let current = self.paths.current();
         FakeNode::answering(
             now,
             Box::new(move |tool, args| {
@@ -283,6 +406,18 @@ impl World {
                     (Tool::Nft, ["-j", "list", "chain", ..]) => ok(guards.as_bytes()),
                     (Tool::Systemctl, ["restart" | "start", ..]) if faults.restart => failed(b"Job failed.\n"),
                     (Tool::SystemdRun, args) if faults.launch && args.contains(&"txn") => failed(b"Failed to start transient service unit.\n"),
+                    (Tool::Systemctl, ["is-active", "mooring-xray.service"]) => {
+                        if faults.xray.unstartable {
+                            return Err(std::io::Error::from_raw_os_error(ENOENT));
+                        }
+                        if faults.xray.stopped.get() {
+                            exited(3, b"inactive\n", b"")
+                        } else if faults.xray.reloading {
+                            ok(b"reloading\n")
+                        } else {
+                            ok(b"active\n")
+                        }
+                    }
                     (Tool::Systemctl, ["is-active", ..]) if faults.unit_failed => ok(b"active\nfailed\nactive\n"),
                     (Tool::Systemctl, ["is-active", ..]) => ok(b"active\nactive\nactive\n"),
                     (Tool::Ss, _) => {
@@ -333,6 +468,10 @@ impl World {
                             ok(b"")
                         }
                     }
+                    (Tool::Systemctl, ["restart", "mooring-xray.service"]) => {
+                        faults.xray.restart(&current);
+                        ok(b"")
+                    }
                     _ => ok(b""),
                 })
             }),
@@ -377,6 +516,10 @@ impl World {
                     Some(error) => failed(error.as_bytes()),
                     None => ok(b""),
                 },
+                ("xray", ["api", "adu", "--server=127.0.0.1:10085", request]) => faults.xray.add(request),
+                ("xray", ["api", "inbounduser", "--server=127.0.0.1:10085", tag]) => {
+                    faults.xray.list(tag.strip_prefix("-tag=").unwrap())
+                }
                 (_, ["self-test"]) => match &faults.self_test {
                     Some(output) => ok(output.as_bytes()),
                     None => ok(b"1\n"),

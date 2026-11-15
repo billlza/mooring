@@ -27,6 +27,7 @@ use crate::sim::{
     BillDay, Carrier, CycleRule, EvidenceRef, FairUseWindow, PlanKind, SimPlan, SimPolicy,
     StopPolicy,
 };
+use crate::spare::SpareUser;
 use crate::target::{
     CertificateName, EvidenceUrl, HttpOutcome, HttpStatus, HttpVersion, KeyExchange,
     TargetAttestation, TargetFacts, TargetSpec, TlsHandshake, TlsOutcome, TlsVersion, qualify,
@@ -232,6 +233,24 @@ pub(crate) fn user(n: u64, nodes: &[(&str, u8)]) -> User {
     }
 }
 
+/// A spare user holding credentials on `nodes` (`(node, short id byte)`).
+pub(crate) fn spare(n: u64, nodes: &[(&str, u8)]) -> SpareUser {
+    SpareUser {
+        id: user_id(n),
+        per_node: nodes
+            .iter()
+            .map(|(node, short)| {
+                (
+                    node_id(node),
+                    UserNodePublic {
+                        short_id: short_id(*short),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
 /// Parts with lon1 and ams1 applied at generation 1 and two users on both.
 pub(crate) fn two_node_parts() -> DeploymentParts {
     DeploymentParts {
@@ -250,6 +269,7 @@ pub(crate) fn two_node_parts() -> DeploymentParts {
             user(1, &[("lon1", 1), ("ams1", 1)]),
             user(2, &[("lon1", 2), ("ams1", 2)]),
         ],
+        spares: Vec::new(),
         forgotten: Vec::new(),
         next_wg_index: WgIndex::new(3).unwrap(),
     }

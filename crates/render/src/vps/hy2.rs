@@ -4,6 +4,10 @@
 //! Hysteria2 inbound per listener, each user handed to Xray's
 //! `hy2-loop-in` over loopback with its own loopback UUID, and a final
 //! reject. sing-box rejects unknown keys (`option/options.go:39-41`).
+//! sing-box has no way to change its users while it runs, so the file
+//! lists every identity the node keeps, served or not (design §13.6):
+//! Xray's `hy2-loop-in`, whose clients the running engine takes, admits
+//! only the served ones.
 
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -226,7 +230,9 @@ pub(crate) struct Hy2Input<'a> {
     pub(crate) listeners: Vec<ListenerInput<'a>>,
     pub(crate) certificate: &'a CertificatePem,
     pub(crate) key: &'a Hy2KeyPem,
-    pub(crate) served: &'a [Served],
+    /// Every identity the node keeps (design §13.6): each has a user, a
+    /// loopback outbound and a route rule, whether Xray serves it or not.
+    pub(crate) kept: &'a [Served],
 }
 
 /// Builds `hy2.json`.
@@ -249,11 +255,11 @@ pub(crate) fn config(input: &Hy2Input<'_>) -> Hy2Config {
                 password: Rendered::new(listener.obfs.clone()),
             },
             users: input
-                .served
+                .kept
                 .iter()
-                .map(|served| Hy2User {
-                    name: served.identity.clone(),
-                    password: Rendered::new(served.hy2.clone()),
+                .map(|kept| Hy2User {
+                    name: kept.identity.clone(),
+                    password: Rendered::new(kept.hy2.clone()),
                 })
                 .collect(),
             ignore_client_bandwidth: true,
@@ -266,26 +272,26 @@ pub(crate) fn config(input: &Hy2Input<'_>) -> Hy2Config {
         })
         .collect();
     let outbounds = input
-        .served
+        .kept
         .iter()
-        .map(|served| LoopOutbound {
+        .map(|kept| LoopOutbound {
             kind: VlessType::Value,
-            tag: LoopTag(served.identity.clone()),
+            tag: LoopTag(kept.identity.clone()),
             server: Ipv4Addr::LOCALHOST,
             server_port: SYSTEM_PORTS.hy2_loopback,
-            uuid: Rendered::new(served.loopback.clone()),
+            uuid: Rendered::new(kept.loopback.clone()),
             packet_encoding: Xudp::Value,
         })
         .collect();
     let mut rules: Vec<Hy2Rule> = input
-        .served
+        .kept
         .iter()
-        .map(|served| {
+        .map(|kept| {
             Hy2Rule::Route(Hy2RouteRule {
                 inbound: tags.clone(),
-                auth_user: [served.identity.clone()],
+                auth_user: [kept.identity.clone()],
                 action: RouteAction::Value,
-                outbound: LoopTag(served.identity.clone()),
+                outbound: LoopTag(kept.identity.clone()),
             })
         })
         .collect();
