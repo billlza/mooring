@@ -12,16 +12,21 @@ function [forecast, fit] = radioForecast(samples, options)
 %
 %   The fit is the daily pattern: for each hour of the day, the median of
 %   the history's values of that hour. It is a description of the history
-%   continued, and knows nothing of what changes a link: another band,
-%   another network or cell, the M7 moved. The band between low and high
-%   holds 80 % of the history's hours around the fit and does not widen
-%   with the distance ahead. An hour of the day the history never held has
-%   no forecast: NaN.
+%   continued, and knows nothing of what changes a link: another band or
+%   cell, the M7 moved. The band between low and high holds 80 % of the
+%   history's hours around the fit and does not widen with the distance
+%   ahead. An hour of the day the history never held has no forecast: NaN.
+%
+%   Only the polls of one network are fitted, the network of the last
+%   poll unless Network names another, as mooring.radioDegradation judges
+%   them: the hours on another network say nothing of this one's. So
+%   after another SIM went into the M7 the history is the hours since,
+%   and a forecast needs MinHours of them.
 %
 %   With Trend=true the fit is a straight trend plus the daily pattern:
 %   the history's slope (mooring.internal.seasonalSlope) is taken out of
 %   the values before the pattern is, and continued over the coming hours.
-%   A level that moved in one step, as with another network, reads as a
+%   A level that moved in one step, as with another band, reads as a
 %   slope and is continued wrongly; compare the two fits by their
 %   backtests before trusting the trend.
 %
@@ -29,6 +34,10 @@ function [forecast, fit] = radioForecast(samples, options)
 %   fitted and how well it did on the history's own last hours:
 %
 %     metric          the reading
+%     network         the codes of the network fitted, as "234-30": a
+%                     missing string when every poll was taken
+%                     (Network="all") and when no poll holds a network's
+%                     codes
 %     hours           how many hourly medians the fit used
 %     trend           whether the fit continues the slope
 %     slope_per_day   the history's slope, in the reading's unit per day,
@@ -50,6 +59,11 @@ function [forecast, fit] = radioForecast(samples, options)
 %     Metric    the reading: "lte_rsrp_dbm", "lte_rsrq_db", "lte_sinr_db"
 %               (default), "lte_rssi_dbm", "nr_rsrp_dbm", "nr_rsrq_db" or
 %               "nr_sinr_db"
+%     Network   whose polls are fitted: "last" (default), the network of
+%               the last poll; "all", every poll, whatever its network;
+%               or a network's codes, as "234-30", whose coming hours are
+%               then the ones after its own last poll. Codes no poll is
+%               on are refused: mooring:radio:UnknownNetwork
 %     Horizon   how far ahead, in whole hours (default hours(48))
 %     History   how far back the fit looks (default days(14))
 %     MinHours  the fewest hourly medians a fit needs, at least 48
@@ -58,13 +72,15 @@ function [forecast, fit] = radioForecast(samples, options)
 %     Trend     whether the fit continues the history's slope (default
 %               false)
 %
-%   See also mooring.radioHourly, mooring.radioDegradation.
+%   See also mooring.radioHourly, mooring.radioDegradation,
+%   mooring.radioNetworks.
 
 % SPDX-License-Identifier: GPL-3.0-or-later
 
     arguments
         samples timetable {mooring.internal.mustBeSamples}
         options.Metric (1,1) string = "lte_sinr_db"
+        options.Network (1,1) string = "last"
         options.Horizon (1,1) duration = hours(48)
         options.History (1,1) duration = days(14)
         options.MinHours (1,1) double {mustBeInteger, mustBeGreaterThanOrEqual(options.MinHours, 48)} = 72
@@ -80,7 +96,8 @@ function [forecast, fit] = radioForecast(samples, options)
         error("mooring:radio:BadHorizon", "The horizon is shorter than an hour; a forecast is by the hour.");
     end
 
-    hourly = mooring.radioHourly(samples);
+    [onIt, network] = mooring.internal.onNetwork(samples, options.Network);
+    hourly = mooring.radioHourly(samples(onIt, :));
     values = hourly.(options.Metric);
     starts = hourly.Properties.RowTimes;
     kept = max(1, numel(values) - floor(hours(options.History)) + 1):numel(values);
@@ -88,9 +105,13 @@ function [forecast, fit] = radioForecast(samples, options)
     starts = starts(kept);
     known = ~isnan(values);
     if sum(known) < options.MinHours
+        scope = "";
+        if ~ismissing(network)
+            scope = " on network " + network;
+        end
         error("mooring:radio:TooFewHours", ...
-            "%d of the last %d hours hold a %s reading; a forecast needs %d.", ...
-            sum(known), numel(values), options.Metric, options.MinHours);
+            "%d of the last %d hours hold a %s reading%s; a forecast needs %d.", ...
+            sum(known), numel(values), options.Metric, scope, options.MinHours);
     end
 
     % Hours are counted from the history's last one, so that a profile
@@ -108,6 +129,7 @@ function [forecast, fit] = radioForecast(samples, options)
     forecast.Properties.DimensionNames{1} = 'hour';
 
     fit.metric = options.Metric;
+    fit.network = network;
     fit.hours = sum(known);
     fit.trend = options.Trend;
     fit.slope_per_day = 24 * slope;

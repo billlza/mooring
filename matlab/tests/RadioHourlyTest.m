@@ -119,6 +119,7 @@ classdef RadioHourlyTest < matlab.unittest.TestCase
             events = mooring.readRadioEvents(fixtureFile("radio-events.csv"));
             testCase.verifyError(@() mooring.radioHourly(other), "mooring:radio:NotSamples");
             testCase.verifyError(@() mooring.radioHourly(events), "mooring:radio:NotSamples");
+            testCase.verifyError(@() mooring.radioNetworks(other), "mooring:radio:NotSamples");
             testCase.verifyError(@() mooring.radioDegradation(events), "mooring:radio:NotSamples");
             testCase.verifyError(@() mooring.radioForecast(events), "mooring:radio:NotSamples");
             testCase.verifyError(@() mooring.plotRadio(events), "mooring:radio:NotSamples");

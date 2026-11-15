@@ -1,4 +1,4 @@
-function [indicators, verdict] = radioDegradation(samples, options)
+function [indicators, verdict, network] = radioDegradation(samples, options)
 %RADIODEGRADATION Whether the radio link is worse than on its own earlier days.
 %   [INDICATORS, VERDICT] = mooring.radioDegradation(SAMPLES) compares the
 %   last 24 hours of SAMPLES (the timetable mooring.readRadioSamples
@@ -6,6 +6,17 @@ function [indicators, verdict] = radioDegradation(samples, options)
 %   each of the 7 days before them. A recent window shorter than a day is
 %   compared with the same hours of each earlier day, and not with that
 %   day's busier or quieter ones.
+%
+%   Only the polls of one network are judged, the network of the last
+%   poll unless Network names another: another network's days are no
+%   baseline for this one's. So after another SIM went into the M7, or
+%   after the SIM changed its network, the indicators are
+%   insufficient_data until MinDays earlier days on the new network
+%   count, and the day it began on is not one of them (baseline_days,
+%   below). A poll's network is its `plmn`; a poll that holds none, as a
+%   failed poll and a read without service do, counts for the network of
+%   the last poll before it that holds one. mooring.radioNetworks sets
+%   the networks beside each other.
 %
 %   INDICATORS is a table with a row per indicator:
 %
@@ -29,7 +40,11 @@ function [indicators, verdict] = radioDegradation(samples, options)
 %     worse_when     "lower" or "higher"
 %     recent_count   the polls with a value in the recent window
 %     baseline_days  the earlier days that count: those whose window holds
-%                    MinSamples polls with a value or more
+%                    MinSamples polls with a value or more, and a poll in
+%                    its first hour. A window the polls begin in later,
+%                    as on the day another SIM went in or the history
+%                    begins, is a part of a day: the hours it lacks are
+%                    not there to compare
 %     state          "degraded", "ok" or "insufficient_data"
 %
 %   An indicator is degraded when it is worse than the baseline by its
@@ -43,13 +58,23 @@ function [indicators, verdict] = radioDegradation(samples, options)
 %   VERDICT is "degraded" when an indicator is degraded, else "ok" when
 %   one is ok, else "insufficient_data".
 %
+%   [INDICATORS, VERDICT, NETWORK] = mooring.radioDegradation(...) also
+%   returns the codes of the network judged, as "234-30": a missing
+%   string when every poll was taken (Network="all") and when no poll
+%   holds a network's codes.
+%
 %   The thresholds are starting points and not measurements of this link:
 %   compare them with what INDICATORS shows over quiet weeks, and set your
-%   own. A change of band or of network moves the readings' level without
-%   the link being worse or better; mooring.readRadioEvents shows those
-%   changes.
+%   own. A change of band moves the readings' level without the link
+%   being worse or better; mooring.readRadioEvents shows those changes.
 %
 %   Name-value arguments:
+%     Network        whose polls are judged: "last" (default), the
+%                    network of the last poll; "all", every poll,
+%                    whatever its network; or a network's codes, as
+%                    "234-30", whose last 24 hours are then counted back
+%                    from its own last poll. Codes no poll is on are
+%                    refused: mooring:radio:UnknownNetwork
 %     Recent         the recent window, 24 hours at most (default
 %                    hours(24))
 %     Days           how many days before it make the baseline (default 7)
@@ -73,12 +98,14 @@ function [indicators, verdict] = radioDegradation(samples, options)
 %                    (default 0.5)
 %   A threshold of Inf never calls its indicators degraded.
 %
-%   See also mooring.readRadioSamples, mooring.radioForecast.
+%   See also mooring.readRadioSamples, mooring.radioNetworks,
+%   mooring.radioForecast.
 
 % SPDX-License-Identifier: GPL-3.0-or-later
 
     arguments
         samples timetable {mooring.internal.mustBeSamples}
+        options.Network (1,1) string = "last"
         options.Recent (1,1) duration = hours(24)
         options.Days (1,1) double {mustBeInteger, mustBePositive} = 7
         options.MinSamples (1,1) double {mustBeInteger, mustBePositive} = 30
@@ -100,16 +127,24 @@ function [indicators, verdict] = radioDegradation(samples, options)
         error("mooring:radio:BadWindow", ...
             "MinDays is %d and Days %d: no baseline could count.", options.MinDays, options.Days);
     end
+    [kept, network] = mooring.internal.onNetwork(samples, options.Network);
+    samples = samples(kept, :);
 
     % Which window each poll is in: 0 for the recent one, k for the same
-    % hours k days before it, NaN for a poll in none of them.
+    % hours k days before it, NaN for a poll in none of them. A window is
+    % whole when its first hour holds a poll: one the polls begin in
+    % later, as on the day another SIM went in, is a part of a day, and
+    % the hours it lacks are not there to compare.
     times = samples.Properties.RowTimes;
     back = nan(size(times));
+    whole = false(1, options.Days + 1);
     if ~isempty(times)
         age = max(times) - times;
         wholeDays = floor(age ./ days(1));
-        inside = age - days(wholeDays) < options.Recent & wholeDays <= options.Days;
+        within = age - days(wholeDays);
+        inside = within < options.Recent & wholeDays <= options.Days;
         back(inside) = wholeDays(inside);
+        whole(wholeDays(inside & within >= options.Recent - hours(1)) + 1) = true;
     end
 
     % One column per indicator: NaN where a poll is not of the indicator's
@@ -144,6 +179,7 @@ function [indicators, verdict] = radioDegradation(samples, options)
     recentCount = polls(:, 1);
     earlier = value(:, 2:end);
     earlier(polls(:, 2:end) < options.MinSamples) = NaN;
+    earlier(:, ~whole(2:end)) = NaN;
     baselineDays = sum(~isnan(earlier), 2);
     baselineValue = median(earlier, 2, "omitnan");
     spread = median(abs(earlier - baselineValue), 2, "omitnan");
