@@ -1,4 +1,4 @@
-function writeRadioSamples(file, at, kind, readings, network, carriers, codes)
+function writeRadioSamples(file, at, kind, readings, network, carriers, codes, bands)
 %WRITERADIOSAMPLES A samples table of made-up polls, as mooringctl prints one.
 %   writeRadioSamples(FILE, AT, KIND, READINGS, NETWORK, CARRIERS) writes
 %   one row per poll, for N polls:
