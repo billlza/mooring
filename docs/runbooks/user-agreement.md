@@ -217,6 +217,13 @@
       `user forget` for a user who leaves and asks. The ban records are
       kept until the service ends, outside Mooring's state, so neither the
       13-month rule nor `user forget` reaches them.
+    - Clause 4 also names the make-ups the operator gives (clauses 1 and
+      3): each one's number, what it gave (a service period, its dates and
+      its quota, or traffic), its reason and its time, deleted with the
+      payments under the 13-month rule. The operator decided on 2026-11-15
+      that the text names them, in their words: «要写明». The command that
+      gives and records them, `mooringctl user make-up`, is #71's. The
+      copies kept at a ban still name the payments alone.
     - The operator's phone and Mac keep the call history of the app the
       operator calls each user with, FaceTime, WhatsApp or Telegram (below,
       2026-11-15): the contact (FaceTime's number or Apple ID, WhatsApp's
@@ -456,6 +463,7 @@
 - 你最近一次使用的时间；
 - 你的账户状态变化（启用、暂停、作废），以及运营者为你做的操作（例如导出配置、更换凭据）及其时间；
 - 从门户取回的你的付款记录：订单编号、买了什么、金额和币种、付款时间、为你开通了什么，以及开通的时间；
+- 运营者给你的补偿（第 1 条、第 3 条）：补偿编号、补了什么（延长的服务期从哪天到哪天和它每个计费周期的配额，或者增加的流量）、补偿的原因，以及补偿的时间；
 - 你接受本约定的版本号和日期；
 - 从服务器取回的滥用记录（见下文「服务器上会保存」）；
 - 如果你被封禁：你的名字、你和运营者通话用的联系方式、封禁的日期，你按小时和按日汇总的流量记录、付款记录和滥用记录在封禁时的副本，以及 Stripe 后台显示的你付款时的 IP 地址、大致位置和设备信息，用来认出你是否换了账号回来（第 3 条）。
@@ -521,7 +529,7 @@
 
 **保存多久：**
 - 运营者的电脑上：五分钟粒度的流量记录保存 7 天，按小时汇总的保存 35 天，按日和按月的合计保存 13 个月。
-- 你的累计总量、最近一次使用的时间、账户状态变化和这些操作记录、付款记录、你接受本约定的记录，以及你的名字和别名，在你的账户作废 13 个月后全部删除；你被封禁时，其中一部分另有副本保存在封禁记录里（见下一条）。
+- 你的累计总量、最近一次使用的时间、账户状态变化和这些操作记录、付款记录、补偿记录、你接受本约定的记录，以及你的名字和别名，在你的账户作废 13 个月后全部删除；你被封禁时，其中一部分另有副本保存在封禁记录里（见下一条）。
 - 你被封禁时，运营者电脑上的封禁记录（第 3 条）保留到本服务停止：你的名字、通话用的联系方式、封禁的日期，流量记录、付款记录和滥用记录的副本，以及你付款时的 IP 地址、大致位置和设备信息。封禁后发现是误封的，这些记录随即删除。
 - 通话记录：你的账户作废时，运营者在手机和电脑上删除这些软件里和你的通话记录；这些设备此前的备份里如果还有，要到备份被删除或覆盖时才会消失。Apple、WhatsApp 和 Telegram 自己保存的通话信息，按它们各自的规定保存，运营者不能删除。
 - 服务器上：流量明细保存 48 小时，每月合计在当月结束 7 天后删除，运营者的电脑会在此之前取回它们；你最近一次使用的时间在你的账户作废、服务器不再为你服务时删除。
