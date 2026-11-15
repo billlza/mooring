@@ -7,6 +7,9 @@ function samples = radioPolls(folder, at, kind, readings, network, carriers, var
 %   SAMPLES = radioPolls(..., CODES) gives each attached poll its
 %   network's codes, as writeRadioSamples takes them; without CODES every
 %   attached poll is on network 234-30.
+%
+%   SAMPLES = radioPolls(..., CODES, BANDS) gives each attached poll its
+%   band too; without BANDS every attached poll is on band B3.
 
 % SPDX-License-Identifier: GPL-3.0-or-later
 
