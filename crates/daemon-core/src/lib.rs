@@ -24,6 +24,8 @@
 //! - [`radio_history`]: the sample each poll of the M7 leaves, its line in
 //!   the day files the store keeps, and the events and hourly statistics
 //!   `router history` prints.
+//! - [`radio_table`]: those samples and events as tables, the columns
+//!   `router history --csv` prints.
 //! - [`status`]: [`MacStatusV2`] itself.
 //! - [`snapshot`]: a [`MacStatusV2`] assembled from what the daemon holds
 //!   at one instant.
@@ -82,6 +84,7 @@ pub mod policy;
 pub mod portal;
 pub mod power;
 pub mod radio_history;
+pub mod radio_table;
 pub mod report;
 pub mod router;
 pub mod share;

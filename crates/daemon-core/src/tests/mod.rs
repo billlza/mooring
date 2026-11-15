@@ -22,6 +22,7 @@ mod policy;
 mod portal;
 mod power;
 mod radio_history;
+mod radio_table;
 mod router;
 mod served_before;
 mod sim_network;

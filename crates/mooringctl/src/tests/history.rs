@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `router history` (design §15.6 rule 11): the day files the daemon
-//! recorded, read through the store and printed as the document the app
-//! reads or as a summary; the range's rules; what a corrupt line does; and
-//! that the command never writes.
+//! `router history` (design §15.6 rules 11 and 13): the day files the
+//! daemon recorded, read through the store and printed as the document the
+//! app reads, as a table of the samples or of their events, or as a
+//! summary; the range's rules; what a corrupt line does; and that the
+//! command never writes.
 
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, symlink};
@@ -15,6 +16,9 @@ use mooring_daemon_core::radio_history::{
     RadioHistory, RadioPoll, RadioReading, RadioSample, SampledAttachment, SampledRadio,
     encode_line,
 };
+use mooring_daemon_core::radio_table::{
+    EVENTS_HEADER, SAMPLES_HEADER, events_table, samples_table,
+};
 use mooring_daemon_core::router::{
     Band, BandNumber, Celsius, DataService, LteSignal, Mcc, Mnc, NetworkService, NrSignal, Plmn,
     RouterUnavailableReason, Rsrp, Rsrq, Rssi, Sinr, ThermalState,
@@ -23,8 +27,18 @@ use mooring_model::{CalendarDate, UnixTime};
 use mooring_store::{RADIO_DIRECTORY, append_radio_line, radio_day_path};
 
 use super::support::{Harness, NOW};
-use crate::cli::Cli;
+use crate::cli::{Cli, HistoryTableArg};
 use crate::error::{EXIT_LOCAL, EXIT_USAGE};
+use crate::router::history::Form;
+
+/// The command in each of its forms: the summary, the document and the
+/// two tables.
+const FORMS: [&[&str]; 4] = [
+    &["router", "history"],
+    &["router", "history", "--json"],
+    &["router", "history", "--csv", "samples"],
+    &["router", "history", "--csv", "events"],
+];
 
 /// 2026-10-13 00:00:00 UTC.
 const MIDNIGHT: u64 = NOW - 19 * 3600 - 20 * 60;
@@ -304,7 +318,7 @@ fn a_range_that_is_inverted_or_too_long_is_refused() {
 }
 
 /// A line the decoder refuses is a typed error naming the file and the
-/// line, never its bytes; nothing is printed, with or without `--json`.
+/// line, never its bytes; nothing is printed, in any form.
 #[test]
 fn a_corrupt_line_is_a_typed_error_naming_file_and_line() {
     let mut harness = Harness::new(0);
@@ -316,7 +330,7 @@ fn a_corrupt_line_is_a_typed_error_naming_file_and_line() {
     corrupt.extend_from_slice(b"not json canary-line\n");
     corrupt.extend_from_slice(&encode_line(&today()[2]).unwrap());
     fs::write(&path, &corrupt).unwrap();
-    for args in [&["router", "history"][..], &["router", "history", "--json"]] {
+    for args in FORMS {
         let outcome = harness.run(args);
         assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
         assert_eq!(outcome.stdout, "", "{args:?}");
@@ -363,16 +377,19 @@ fn a_day_file_that_is_not_a_regular_file_is_a_local_failure() {
     let path = radio_day_path(&support, day("2026-10-13"));
     symlink(support.join("moved.jsonl"), &path).unwrap();
     let refused = |harness: &mut Harness| {
-        let outcome = harness.run(&["router", "history", "--json"]);
-        assert_eq!(outcome.code, EXIT_LOCAL);
-        assert_eq!(outcome.stdout, "");
-        assert_eq!(
-            outcome.stderr,
-            format!(
-                "mooringctl: the radio history's files failed\n  caused by: {} is not a regular file\n",
-                path.display()
-            )
-        );
+        for args in FORMS {
+            let outcome = harness.run(args);
+            assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
+            assert_eq!(outcome.stdout, "", "{args:?}");
+            assert_eq!(
+                outcome.stderr,
+                format!(
+                    "mooringctl: the radio history's files failed\n  caused by: {} is not a regular file\n",
+                    path.display()
+                ),
+                "{args:?}"
+            );
+        }
     };
     refused(&mut harness);
     fs::remove_file(&path).unwrap();
@@ -476,4 +493,187 @@ fn a_radio_directory_that_cannot_be_read_is_the_error() {
         "{}",
         outcome.stderr
     );
+}
+
+// --- The tables (design §15.6 rule 13) --------------------------------------
+
+/// `--csv samples` prints one row per whole line of the range's files, in
+/// their order, and `--csv events` one row per change they show: the
+/// tables `daemon-core` makes, byte for byte. The torn last line is no
+/// row, and reading never writes.
+#[test]
+fn history_csv_prints_the_samples_and_their_events_as_tables() {
+    let mut harness = Harness::new(0);
+    let yesterday = [failed(0, RouterUnavailableReason::NotConfigured)];
+    plant(&harness.support_dir(), day("2026-10-12"), &yesterday, false);
+    plant(&harness.support_dir(), day("2026-10-13"), &today(), true);
+    let path = radio_day_path(&harness.support_dir(), day("2026-10-13"));
+    let before = fs::read(&path).unwrap();
+    let mut samples = yesterday.to_vec();
+    samples.extend(today());
+    let expected = RadioHistory::new(
+        day("2026-10-12"),
+        day("2026-10-13"),
+        samples,
+        vec![day("2026-10-13")],
+    );
+
+    let outcome = harness.run(&["router", "history", "--csv", "samples"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stderr, "");
+    assert_eq!(
+        outcome.stdout,
+        "at_unix,at_utc,outcome,failure,uptime_secs,temperature_c,thermal,service,network_service,data_service,band,ca_secondary_count,lte_rsrp_dbm,lte_rsrq_db,lte_sinr_db,lte_rssi_dbm,nr_rsrp_dbm,nr_rsrq_db,nr_sinr_db,plmn,session_secs\n\
+         1791849600,2026-10-13T00:00:00Z,failed,not_configured,,,,,,,,,,,,,,,,,\n\
+         1791918000,2026-10-13T19:00:00Z,read,,10000,35,normal,attached,nr5g,nr_sub6,B3,0,-104.0,-12.0,0.0,-69.0,,,,234-30,9000\n\
+         1791918060,2026-10-13T19:01:00Z,failed,unreachable,,,,,,,,,,,,,,,,,\n\
+         1791918120,2026-10-13T19:02:00Z,read,,10120,35,normal,attached,lte,lte_plus,B3,0,-100.0,-12.0,2.0,-69.0,,,,234-30,9120\n\
+         1791918180,2026-10-13T19:03:00Z,read,,10180,35,normal,attached,lte,lte_plus,B20,0,-90.0,-12.0,5.5,-69.0,,,,234-20,30\n\
+         1791921600,2026-10-13T20:00:00Z,read,,40,35,normal,no_service,,,,,,,,,,,,,\n"
+    );
+    assert_eq!(outcome.stdout, samples_table(expected.samples()).unwrap());
+
+    let outcome = harness.run(&["router", "history", "--csv", "events"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stderr, "");
+    assert_eq!(
+        outcome.stdout,
+        "at_unix,at_utc,event,reason,from,to\n\
+         1791918000,2026-10-13T19:00:00Z,poll_recovered,,,\n\
+         1791918060,2026-10-13T19:01:00Z,poll_failed,unreachable,,\n\
+         1791918120,2026-10-13T19:02:00Z,poll_recovered,,,\n\
+         1791918120,2026-10-13T19:02:00Z,network_service_changed,,nr5g,lte\n\
+         1791918120,2026-10-13T19:02:00Z,data_service_changed,,nr_sub6,lte_plus\n\
+         1791918180,2026-10-13T19:03:00Z,band_changed,,B3,B20\n\
+         1791918180,2026-10-13T19:03:00Z,plmn_changed,,234-30,234-20\n\
+         1791918180,2026-10-13T19:03:00Z,session_restarted,,,\n\
+         1791921600,2026-10-13T20:00:00Z,router_rebooted,,,\n\
+         1791921600,2026-10-13T20:00:00Z,service_lost,,,\n"
+    );
+    assert_eq!(outcome.stdout, events_table(expected.events()).unwrap());
+
+    // Reading never writes: the torn tail is still there.
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
+
+/// The range is the same in every form: one day's rows alone, and for
+/// days without a file the header alone, with nothing created.
+#[test]
+fn a_table_covers_the_range_asked_for_and_is_its_header_without_samples() {
+    let mut harness = Harness::new(0);
+    for (table, header) in [("samples", SAMPLES_HEADER), ("events", EVENTS_HEADER)] {
+        let outcome = harness.run(&["router", "history", "--csv", table]);
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert_eq!(outcome.stderr, "");
+        assert_eq!(outcome.stdout, format!("{header}\n"));
+    }
+    assert!(!history_dir(&harness).exists());
+
+    let yesterday = [failed(0, RouterUnavailableReason::NotConfigured)];
+    plant(&harness.support_dir(), day("2026-10-12"), &yesterday, false);
+    plant(&harness.support_dir(), day("2026-10-13"), &today(), false);
+    let one_day = ["--since", "2026-10-13", "--until", "2026-10-13"];
+    let mut args = vec!["router", "history", "--csv", "samples"];
+    args.extend(one_day);
+    let outcome = harness.run(&args);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stdout, samples_table(&today()).unwrap());
+    assert_eq!(outcome.stdout.lines().count(), 6);
+    // Without yesterday's failed poll before it, today's first read is no
+    // recovery: nine events, not ten.
+    let mut args = vec!["router", "history", "--csv", "events"];
+    args.extend(one_day);
+    let outcome = harness.run(&args);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.stdout.lines().count(), 10);
+    assert!(
+        outcome
+            .stdout
+            .starts_with("at_unix,at_utc,event,reason,from,to\n1791918060,2026-10-13T19:01:00Z,poll_failed,unreachable,,\n"),
+        "{}",
+        outcome.stdout
+    );
+
+    // The range's rules hold for a table as for the other forms.
+    let outcome = harness.run(&[
+        "router",
+        "history",
+        "--csv",
+        "samples",
+        "--since",
+        "2026-10-14",
+        "--until",
+        "2026-10-13",
+    ]);
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(outcome.stdout, "");
+    assert_eq!(
+        outcome.stderr,
+        "mooringctl: --since 2026-10-14 is after --until 2026-10-13\n"
+    );
+}
+
+/// `--csv` names its table, takes no other word, and does not go with
+/// `--json`: each is clap's usage error.
+#[test]
+fn the_table_is_named_and_excludes_the_document() {
+    for args in [
+        &["mooringctl", "router", "history", "--csv"][..],
+        &["mooringctl", "router", "history", "--csv", "hourly"],
+        &["mooringctl", "router", "history", "--csv", "Samples"],
+        &[
+            "mooringctl",
+            "router",
+            "history",
+            "--csv",
+            "samples",
+            "--json",
+        ],
+        &[
+            "mooringctl",
+            "router",
+            "history",
+            "--json",
+            "--csv",
+            "events",
+        ],
+    ] {
+        let error = Cli::try_parse_from(args).unwrap_err();
+        assert_eq!(error.exit_code(), i32::from(EXIT_USAGE), "{args:?}");
+    }
+    Cli::try_parse_from(["mooringctl", "router", "history", "--csv", "samples"]).unwrap();
+    Cli::try_parse_from(["mooringctl", "router", "history", "--csv", "events"]).unwrap();
+
+    assert_eq!(Form::of(false, None), Form::Summary);
+    assert_eq!(Form::of(true, None), Form::Json);
+    for table in [HistoryTableArg::Samples, HistoryTableArg::Events] {
+        assert_eq!(Form::of(false, Some(table)), Form::Table(table));
+        // The command line never gives both; a table would win.
+        assert_eq!(Form::of(true, Some(table)), Form::Table(table));
+    }
+}
+
+/// A sample dated past the year 9999 has no UTC date a table can write:
+/// the command fails as the Mac's clock outside its range, and prints no
+/// part of a table.
+#[test]
+fn a_sample_past_the_year_9999_is_no_row() {
+    let mut harness = Harness::new(0);
+    let late = RadioSample {
+        at: UnixTime::from_secs(253_402_300_800),
+        poll: RadioPoll::Failed {
+            reason: RouterUnavailableReason::Unreachable,
+        },
+    };
+    let samples = [today()[0], late, today()[2]];
+    plant(&harness.support_dir(), day("2026-10-13"), &samples, false);
+    for table in ["samples", "events"] {
+        let outcome = harness.run(&["router", "history", "--csv", table]);
+        assert_eq!(outcome.code, EXIT_LOCAL, "{table}");
+        assert_eq!(outcome.stdout, "", "{table}");
+        assert_eq!(
+            outcome.stderr, "mooringctl: the Mac's clock is outside 1970 to 9999\n",
+            "{table}"
+        );
+    }
 }

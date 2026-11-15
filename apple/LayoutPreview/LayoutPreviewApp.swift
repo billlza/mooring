@@ -122,6 +122,7 @@ struct LayoutPreviewApp: App {
     @State private var model: ConsoleModel
     @State private var history = HistoryModel(command: nil)
     @State private var daemon = DaemonService()
+    @State private var daemonState: PreviewDaemonState = .started
 
     init() {
         // This bundle has its own preferences domain.
@@ -145,6 +146,14 @@ struct LayoutPreviewApp: App {
                             Text(verbatim: scenario.rawValue).tag(scenario)
                         }
                     }
+                    Picker("Daemon", selection: $daemonState) {
+                        ForEach(PreviewDaemonState.allCases) { state in
+                            Text(verbatim: state.rawValue).tag(state)
+                        }
+                    }
+                }
+                .onChange(of: daemonState) { _, next in
+                    daemon.show(next)
                 }
                 .onChange(of: scenario) { _, next in
                     do {

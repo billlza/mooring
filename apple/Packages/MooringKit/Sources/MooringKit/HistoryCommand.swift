@@ -43,48 +43,14 @@ public struct HistoryCommand: Sendable {
 
     /// One run of the command: its document, or why there is none.
     public func run() async -> Result<RadioHistory, HistoryFailure> {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = Self.arguments
-        process.standardInput = FileHandle.nullDevice
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        let exit = AsyncStream<EndReason> { exited in
-            process.terminationHandler = { finished in
-                exited.yield(Subprocess.reason(of: finished))
-                exited.finish()
-            }
-        }
-        do {
-            try process.run()
-        } catch {
-            return .failure(.ended(StreamEnd(reason: .notStarted(error.localizedDescription), message: "")))
-        }
-        async let message = Subprocess.offThePool { Subprocess.collect(stderr.fileHandleForReading) }
-        let read = await Subprocess.offThePool {
-            Result { try Subprocess.readAll(stdout.fileHandleForReading, limit: Self.outputLimit) }
-        }
-        if case .success(.some) = read {
-        } else {
-            // Its output cannot be used, so nothing more is read: the command
-            // is ended, and anything still writing to the pipe with it.
-            process.terminate()
-            try? stdout.fileHandleForReading.close()
-        }
-        var reason: EndReason = .exited(0)
-        for await ended in exit {
-            reason = ended
-        }
-        let said = await message
-        switch read {
-        case .success(nil):
+        switch await Subprocess.run(executable, Self.arguments, outputLimit: Self.outputLimit) {
+        case .notStarted(let why):
+            return .failure(.ended(StreamEnd(reason: .notStarted(why), message: "")))
+        case .tooLong:
             return .failure(.tooLong)
-        case .failure(let error):
-            let text = [said, "its output could not be read: \(error)"].filter { !$0.isEmpty }
-            return .failure(.ended(StreamEnd(reason: reason, message: text.joined(separator: "\n"))))
-        case .success(var output?):
+        case .unread(let reason, let message):
+            return .failure(.ended(StreamEnd(reason: reason, message: message)))
+        case .finished(let reason, var output, let said):
             guard case .exited(0) = reason else {
                 return .failure(.ended(StreamEnd(reason: reason, message: said)))
             }
