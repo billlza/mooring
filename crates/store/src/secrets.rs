@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io;
 
 use mooring_model::secret::{
     SecretEntry, SecretMaterial, SecretRef, SecretSnapshot, SecretSnapshotError,
@@ -62,6 +63,46 @@ pub enum SecretStoreError {
         /// The reference whose item is invalid.
         secret_ref: SecretRef,
     },
+    /// The Keychain has not answered a read within the reader's wait, and
+    /// the read goes on. A store that reads so (`mooringctl`'s daemon,
+    /// design §10.1) gives this instead of waiting: macOS asks at the
+    /// Mac's screen before a new build first reads an item, and only the
+    /// operator can answer.
+    #[error(
+        "the keychain has not yet answered the read of {secret_ref} (macOS may be asking at the Mac's screen)"
+    )]
+    Unanswered {
+        /// The reference read.
+        secret_ref: SecretRef,
+    },
+    /// The read could not run on a thread of its own, or that thread ended
+    /// without the Keychain's answer.
+    #[error("the read of {secret_ref} has no answer: {fault}")]
+    ReaderFailed {
+        /// The reference read.
+        secret_ref: SecretRef,
+        /// What befell the read.
+        fault: ReaderFault,
+    },
+}
+
+/// What befell a read run on a thread of its own
+/// ([`SecretStoreError::ReaderFailed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReaderFault {
+    /// The thread could not be started.
+    NotStarted(io::ErrorKind),
+    /// The thread ended without an answer: the read panicked.
+    Ended,
+}
+
+impl fmt::Display for ReaderFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotStarted(kind) => write!(f, "its thread could not be started ({kind})"),
+            Self::Ended => f.write_str("its thread ended without an answer"),
+        }
+    }
 }
 
 kinds! {
@@ -73,6 +114,10 @@ kinds! {
         Keychain,
         /// See [`SecretStoreError::ItemInvalid`].
         ItemInvalid,
+        /// See [`SecretStoreError::Unanswered`].
+        Unanswered,
+        /// See [`SecretStoreError::ReaderFailed`].
+        ReaderFailed,
     }
 }
 
@@ -84,6 +129,8 @@ impl SecretStoreError {
             Self::SecretMissing { .. } => SecretStoreErrorKind::SecretMissing,
             Self::Keychain { .. } => SecretStoreErrorKind::Keychain,
             Self::ItemInvalid { .. } => SecretStoreErrorKind::ItemInvalid,
+            Self::Unanswered { .. } => SecretStoreErrorKind::Unanswered,
+            Self::ReaderFailed { .. } => SecretStoreErrorKind::ReaderFailed,
         }
     }
 }

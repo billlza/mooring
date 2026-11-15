@@ -41,7 +41,8 @@ use crate::user_history::Output;
 pub(crate) struct Env<'a> {
     /// The router adapter's link layer, port and limits.
     pub(crate) router: RouterEnv<'a>,
-    /// The secret store (the login keychain in the binary).
+    /// The secret store (the login keychain in the binary; the daemon's
+    /// reads it on threads of their own, `daemon::secrets`).
     pub(crate) secrets: &'a mut dyn SecretStore,
     /// `HOME`, from which the support directory is derived.
     pub(crate) home: Option<OsString>,

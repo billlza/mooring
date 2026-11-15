@@ -188,7 +188,10 @@ pub enum DownReason {
     /// The SIM plan is not recorded (a state lifted from version 1); the
     /// exit stays down until `sim set-plan` records it (design §10.2).
     SimPlanUnrecorded,
-    /// The Keychain could not be read (`errSecInteractionNotAllowed`).
+    /// The Keychain could not be read: it would have to ask where no one
+    /// can answer (`errSecInteractionNotAllowed`), or it has not answered
+    /// within the daemon's wait while macOS asks at the Mac's screen
+    /// (design §10.1).
     SecretsUnavailable,
     /// The agent on a node is not enabled.
     AgentNotEnabled {

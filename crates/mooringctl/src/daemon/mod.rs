@@ -15,7 +15,9 @@
 //!
 //! It runs under launchd, which starts it with no ad-hoc-signed ancestor,
 //! so the kernel shows it the neighbour table the identity check reads
-//! (design §15.6 rule 10). Only it and the CLI read secrets.
+//! (design §15.6 rule 10). Only it and the CLI read secrets, and it reads
+//! them so that a question macOS asks at the Mac's screen holds nothing
+//! else up ([`secrets`]).
 
 pub(crate) mod capacity;
 pub(crate) mod deployed;
@@ -27,6 +29,7 @@ pub(crate) mod noted;
 pub(crate) mod peer;
 pub(crate) mod pending;
 pub(crate) mod radio;
+pub(crate) mod secrets;
 pub(crate) mod serve;
 pub(crate) mod sim_network;
 pub(crate) mod usage;

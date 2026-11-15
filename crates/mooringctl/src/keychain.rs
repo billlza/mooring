@@ -16,10 +16,14 @@
 //! (`security add-generic-password`, a rename in Keychain Access) is
 //! replaced rather than reported missing.
 //!
-//! The pure parts, [`status_error`] and [`decode_item`], are tested; the
-//! live keychain is never touched by tests.
+//! The pure parts, [`status_error`], [`decode_item`] and which store a
+//! command gets ([`CommandSecrets::for_command`]), are tested; the live
+//! keychain is never touched by tests. The daemon reads it through
+//! [`daemon_store`], which waits for no question at the Mac's screen
+//! (`daemon::secrets`); a command's reads wait for the operator's answer.
 
 use std::str;
+use std::sync::Arc;
 
 use core_foundation::data::CFData;
 use mooring_model::secret::{SecretEntry, SecretMaterial, SecretRef};
@@ -32,6 +36,9 @@ use security_framework::passwords::{
     PasswordOptions, delete_generic_password_options, generic_password,
 };
 use zeroize::Zeroizing;
+
+use crate::cli::Command;
+use crate::daemon::secrets::{ANSWER_WITHIN, DaemonSecrets, Read};
 
 /// The keychain service of the development build.
 pub(crate) const SERVICE: &str = "com.bill.mooring.dev";
@@ -48,6 +55,42 @@ pub(crate) const ERR_SEC_DUPLICATE_ITEM: i32 = -25_299;
 /// The login keychain of the user running the command.
 #[derive(Debug)]
 pub(crate) struct LoginKeychain;
+
+/// The daemon's store: the login keychain, each read on a thread of its
+/// own and waited for at most [`ANSWER_WITHIN`].
+pub(crate) fn daemon_store() -> DaemonSecrets<LoginKeychain> {
+    let read: Arc<Read> = Arc::new(|secret_ref: &SecretRef| LoginKeychain.get(secret_ref));
+    DaemonSecrets::new(read, LoginKeychain, ANSWER_WITHIN)
+}
+
+/// The store a command gets. Only `mooringctl daemon` runs with no one at
+/// the Mac's screen, so only its reads wait for no question there; every
+/// other command's operator is at the screen and answers it.
+#[derive(Debug)]
+pub(crate) enum CommandSecrets {
+    /// A command's: the login keychain.
+    Login(LoginKeychain),
+    /// The daemon's ([`daemon_store`]).
+    Daemon(DaemonSecrets<LoginKeychain>),
+}
+
+impl CommandSecrets {
+    /// The store `command` gets.
+    pub(crate) fn for_command(command: &Command) -> Self {
+        match command {
+            Command::Daemon => Self::Daemon(daemon_store()),
+            _ => Self::Login(LoginKeychain),
+        }
+    }
+
+    /// The store, as commands use it.
+    pub(crate) fn store(&mut self) -> &mut dyn SecretStore {
+        match self {
+            Self::Login(keychain) => keychain,
+            Self::Daemon(store) => store,
+        }
+    }
+}
 
 /// The store error for a Security framework `status`: a missing item is
 /// `SecretMissing` (when reading or deleting); every other status is

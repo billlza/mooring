@@ -19,6 +19,7 @@ mod capture;
 mod console;
 mod control;
 mod daemon;
+mod daemon_secrets;
 mod debug;
 mod deployed;
 mod engine;

@@ -168,7 +168,7 @@ fn main() -> ExitCode {
     use crate::app::{Env, run, system_clock};
     use crate::backup::Tmutil;
     use crate::cli::Cli;
-    use crate::keychain::LoginKeychain;
+    use crate::keychain::CommandSecrets;
     use crate::node::ssh::SshLinks;
     use crate::prompt::TtyConsole;
     use crate::router::RouterEnv;
@@ -177,7 +177,7 @@ fn main() -> ExitCode {
 
     let cli = Cli::parse();
     let link = KernelLink;
-    let mut keychain = LoginKeychain;
+    let mut secrets = CommandSecrets::for_command(&cli.command);
     let mut console = TtyConsole;
     let mut stdin = io::stdin().lock();
     let backups = Tmutil;
@@ -188,7 +188,7 @@ fn main() -> ExitCode {
             port: HTTP_PORT,
             timeouts: DEVICE_TIMEOUTS,
         },
-        secrets: &mut keychain,
+        secrets: secrets.store(),
         home: std::env::var_os("HOME"),
         clock: &system_clock,
         console: &mut console,

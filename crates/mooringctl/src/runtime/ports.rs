@@ -144,7 +144,9 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
     /// WireGuard key, and the probe identity's credentials and the first
     /// listener's obfuscation password on it. They are read once per
     /// generation and set of applied nodes; `None` when the Keychain would
-    /// have to ask.
+    /// have to ask, or has not answered within the daemon's wait while it
+    /// asks at the Mac's screen (`daemon::secrets`): a later tick reads
+    /// again and takes the answer.
     fn secrets(&mut self, deployment: &Deployment) -> Result<Option<&SecretSnapshot>, LocalError> {
         let generation = deployment.config_generation();
         let refs: BTreeSet<SecretRef> = deployment
@@ -181,6 +183,7 @@ impl<'e, 'a> DaemonPorts<'e, 'a> {
             {
                 Ok(None)
             }
+            Err(SnapshotReadError::Store(SecretStoreError::Unanswered { .. })) => Ok(None),
             Err(error) => Err(LocalError::ExitSecrets(Box::new(error))),
         }
     }

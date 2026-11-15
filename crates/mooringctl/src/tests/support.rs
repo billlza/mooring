@@ -1143,6 +1143,16 @@ impl Harness {
 
     /// Runs `work` against the environment a command gets.
     pub(crate) fn with_env<T>(&mut self, work: impl FnOnce(&mut Env<'_>) -> T) -> T {
+        self.with_env_on(None, work)
+    }
+
+    /// [`Harness::with_env`], with `secrets` (when given) in place of the
+    /// harness's own keychain.
+    pub(crate) fn with_env_on<T>(
+        &mut self,
+        secrets: Option<&mut dyn SecretStore>,
+        work: impl FnOnce(&mut Env<'_>) -> T,
+    ) -> T {
         let now = &self.now;
         let step = &self.clock_step;
         let clock = move || {
@@ -1199,9 +1209,13 @@ impl Harness {
             redirected.set(redirected.get() + 1);
             Ok(())
         };
-        let mut secrets = RefusingStore {
+        let mut refusing = RefusingStore {
             store: &mut self.secrets,
             refusals: &self.keychain,
+        };
+        let secrets: &mut dyn SecretStore = match secrets {
+            Some(secrets) => secrets,
+            None => &mut refusing,
         };
         let mut env = Env {
             router: RouterEnv {
@@ -1209,7 +1223,7 @@ impl Harness {
                 port: self.port,
                 timeouts: self.timeouts,
             },
-            secrets: &mut secrets,
+            secrets,
             home: Some(self.home.path().as_os_str().to_owned()),
             clock: &clock,
             console: &mut self.console,
