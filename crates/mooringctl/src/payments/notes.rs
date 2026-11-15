@@ -56,7 +56,7 @@ pub(crate) const fn reason(reason: MakeUpReason) -> &'static str {
 /// The daemon's line for a make-up it recorded.
 pub(crate) fn made_up(record: &MakeUpRecord, suspended: Option<SuspendReason>) -> String {
     format!(
-        "make-up {}: user {} is given {} {}{}",
+        "make-up {}: user {} is given {}, {}{}",
         record.number,
         record.user,
         gift(&record.gift),

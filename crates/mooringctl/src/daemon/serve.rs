@@ -28,7 +28,7 @@ use mooring_daemon_core::sim_network::SimNetwork;
 use mooring_model::UserId;
 
 use super::hub::{Hub, HubPoisoned};
-use super::{AcceptRequest, Control, MakeUpRequest, peer};
+use super::{AcceptRequest, Control, Handover, MakeUpRequest, peer};
 
 /// The most clients served at once: the app's one subscription, a few CLI
 /// calls, and room for a stale connection that has not been noticed yet.
@@ -223,7 +223,7 @@ fn accept_sim_network(
     if !control.deployed.load(Ordering::SeqCst) {
         return Err(refused(stream, Refusal::NotDeployed));
     }
-    let (answer, answered) = mpsc::sync_channel(0);
+    let (answer, answered) = Handover::pair();
     match control.accept.try_send(AcceptRequest { network, answer }) {
         Ok(()) => {}
         Err(mpsc::TrySendError::Full(_)) => return Err(refused(stream, Refusal::LoopBusy)),
@@ -264,7 +264,7 @@ fn make_up(
     if !control.deployed.load(Ordering::SeqCst) {
         return Err(refused(stream, Refusal::NotDeployed));
     }
-    let (decided, decision) = mpsc::sync_channel(0);
+    let (decided, decision) = Handover::pair();
     let (recorded, outcome) = mpsc::sync_channel(1);
     let request = MakeUpRequest {
         user,

@@ -243,16 +243,39 @@ pub(crate) fn deployment_exists(support_dir: &Path) -> Result<bool, LocalError> 
     }
 }
 
+/// Where the daemon's loop hands a waiting connection its answer: a
+/// channel that holds nothing. [`Handover::send`] returns `Ok` only once
+/// the connection has taken the answer, and fails once the connection has
+/// stopped waiting for it, so the loop acts on an answer only when it was
+/// heard. A channel with room for the answer would take a send that lands
+/// as the connection's wait runs out, and the loop would act on an answer
+/// that the connection, which then says `LoopBusy`, never took.
+#[derive(Debug)]
+pub(crate) struct Handover<T>(mpsc::SyncSender<T>);
+
+impl<T> Handover<T> {
+    /// A handover, and the end the connection waits on.
+    pub(crate) fn pair() -> (Self, mpsc::Receiver<T>) {
+        let (sender, receiver) = mpsc::sync_channel(0);
+        (Self(sender), receiver)
+    }
+
+    /// Hands `answer` to the connection, waiting until it takes it; the
+    /// answer comes back when the connection no longer waits.
+    pub(crate) fn send(&self, answer: T) -> Result<(), mpsc::SendError<T>> {
+        self.0.send(answer)
+    }
+}
+
 /// A request to take a network as the SIM's network on record (`sim
 /// accept-network`, design §10.2), from a connection to the daemon's loop.
 #[derive(Debug)]
 pub(crate) struct AcceptRequest {
     /// The network the operator was shown and named.
     pub(crate) network: SimNetwork,
-    /// Where the loop's answer goes. It holds nothing: the loop's send
-    /// succeeds only into the hands of a connection still waiting, so the
-    /// loop knows whether its answer was heard.
-    pub(crate) answer: mpsc::SyncSender<Result<(), NotAccepted>>,
+    /// Where the loop's answer goes, so that the loop knows whether it
+    /// was heard.
+    pub(crate) answer: Handover<Result<(), NotAccepted>>,
 }
 
 /// What came of a make-up the loop took: the make-up as the ledger
@@ -273,11 +296,9 @@ pub(crate) struct MakeUpRequest {
     /// Why.
     pub(crate) reason: MakeUpReason,
     /// Where the loop says what it decided: `Ok` before it writes the
-    /// ledger with the make-up, or why it records nothing. It holds
-    /// nothing: the loop's send succeeds only into the hands of a
-    /// connection still waiting, and the loop writes nothing for one that
-    /// has gone.
-    pub(crate) decided: mpsc::SyncSender<Result<(), Refusal>>,
+    /// ledger with the make-up, or why it records nothing. The loop
+    /// writes nothing for a connection that did not take its `Ok`.
+    pub(crate) decided: Handover<Result<(), Refusal>>,
     /// Where the loop says what came of the write. It holds one outcome,
     /// so the loop never waits on it.
     pub(crate) recorded: mpsc::SyncSender<MakeUpOutcome>,

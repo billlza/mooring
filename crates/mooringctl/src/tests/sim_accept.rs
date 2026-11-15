@@ -43,7 +43,7 @@ use super::user::fixture;
 use crate::daemon::deployed::{self, Stopped};
 use crate::daemon::serve::{End, Limits, MAX_CLIENTS, serve};
 use crate::daemon::sim_network::{NetworkWatch, WRITE_RETRY};
-use crate::daemon::{AcceptRequest, Asked, Control, RunPaths};
+use crate::daemon::{AcceptRequest, Asked, Control, Handover, RunPaths};
 use crate::error::{EXIT_LOCAL, refusal_text};
 use crate::prompt::Answer;
 
@@ -517,7 +517,7 @@ fn request_to_take(
     waiting: bool,
 ) -> (mpsc::Receiver<AcceptRequest>, Option<Running<Heard>>) {
     let (requests, acceptances) = mpsc::channel();
-    let (answer, answered) = mpsc::sync_channel(0);
+    let (answer, answered) = Handover::pair();
     requests.send(AcceptRequest { network, answer }).unwrap();
     let heard = waiting.then(|| Running::start(move || answered.recv_timeout(DEADLINE)));
     (acceptances, heard)
@@ -619,7 +619,7 @@ fn one_pass_answers_every_request_that_waits_in_the_order_they_came() {
         let askers: Vec<Running<Heard>> = [unnamed(), unnamed()]
             .into_iter()
             .map(|network| {
-                let (answer, answered) = mpsc::sync_channel(0);
+                let (answer, answered) = Handover::pair();
                 requests.send(AcceptRequest { network, answer }).unwrap();
                 Running::start(move || answered.recv_timeout(DEADLINE))
             })
@@ -647,7 +647,7 @@ fn the_served_loop_answers_a_waiting_request_after_its_tick() {
     run_against(&mut harness, &control, 0, cmlink_document(), |_, _| {});
 
     let (control, asked) = Control::new();
-    let (answer, answered) = mpsc::sync_channel(0);
+    let (answer, answered) = Handover::pair();
     control
         .accept
         .try_send(AcceptRequest {

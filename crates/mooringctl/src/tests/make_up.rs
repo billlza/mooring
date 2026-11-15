@@ -43,7 +43,7 @@ use super::user::{fixture, holding};
 use crate::cli::Cli;
 use crate::daemon::deployed::{self, Stopped};
 use crate::daemon::serve::{End, Limits, MAX_CLIENTS, serve};
-use crate::daemon::{Control, Intervals, MakeUpOutcome, MakeUpRequest, RunPaths};
+use crate::daemon::{Control, Handover, Intervals, MakeUpOutcome, MakeUpRequest, RunPaths};
 use crate::error::{EXIT_LOCAL, EXIT_USAGE, LocalError};
 use crate::payments::notes::{made_up, stamp};
 use crate::payments::pull::{Gate, Puller};
@@ -111,7 +111,7 @@ fn week_for_first() -> MakeUpRecord {
 /// The daemon's line for [`week_for_first`].
 fn week_line() -> String {
     format!(
-        "make-up 1: user fxuseraaab is given service from {} until {}, with a quota of 100000000000 bytes a billing cycle for an outage",
+        "make-up 1: user fxuseraaab is given service from {} until {}, with a quota of 100000000000 bytes a billing cycle, for an outage",
         stamp(at(NOW + 30 * DAY)),
         stamp(at(NOW + 37 * DAY))
     )
@@ -140,7 +140,7 @@ enum Asker {
 /// A request for `ask` for `user`, for an outage, as a connection hands it
 /// to the loop, and its asker.
 fn asking(user: &str, ask: MakeUpAsk, asker: Asker) -> (MakeUpRequest, Option<Running<Heard>>) {
-    let (decided, decision) = mpsc::sync_channel(0);
+    let (decided, decision) = Handover::pair();
     let (recorded, outcome) = mpsc::sync_channel(1);
     let request = MakeUpRequest {
         user: UserId::parse(user).unwrap(),
@@ -363,7 +363,7 @@ fn the_daemons_line_names_the_make_up_and_the_users_suspension() {
             reason,
             ..traffic_record.clone()
         };
-        assert_eq!(made_up(&record, None), format!("{given} {why}"));
+        assert_eq!(made_up(&record, None), format!("{given}, {why}"));
     }
     let quota = SuspendReason::QuotaExceeded {
         cycle_start: mooring_model::CalendarDate::parse("2026-10-01").unwrap(),
@@ -388,7 +388,7 @@ fn the_daemons_line_names_the_make_up_and_the_users_suspension() {
     ] {
         assert_eq!(
             made_up(&traffic_record, Some(suspended)),
-            format!("{given} for an outage{said}")
+            format!("{given}, for an outage{said}")
         );
     }
 }
@@ -605,6 +605,32 @@ fn a_loop_late_to_decide_is_reported_busy_and_then_finds_no_one_waiting() {
     );
     assert_eq!(served.result(), End::Refused(Refusal::LoopBusy));
     assert!(request.decided.send(Ok(())).is_err());
+}
+
+/// The loop hands its answer to a connection over a [`Handover`], a
+/// make-up's decision as a network to take: the send returns only once the
+/// connection took the answer, and fails once the connection stopped
+/// waiting, so the loop never acts on an answer that no one heard.
+#[test]
+fn the_loops_answer_is_handed_only_to_a_connection_that_takes_it() {
+    let (handover, taken) = Handover::pair();
+    let (sent, returned) = mpsc::channel();
+    let handing = Running::start(move || {
+        let outcome = handover.send(7_u8);
+        sent.send(outcome.is_ok()).unwrap();
+    });
+    // No one has taken the answer yet, so the send has not returned.
+    assert_eq!(
+        returned.recv_timeout(BRIEF.answer),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    );
+    assert_eq!(taken.recv_timeout(DEADLINE), Ok(7));
+    assert_eq!(returned.recv_timeout(DEADLINE), Ok(true));
+    handing.result();
+
+    let (handover, taken) = Handover::pair();
+    drop(taken);
+    assert_eq!(handover.send(7_u8), Err(mpsc::SendError(7)));
 }
 
 /// A loop that takes no request holds as many make-ups as the connections
