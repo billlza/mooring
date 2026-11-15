@@ -318,7 +318,7 @@ pub(crate) fn retry(env: &mut Env<'_>, out: &mut dyn Write) -> Result<(), Comman
             Ok(())
         }
         DaemonReply::Refused { reason } => Err(LocalError::DaemonRefused { reason }.into()),
-        DaemonReply::Status(_) | DaemonReply::SimNetworkAccepted => {
+        DaemonReply::Status(_) | DaemonReply::SimNetworkAccepted | DaemonReply::MadeUp { .. } => {
             Err(LocalError::DaemonUnexpectedReply.into())
         }
     }

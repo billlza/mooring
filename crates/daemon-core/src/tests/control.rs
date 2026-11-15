@@ -12,9 +12,13 @@ use crate::control::{
     ProtocolLine, Refusal, decode_protocol_line, decode_reply, decode_request, encode_line,
 };
 use crate::error::{ControlError, ControlErrorKind};
+use crate::payments::{
+    MakeUpAsk, MakeUpGift, MakeUpNumber, MakeUpReason, MakeUpRecord, MakeUpRefusal,
+};
 use crate::router::{CarrierName, Mcc, Mnc, Plmn};
 use crate::sim_network::{NotAccepted, SimNetwork};
-use mooring_model::UnixTime;
+use mooring_model::{CalendarDate, SuspendReason, UnixTime, UserId};
+use std::num::{NonZeroU32, NonZeroU64};
 
 fn status() -> ConsoleStatus {
     ConsoleStatus::NoDeployment(UndeployedStatus::new(
@@ -36,7 +40,8 @@ fn network(spn: Option<&str>, mcc: &str, mnc: &str) -> SimNetwork {
 }
 
 /// Each request is one short JSON document and a newline, both ways: a
-/// string, or for the request that names a network an object with it.
+/// string, or for a request that names a network or a make-up an object
+/// with it.
 #[test]
 fn requests_have_fixed_lines() {
     for (request, line) in [
@@ -54,6 +59,22 @@ fn requests_have_fixed_lines() {
                 network: network(None, "234", "020"),
             },
             "{\"accept_sim_network\":{\"network\":{\"spn\":null,\"plmn\":{\"mcc\":\"234\",\"mnc\":\"020\"}}}}\n",
+        ),
+        (
+            DaemonRequest::MakeUp {
+                user: UserId::parse("pilotusera").unwrap(),
+                ask: MakeUpAsk::Days(NonZeroU32::new(7).unwrap()),
+                reason: MakeUpReason::Outage,
+            },
+            "{\"make_up\":{\"user\":\"pilotusera\",\"ask\":{\"days\":7},\"reason\":\"outage\"}}\n",
+        ),
+        (
+            DaemonRequest::MakeUp {
+                user: UserId::parse("pilotuserb").unwrap(),
+                ask: MakeUpAsk::TrafficBytes(NonZeroU64::new(20_000_000_000).unwrap()),
+                reason: MakeUpReason::MistakenCut,
+            },
+            "{\"make_up\":{\"user\":\"pilotuserb\",\"ask\":{\"traffic_bytes\":20000000000},\"reason\":\"mistaken_cut\"}}\n",
         ),
     ] {
         let encoded = encode_line(&request, MAX_REQUEST_LINE_BYTES).unwrap();
@@ -85,6 +106,15 @@ fn replies_have_fixed_lines() {
             "sim_network_report_changed",
         ),
         (Refusal::LoopBusy, "loop_busy"),
+        (Refusal::UnknownUser, "unknown_user"),
+        (Refusal::UserRevoked, "user_revoked"),
+        (Refusal::NoPaidPeriod, "no_paid_period"),
+        (Refusal::NoQuota, "no_quota"),
+        (Refusal::QuotaUnknown, "quota_unknown"),
+        (Refusal::BeyondCalendar, "beyond_calendar"),
+        (Refusal::MakeUpNumbersSpent, "make_up_numbers_spent"),
+        (Refusal::LedgerUnreadable, "ledger_unreadable"),
+        (Refusal::LedgerNotWritten, "ledger_not_written"),
     ] {
         let reply = DaemonReply::Refused { reason };
         let line = encode_line(&reply, MAX_REPLY_LINE_BYTES).unwrap();
@@ -108,6 +138,72 @@ fn replies_have_fixed_lines() {
     assert!(line.starts_with(b"{\"status\":{\"no_deployment\":{\"version\":1,"));
     assert_eq!(line.iter().filter(|&&byte| byte == b'\n').count(), 1);
     assert_eq!(decode_reply(&line).unwrap(), reply);
+}
+
+/// A make-up recorded is answered with the make-up and the user's
+/// suspension, if any, as the ledger writes them.
+#[test]
+fn a_make_up_recorded_is_answered_with_it() {
+    let record = MakeUpRecord {
+        number: MakeUpNumber::new(NonZeroU64::new(3).unwrap()),
+        user: UserId::parse("pilotusera").unwrap(),
+        reason: MakeUpReason::MistakenBan,
+        granted_at: UnixTime::from_secs(1_797_000_100),
+        after: 9,
+        gift: MakeUpGift::Period {
+            from: UnixTime::from_secs(1_797_000_100),
+            until: UnixTime::from_secs(1_797_604_900),
+            quota_bytes: NonZeroU64::new(100_000_000_000).unwrap(),
+        },
+    };
+    for (suspended, written) in [
+        (None, "null"),
+        (
+            Some(SuspendReason::QuotaExceeded {
+                cycle_start: CalendarDate::parse("2026-12-01").unwrap(),
+            }),
+            "{\"quota_exceeded\":{\"cycle_start\":\"2026-12-01\"}}",
+        ),
+    ] {
+        let reply = DaemonReply::MadeUp {
+            record: record.clone(),
+            suspended,
+        };
+        let line = encode_line(&reply, MAX_REPLY_LINE_BYTES).unwrap();
+        assert_eq!(
+            String::from_utf8(line.clone()).unwrap(),
+            format!(
+                "{{\"made_up\":{{\"record\":{{\"number\":3,\"user\":\"pilotusera\",\"reason\":\"mistaken_ban\",\"granted_at\":1797000100,\"after\":9,\"gift\":{{\"period\":{{\"from\":1797000100,\"until\":1797604900,\"quota_bytes\":100000000000}}}}}},\"suspended\":{written}}}}}\n"
+            )
+        );
+        assert_eq!(decode_reply(&line).unwrap(), reply);
+    }
+}
+
+/// Each reason a make-up is refused is a refusal of its own on the wire.
+#[test]
+fn each_reason_a_make_up_is_refused_is_its_own_refusal() {
+    assert_eq!(
+        [
+            MakeUpRefusal::UnknownUser,
+            MakeUpRefusal::UserRevoked,
+            MakeUpRefusal::NoPaidPeriod,
+            MakeUpRefusal::NoQuota,
+            MakeUpRefusal::QuotaUnknown,
+            MakeUpRefusal::BeyondCalendar,
+            MakeUpRefusal::NumbersSpent,
+        ]
+        .map(Refusal::from),
+        [
+            Refusal::UnknownUser,
+            Refusal::UserRevoked,
+            Refusal::NoPaidPeriod,
+            Refusal::NoQuota,
+            Refusal::QuotaUnknown,
+            Refusal::BeyondCalendar,
+            Refusal::MakeUpNumbersSpent,
+        ]
+    );
 }
 
 /// Each reason a network is not taken is a refusal of its own on the
@@ -144,16 +240,26 @@ fn the_longest_request_fits_a_request_line() {
     }
     // One character more is not a SIM's name.
     assert!(CarrierName::parse(&"\\".repeat(33)).is_err());
+    // The longest make-up is shorter: the most bytes of traffic, for the
+    // longest reason.
+    let request = DaemonRequest::MakeUp {
+        user: UserId::parse("pilotusera").unwrap(),
+        ask: MakeUpAsk::TrafficBytes(NonZeroU64::MAX),
+        reason: MakeUpReason::MistakenCut,
+    };
+    let line = encode_line(&request, MAX_REQUEST_LINE_BYTES).unwrap();
+    assert_eq!(line.len(), 103);
+    assert_eq!(decode_request(&line).unwrap(), request);
 }
 
-/// The first line of a connection names the protocol, protocol 4 in this
+/// The first line of a connection names the protocol, protocol 5 in this
 /// build, and only that line is read as one: a reply, a line with another
 /// key or another type is not.
 #[test]
 fn the_protocol_line_is_fixed() {
-    assert_eq!(CONTROL_PROTOCOL, 4);
+    assert_eq!(CONTROL_PROTOCOL, 5);
     let line = encode_line(&ProtocolLine::CURRENT, MAX_REPLY_LINE_BYTES).unwrap();
-    assert_eq!(line, b"{\"control_protocol\":4}\n");
+    assert_eq!(line, b"{\"control_protocol\":5}\n");
     assert_eq!(decode_protocol_line(&line).unwrap(), ProtocolLine::CURRENT);
     assert_eq!(
         decode_protocol_line(b"{\"control_protocol\":7}").unwrap(),

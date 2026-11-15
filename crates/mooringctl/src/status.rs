@@ -111,7 +111,9 @@ pub(crate) fn status(
                 return Err(CommandError::Local(LocalError::DaemonRefused { reason }));
             }
             DaemonReply::Status(status) => status,
-            DaemonReply::RetryQueued | DaemonReply::SimNetworkAccepted => {
+            DaemonReply::RetryQueued
+            | DaemonReply::SimNetworkAccepted
+            | DaemonReply::MadeUp { .. } => {
                 return Err(CommandError::Local(LocalError::DaemonUnexpectedReply));
             }
         };
@@ -159,16 +161,21 @@ pub(crate) enum Next {
 }
 
 /// Connects to the daemon, sends `request` and reads the daemon's protocol
-/// line (see [`check_protocol`]); each read then waits at most `tick`. No
-/// socket, or no one listening on it, is `DaemonNotRunning`. The time
-/// limits are set before connecting: a busy daemon writes its refusal and
-/// closes at once, and setsockopt(2) fails on macOS once the peer has shut
-/// the socket down.
+/// line (see [`check_protocol`]); each read then waits at most `tick`.
 pub(crate) fn connect(
     socket: &Path,
     request: DaemonRequest,
     tick: Duration,
 ) -> Result<BufReader<UnixStream>, LocalError> {
+    exchange(open(socket, tick)?, request, socket)
+}
+
+/// Connects to the daemon and sends nothing yet; each read then waits at
+/// most `tick`. No socket, or no one listening on it, is
+/// `DaemonNotRunning`. The time limits are set before connecting: a busy
+/// daemon writes its refusal and closes at once, and setsockopt(2) fails
+/// on macOS once the peer has shut the socket down.
+pub(crate) fn open(socket: &Path, tick: Duration) -> Result<UnixStream, LocalError> {
     let io_error = |source| LocalError::DaemonIo {
         path: socket.to_path_buf(),
         source,
@@ -187,7 +194,17 @@ pub(crate) fn connect(
             },
             _ => io_error(error),
         })?;
-    let mut reader = BufReader::new(send_request(UnixStream::from(client), request, socket)?);
+    Ok(UnixStream::from(client))
+}
+
+/// Sends `request` on `stream`, which [`open`] connected, and reads the
+/// daemon's protocol line (see [`check_protocol`]).
+fn exchange(
+    stream: UnixStream,
+    request: DaemonRequest,
+    socket: &Path,
+) -> Result<BufReader<UnixStream>, LocalError> {
+    let mut reader = BufReader::new(send_request(stream, request, socket)?);
     check_protocol(&mut reader, socket)?;
     Ok(reader)
 }
@@ -252,7 +269,18 @@ pub(crate) fn ask_within(
     request: DaemonRequest,
     limit: Duration,
 ) -> Result<DaemonReply, LocalError> {
-    let mut reader = connect(socket, request, limit)?;
+    ask_on(open(socket, limit)?, socket, request, limit)
+}
+
+/// [`ask_within`] on `stream`, which [`open`] connected to `socket` with
+/// `limit` as its tick: nothing was sent before this is called.
+pub(crate) fn ask_on(
+    stream: UnixStream,
+    socket: &Path,
+    request: DaemonRequest,
+    limit: Duration,
+) -> Result<DaemonReply, LocalError> {
+    let mut reader = exchange(stream, request, socket)?;
     let deadline = Instant::now() + limit;
     match read_reply_line(&mut reader, socket, deadline, &|| true)? {
         Next::Line(line) => decode_reply(&line).map_err(LocalError::DaemonReply),

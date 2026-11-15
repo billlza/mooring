@@ -30,6 +30,7 @@ mod form;
 mod history;
 mod http;
 mod log;
+mod make_up;
 mod meter;
 mod node;
 mod node_files;

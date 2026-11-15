@@ -212,7 +212,7 @@
     - The Mac's new records are the payments it pulls (design §9.6), which
       clause 4 puts under the 13-month rule, and the operator's ban records
       (clause 3). The daemon deletes a removed user's payment orders
-      (design §9.6, the ledger's retention): when the nightly apply job
+      and make-ups (design §9.6, the ledger's retention): when the nightly apply job
       removes the user 13 months after the revocation, or after `user
       forget` for a user who leaves and asks. The ban records are kept
       until the service ends, outside Mooring's state, so neither the

@@ -39,6 +39,8 @@
 //! - [`payments`]: the entitlements the portal lists for Mooring to pull,
 //!   the payment ledger the daemon keeps of them, and the service periods
 //!   and traffic packs they give users.
+//! - [`make_up`]: the time or traffic the operator gives a user without a
+//!   payment, decided against the deployment and recorded in the ledger.
 //!
 //! # Purity
 //!
@@ -74,6 +76,7 @@ pub mod control;
 pub mod error;
 pub mod exit;
 pub mod forecast;
+pub mod make_up;
 pub mod meter;
 pub mod network;
 pub mod notify;

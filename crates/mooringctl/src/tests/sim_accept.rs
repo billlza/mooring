@@ -48,7 +48,7 @@ use crate::error::{EXIT_LOCAL, refusal_text};
 use crate::prompt::Answer;
 
 /// How long a test waits for a reply or a connection's end.
-const DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
 /// The log's line for the SIM without a name taken in place of the
 /// fixture's SIM.
@@ -289,22 +289,23 @@ fn a_network_taken_that_cannot_be_written_is_said_and_written_when_due() {
 /// A connection's limits. The loop's answer is waited for a minute, far
 /// longer than a test takes to give one, so that no outcome hangs on how
 /// soon the test's own thread runs.
-const PATIENT: Limits = Limits {
+pub(crate) const PATIENT: Limits = Limits {
     request: Duration::from_secs(2),
     write: Duration::from_secs(2),
     idle_check: Duration::from_millis(100),
     answer: Duration::from_secs(60),
+    recorded: Duration::from_secs(60),
 };
 
 /// The same with 50 ms for the loop's answer, for a loop that gives none.
-const BRIEF: Limits = Limits {
+pub(crate) const BRIEF: Limits = Limits {
     answer: Duration::from_millis(50),
     ..PATIENT
 };
 
 /// What a deployed daemon's connections and its loop share, and the
 /// loop's ends of it.
-fn deployed_control() -> (Arc<Control>, Asked) {
+pub(crate) fn deployed_control() -> (Arc<Control>, Asked) {
     let (control, asked) = Control::new();
     control.deployed.store(true, Ordering::SeqCst);
     (Arc::new(control), asked)
@@ -350,7 +351,7 @@ fn asked_to_take_under(
 }
 
 /// The next reply on `reader`.
-fn reply(reader: &mut BufReader<UnixStream>) -> DaemonReply {
+pub(crate) fn reply(reader: &mut BufReader<UnixStream>) -> DaemonReply {
     let mut line = Vec::new();
     reader.read_until(b'\n', &mut line).unwrap();
     decode_reply(&line).unwrap()
@@ -472,7 +473,7 @@ fn a_loop_that_has_ended_ends_the_connection_without_a_reply() {
 // --- The loop -----------------------------------------------------------
 
 /// Every regular file under `dir`, by its path from it, with its bytes.
-fn files_under(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+pub(crate) fn files_under(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(next) = pending.pop() {
@@ -493,7 +494,7 @@ fn files_under(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 /// The paths whose bytes differ between `before` and `after`, or that
 /// only one of them holds.
-fn changed(
+pub(crate) fn changed(
     before: &BTreeMap<PathBuf, Vec<u8>>,
     after: &BTreeMap<PathBuf, Vec<u8>>,
 ) -> Vec<PathBuf> {
@@ -708,7 +709,10 @@ fn swapped_status() -> DaemonReply {
 /// connection for each of `answers`, in turn, with the protocol line and
 /// that reply, and returns the request each connection sent. The command
 /// reads both lines of a connection before it closes it.
-fn daemon_answering(harness: &Harness, answers: Vec<DaemonReply>) -> Running<Vec<String>> {
+pub(crate) fn daemon_answering(
+    harness: &Harness,
+    answers: Vec<DaemonReply>,
+) -> Running<Vec<String>> {
     let paths = RunPaths::under(&harness.support_dir());
     fs::create_dir_all(&paths.dir).unwrap();
     let listener = UnixListener::bind(&paths.socket).unwrap();

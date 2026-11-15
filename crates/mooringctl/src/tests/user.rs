@@ -20,7 +20,12 @@ use crate::error::EXIT_LOCAL;
 /// A harness whose support directory holds `deployment` as `state.json`,
 /// encoded as the store writes it, with the exit disabled.
 pub(crate) fn harness_with(deployment: Deployment) -> Harness {
-    let harness = Harness::new(0);
+    holding(Harness::new(0), deployment)
+}
+
+/// `harness`, its support directory made, holding `deployment` as
+/// [`harness_with`] does.
+pub(crate) fn holding(harness: Harness, deployment: Deployment) -> Harness {
     let dir = harness.support_dir();
     fs::DirBuilder::new()
         .recursive(true)

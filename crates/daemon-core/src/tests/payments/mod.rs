@@ -21,6 +21,7 @@ use crate::usage::{DownlinkCount, ServedBefore};
 
 mod feed;
 mod ledger;
+mod make_ups;
 mod open_downloads;
 mod policy;
 mod refunds;
