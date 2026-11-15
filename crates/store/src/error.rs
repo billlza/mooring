@@ -100,6 +100,21 @@ io_ops! {
     ListRadioDays => "list the radio history's day files",
     /// Removing a radio history day file.
     RemoveRadioDay => "remove a radio history day file",
+    /// Creating or inspecting a level of the event journals' directory, to
+    /// append to a day file.
+    CreateEventsDir => "create the event journal directory",
+    /// Opening, inspecting or creating an event journal day file, or
+    /// inspecting a level of its directory to read one.
+    OpenEventsDay => "open an event journal day file",
+    /// Reading an event journal day file.
+    ReadEventsDay => "read an event journal day file",
+    /// Writing, truncating or flushing an event journal day file.
+    WriteEventsDay => "write an event journal day file",
+    /// Inspecting a level of the event journals' directory, or listing its
+    /// day files or its nodes.
+    ListEventsDays => "list the event journals' day files",
+    /// Removing an event journal day file.
+    RemoveEventsDay => "remove an event journal day file",
     /// Opening or reading the payment ledger, or inspecting its directory
     /// to read it.
     ReadPaymentLedger => "read the payment ledger",
@@ -372,9 +387,9 @@ pub enum StoreError {
         source: SecretStoreError,
     },
     /// Something other than a directory (a link included) is where one of
-    /// the store's private directories (`usage/`, `radio/`) belongs; the
-    /// writes, the reads and the prune refuse it alike, and nothing was
-    /// read, written or removed through it.
+    /// the store's private directories (`usage/`, `radio/`, a level of
+    /// `events/`) belongs; the writes, the reads and the prune refuse it
+    /// alike, and nothing was read, written or removed through it.
     #[error("{} is not a directory", path.display())]
     DirNotDirectory {
         /// The directory's path.
@@ -398,6 +413,19 @@ pub enum StoreError {
         path: PathBuf,
         /// What is wrong with it.
         fault: RadioHistoryFault,
+    },
+    /// An event journal day file is larger than
+    /// [`MAX_EVENTS_DAY_BYTES`](crate::MAX_EVENTS_DAY_BYTES), or an append
+    /// would make it so (design §15.7). Nothing was read or written
+    /// through it.
+    #[error(
+        "event journal file {} is larger than {} bytes",
+        path.display(),
+        crate::events::MAX_EVENTS_DAY_BYTES
+    )]
+    EventsDayTooLarge {
+        /// The day file.
+        path: PathBuf,
     },
     /// The exit's latch (`run/latch.json`) exists but is not a version-1
     /// latch; the daemon keeps the exit down rather than read it as none.
@@ -500,6 +528,8 @@ kinds! {
         NotRegularFile,
         /// See [`StoreError::RadioHistoryCorrupt`].
         RadioHistoryCorrupt,
+        /// See [`StoreError::EventsDayTooLarge`].
+        EventsDayTooLarge,
     }
 }
 
@@ -537,6 +567,7 @@ impl StoreError {
             Self::DirNotDirectory { .. } => StoreErrorKind::DirNotDirectory,
             Self::NotRegularFile { .. } => StoreErrorKind::NotRegularFile,
             Self::RadioHistoryCorrupt { .. } => StoreErrorKind::RadioHistoryCorrupt,
+            Self::EventsDayTooLarge { .. } => StoreErrorKind::EventsDayTooLarge,
         }
     }
 }

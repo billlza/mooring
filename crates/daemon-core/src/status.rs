@@ -40,7 +40,7 @@ use mooring_model::sim::SimThresholds;
 use mooring_model::user::UserStatus;
 use mooring_model::verdict::{Violation, ViolationKind};
 use mooring_model::{
-    CalendarDate, ConfigGeneration, NodeId, Pairing, PublicAlias, UnixTime, UserId,
+    CalendarDate, ConfigGeneration, NodeId, Pairing, PublicAlias, UnixTime, UserId, kinds,
 };
 use serde::{Deserialize, Serialize};
 
@@ -230,7 +230,79 @@ pub enum DownReason {
     },
 }
 
+kinds! {
+    /// Why the exit is down, without details: no node, engine, address or
+    /// evidence (the event journal's record of it, design §15.7).
+    #[derive(Serialize, Deserialize)]
+    pub enum DownReasonKind {
+        /// See [`DownReason::EgressInterfaceAbsent`].
+        EgressInterfaceAbsent,
+        /// See [`DownReason::EgressAmbiguous`].
+        EgressAmbiguous,
+        /// See [`DownReason::EgressNoIpv4`].
+        EgressNoIpv4,
+        /// See [`DownReason::EgressSubnetMismatch`].
+        EgressSubnetMismatch,
+        /// See [`DownReason::UplinkAbsent`].
+        UplinkAbsent,
+        /// See [`DownReason::UplinkEqualsEgress`].
+        UplinkEqualsEgress,
+        /// See [`DownReason::NoAppliedNode`].
+        NoAppliedNode,
+        /// See [`DownReason::DirectProbeFailed`].
+        DirectProbeFailed,
+        /// See [`DownReason::CarrierCheckUnrecorded`].
+        CarrierCheckUnrecorded,
+        /// See [`DownReason::SimPlanUnrecorded`].
+        SimPlanUnrecorded,
+        /// See [`DownReason::SecretsUnavailable`].
+        SecretsUnavailable,
+        /// See [`DownReason::AgentNotEnabled`].
+        AgentNotEnabled,
+        /// See [`DownReason::EngineSpawnFailed`].
+        EngineSpawnFailed,
+        /// See [`DownReason::EngineConfigRejected`].
+        EngineConfigRejected,
+        /// See [`DownReason::EngineStartFailed`].
+        EngineStartFailed,
+        /// See [`DownReason::EngineCrashLoop`].
+        EngineCrashLoop,
+        /// See [`DownReason::Violation`].
+        Violation,
+        /// See [`DownReason::SimCapReached`].
+        SimCapReached,
+        /// See [`DownReason::ForeignNetworkAttached`].
+        ForeignNetworkAttached,
+    }
+}
+
 impl DownReason {
+    /// The reason's kind.
+    #[must_use]
+    pub const fn kind(&self) -> DownReasonKind {
+        match self {
+            Self::EgressInterfaceAbsent => DownReasonKind::EgressInterfaceAbsent,
+            Self::EgressAmbiguous { .. } => DownReasonKind::EgressAmbiguous,
+            Self::EgressNoIpv4 { .. } => DownReasonKind::EgressNoIpv4,
+            Self::EgressSubnetMismatch => DownReasonKind::EgressSubnetMismatch,
+            Self::UplinkAbsent => DownReasonKind::UplinkAbsent,
+            Self::UplinkEqualsEgress => DownReasonKind::UplinkEqualsEgress,
+            Self::NoAppliedNode => DownReasonKind::NoAppliedNode,
+            Self::DirectProbeFailed { .. } => DownReasonKind::DirectProbeFailed,
+            Self::CarrierCheckUnrecorded => DownReasonKind::CarrierCheckUnrecorded,
+            Self::SimPlanUnrecorded => DownReasonKind::SimPlanUnrecorded,
+            Self::SecretsUnavailable => DownReasonKind::SecretsUnavailable,
+            Self::AgentNotEnabled { .. } => DownReasonKind::AgentNotEnabled,
+            Self::EngineSpawnFailed { .. } => DownReasonKind::EngineSpawnFailed,
+            Self::EngineConfigRejected { .. } => DownReasonKind::EngineConfigRejected,
+            Self::EngineStartFailed { .. } => DownReasonKind::EngineStartFailed,
+            Self::EngineCrashLoop { .. } => DownReasonKind::EngineCrashLoop,
+            Self::Violation(_) => DownReasonKind::Violation,
+            Self::SimCapReached { .. } => DownReasonKind::SimCapReached,
+            Self::ForeignNetworkAttached { .. } => DownReasonKind::ForeignNetworkAttached,
+        }
+    }
+
     /// The node the reason names, if any.
     const fn node(&self) -> Option<&NodeId> {
         match self {
@@ -298,12 +370,21 @@ impl ExitState {
         let Self::Degraded { reasons } = self else {
             return None;
         };
-        let mut kinds = NonEmptySet::new(reasons.first().kind());
-        for reason in reasons {
-            kinds.insert(reason.kind());
-        }
-        Some(AlertCondition::ExitDegraded { reasons: kinds })
+        Some(AlertCondition::ExitDegraded {
+            reasons: degraded_kinds(reasons),
+        })
     }
+}
+
+/// The kinds of a degraded exit's reasons, each once.
+pub(crate) fn degraded_kinds(
+    reasons: &NonEmpty<DegradedReason>,
+) -> NonEmptySet<DegradedReasonKind> {
+    let mut kinds = NonEmptySet::new(reasons.first().kind());
+    for reason in reasons {
+        kinds.insert(reason.kind());
+    }
+    kinds
 }
 
 /// A latched violation (`run/latch.json`, design §10.2).

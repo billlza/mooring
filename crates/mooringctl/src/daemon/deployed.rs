@@ -8,6 +8,9 @@
 //! neither delays a probe; and it publishes the deployment's status when
 //! the exit's state changes and at least every [`PUBLISH_EVERY`], with the
 //! capacity monitor's view after each tick that sampled ([`Capacity`]).
+//! Each status it publishes gives the Mac's event journal the events it
+//! shows ([`Journals`]), and on a tick that asks no node anything else it
+//! reads a node's event journal into the Mac's copy ([`NodeEvents`]).
 //! The SIM meter reads the egress counters on a thread of its own, and the
 //! power
 //! helper's events arrive on one (design §10.3, [`crate::runtime::power`]):
@@ -46,6 +49,8 @@ use mooring_model::{Deployment, ExitSite, NodeId};
 use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
 use super::capacity::{Capacity, Probed};
+use super::events::Journals;
+use super::node_events::NodeEvents;
 use super::{
     AcceptRequest, Asked, Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending,
     poll_router_on, publish, radio::RadioHistoryWriter, router_after_poll, say,
@@ -196,6 +201,10 @@ pub(crate) struct Deployed<'e, 'a> {
     pending: Pending,
     /// The capacity monitor and the record of round trips (design §15.3).
     capacity: Capacity,
+    /// The Mac's event journal and the journals' retention (design §15.7).
+    journals: Journals,
+    /// The reader of the nodes' event journals (design §15.7).
+    node_events: NodeEvents,
     nodes_polled: Option<Instant>,
     polls: BTreeMap<NodeId, NodePoll>,
     unreachable: BTreeMap<NodeId, NodeAgentState>,
@@ -300,6 +309,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if let Some(note) = begun {
             say(log, now, &note)?;
         }
+        let journals = Journals::open(log, support_dir, now)?;
         let mut router_failure = None;
         let router = poll_m7(
             env,
@@ -348,6 +358,8 @@ impl<'e, 'a> Deployed<'e, 'a> {
             payments,
             pending,
             capacity,
+            journals,
+            node_events: NodeEvents::open(support_dir, intervals.node_events),
             nodes_polled: None,
             polls: BTreeMap::new(),
             unreachable: BTreeMap::new(),
@@ -500,11 +512,28 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 }
             }
         }
-        // One request per tick: the payment pull waits for a tick on which
-        // the usage collection asked no node. It goes the Mac's own way, so
-        // it asks only while the network is clear, checked again right
-        // before its request (F15, design §9.6): this tick's check is
-        // seconds old by then.
+        // One request per tick: the nodes' event journals are read on a tick
+        // on which the usage collection asked no node.
+        if awake
+            && !asked_a_node
+            && let Ok(egress) = egress_name.as_ref()
+            && let Some(room) = super::usage::pull_budget(
+                self.machine.next_probe_in(self.begun.elapsed(), deployment),
+            )
+        {
+            asked_a_node = self.node_events.tick(
+                env,
+                log,
+                deployment,
+                egress,
+                room,
+                self.intervals.node_events,
+            )?;
+        }
+        // The payment pull waits for a tick on which no node was asked. It
+        // goes the Mac's own way, so it asks only while the network is
+        // clear, checked again right before its request (F15, design §9.6):
+        // this tick's check is seconds old by then.
         if awake && !asked_a_node {
             let link = env.router.link;
             let support = self.support_dir.clone();
@@ -592,6 +621,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 entitlements: &self.payments.entitlements(),
             })
             .map_err(|error| LocalError::Snapshot(Box::new(error)))?;
+            self.journals.record(log, &self.support_dir, &status, now)?;
             publish(
                 &control.hub,
                 &self.support_dir,

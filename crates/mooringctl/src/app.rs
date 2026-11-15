@@ -327,6 +327,9 @@ pub(crate) fn run(
             json,
         ),
         Command::SshRelay { socket } => crate::node::dial::ssh_relay(&socket),
+        Command::Events { since, until, json } => {
+            crate::events::events(env, out, since, until, json)
+        }
         Command::Daemon => daemon(env),
         Command::Apply {
             pending,
