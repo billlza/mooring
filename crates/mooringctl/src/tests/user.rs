@@ -220,6 +220,8 @@ fn a_link_where_the_state_belongs_is_not_no_deployment() {
         &["user", "agree", "abcdefghij"][..],
         &["user", "alias", "abcdefghij"][..],
         &["user", "add"][..],
+        &["user", "set-quota", "abcdefghij", "--gb", "100"][..],
+        &["user", "set-quota", "abcdefghij", "--none"][..],
         &[
             "user",
             "make-up",
@@ -256,6 +258,8 @@ fn every_user_command_without_a_state_says_there_is_no_deployment() {
             &["user", "agree", "abcdefghij"][..],
             &["user", "alias", "abcdefghij"][..],
             &["user", "add"][..],
+            &["user", "set-quota", "abcdefghij", "--gb", "100"][..],
+            &["user", "set-quota", "abcdefghij", "--none"][..],
             &[
                 "user",
                 "make-up",
