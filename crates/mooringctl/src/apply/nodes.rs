@@ -2,9 +2,10 @@
 
 //! The apply job's node applies (design §13.6): every node that confirmed
 //! a generation older than the deployment's, by id, each as `node apply`
-//! does it, through the exit's egress as the daemon resolves it
-//! (`exit_interfaces`) and with the engines in the support directory, as
-//! the daemon runs them. A node not yet applied, or leaving, is not
+//! does it, restarting only as the run allows, through the exit's egress as
+//! the daemon resolves it (`exit_interfaces`) and with the engines in the
+//! support directory, as the daemon runs them. A node not yet applied, or
+//! leaving, is not
 //! applied: its first apply is the operator's (design §13.2). A node that
 //! cannot be reached, or whose apply fails, is reported, and the next one
 //! runs; an egress that does not resolve fails each node without dialling.
@@ -12,6 +13,7 @@
 use std::io::Write;
 use std::path::Path;
 
+use mooring_agent_proto::Restarts;
 use mooring_model::node::NodeLifecycle;
 use mooring_model::{Deployment, NodeId, UnixTime};
 use mooring_store::Store;
@@ -38,14 +40,15 @@ pub(super) fn behind(deployment: &Deployment) -> Vec<NodeId> {
         .collect()
 }
 
-/// Applies every node behind the state's generation as it is now, writing
-/// each apply's progress to `progress` and handing each outcome, with the
-/// time it ended, to `done`.
+/// Applies every node behind the state's generation as it is now,
+/// restarting only as `restarts` allows, writing each apply's progress to
+/// `progress` and handing each outcome, with the time it ended, to `done`.
 pub(super) fn apply_behind(
     env: &mut Env<'_>,
     progress: &mut dyn Write,
     store: &Store,
     support: &Path,
+    restarts: Restarts,
     done: &mut dyn FnMut(&NodeOutcome, UnixTime) -> Result<(), CommandError>,
 ) -> Result<Vec<NodeOutcome>, CommandError> {
     let deployment = load(store)?.deployment;
@@ -63,7 +66,8 @@ pub(super) fn apply_behind(
     for node in behind {
         let result = match &egress {
             Ok(interface) => {
-                match crate::node::apply::apply(env, progress, &node, interface, &engines) {
+                match crate::node::apply::apply(env, progress, &node, interface, &engines, restarts)
+                {
                     Ok(()) => NodeResult::Applied,
                     Err(error) => NodeResult::Failed {
                         error: chain(&error),

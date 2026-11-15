@@ -9,6 +9,7 @@
 mod classify;
 #[cfg(target_os = "linux")]
 mod lab;
+mod refused;
 
 use mooring_agent_proto::{
     AgentError, ApplyStep, Generation, ManagedFile, RollbackCause, StderrTail, TxnState,

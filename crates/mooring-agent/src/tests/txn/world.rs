@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use mooring_agent_proto::{
     AgentError, Arch, BlobLen, BundleFiles, BundleHeader, EngineSet, Generation, Halt, HostFacts,
-    HostProfile, IfName, KernelIdent, KernelRelease, ManagedFile, PortRange, Sha256Hex,
+    HostProfile, IfName, KernelIdent, KernelRelease, ManagedFile, PortRange, Restarts, Sha256Hex,
     ShutdownReason, TxnState, UnixTime,
 };
 
@@ -102,8 +102,10 @@ pub(super) struct Tunnel {
 /// The running Xray's VLESS users as the stand-in node follows them: a
 /// restart of its unit loads the current generation's clients, `xray api
 /// adu` adds a request's (refusing an email the inbound holds, in any case,
-/// and exiting 0 all the same), and `xray api inbounduser` prints an
-/// inbound's, each as the pinned source does (`txn::xray_users`).
+/// and exiting 0 all the same), `xray api rmu` removes an inbound's by email
+/// (refusing an email it does not hold, and exiting 0 all the same), and
+/// `xray api inbounduser` prints an inbound's, each as the pinned source
+/// does (`txn::xray_users`).
 #[derive(Debug, Default)]
 pub(super) struct StandInXray {
     /// The clients each inbound holds, by tag.
@@ -115,8 +117,13 @@ pub(super) struct StandInXray {
     pub(super) reloading: bool,
     /// `adu` adds nothing: the engine refuses each user.
     pub(super) refuses: bool,
-    /// `adu` cannot reach the API and exits 1.
+    /// `adu` and `rmu` cannot reach the API and exit 1.
     pub(super) unreachable: bool,
+    /// `rmu` removes nothing: the engine refuses each removal.
+    pub(super) rmu_refuses: bool,
+    /// Xray stops once `systemctl is-active mooring-xray.service` has been
+    /// asked this many more times, as between a check and the swap.
+    pub(super) stops_after_asked: Cell<Option<u32>>,
     /// `systemctl is-active mooring-xray.service`, as the users' step asks
     /// it, cannot be started (`ENOENT`); the health check's, over every
     /// unit, can.
@@ -125,6 +132,8 @@ pub(super) struct StandInXray {
     pub(super) prints: Option<String>,
     /// The requests `adu` was given, as it read them.
     pub(super) requests: RefCell<Vec<String>>,
+    /// The removals `rmu` was given: the inbound's tag and the emails.
+    pub(super) removals: RefCell<Vec<(String, Vec<String>)>>,
 }
 
 impl StandInXray {
@@ -180,9 +189,56 @@ impl StandInXray {
         ok(printed.as_bytes())
     }
 
+    /// `xray api rmu -tag=<tag> <email>…`: each held email removed, in any
+    /// case, as the validator keys them.
+    fn remove(&self, tag: &str, emails: &[&str]) -> ToolOutput {
+        self.removals.borrow_mut().push((
+            tag.to_owned(),
+            emails.iter().map(|email| (*email).to_owned()).collect(),
+        ));
+        if self.unreachable {
+            return failed(b"failed to dial 127.0.0.1:10085\n");
+        }
+        let mut printed = String::new();
+        let mut removed = 0;
+        let mut held = self.held.borrow_mut();
+        let users = held.entry(tag.to_owned()).or_default();
+        for email in emails {
+            printed += &format!("remove user: {email}\n");
+            let holds = |user: &Value| user["email"].as_str().unwrap().eq_ignore_ascii_case(email);
+            if self.rmu_refuses {
+                printed += "rpc error: code = Unknown desc = failed to remove user\n";
+            } else if users.iter().any(holds) {
+                users.retain(|user| !holds(user));
+                removed += 1;
+            } else {
+                printed += &format!("rpc error: code = Unknown desc = User {email} not found.\n");
+            }
+        }
+        printed += &format!("Removed {removed} user(s) in total.\n");
+        ok(printed.as_bytes())
+    }
+
+    /// Whether Xray runs, as `systemctl is-active` is asked of its unit: it
+    /// stops once [`Self::stops_after_asked`] runs out.
+    fn asked_active(&self) -> bool {
+        match self.stops_after_asked.get() {
+            Some(0) => {
+                self.stopped.set(true);
+                self.stops_after_asked.set(None);
+            }
+            Some(left) => self.stops_after_asked.set(Some(left - 1)),
+            None => {}
+        }
+        !self.stopped.get()
+    }
+
     /// `xray api inbounduser -tag=<tag>`: the users last first, as the
     /// engine's map keeps no order, with every zero or empty field left out.
     fn list(&self, tag: &str) -> ToolOutput {
+        if self.unreachable {
+            return failed(b"failed to dial 127.0.0.1:10085\n");
+        }
         if let Some(text) = &self.prints {
             return ok(text.as_bytes());
         }
@@ -410,7 +466,7 @@ impl World {
                         if faults.xray.unstartable {
                             return Err(std::io::Error::from_raw_os_error(ENOENT));
                         }
-                        if faults.xray.stopped.get() {
+                        if !faults.xray.asked_active() {
                             exited(3, b"inactive\n", b"")
                         } else if faults.xray.reloading {
                             ok(b"reloading\n")
@@ -517,6 +573,9 @@ impl World {
                     None => ok(b""),
                 },
                 ("xray", ["api", "adu", "--server=127.0.0.1:10085", request]) => faults.xray.add(request),
+                ("xray", ["api", "rmu", "--server=127.0.0.1:10085", tag, "--", emails @ ..]) => {
+                    faults.xray.remove(tag.strip_prefix("-tag=").unwrap(), emails)
+                }
                 ("xray", ["api", "inbounduser", "--server=127.0.0.1:10085", tag]) => {
                     faults.xray.list(tag.strip_prefix("-tag=").unwrap())
                 }
@@ -595,11 +654,23 @@ impl World {
         txn::status(&self.paths, Generation::new(generation)).unwrap()
     }
 
-    /// Apply, then run the transaction unit, as systemd would.
+    /// Apply, restarts allowed, then run the transaction unit, as systemd
+    /// would.
     pub(super) fn apply_and_run(&self, node: &FakeNode, header: BundleHeader) -> TxnState {
+        self.apply_and_run_with(node, header, Restarts::Allowed)
+    }
+
+    /// Apply with `restarts`, then run the transaction unit, as systemd
+    /// would.
+    pub(super) fn apply_and_run_with(
+        &self,
+        node: &FakeNode,
+        header: BundleHeader,
+        restarts: Restarts,
+    ) -> TxnState {
         let generation = header.config_generation;
         assert_eq!(
-            txn::apply(&self.paths, node, header),
+            txn::apply(&self.paths, node, header, restarts),
             Ok(Launched::Launched(generation))
         );
         txn::run(&self.paths, node, generation).unwrap();

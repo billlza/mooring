@@ -504,6 +504,9 @@ pub(crate) enum NodeCommand {
     Target(TargetCommand),
     /// Render the node's bundle for the current generation, install it
     /// with a transaction, confirm it and record what the node confirmed.
+    /// Without `--restart` the node takes only what its running engines
+    /// take as they run (users added), and refuses anything else, changing
+    /// nothing.
     Apply {
         /// The node's id.
         node: NodeId,
@@ -513,6 +516,10 @@ pub(crate) enum NodeCommand {
         /// The engine directory `cargo xtask engines-verify` accepted.
         #[arg(long, value_name = "DIR")]
         engines: PathBuf,
+        /// Let the node restart what the change needs, which drops every
+        /// connection on it for a few seconds.
+        #[arg(long)]
+        restart: bool,
     },
     /// Upload a new agent, have the node activate it (its self-test first,
     /// the previous agent's revert timer armed) and confirm it from the

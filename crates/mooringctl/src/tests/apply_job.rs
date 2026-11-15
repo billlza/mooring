@@ -9,7 +9,7 @@
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 
-use mooring_agent_proto::{Generation, RequestKind, Response};
+use mooring_agent_proto::{Generation, LineRequest, RequestKind, Response, Restarts};
 use mooring_model::node::NodeLifecycle;
 use mooring_model::removal::ForgottenUser;
 use mooring_model::secret::{SecretEntry, SecretSnapshot};
@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use super::apply::{bundle_and_header, stand_in_engines};
 use super::deployed::deployed_with;
-use super::support::{Answered, Expected, ExpectedRemote, Harness, NOW, Refusals};
+use super::support::{Answered, Expected, ExpectedRemote, Harness, NOW, Refusals, Sent};
 use super::user::{fixture, state_bytes, store};
 use crate::apply::APPLY_LOCK_FILE;
 use crate::apply::report::{Spares, SparesFailure};
@@ -612,10 +612,9 @@ fn the_json_outcome_names_each_part() {
     assert_eq!(outcome.stdout.lines().count(), 1);
 }
 
-/// A node behind is applied by the job, as `node apply` applies it; the
-/// node up to date is not asked.
-#[test]
-fn a_node_behind_is_applied() {
+/// The job's harness with ams1 up to date and lon1 a generation behind,
+/// which answers its `Apply` with `Unchanged`.
+fn lon1_behind() -> Harness {
     let deployment = fixture(|parts| {
         parts.config_generation = ConfigGeneration::new(2).unwrap();
         for node in &mut parts.nodes {
@@ -626,7 +625,7 @@ fn a_node_behind_is_applied() {
             }
         }
     });
-    let mut harness = job(deployment);
+    let harness = job(deployment);
     let engines = harness.support_dir().join(ENGINES_DIRECTORY);
     let (_, header) = bundle_and_header(&harness, &engines, &self::deployment(&harness));
     super::apply::script_hello_and_blobs(&harness, header.blobs());
@@ -640,6 +639,42 @@ fn a_node_behind_is_applied() {
             generation: Generation::new(2),
         })),
     );
+    harness
+}
+
+/// The job's node applies may restart inside its window only: `apply
+/// --now` outside it refuses restarts, as `node apply` does unless told.
+#[test]
+fn the_job_allows_restarts_inside_its_window_only() {
+    for (now, allowed) in [
+        (NOW, Restarts::Allowed),
+        (NOW - 7 * 3600, Restarts::Refused),
+        (NOW - 5 * 60 - 1, Restarts::Refused),
+        (NOW - 5 * 60, Restarts::Allowed),
+        (NOW + 25 * 60 - 1, Restarts::Allowed),
+        (NOW + 25 * 60, Restarts::Refused),
+    ] {
+        let mut harness = lon1_behind();
+        harness.now.set(now);
+        let outcome = harness.run(&["apply", "--now"]);
+        assert_eq!(outcome.code, 0, "{now}: {}", outcome.stderr);
+        let seen = harness.nodes.seen.borrow();
+        let sent: Vec<Restarts> = seen
+            .iter()
+            .filter_map(|(_, sent)| match sent {
+                Sent::Request(LineRequest::Apply { restarts, .. }) => Some(*restarts),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, [allowed], "{now}");
+    }
+}
+
+/// A node behind is applied by the job, as `node apply` applies it; the
+/// node up to date is not asked.
+#[test]
+fn a_node_behind_is_applied() {
+    let mut harness = lon1_behind();
     let outcome = harness.run(&["apply", "--now"]);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     assert!(harness.nodes.script.borrow().is_empty());

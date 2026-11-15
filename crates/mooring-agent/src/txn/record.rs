@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 
 use mooring_agent_proto::{
-    AgentError, AppliedGeneration, BundleHeader, Generation, IoOp, Sha256Hex, TxnState,
+    AgentError, AppliedGeneration, BundleHeader, Generation, IoOp, Restarts, Sha256Hex, TxnState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -72,6 +72,13 @@ pub(crate) enum Change {
     Apply {
         /// The generation current before it.
         previous: Generation,
+        /// What the `Apply` allowed (design §13.6): a change applied under
+        /// [`Restarts::Refused`] is undone live too, whatever undoes it.
+        /// Absent from a change an agent of protocol 2 recorded, which
+        /// restarted whatever its change needed, so it reads as
+        /// [`Restarts::Allowed`].
+        #[serde(default = "restarts_before_protocol_3")]
+        restarts: Restarts,
     },
     /// A new agent; reverting points the forced command back at
     /// `previous`, the file name the link named before.
@@ -81,6 +88,12 @@ pub(crate) enum Change {
         /// The link's previous target.
         previous: String,
     },
+}
+
+/// What a pending `Apply` recorded by an agent of protocol 2 allowed: every
+/// `Apply` restarted what it needed.
+const fn restarts_before_protocol_3() -> Restarts {
+    Restarts::Allowed
 }
 
 /// The pending change, if any.

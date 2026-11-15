@@ -17,6 +17,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use mooring_agent_proto::Restarts;
 use mooring_daemon_core::router::RouterReading;
 use mooring_daemon_core::router::netgear::RedactedModelJson;
 use mooring_daemon_core::usage::history::UsageScope;
@@ -291,7 +292,15 @@ pub(crate) fn run(
             node,
             interface,
             engines,
-        }) => crate::node::apply::apply(env, out, &node, &interface, &engines),
+            restart,
+        }) => {
+            let restarts = if restart {
+                Restarts::Allowed
+            } else {
+                Restarts::Refused
+            };
+            crate::node::apply::apply(env, out, &node, &interface, &engines, restarts)
+        }
         Command::Node(NodeCommand::UpgradeAgent {
             node,
             interface,

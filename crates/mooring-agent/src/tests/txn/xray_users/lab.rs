@@ -23,6 +23,10 @@
 //! the echo. Vision clients need TLS or REALITY to carry data, so data
 //! goes through the loopback inbound; the REALITY inbound's clients are
 //! checked as the engine holds them.
+//!
+//! The second test takes a live opening back as the undo of a change
+//! applied live does (`txn::xray_users::undo`), through `xray api rmu` and
+//! `adu`, with the engine running throughout.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -42,6 +46,7 @@ use crate::host::{Node, RealNode};
 use crate::paths::Paths;
 use crate::tests::txn::world::{XRAY, golden};
 use crate::txn::stage::{self, program};
+use crate::txn::xray_users::undo::restore;
 use crate::txn::xray_users::{Client, LIVE_INBOUNDS, OpenError, classify, open, parse_held};
 
 /// The variable naming the pinned Xray.
@@ -330,20 +335,15 @@ fn loopback_id(config: &Value) -> String {
 #[test]
 #[ignore = "runs the pinned xray, which the xray-lab workflow names in MOORING_LAB_XRAY"]
 fn users_opened_through_the_api_are_served_at_once_without_dropping_a_connection() {
-    let pinned = env::var_os(LAB_XRAY)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| panic!("{LAB_XRAY} names the pinned xray"));
     let root = tempfile::tempdir().unwrap();
     let paths = Paths::under(root.path());
-    // The agent runs the current generation's own xray, as here.
-    let xray = program(&paths.current(), stage::XRAY);
-    fs::create_dir_all(xray.parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink(&pinned, &xray).unwrap();
-    let echo = echo_server();
-    let ports = [free_port(), free_port()];
-    let loopback = ports[1];
-    let before = lab_config(ports, echo);
-    let mut engine = Engine::start(&xray, root.path(), &before, &[API_PORT, ports[0], loopback]);
+    let Lab {
+        mut engine,
+        xray,
+        config: before,
+        echo,
+        loopback,
+    } = Lab::start(root.path());
 
     // A client served from the start holds one connection throughout.
     let mut kept = Tunnel::open(loopback, &loopback_id(&before), echo, b"before the opening");
@@ -401,6 +401,127 @@ fn users_opened_through_the_api_are_served_at_once_without_dropping_a_connection
     let error = open(&RealNode, &xray, &paths.validate_dir(), &opening).unwrap_err();
     assert!(
         matches!(&error, OpenError::Api { command: "adu", .. }),
+        "{error}"
+    );
+}
+
+/// `config` with user 1's two clients added under other ids than
+/// [`client`] gives them: the same emails, held otherwise.
+fn with_user_1_otherwise(config: &Value) -> Value {
+    let mut config = with_user(config, 1);
+    for (tag, _) in INBOUNDS {
+        let added = clients(&mut config, tag).last_mut().unwrap();
+        let id = added["id"]
+            .as_str()
+            .unwrap()
+            .replace("00c04fd430c8", "00c04fd430c9");
+        added["id"] = Value::from(id);
+    }
+    config
+}
+
+/// The pinned xray running the lab configuration under a test's root, as
+/// the current generation's own binary, which the agent runs.
+struct Lab {
+    engine: Engine,
+    xray: PathBuf,
+    config: Value,
+    echo: SocketAddrV4,
+    /// The loopback inbound's port, which data goes through.
+    loopback: u16,
+}
+
+impl Lab {
+    fn start(root: &Path) -> Self {
+        let pinned = env::var_os(LAB_XRAY)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| panic!("{LAB_XRAY} names the pinned xray"));
+        let xray = program(&Paths::under(root).current(), stage::XRAY);
+        fs::create_dir_all(xray.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&pinned, &xray).unwrap();
+        let echo = echo_server();
+        let ports = [free_port(), free_port()];
+        let config = lab_config(ports, echo);
+        let engine = Engine::start(&xray, root, &config, &[API_PORT, ports[0], ports[1]]);
+        Self {
+            engine,
+            xray,
+            config,
+            echo,
+            loopback: ports[1],
+        }
+    }
+}
+
+#[test]
+#[ignore = "runs the pinned xray, which the xray-lab workflow names in MOORING_LAB_XRAY"]
+fn a_live_opening_is_taken_back_through_the_api_without_a_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = Paths::under(root.path());
+    let Lab {
+        mut engine,
+        xray,
+        config: before,
+        echo,
+        loopback,
+    } = Lab::start(root.path());
+    let scratch = paths.validate_dir();
+
+    // A user opened live, with a connection open through it.
+    let next = with_user(&before, 1);
+    let opening = classify(&before, &next).expect("a user added is an opening");
+    open(&RealNode, &xray, &scratch, &opening).expect("the running xray takes it");
+    let opened = client(1, "hy2");
+    let opened_id = opened["id"].as_str().unwrap();
+    let mut through = Tunnel::open(loopback, opened_id, echo, b"opened");
+
+    // Taken back: the engine holds the previous file's clients again and
+    // refuses the user's new connections. The connection already open stays
+    // open, as the pinned `RemoveUser` cuts none.
+    restore(&RealNode, &xray, &scratch, &before).expect("the running xray gives the user up");
+    for tag in LIVE_INBOUNDS {
+        assert_eq!(held(&xray, tag), listed(&before, tag), "{tag}");
+    }
+    assert_refused(loopback, opened_id, echo);
+    through.exchange(b"after the undo");
+    engine.assert_running();
+
+    // Done again, it finds nothing to take back.
+    restore(&RealNode, &xray, &scratch, &before).expect("nothing is left to take back");
+
+    // A client held otherwise than the file lists it is taken out and added
+    // back as the file has it, and served so.
+    open(&RealNode, &xray, &scratch, &opening).expect("the running xray takes it again");
+    let otherwise = with_user_1_otherwise(&before);
+    restore(&RealNode, &xray, &scratch, &otherwise).expect("held otherwise is restored");
+    for tag in LIVE_INBOUNDS {
+        assert_eq!(held(&xray, tag), listed(&otherwise, tag), "{tag}");
+    }
+    let mut restored = otherwise.clone();
+    let restored_id = clients(&mut restored, "hy2-loop-in").last().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    Tunnel::open(loopback, &restored_id, echo, b"as the file has it");
+    assert_refused(loopback, opened_id, echo);
+    assert_eq!(
+        fs::read_dir(&scratch).unwrap().count(),
+        0,
+        "the request is removed"
+    );
+    engine.assert_running();
+
+    // An engine that is not running fails the undo, at its first reading.
+    engine.stop();
+    let error = restore(&RealNode, &xray, &scratch, &before).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            OpenError::Api {
+                command: "inbounduser",
+                ..
+            }
+        ),
         "{error}"
     );
 }

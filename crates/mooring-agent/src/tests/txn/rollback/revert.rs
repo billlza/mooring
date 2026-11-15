@@ -11,13 +11,14 @@
 
 use std::fs;
 
-use mooring_agent_proto::{AgentError, Generation, IoOp, RollbackCause, TxnState};
+use mooring_agent_proto::{AgentError, Generation, IoOp, Restarts, RollbackCause, TxnState};
 
 use super::{assert_rollback_failed, assert_stopped_safe};
 use crate::tests::txn::world::{World, awaiting_second, idle, index_of, same};
 use crate::tests::{
     EACCES, EEXIST, ENOTDIR, FakeNode, ModeFault, header, occupy_temporary, scratch,
 };
+use crate::txn::live::Way;
 use crate::txn::record::{Change, Pending, Phase, pending, set_pending};
 use crate::txn::stage::BUNDLE_FILE;
 use crate::txn::{self, Launched, Why};
@@ -28,14 +29,24 @@ fn rollback_cancels_a_transaction_that_died_before_its_swap() {
     world.commit(&world.node(1000), world.bundle(1, same));
     let node = world.node(2000);
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(2, idle(311))),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(2, idle(311)),
+            Restarts::Allowed
+        ),
         Ok(Launched::Launched(Generation::new(2)))
     );
     // What a unit that died while staging leaves behind.
     let staged = world.paths.generation(Generation::new(2));
     fs::create_dir_all(&staged).unwrap();
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(3, idle(312))),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(3, idle(312)),
+            Restarts::Allowed
+        ),
         Err(AgentError::Busy {
             generation: Generation::new(2)
         })
@@ -79,6 +90,7 @@ fn rollback_reverts_a_transaction_that_died_after_its_swap() {
             generation: Generation::new(2),
             change: Change::Apply {
                 previous: Generation::new(1),
+                restarts: Restarts::Allowed,
             },
             phase: Phase::Armed,
         },
@@ -114,7 +126,7 @@ fn a_cancelled_change_whose_directory_cannot_be_removed_says_so_and_stops_nothin
     let (_dir, paths) = scratch();
     let node = FakeNode::new(1_000);
     let one = Generation::new(1);
-    txn::apply(&paths, &node, header(1)).unwrap();
+    txn::apply(&paths, &node, header(1), Restarts::Allowed).unwrap();
     let staged = paths.generation(one);
     fs::create_dir_all(staged.parent().unwrap()).unwrap();
     fs::write(&staged, "").unwrap();
@@ -256,7 +268,13 @@ fn a_revert_that_cannot_swap_back_keeps_the_generation_current_names() {
     .unwrap();
     let node = world.node(2050);
     assert_eq!(
-        txn::rollback::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
+        txn::rollback::revert(
+            &world.paths,
+            &node,
+            Generation::new(2),
+            Generation::new(1),
+            Way::Restarting
+        ),
         Err(RollbackCause::Swap {
             errno: Some(EEXIST)
         })
@@ -288,7 +306,13 @@ fn a_revert_that_cannot_read_current_keeps_the_failed_generation() {
     fs::create_dir_all(current.join("entry")).unwrap();
     let node = world.node(2050);
     assert_eq!(
-        txn::rollback::revert(&world.paths, &node, Generation::new(2), Generation::new(1)),
+        txn::rollback::revert(
+            &world.paths,
+            &node,
+            Generation::new(2),
+            Generation::new(1),
+            Way::Restarting
+        ),
         Err(RollbackCause::Swap { errno })
     );
     assert!(world.paths.generation(Generation::new(2)).is_dir());

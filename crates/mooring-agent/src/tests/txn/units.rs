@@ -6,7 +6,7 @@
 
 use std::process::ExitCode;
 
-use mooring_agent_proto::{AgentError, Generation, IoOp, TxnState};
+use mooring_agent_proto::{AgentError, Generation, IoOp, Restarts, TxnState};
 
 use super::world::{World, same};
 use crate::agent::Invocation;
@@ -19,7 +19,13 @@ fn a_transaction_unit_exits_0_once_its_change_awaits_confirmation() {
     let world = World::new();
     let node = world.node(1000);
     let one = Generation::new(1);
-    txn::apply(&world.paths, &node, world.bundle(1, same)).unwrap();
+    txn::apply(
+        &world.paths,
+        &node,
+        world.bundle(1, same),
+        Restarts::Allowed,
+    )
+    .unwrap();
     let done = ran(Invocation::Txn(one), &world.paths, &node, b"");
     assert_eq!(done.code, ExitCode::SUCCESS, "{}", done.stderr);
     assert!(done.stderr.is_empty());

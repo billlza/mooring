@@ -4,11 +4,12 @@
 //! whose kind is the status's `RouterUnavailableReason`, or a failure on
 //! the Mac itself.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
-use mooring_agent_proto::{AgentError, Sha256Hex};
+use mooring_agent_proto::{AgentError, RestartNeed, Sha256Hex};
 use mooring_daemon_core::ControlError;
 use mooring_daemon_core::PortalError;
 use mooring_daemon_core::RadioHistoryError;
@@ -1158,6 +1159,36 @@ pub(crate) enum LocalError {
         #[source]
         source: AgentError,
     },
+    /// The node refused a change that needs a restart, which the apply
+    /// did not allow (design §13.6); nothing changed on it.
+    #[error(
+        "generation {generation} was not applied, and nothing changed on the node: it needs a \
+         restart ({}), which this apply does not allow. `node apply` with `--restart` restarts \
+         now, and every connection on the node drops for a few seconds; the night's run \
+         restarts in its window",
+        restart_needs_text(needs)
+    )]
+    RestartNotAllowed {
+        /// Its generation.
+        generation: u64,
+        /// What would restart.
+        needs: BTreeSet<RestartNeed>,
+    },
+    /// The node's agent speaks a protocol older than the one whose `Apply`
+    /// says what it may restart (design §13.6); nothing was uploaded.
+    #[error(
+        "{node}'s agent speaks protocol {protocol}, which cannot be told what an apply may restart \
+         (protocol {required}): upgrade it first, with `mooringctl node upgrade-agent {node}`; \
+         nothing was uploaded or applied"
+    )]
+    AgentProtocolTooOld {
+        /// The node.
+        node: NodeId,
+        /// The protocol its agent speaks.
+        protocol: u32,
+        /// The protocol `Apply` needs.
+        required: u32,
+    },
     /// The transaction was reverted by a `Rollback`.
     #[error("the transaction for generation {generation} was rolled back")]
     TxnReverted {
@@ -1193,6 +1224,29 @@ impl From<NodeError> for CommandError {
     fn from(error: NodeError) -> Self {
         Self::Local(LocalError::Node(error))
     }
+}
+
+/// What would restart, in words.
+pub(crate) const fn restart_need_text(need: RestartNeed) -> &'static str {
+    match need {
+        RestartNeed::Nftables => "the ruleset",
+        RestartNeed::WireGuard => "the tunnel",
+        RestartNeed::HostProfile => "the host profile",
+        RestartNeed::Engines => "an engine upgrade",
+        RestartNeed::XrayConfig => "Xray's configuration",
+        RestartNeed::XrayApi => "an Xray that serves no HandlerService yet",
+        RestartNeed::XrayStopped => "Xray not running",
+        RestartNeed::Hy2Config => "Hysteria 2's configuration",
+    }
+}
+
+/// Each of `needs` in words, in their order, joined by commas.
+fn restart_needs_text(needs: &BTreeSet<RestartNeed>) -> String {
+    needs
+        .iter()
+        .map(|need| restart_need_text(*need))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What a refusal means, in words.

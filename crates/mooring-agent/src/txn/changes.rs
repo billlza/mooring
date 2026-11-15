@@ -5,9 +5,10 @@
 //! (step 4), then the ruleset, the tunnel, what those files need, and the
 //! engines whose configuration, artifacts or unit changed (step 5), Xray
 //! taking clients added and nothing else without a restart (design
-//! §13.6). Each tool's failure is reported through [`Step`], scrubbed of
-//! the generation's secrets; the rollback to nothing runs its tools
-//! through a `Step` too, with no secrets to scrub.
+//! §13.6). A change whose `Apply` refused restarts runs the live step
+//! ([`super::live`]) in place of all this. Each tool's failure is reported
+//! through [`Step`], scrubbed of the generation's secrets; the rollback to
+//! nothing runs its tools through a `Step` too, with no secrets to scrub.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -18,8 +19,8 @@ use mooring_agent_proto::{
     StderrTail, UnitName, WG_INTERFACE,
 };
 
-use super::stage::{XRAY, program};
-use super::{validate, xray_users};
+use super::validate;
+use super::xray_users::{self, Takes};
 use crate::gate;
 use crate::host::{Node, Tool, run_ok};
 use crate::hostfiles::{self, Applied};
@@ -32,6 +33,16 @@ fn wg_value(conf: &str, key: &str) -> Option<String> {
         let (name, value) = line.split_once('=')?;
         (name.trim() == key).then(|| value.trim().to_owned())
     })
+}
+
+/// Which host-profile files a transaction applies after `before`: every
+/// one for a node's first generation, since one rolled back to nothing left
+/// the files it installed, never applied; else those that changed.
+pub(super) const fn applied(before: Option<&BundleHeader>) -> Applied {
+    match before {
+        None => Applied::Every,
+        Some(_) => Applied::Changed,
+    }
 }
 
 /// Installs the host profile's files staged with the generation in `dir`
@@ -53,9 +64,29 @@ pub(super) fn install_host(
     Ok(applied.files(changed))
 }
 
+/// The host-profile files [`install_host`] would apply for the generation
+/// this agent staged in `dir`, which holds them, installing none.
+pub(super) fn host_to_apply(
+    paths: &Paths,
+    dir: &Path,
+    applied: Applied,
+) -> Result<BTreeSet<HostFile>, AgentError> {
+    let staged = hostfiles::differing(paths, &dir.join(hostfiles::HOST_DIR))?;
+    Ok(applied.files(staged))
+}
+
+/// The secrets of the generation in `dir`, which its tools' failures are
+/// scrubbed of; a failure to read them is `step`'s, and nothing is run.
+pub(super) fn secrets(dir: &Path, step: ApplyStep) -> Result<Vec<Vec<u8>>, RollbackCause> {
+    validate::secrets(dir).map_err(|error| RollbackCause::Apply {
+        step,
+        stderr_tail: StderrTail::scrubbed(error.to_string().as_bytes(), &[]),
+    })
+}
+
 /// How an engine whose configuration changed takes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Restarts {
+pub(super) enum Mode {
     /// A transaction's apply: Xray takes clients added and nothing else
     /// through its API ([`xray_users`]); every other change restarts.
     UnlessUsersOnly,
@@ -68,7 +99,7 @@ pub(super) enum Restarts {
 /// generation now current, in `dir`: the ruleset, the tunnel (a restart if
 /// its address or MTU changed, else `wg syncconf`), what the host profile
 /// files in `host` need, and the engines whose configuration, artifacts or
-/// unit changed, as `restarts` says. Nothing reaches an engine while the
+/// unit changed, as `mode` says. Nothing reaches an engine while the
 /// node is halted. Tool output is scrubbed of the generation's secrets; if
 /// they cannot be read, nothing is run.
 pub(super) fn apply_changes(
@@ -78,12 +109,9 @@ pub(super) fn apply_changes(
     next: &BundleHeader,
     dir: &Path,
     host: &BTreeSet<HostFile>,
-    restarts: Restarts,
+    mode: Mode,
 ) -> Result<(), RollbackCause> {
-    let secrets = validate::secrets(dir).map_err(|error| RollbackCause::Apply {
-        step: ApplyStep::Nftables,
-        stderr_tail: StderrTail::scrubbed(error.to_string().as_bytes(), &[]),
-    })?;
+    let secrets = secrets(dir, ApplyStep::Nftables)?;
     let step = Step {
         node,
         secrets: &secrets,
@@ -121,20 +149,19 @@ pub(super) fn apply_changes(
         if !runs_anew && !changed(file) {
             continue;
         }
-        let opening = match (engine, before, restarts) {
-            (EngineUser::Xray, Some(before), Restarts::UnlessUsersOnly) if !runs_anew => {
-                xray_users::opening(paths, &step, before, dir)?
+        let opening = match (engine, before, mode) {
+            (EngineUser::Xray, Some(before), Mode::UnlessUsersOnly) if !runs_anew => {
+                match xray_users::takes(paths, node, before, dir)
+                    .map_err(|error| step.failed(ApplyStep::XrayUsers, &error))?
+                {
+                    Takes::Live(opening) => Some(opening),
+                    Takes::Restart(_) => None,
+                }
             }
             _ => None,
         };
         match opening {
-            Some(opening) => {
-                xray_users::open(node, &program(dir, XRAY), &paths.validate_dir(), &opening)
-                    .map_err(|error| RollbackCause::Apply {
-                        step: ApplyStep::XrayUsers,
-                        stderr_tail: step.tail(error.to_string().as_bytes()),
-                    })?;
-            }
+            Some(opening) => xray_users::open_step(paths, &step, dir, &opening)?,
             None => {
                 step.run(
                     ApplyStep::EngineRestart,

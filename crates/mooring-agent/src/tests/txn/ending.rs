@@ -10,7 +10,7 @@
 //! leaves the timer armed for a retry or to revert the change, and a timer
 //! that cannot be stopped finds nothing to revert when it fires.
 
-use mooring_agent_proto::{AgentError, Generation, IoOp, SystemdOp, TxnState, UnitName};
+use mooring_agent_proto::{AgentError, Generation, IoOp, Restarts, SystemdOp, TxnState, UnitName};
 
 use super::world::{ToolFault, World, awaiting_second, idle, index_of, same};
 use crate::tests::{EEXIST, ENOENT, occupy_temporary};
@@ -74,7 +74,13 @@ fn a_change_whose_timer_cannot_be_armed_fails_before_the_swap() {
 fn a_timer_armed_whose_phase_cannot_be_recorded_is_stopped() {
     let world = World::new();
     let node = world.node(1000);
-    txn::apply(&world.paths, &node, world.bundle(1, same)).unwrap();
+    txn::apply(
+        &world.paths,
+        &node,
+        world.bundle(1, same),
+        Restarts::Allowed,
+    )
+    .unwrap();
     let blocker = occupy_temporary(&world.paths.pending());
     txn::run(&world.paths, &node, Generation::new(1)).unwrap();
     std::fs::remove_dir(blocker).unwrap();
@@ -203,7 +209,12 @@ fn confirm_commits_only_the_change_awaiting_it() {
     let world = World::new();
     let node = world.node(1000);
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(1, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(1, same),
+            Restarts::Allowed
+        ),
         Ok(Launched::Launched(Generation::new(1)))
     );
     assert_eq!(
@@ -286,7 +297,7 @@ fn a_timer_reverts_only_the_change_it_was_armed_for() {
     let node = world.node(2000);
     let next = world.bundle(2, idle(304));
     assert_eq!(
-        txn::apply(&world.paths, &node, next),
+        txn::apply(&world.paths, &node, next, Restarts::Allowed),
         Ok(Launched::Launched(Generation::new(2)))
     );
     assert_eq!(
@@ -340,7 +351,7 @@ fn a_reboot_reverts_whatever_was_pending() {
     );
     let cut_short = world.bundle(3, idle(306));
     assert_eq!(
-        txn::apply(&world.paths, &node, cut_short),
+        txn::apply(&world.paths, &node, cut_short, Restarts::Allowed),
         Ok(Launched::Launched(Generation::new(3)))
     );
     assert_eq!(

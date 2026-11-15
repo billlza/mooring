@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `node apply <id> --interface <bsd> --engines <dir>` (design §11.2,
-//! §13.2 step 5): renders the node's bundle for the current generation,
-//! uploads the blobs it lacks, runs the transaction, confirms it from a new
-//! session and records what the node confirmed (`Bookkeeping::Applied`).
+//! `node apply <id> --interface <bsd> --engines <dir> [--restart]` (design
+//! §11.2, §13.2 step 5): renders the node's bundle for the current
+//! generation, uploads the blobs it lacks, runs the transaction, confirms
+//! it from a new session and records what the node confirmed
+//! (`Bookkeeping::Applied`). The transaction restarts what serves users
+//! only as its `Restarts` allows (design §13.6): an agent that cannot be
+//! told is refused before anything is uploaded, and a change the node
+//! refuses for a restart it needs is named with the two ways on.
 
 use std::io::Write;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mooring_agent_proto::{Generation, LineRequest, RequestKind, Response, TxnStage, TxnState};
+use mooring_agent_proto::{
+    AgentError, Generation, LineRequest, PROTOCOL, RequestKind, Response, Restarts, TxnStage,
+    TxnState,
+};
 use mooring_model::iface::BsdName;
 use mooring_model::node::AppliedConfig;
 use mooring_model::{Bookkeeping, NodeId};
@@ -32,13 +39,14 @@ pub(crate) const POLL: Duration = Duration::from_secs(2);
 /// gate itself precedes.
 pub(crate) const MAX_WAIT: Duration = Duration::from_secs(300);
 
-/// `node apply`.
+/// `node apply`, the transaction restarting only as `restarts` allows.
 pub(crate) fn apply(
     env: &mut Env<'_>,
     out: &mut dyn Write,
     node: &NodeId,
     interface: &BsdName,
     engines: &Path,
+    restarts: Restarts,
 ) -> Result<(), CommandError> {
     let store = Store::new(support_dir(env)?);
     let state = load(&store)?;
@@ -54,6 +62,16 @@ pub(crate) fn apply(
     let Response::Hello(hello) = reply else {
         return Err(unexpected(RequestKind::Hello, &reply));
     };
+    // An agent of protocol 2 cannot decode an `Apply` that says what it may
+    // restart (design §11.1).
+    if hello.protocol < PROTOCOL {
+        return Err(LocalError::AgentProtocolTooOld {
+            node: node.clone(),
+            protocol: hello.protocol,
+            required: PROTOCOL,
+        }
+        .into());
+    }
     let header = bundle.header(&hello.host).map_err(LocalError::Render)?;
     let uploaded = upload_missing(session.as_mut(), header.blobs(), &mut |sha256| {
         if let Some((_, file)) = bundle.files().find(|(_, file)| file.sha256() == *sha256) {
@@ -70,7 +88,10 @@ pub(crate) fn apply(
         bundle.digest()
     )
     .map_err(output)?;
-    let reply = session.request(&LineRequest::Apply(Box::new(header)))?;
+    let reply = session.request(&LineRequest::Apply {
+        bundle: Box::new(header),
+        restarts,
+    })?;
     let generation = match reply {
         Response::TxnLaunched { generation } => {
             wait_for_confirm(session.as_mut(), out, generation, POLL, MAX_WAIT)?;
@@ -115,8 +136,9 @@ pub(crate) fn apply(
 
 /// Reads the transaction's state every `poll` ([`POLL`] for `node apply`)
 /// until it awaits confirmation, printing each new stage; a failed or
-/// reverted transaction is the error, and so is one still running after
-/// `max_wait` ([`MAX_WAIT`]).
+/// reverted transaction is the error, one refused for a restart it needs
+/// named as such, and so is one still running after `max_wait`
+/// ([`MAX_WAIT`]).
 pub(crate) fn wait_for_confirm(
     session: &mut dyn NodeSession,
     out: &mut dyn Write,
@@ -161,6 +183,15 @@ pub(crate) fn wait_for_confirm(
             TxnState::Reverted => {
                 return Err(LocalError::TxnReverted {
                     generation: generation.get(),
+                }
+                .into());
+            }
+            TxnState::Failed {
+                error: AgentError::RestartNotAllowed { needs },
+            } => {
+                return Err(LocalError::RestartNotAllowed {
+                    generation: generation.get(),
+                    needs,
                 }
                 .into());
             }

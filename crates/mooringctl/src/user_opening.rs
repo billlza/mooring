@@ -12,9 +12,11 @@
 //! deployment, or one whose last apply was of another build's files or
 //! engines, carries those changes too.
 //!
-//! What runs on the node is not read here: an agent older than this
-//! build's restarts Xray for every change, and an engine that is not
-//! running is started.
+//! A restart is made only by an apply that allows it (design §13.6):
+//! `node apply` with `--restart`, or the night's run in its window. What
+//! runs on the node is not read here: a node whose Xray is not running, or
+//! whose running generation serves no `HandlerService` yet, needs a
+//! restart too, which its apply then names.
 
 use std::path::Path;
 
@@ -47,12 +49,14 @@ impl NextApply {
     const fn words(self) -> &'static str {
         match self {
             Self::AddsLive => "adds the user to the running Xray, with no restart",
-            Self::Fresh => "restarts its engines: the user's credentials there are new",
+            Self::Fresh => {
+                "needs a restart, since the user's credentials there are new: `node apply` makes it only with `--restart`, the night's run in its window"
+            }
             Self::Behind => {
-                "also carries changes it has not applied yet, and restarts its engines if any of them needs it"
+                "also carries changes it has not applied yet: if any needs a restart, `node apply` makes it only with `--restart`, the night's run in its window"
             }
             Self::OtherRender => {
-                "also carries what this build renders differently from what it last applied, and restarts its engines if any of that needs it"
+                "also carries what this build renders differently from what it last applied: if any of that needs a restart, `node apply` makes it only with `--restart`, the night's run in its window"
             }
         }
     }

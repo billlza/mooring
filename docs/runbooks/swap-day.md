@@ -76,7 +76,7 @@ mooringctl node target set lon1 <host> --interface en9 --engines ~/mooring-engin
 
 lon1's first configuration is applied with its first users, in section 0.5: a configuration that serves only the probe has nothing to carry.
 
-A node keeps the agent it was adopted with until it is upgraded. When main carries an agent fix (lon1's adoption agent of 2026-10-24 rolled its first configuration back, design §11.2 step 6), build the agent from main and upgrade the node before `node apply`. The node self-tests the new agent, and if the confirm does not arrive within 120 s the previous agent reverts it:
+A node keeps the agent it was adopted with until it is upgraded. When main carries an agent fix (lon1's adoption agent of 2026-10-24 rolled its first configuration back, design §11.2 step 6), build the agent from main and upgrade the node before `node apply`. The node self-tests the new agent, and if the confirm does not arrive within 120 s the previous agent reverts it. A `node apply` restarts nothing on a node that already serves a configuration unless it is given `--restart` (design §13.6); a node's first configuration, as lon1's in section 0.5, is applied whole either way:
 
 ```
 cargo build -p mooring-agent --release --target x86_64-unknown-linux-musl

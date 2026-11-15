@@ -4,13 +4,15 @@
 //! "agent (remote)"), and [`ValueError`], a wire value that breaks its
 //! type's rule.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::macros::closed_enum;
 use crate::{
     GateReason, Generation, HostAccount, HostFact, HostProfileVersion, MAX_EVENTS,
-    MAX_SERIES_ENTRIES, MacReportRule, ManagedFile, PortRange, RequestKind, Resolution, Role,
-    SeriesSpan, Sha256Hex, StderrTail, UnitName, UsageMonth, WatchErrorKind,
+    MAX_SERIES_ENTRIES, MacReportRule, ManagedFile, PortRange, RequestKind, Resolution,
+    RestartNeed, Role, SeriesSpan, Sha256Hex, StderrTail, UnitName, UsageMonth, WatchErrorKind,
 };
 
 /// A wire value that does not satisfy its type's rule. Deserialisation
@@ -360,6 +362,32 @@ pub enum AgentError {
         /// current while it was pending).
         generation: Generation,
     },
+    /// The change would restart what `needs` names, and the `Apply` refused
+    /// restarts ([`crate::Restarts::Refused`], design §13.6); nothing was
+    /// switched. The agent never sends an empty `needs`.
+    #[error(
+        "the change needs a restart this apply does not allow ({needs:?}); nothing was switched"
+    )]
+    RestartNotAllowed {
+        /// What the change would restart, in apply order.
+        needs: BTreeSet<RestartNeed>,
+    },
+    /// The rollback of a change applied live, which takes it back out of
+    /// the running Xray through its API, failed (design §13.6). Nothing was
+    /// restarted or stopped and the gate is as it was; until its next
+    /// restart the running Xray may hold other clients than its files list,
+    /// more or fewer.
+    #[error(
+        "the live rollback of generation {generation} failed; nothing was restarted or stopped, \
+         and until its next restart the running Xray may hold other clients than its files list"
+    )]
+    LiveRollbackFailed {
+        /// The generation that failed.
+        generation: Generation,
+        /// Why the rollback was started; for a `Rollback`'s or the confirm
+        /// timer's, the rollback's own failure, there being no other.
+        cause: RollbackCause,
+    },
     /// The new agent's `self-test` failed; nothing was switched.
     #[error("new agent failed its self-test")]
     AgentSelfTestFailed {
@@ -584,6 +612,10 @@ closed_enum! {
         RollbackFailed,
         /// [`AgentError::RevertedUnconfirmed`].
         RevertedUnconfirmed,
+        /// [`AgentError::RestartNotAllowed`].
+        RestartNotAllowed,
+        /// [`AgentError::LiveRollbackFailed`].
+        LiveRollbackFailed,
         /// [`AgentError::AgentSelfTestFailed`].
         AgentSelfTestFailed,
         /// [`AgentError::WatchNotUpdated`].
@@ -658,6 +690,8 @@ impl AgentError {
             Self::RolledBack { .. } => AgentErrorKind::RolledBack,
             Self::RollbackFailed { .. } => AgentErrorKind::RollbackFailed,
             Self::RevertedUnconfirmed { .. } => AgentErrorKind::RevertedUnconfirmed,
+            Self::RestartNotAllowed { .. } => AgentErrorKind::RestartNotAllowed,
+            Self::LiveRollbackFailed { .. } => AgentErrorKind::LiveRollbackFailed,
             Self::AgentSelfTestFailed { .. } => AgentErrorKind::AgentSelfTestFailed,
             Self::AgentShaMismatch { .. } => AgentErrorKind::AgentShaMismatch,
             Self::HostRanMooring { .. } => AgentErrorKind::HostRanMooring,
@@ -736,8 +770,14 @@ closed_enum! {
         /// Adding clients to the running Xray through its API, in place of
         /// restarting it, and reading both VLESS inbounds back (design
         /// §13.6): `systemctl is-active`, `xray api adu`, then
-        /// `xray api inbounduser`.
+        /// `xray api inbounduser`. Under `Restarts::Refused` it is all a
+        /// transaction applies, and it fails first, naming what would
+        /// restart, when the change needs anything else.
         XrayUsers,
+        /// Taking a live change back out of the running Xray through its API,
+        /// in place of restarting it (design §13.6): `xray api inbounduser`,
+        /// `rmu` and `adu`, then `inbounduser` again.
+        XrayUndo,
     }
 }
 

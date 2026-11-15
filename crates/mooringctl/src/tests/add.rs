@@ -113,8 +113,8 @@ fn add_creates_an_active_user_with_credentials_on_every_node() {
         outcome.stdout,
         format!(
             "added user {}: CFM 0.5, credentials on ams1, lon1 (no spare user was ready; the nightly apply job draws them in its window)\n\
-             ams1: its next apply restarts its engines: the user's credentials there are new\n\
-             lon1: its next apply restarts its engines: the user's credentials there are new\n\
+             ams1: its next apply needs a restart, since the user's credentials there are new: `node apply` makes it only with `--restart`, the night's run in its window\n\
+             lon1: its next apply needs a restart, since the user's credentials there are new: `node apply` makes it only with `--restart`, the night's run in its window\n\
              next: `mooringctl user alias {}`, then `node apply` each of those nodes, then `user agree` and `user export`\n",
             user.id, user.id
         )
@@ -494,7 +494,7 @@ fn add_takes_the_spare_with_the_lowest_id_and_its_credentials() {
 
 /// A node the spare holds no credentials on (one planned since it was
 /// drawn) gets fresh ones under the spare's id, and its next apply
-/// restarts its engines; a node behind the deployment carries other
+/// needs a restart; a node behind the deployment carries other
 /// changes; a node not yet applied gets no line.
 #[test]
 fn each_node_says_what_its_next_apply_does() {
@@ -518,11 +518,11 @@ fn each_node_says_what_its_next_apply_does() {
     assert_eq!(minted, user_refs(&user.id, &["ams1"]));
     assert_eq!(
         outcome.stdout.lines().nth(1).unwrap(),
-        "ams1: its next apply restarts its engines: the user's credentials there are new"
+        "ams1: its next apply needs a restart, since the user's credentials there are new: `node apply` makes it only with `--restart`, the night's run in its window"
     );
     assert_eq!(
         outcome.stdout.lines().nth(2).unwrap(),
-        "lon1: its next apply also carries changes it has not applied yet, and restarts its engines if any of them needs it"
+        "lon1: its next apply also carries changes it has not applied yet: if any needs a restart, `node apply` makes it only with `--restart`, the night's run in its window"
     );
     let (_, mut harness) = adding_with_spares(|parts| {
         for node in &mut parts.nodes {
@@ -568,8 +568,8 @@ fn a_node_that_confirmed_another_build_s_bundle_carries_the_difference() {
         lines[1..3],
         [
             "ams1: its next apply adds the user to the running Xray, with no restart",
-            "lon1: its next apply also carries what this build renders differently from what it last applied, \
-             and restarts its engines if any of that needs it",
+            "lon1: its next apply also carries what this build renders differently from what it last applied: \
+             if any of that needs a restart, `node apply` makes it only with `--restart`, the night's run in its window",
         ],
         "{}",
         outcome.stdout

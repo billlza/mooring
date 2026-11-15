@@ -13,8 +13,8 @@ use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
 use mooring_agent_proto::{
-    AgentError, BundleHeader, Generation, Halt, IoOp, ManagedFile, ShutdownReason, TxnStage,
-    TxnState, UnixTime,
+    AgentError, BundleHeader, Generation, Halt, IoOp, ManagedFile, Restarts, ShutdownReason,
+    TxnStage, TxnState, UnixTime,
 };
 
 use super::world::{World, idle, same};
@@ -41,13 +41,16 @@ fn a_launcher_that_cannot_be_started_fails_the_transaction_and_leaves_nothing_pe
         op: IoOp::SpawnProcess,
         errno: Some(ENOENT),
     };
-    assert_eq!(txn::apply(&paths, &node, header(1)), Err(error.clone()));
+    assert_eq!(
+        txn::apply(&paths, &node, header(1), Restarts::Allowed),
+        Err(error.clone())
+    );
     assert_eq!(txn::status(&paths, one), Ok(TxnState::Failed { error }));
     assert_eq!(pending(&paths), Ok(None));
     // Nothing is left busy: the generation is retried at once.
     let node = FakeNode::new(1_100);
     assert_eq!(
-        txn::apply(&paths, &node, header(1)),
+        txn::apply(&paths, &node, header(1), Restarts::Allowed),
         Ok(Launched::Launched(one))
     );
 }
@@ -61,7 +64,7 @@ fn an_apply_while_the_lock_is_held_names_the_nodes_generation_or_the_unreadable_
     // A `Confirm` or revert finishing holds the lock with nothing pending.
     let _held = Lock::exclusive(&paths.txn_lock()).unwrap();
     assert_eq!(
-        txn::apply(&paths, &node, header(4)),
+        txn::apply(&paths, &node, header(4), Restarts::Allowed),
         Err(AgentError::Busy {
             generation: Generation::new(3)
         })
@@ -70,7 +73,7 @@ fn an_apply_while_the_lock_is_held_names_the_nodes_generation_or_the_unreadable_
     fs::create_dir_all(paths.txn_dir()).unwrap();
     fs::write(paths.pending(), "{").unwrap();
     assert_eq!(
-        txn::apply(&paths, &node, header(4)),
+        txn::apply(&paths, &node, header(4), Restarts::Allowed),
         Err(AgentError::Io {
             op: IoOp::ReadState,
             errno: None
@@ -86,7 +89,7 @@ fn an_apply_whose_record_cannot_be_written_launches_nothing() {
     let one = Generation::new(1);
     let blocker = occupy_temporary(&paths.txn_record(one));
     assert_eq!(
-        txn::apply(&paths, &node, header(1)),
+        txn::apply(&paths, &node, header(1), Restarts::Allowed),
         Err(AgentError::Io {
             op: IoOp::WriteState,
             errno: Some(EEXIST)
@@ -100,7 +103,7 @@ fn an_apply_whose_record_cannot_be_written_launches_nothing() {
     assert!(node.calls().is_empty(), "{:#?}", node.calls());
     fs::remove_dir(blocker).unwrap();
     assert_eq!(
-        txn::apply(&paths, &node, header(1)),
+        txn::apply(&paths, &node, header(1), Restarts::Allowed),
         Ok(Launched::Launched(one))
     );
 }
@@ -114,7 +117,10 @@ fn an_apply_whose_pending_change_cannot_be_written_launches_nothing() {
         op: IoOp::WriteState,
         errno: Some(EEXIST),
     };
-    assert_eq!(txn::apply(&paths, &node, header(1)), Err(error.clone()));
+    assert_eq!(
+        txn::apply(&paths, &node, header(1), Restarts::Allowed),
+        Err(error.clone())
+    );
     assert_eq!(
         txn::status(&paths, Generation::new(1)),
         Ok(TxnState::Failed { error }),
@@ -124,7 +130,7 @@ fn an_apply_whose_pending_change_cannot_be_written_launches_nothing() {
     assert!(node.calls().is_empty(), "{:#?}", node.calls());
     fs::remove_dir(blocker).unwrap();
     assert_eq!(
-        txn::apply(&paths, &node, header(1)),
+        txn::apply(&paths, &node, header(1), Restarts::Allowed),
         Ok(Launched::Launched(Generation::new(1)))
     );
 }
@@ -151,7 +157,7 @@ fn a_launch_failure_that_cannot_be_recorded_is_left_for_a_rollback() {
         }),
     );
     assert_eq!(
-        txn::apply(&paths, &node, header(1)),
+        txn::apply(&paths, &node, header(1), Restarts::Allowed),
         Err(AgentError::Io {
             op: IoOp::WriteState,
             errno: Some(EEXIST)
@@ -173,7 +179,7 @@ fn apply_records_the_transaction_and_launches_its_unit() {
     let node = world.node(1000);
     let header = world.bundle(1, same);
     assert_eq!(
-        txn::apply(&world.paths, &node, header),
+        txn::apply(&world.paths, &node, header, Restarts::Allowed),
         Ok(Launched::Launched(Generation::new(1)))
     );
     assert_eq!(
@@ -196,7 +202,8 @@ fn apply_records_the_transaction_and_launches_its_unit() {
         Some(Pending {
             generation: Generation::new(1),
             change: Change::Apply {
-                previous: Generation::ZERO
+                previous: Generation::ZERO,
+                restarts: Restarts::Allowed,
             },
             phase: Phase::Launched,
         })
@@ -212,18 +219,33 @@ fn apply_refuses_while_busy_halted_or_not_newer() {
     let world = World::new();
     let node = world.node(1000);
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(2, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(2, same),
+            Restarts::Allowed
+        ),
         Ok(Launched::Launched(Generation::new(2)))
     );
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(3, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(3, same),
+            Restarts::Allowed
+        ),
         Err(AgentError::Busy {
             generation: Generation::new(2)
         })
     );
     let held = Lock::exclusive(&world.paths.txn_lock()).unwrap();
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(3, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(3, same),
+            Restarts::Allowed
+        ),
         Err(AgentError::Busy {
             generation: Generation::new(2)
         })
@@ -232,7 +254,12 @@ fn apply_refuses_while_busy_halted_or_not_newer() {
     fs::remove_file(world.paths.pending()).unwrap();
     let held = Lock::exclusive(&world.paths.txn_lock()).unwrap();
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(3, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(3, same),
+            Restarts::Allowed
+        ),
         Err(AgentError::Busy {
             generation: Generation::ZERO
         }),
@@ -249,7 +276,12 @@ fn apply_refuses_while_busy_halted_or_not_newer() {
     )
     .unwrap();
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(3, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(3, same),
+            Restarts::Allowed
+        ),
         Err(AgentError::NodeHalted)
     );
     fs::remove_file(world.paths.halted()).unwrap();
@@ -265,7 +297,12 @@ fn apply_refuses_while_busy_halted_or_not_newer() {
     );
     for older_or_same in [4, 5] {
         assert_eq!(
-            txn::apply(&world.paths, &node, world.bundle(older_or_same, same)),
+            txn::apply(
+                &world.paths,
+                &node,
+                world.bundle(older_or_same, same),
+                Restarts::Allowed
+            ),
             Err(AgentError::GenerationNotNewer {
                 current: Generation::new(5)
             }),
@@ -286,7 +323,7 @@ fn a_bundle_the_node_already_runs_is_unchanged() {
     };
     let node = world.node(2000);
     assert_eq!(
-        txn::apply(&world.paths, &node, again),
+        txn::apply(&world.paths, &node, again, Restarts::Allowed),
         Ok(Launched::Unchanged(Generation::new(1)))
     );
     assert!(node.calls().is_empty(), "nothing ran");
@@ -303,7 +340,12 @@ fn a_transaction_unit_runs_only_its_own_launched_transaction() {
     let world = World::new();
     world.faults.borrow_mut().launch = true;
     let node = world.node(1000);
-    let unlaunched = txn::apply(&world.paths, &node, world.bundle(3, idle(313)));
+    let unlaunched = txn::apply(
+        &world.paths,
+        &node,
+        world.bundle(3, idle(313)),
+        Restarts::Allowed,
+    );
     assert!(
         matches!(unlaunched, Err(AgentError::Systemd { .. })),
         "{unlaunched:?}"
@@ -311,7 +353,12 @@ fn a_transaction_unit_runs_only_its_own_launched_transaction() {
     let recorded = world.state(3);
     world.faults.borrow_mut().launch = false;
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(2, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(2, same),
+            Restarts::Allowed
+        ),
         Ok(Launched::Launched(Generation::new(2)))
     );
     assert_eq!(
@@ -340,7 +387,12 @@ fn a_unit_that_cannot_be_launched_leaves_nothing_pending() {
     let world = World::new();
     world.faults.borrow_mut().launch = true;
     let node = world.node(1000);
-    let refused = txn::apply(&world.paths, &node, world.bundle(1, same));
+    let refused = txn::apply(
+        &world.paths,
+        &node,
+        world.bundle(1, same),
+        Restarts::Allowed,
+    );
     let Err(error @ AgentError::Systemd { .. }) = refused else {
         panic!("{refused:?}");
     };
@@ -348,7 +400,12 @@ fn a_unit_that_cannot_be_launched_leaves_nothing_pending() {
     assert_eq!(pending(&world.paths).unwrap(), None);
     world.faults.borrow_mut().launch = false;
     assert_eq!(
-        txn::apply(&world.paths, &node, world.bundle(1, same)),
+        txn::apply(
+            &world.paths,
+            &node,
+            world.bundle(1, same),
+            Restarts::Allowed
+        ),
         Ok(Launched::Launched(Generation::new(1))),
         "the generation can be launched again"
     );

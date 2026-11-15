@@ -17,6 +17,7 @@ on:
     branches: [main]
     paths:
       - crates/mooring-agent/src/txn/xray_users.rs
+      - crates/mooring-agent/src/txn/xray_users/**
       - crates/mooring-agent/src/tests/txn/xray_users/**
       - crates/mooring-agent/src/accounting/stats.rs
       - crates/mooring-agent/src/host.rs
@@ -27,6 +28,7 @@ on:
   pull_request:
     paths:
       - crates/mooring-agent/src/txn/xray_users.rs
+      - crates/mooring-agent/src/txn/xray_users/**
       - crates/mooring-agent/src/tests/txn/xray_users/**
       - crates/mooring-agent/src/accounting/stats.rs
       - crates/mooring-agent/src/host.rs
