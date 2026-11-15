@@ -86,46 +86,58 @@ fn inactive_users_are_refused() {
     }
 }
 
-/// Decision F9: a file goes only to a user who accepted the agreement
-/// revision this build ships. No record, or a record of another revision,
-/// older (revision 1, which every pilot user accepted before revision 2)
-/// or newer, is refused, and the error names both revisions.
+/// Decision F9, as the operator amended it on 2026-11-15: a file goes only
+/// to a user who accepted the agreement. Without a record the export is
+/// refused, and the error says that any revision would do.
 #[test]
-fn a_user_without_the_current_agreement_is_refused() {
+fn a_user_who_accepted_no_revision_is_refused() {
     let fixture = two_nodes();
     let user = first_user(&fixture);
-    let first = AgreementVersion::new(NonZeroU16::MIN);
-    assert!(first < AgreementVersion::CURRENT);
-    let newer =
-        AgreementVersion::new(NonZeroU16::new(AgreementVersion::CURRENT.get() + 1).unwrap());
-    for recorded in [None, Some(first), Some(newer)] {
-        let deployment = edited(&fixture.deployment, |parts| {
-            parts.users[0].agreement = recorded.map(|version| AgreementRecord {
-                version,
-                accepted_on: CalendarDate::parse("2026-10-08").unwrap(),
+    let deployment = edited(&fixture.deployment, |parts| parts.users[0].agreement = None);
+    let error = refusal(&deployment, &user);
+    assert_eq!(error.kind(), ExportErrorKind::AgreementNotAccepted);
+    assert!(
+        matches!(
+            error,
+            ExportError::AgreementNotAccepted { user: ref u, recorded: None, required }
+                if *u == user && required == AgreementVersion::FIRST
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "user {user} has not accepted agreement revision 1 or a later one: no acceptance is recorded"
+        )
+    );
+}
+
+/// An acceptance of any revision gives the user their file, the same file
+/// whichever it is: one of revision 1, which every pilot user accepted
+/// before revision 2, as well as one of the revision this build ships or of
+/// a later one. So a change on the operator's side, a node or a
+/// certificate, never leaves a new acceptance as the only way to keep the
+/// service (the operator's decision of 2026-11-15).
+#[test]
+fn an_acceptance_of_any_revision_gives_the_file() {
+    let fixture = two_nodes();
+    let user = first_user(&fixture);
+    let current = AgreementVersion::CURRENT;
+    let first = AgreementVersion::FIRST;
+    assert!(first < current);
+    let newer = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
+    for format in [ExportFormat::SingBoxJson, ExportFormat::ClashYaml] {
+        let before = export(&fixture, &fixture.deployment, &user, format);
+        for version in [first, current, newer] {
+            let deployment = edited(&fixture.deployment, |parts| {
+                parts.users[0].agreement = Some(AgreementRecord {
+                    version,
+                    accepted_on: CalendarDate::parse("2026-10-08").unwrap(),
+                });
             });
-        });
-        let error = refusal(&deployment, &user);
-        assert_eq!(error.kind(), ExportErrorKind::AgreementNotAccepted);
-        assert!(
-            matches!(
-                error,
-                ExportError::AgreementNotAccepted { user: ref u, recorded: r, required }
-                    if *u == user && r == recorded && required == AgreementVersion::CURRENT
-            ),
-            "{error:?}"
-        );
-        let detail = match recorded {
-            None => "no acceptance is recorded".to_owned(),
-            Some(version) => format!("the recorded acceptance is of revision {version}"),
-        };
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "user {user} has not accepted agreement revision {}: {detail}",
-                AgreementVersion::CURRENT
-            )
-        );
+            let after = export(&fixture, &deployment, &user, format);
+            assert_eq!(after.expose_bytes(), before.expose_bytes(), "{version}");
+        }
     }
 }
 

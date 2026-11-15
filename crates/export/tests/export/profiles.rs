@@ -327,11 +327,12 @@ fn only_the_users_named_are_in_the_bundle() {
 
 /// A user named who is suspended (for any reason), being revoked or
 /// revoked is served nowhere, and an active user without an acceptance of
-/// the required revision gets no file: each is withheld with the reason,
-/// in id order, the contract's reason in the bundle, and none of their
-/// secrets is read. The status decides before the acceptance: a user who
-/// is not active is withheld for that, accepted or not, as a suspended
-/// user is likely to be right after the revision that opens the portal.
+/// the required revision or of a later one gets no file: each is withheld
+/// with the reason, in id order, the contract's reason in the bundle, and
+/// none of their secrets is read. The status decides before the
+/// acceptance: a user who is not active is withheld for that, accepted or
+/// not, as a suspended user is likely to be right after the revision that
+/// opens the portal.
 #[test]
 fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
     let fixture = mooring_fixtures::two_nodes_twenty_users().unwrap();
@@ -355,11 +356,13 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
         parts.users[5].per_node.clear();
         parts.users[6].agreement = None;
         parts.users[7].agreement = Some(AgreementRecord {
-            version: other,
+            version: first,
             accepted_on: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
         });
+        // An acceptance of a later revision than the one required counts:
+        // the first user delivered holds one.
         parts.users[8].agreement = Some(AgreementRecord {
-            version: first,
+            version: other,
             accepted_on: CalendarDate::utc_of(FIXTURE_NOW).unwrap(),
         });
         // Not active, and without the acceptance either.
@@ -385,10 +388,6 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             required,
         },
         Withheld::AgreementNotAccepted {
-            recorded: Some(other),
-            required,
-        },
-        Withheld::AgreementNotAccepted {
             recorded: Some(first),
             required,
         },
@@ -402,7 +401,7 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             .collect::<Vec<_>>()
             .as_slice()
     );
-    assert_eq!(selection.delivered(), &users[9..]);
+    assert_eq!(selection.delivered(), &users[8..]);
     let said: Vec<String> = selection
         .withheld()
         .iter()
@@ -414,12 +413,11 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             "suspended".to_owned(),
             "being revoked".to_owned(),
             "revoked".to_owned(),
-            format!("has not accepted agreement revision {current}: no acceptance is recorded"),
             format!(
-                "has not accepted agreement revision {current}: the recorded acceptance is of revision {other}"
+                "has not accepted agreement revision {current} or a later one: no acceptance is recorded"
             ),
             format!(
-                "has not accepted agreement revision {current}: the recorded acceptance is of revision {first}"
+                "has not accepted agreement revision {current} or a later one: the recorded acceptance is of revision {first}"
             ),
         ]
     );
@@ -450,7 +448,7 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
             .into_iter()
             .map(|(user, _)| user)
             .collect::<Vec<_>>(),
-        users[9..].iter().map(UserId::as_str).collect::<Vec<_>>()
+        users[8..].iter().map(UserId::as_str).collect::<Vec<_>>()
     );
     let reasons = [
         "suspended",
@@ -459,7 +457,6 @@ fn users_named_but_not_to_be_delivered_are_withheld_with_the_reason() {
         "suspended",
         "revoked",
         "revoked",
-        "agreement_not_accepted",
         "agreement_not_accepted",
         "agreement_not_accepted",
     ];

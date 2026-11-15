@@ -48,7 +48,8 @@ pub(super) enum ReasonV2 {
     /// Being revoked or revoked: as in the snapshot, both are `revoked`,
     /// since to the user both mean the service has ended.
     Revoked,
-    /// Active, without an acceptance of the revision required.
+    /// Active, without an acceptance of the revision required or of a
+    /// later one.
     AgreementNotAccepted,
 }
 

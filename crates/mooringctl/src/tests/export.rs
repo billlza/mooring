@@ -5,7 +5,6 @@
 //! writes, its warnings, and the refusals that write nothing.
 
 use std::fs;
-use std::num::NonZeroU16;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -124,53 +123,61 @@ fn export_writes_clash_yaml_on_request() {
 /// refused, before any secret is read (the keychain here is empty), with
 /// the command that records it; after `user agree`, which keeps the
 /// generation and every node's confirmation, the same export writes the
-/// file with no node apply in between. A record of revision 1, the one
-/// every pilot user accepted before revision 2 (2026-11-06), is refused the
-/// same way, naming it.
+/// file with no node apply in between.
 #[test]
 fn export_needs_the_agreement_and_user_agree_is_enough() {
+    let deployment = fixture(|parts| parts.users[0].agreement = None);
+    let user = first_user(&deployment);
+    let mut harness = harness_with(deployment.clone());
+    let folder = harness.home.path().join("exports");
+    fs::create_dir(&folder).unwrap();
+    let out = folder.join("user.json");
+    let args = ["user", "export", user.as_str(), "--out", arg(&out)];
+    let refused = harness.run(&args);
+    assert_eq!(refused.code, EXIT_LOCAL);
+    assert_eq!(refused.stdout, "");
+    assert_eq!(
+        refused.stderr,
+        format!(
+            "mooringctl: no file was written: record the user's acceptance with `mooringctl user agree {user}` once the user has accepted the agreement (docs/runbooks/user-agreement.md)\n  caused by: user {user} has not accepted agreement revision 1 or a later one: no acceptance is recorded\n"
+        )
+    );
+    assert!(!out.exists());
+    assert_eq!(harness.run(&["user", "agree", user.as_str()]).code, 0);
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.config_generation(), deployment.config_generation());
+    assert_eq!(after.nodes(), deployment.nodes());
+    fill(&mut harness.secrets);
+    let written = harness.run(&args);
+    assert_eq!(written.code, 0, "{}", written.stderr);
+    assert_eq!(
+        fs::read(&out).unwrap(),
+        expected(&after, &user, ExportFormat::SingBoxJson)
+    );
+}
+
+/// A user who accepted revision 1, as every pilot user did before revision
+/// 2 (2026-11-06), gets their file without accepting again, and their
+/// record stays as it was (the operator's decision of 2026-11-15).
+#[test]
+fn a_user_who_accepted_revision_1_gets_a_file_without_accepting_again() {
     let first = AgreementRecord {
-        version: AgreementVersion::new(NonZeroU16::MIN),
+        version: AgreementVersion::FIRST,
         accepted_on: CalendarDate::parse("2026-10-18").unwrap(),
     };
     assert!(first.version < AgreementVersion::CURRENT);
-    for (recorded, detail) in [
-        (None, "no acceptance is recorded".to_owned()),
-        (
-            Some(first),
-            format!("the recorded acceptance is of revision {}", first.version),
-        ),
-    ] {
-        let deployment = fixture(|parts| parts.users[0].agreement = recorded);
-        let user = first_user(&deployment);
-        let mut harness = harness_with(deployment.clone());
-        let folder = harness.home.path().join("exports");
-        fs::create_dir(&folder).unwrap();
-        let out = folder.join("user.json");
-        let args = ["user", "export", user.as_str(), "--out", arg(&out)];
-        let refused = harness.run(&args);
-        assert_eq!(refused.code, EXIT_LOCAL);
-        assert_eq!(refused.stdout, "");
-        assert_eq!(
-            refused.stderr,
-            format!(
-                "mooringctl: no file was written: record the user's acceptance with `mooringctl user agree {user}` once the user has accepted the agreement (docs/runbooks/user-agreement.md)\n  caused by: user {user} has not accepted agreement revision {}: {detail}\n",
-                AgreementVersion::CURRENT
-            )
-        );
-        assert!(!out.exists());
-        assert_eq!(harness.run(&["user", "agree", user.as_str()]).code, 0);
-        let after = store(&harness).load().unwrap().deployment;
-        assert_eq!(after.config_generation(), deployment.config_generation());
-        assert_eq!(after.nodes(), deployment.nodes());
-        fill(&mut harness.secrets);
-        let written = harness.run(&args);
-        assert_eq!(written.code, 0, "{}", written.stderr);
-        assert_eq!(
-            fs::read(&out).unwrap(),
-            expected(&after, &user, ExportFormat::SingBoxJson)
-        );
-    }
+    let deployment = fixture(|parts| parts.users[0].agreement = Some(first));
+    let user = first_user(&deployment);
+    let (mut harness, folder) = exporting(deployment.clone());
+    let out = folder.join("user.json");
+    let written = harness.run(&["user", "export", user.as_str(), "--out", arg(&out)]);
+    assert_eq!(written.code, 0, "{}", written.stderr);
+    assert_eq!(
+        fs::read(&out).unwrap(),
+        expected(&deployment, &user, ExportFormat::SingBoxJson)
+    );
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.users().get(&user).unwrap().agreement, Some(first));
 }
 
 /// Every other refusal the export makes before reading a secret is
