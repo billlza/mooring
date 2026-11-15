@@ -21,8 +21,11 @@ use mooring_daemon_core::capacity::Saturation;
 use mooring_daemon_core::notify::digest_message;
 use mooring_daemon_core::report::project;
 use mooring_daemon_core::router::{
-    Band, CarrierName, FirmwareVersion, LteSignal, NrSignal, RadioState, RouterReading,
-    RouterStatus, RouterStatusParts, Rsrp, Rsrq, Rssi, Sinr, WebAppVersion,
+    Band, CarrierName, FirmwareVersion, LteSignal, Mcc, Mnc, NrSignal, Plmn, RadioState,
+    RouterReading, RouterStatus, RouterStatusParts, Rsrp, Rsrq, Rssi, Sinr, WebAppVersion,
+};
+use mooring_daemon_core::sim_network::{
+    BaselineOrigin, NetworkBaseline, OtherNetwork, SimNetwork, SimNetworkStatus,
 };
 use mooring_daemon_core::status::{DegradedReason, DownReason, ExitState, ForecastView, UsageView};
 use mooring_daemon_core::{
@@ -621,13 +624,21 @@ fn every_plan_line_reports_with_its_kind() {
 /// Text that fits the report's own grammars stays out all the same: the
 /// projection, not the grammar, keeps it out. A SIM name shaped like both a
 /// report user id and a node name, a network name, firmware and web app
-/// versions shaped like node names, and an interface name shaped like one
+/// versions shaped like node names, an interface name shaped like one, and
+/// the names of the SIM on record and of the one the M7 reports now
+/// (`sim.network`), each shaped like both a report user id and a node name,
 /// are planted in fields the report drops, and none reaches it.
 #[test]
 fn grammar_shaped_text_in_dropped_fields_stays_out() {
     let (spn, network, firmware, web_app, interface) =
         (GRAMMAR_SHAPED_LABEL, "tablet", "phone", "laptop", "phone0");
-    assert!(ReportUserId::new(spn).is_ok() && NodeName::new(spn).is_ok());
+    let (recorded, reported) = ("carolblack", "davegreene");
+    for name in [spn, recorded, reported] {
+        assert!(
+            ReportUserId::new(name).is_ok() && NodeName::new(name).is_ok(),
+            "{name}"
+        );
+    }
     for name in [network, firmware, web_app, interface] {
         assert!(NodeName::new(name).is_ok(), "{name}");
     }
@@ -641,8 +652,31 @@ fn grammar_shaped_text_in_dropped_fields_stays_out() {
         radio.network = CarrierName::parse(network).unwrap();
     });
     status.exit.egress.as_mut().unwrap().interface = BsdName::parse(interface).unwrap();
+    let named = |name: &str, mnc: &str| SimNetwork {
+        spn: Some(CarrierName::parse(name).unwrap()),
+        plmn: Plmn {
+            mcc: Mcc::parse("234").unwrap(),
+            mnc: Mnc::parse(mnc).unwrap(),
+        },
+    };
+    status.sim.network = SimNetworkStatus {
+        origin: BaselineOrigin::Recorded,
+        baseline: Some(
+            NetworkBaseline::new(
+                named(recorded, "20"),
+                UnixTime::from_secs(status.at.as_secs() - 86_400),
+                Some(OtherNetwork {
+                    network: named(reported, "30"),
+                    since: UnixTime::from_secs(status.at.as_secs() - 3_600),
+                }),
+            )
+            .unwrap(),
+        ),
+    };
     let json = serde_json::to_string(&report(status)).unwrap();
-    for canary in [spn, network, firmware, web_app, interface] {
+    for canary in [
+        spn, network, firmware, web_app, interface, recorded, reported,
+    ] {
         assert!(
             !json.contains(canary),
             "the report holds {canary:?}: {json}"
@@ -681,7 +715,8 @@ fn revoked_users_are_left_out() {
 
 /// The identifiers a status holds that the report must drop: every IPv4
 /// address, link-layer address and interface name in it, the router's SIM
-/// and network names and its firmware and web app versions, and the users'
+/// and network names and its firmware and web app versions, the names of
+/// the SIM on record and of the one the M7 reports now, and the users'
 /// aliases. Labels never reach a
 /// `MacStatusV2` (it has no field for one); every label of every fixture
 /// deployment, and the grammar-shaped label the degraded scenario gives a
@@ -735,6 +770,13 @@ fn identifiers(status: &MacStatusV2) -> Vec<String> {
         words.extend(router.sim_spn.iter().map(|spn| spn.as_str().to_owned()));
         if let RadioState::Attached(radio) = &router.radio {
             words.push(radio.network.as_str().to_owned());
+        }
+    }
+    // The names of the SIM on record and of the one the M7 reports now.
+    if let Some(baseline) = &parts.sim.network.baseline {
+        let other = baseline.other().map(|other| &other.network);
+        for network in std::iter::once(baseline.network()).chain(other) {
+            words.extend(network.spn.iter().map(|spn| spn.as_str().to_owned()));
         }
     }
     words.extend(

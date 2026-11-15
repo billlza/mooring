@@ -32,13 +32,14 @@
 //!
 //! What a user may use is their own record combined with the service
 //! periods and traffic packs their paid orders gave ([`effective_policy`]):
-//! a period covering the instant gives its quota where the user has no
-//! quota of their own, the packs granted in the cycle add to the quota that
-//! applies, and the last period's end is the expiry, unless the user's own
-//! record is later. A refund in full takes back what the order gave that
-//! the user had not used: the rest of its period, and of its pack what the
-//! user had not used. Every reader of a user's quota or expiry (the status
-//! line, the portal snapshot and [`evaluate`]) goes through it.
+//! a period covering the instant gives its quota, or the user's own quota
+//! where that lets them use more (the operator's decision of 2026-11-15),
+//! the packs granted in the cycle add to the quota that applies, and the
+//! last period's end is the expiry, unless the user's own record is later.
+//! A refund in full takes back what the order gave that the user had not
+//! used: the rest of its period, and of its pack what the user had not
+//! used. Every reader of a user's quota or expiry (the status line, the
+//! portal snapshot and [`evaluate`]) goes through it.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
@@ -416,13 +417,17 @@ pub struct EffectivePolicy {
 /// `now` is in), given the `automatic` quota ([`automatic_quota`]) and what
 /// the user's paid orders gave (`paid`, design §9.6):
 ///
-/// - **Quota.** The user's own `UserPolicy::quota` (an override) wins,
-///   whether larger or smaller; otherwise the quota of the paid service
-///   period covering `now` ([`paid_quota`]); otherwise the automatic one,
-///   if any. The bytes of the traffic packs granted in `cycle` are added to
-///   whichever applies, of a pack refunded in full only what the user had
-///   used of it ([`UserEntitlements::pack_bytes_in`]); a user with no quota
-///   at all keeps none. `downlink` is what each node has counted of the
+/// - **Quota.** While a paid service period covers `now`, the larger of its
+///   quota ([`paid_quota`]) and the user's own `UserPolicy::quota`, if they
+///   have one (`larger_quota`): a payment is never given less than it
+///   bought, and the operator's own quota only adds (the operator's
+///   decision of 2026-11-15). Otherwise the user's own quota, which
+///   overrides the automatic one whether larger or smaller (F4); otherwise
+///   the automatic one, if any. The bytes of the traffic packs granted in
+///   `cycle` are added to whichever applies, of a pack refunded in full
+///   only what the user had used of it
+///   ([`UserEntitlements::pack_bytes_in`]); a user with no quota at all
+///   keeps none. `downlink` is what each node has counted of the
 ///   user's REALITY downlink in `cycle`, by the usage report the caller
 ///   holds the quota against
 ///   ([`UsageReport`](crate::usage::UsageReport)'s `cycle_reality_downlink`),
@@ -445,7 +450,8 @@ pub fn effective_policy(
 ) -> EffectivePolicy {
     let own = paid.user(&user.id);
     let base = match (user.policy.quota, own.and_then(|own| own.period_at(now))) {
-        (Some(quota), _) => Some(quota),
+        (Some(quota), Some(period)) => Some(larger_quota(quota, paid_quota(period.quota_bytes))),
+        (Some(quota), None) => Some(quota),
         (None, Some(period)) => Some(paid_quota(period.quota_bytes)),
         (None, None) => automatic,
     };
@@ -481,6 +487,31 @@ pub const fn paid_quota(bytes: NonZeroU64) -> UserQuota {
         warn_percent: AutoQuotaPolicy::PILOT.warn_percent,
         action: AutoQuotaPolicy::PILOT.action,
     }
+}
+
+/// Of a user's own quota and the quota of the paid period covering the
+/// instant, the one that lets the user use more (the operator's decision
+/// of 2026-11-15, design §9.6). A quota that only warns lets them use any
+/// amount, so it is the larger whatever its bytes; of two that suspend, the
+/// one of more bytes is. The user's own is kept when the two let them use
+/// as much, so its warning share then applies.
+fn larger_quota(own: UserQuota, paid: UserQuota) -> UserQuota {
+    if allowance(paid) > allowance(own) {
+        paid
+    } else {
+        own
+    }
+}
+
+/// How much `quota` lets a user use in one billing cycle, ordered so that
+/// more is greater: first whether reaching it suspends nobody (a quota that
+/// only warns), then its bytes.
+fn allowance(quota: UserQuota) -> (bool, NonZeroU64) {
+    let unlimited = match quota.action {
+        QuotaAction::Warn => true,
+        QuotaAction::Suspend => false,
+    };
+    (unlimited, quota.cycle_served_bytes)
 }
 
 /// The actions due for `deployment`'s users at `now`, given the cycle's

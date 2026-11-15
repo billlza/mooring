@@ -4,15 +4,16 @@
 //! protocol line first (design §15.1), sends one request line and gets its
 //! replies; a client beyond [`MAX_CLIENTS`] gets the protocol line and is
 //! told the daemon is busy. A `retry` is handed to the daemon's loop for
-//! its next tick, and refused while there is no deployment. The request
-//! line and each line written have a deadline, however slowly their bytes
-//! go, so a stalled or dripping client holds a thread for a bounded while
-//! only.
+//! its next tick, and refused while there is no deployment. So is a
+//! network to take as the SIM's network on record, whose connection then
+//! waits for the loop's answer, for a bounded while. The request line and
+//! each line written have a deadline, however slowly their bytes go, so a
+//! stalled or dripping client holds a thread for a bounded while only.
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,9 +21,10 @@ use mooring_daemon_core::control::{
     DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, ProtocolLine,
     Refusal, decode_request, encode_line,
 };
+use mooring_daemon_core::sim_network::{NotAccepted, SimNetwork};
 
-use super::Control;
 use super::hub::{Hub, HubPoisoned};
+use super::{AcceptRequest, Control, peer};
 
 /// The most clients served at once: the app's one subscription, a few CLI
 /// calls, and room for a stale connection that has not been noticed yet.
@@ -38,14 +40,22 @@ pub(crate) struct Limits {
     /// How often a subscription with nothing new checks that its client is
     /// still there.
     pub(crate) idle_check: Duration,
+    /// How long a request that the daemon's loop answers waits for it.
+    pub(crate) answer: Duration,
 }
 
-/// The daemon's limits.
+/// The daemon's limits. The loop's answer is waited for less long than
+/// the CLI waits for a reply (`ANSWER_TIMEOUT`, 10 s), so that a loop held
+/// up in a slow poll is heard of as `LoopBusy`, not as silence; the build
+/// fails if the two are ever the other way round.
 pub(crate) const LIMITS: Limits = Limits {
     request: Duration::from_secs(5),
     write: Duration::from_secs(10),
     idle_check: Duration::from_secs(5),
+    answer: Duration::from_secs(8),
 };
+
+const _: () = assert!(LIMITS.answer.as_millis() < crate::status::ANSWER_TIMEOUT.as_millis());
 
 /// Why the acceptor stopped: the listener failed (anything but a client
 /// that reset before it was accepted).
@@ -124,7 +134,8 @@ pub(crate) enum End {
     Io(ErrorKind),
     /// The hub is poisoned.
     Poisoned,
-    /// The daemon's loop has ended, so a retry cannot be handed to it.
+    /// The daemon's loop has ended, so a request cannot be handed to it,
+    /// or will not be answered by it.
     Stopping,
 }
 
@@ -154,6 +165,9 @@ pub(crate) fn serve(mut stream: UnixStream, control: &Control, limits: Limits) -
         DaemonRequest::Status => answer_status(&mut stream, &control.hub, limits),
         DaemonRequest::Subscribe => subscribe(&mut stream, &control.hub, limits),
         DaemonRequest::Retry => queue_retry(&mut stream, control, limits),
+        DaemonRequest::AcceptSimNetwork { network } => {
+            accept_sim_network(&mut stream, control, limits, network)
+        }
     };
     result.unwrap_or_else(|end| end)
 }
@@ -169,6 +183,52 @@ fn queue_retry(stream: &mut UnixStream, control: &Control, limits: Limits) -> Re
         .map_err(|_| End::Io(ErrorKind::InvalidData))?;
     write_line(stream, &line, limits)?;
     Ok(End::Answered)
+}
+
+/// `AcceptSimNetwork`: handed to the loop, which answers it after its
+/// next tick, and refused as `NotDeployed` without a deployment. The
+/// answer is `SimNetworkAccepted`, or the loop's refusal. A loop that has
+/// not come to the request within `limits.answer` is `LoopBusy`: the
+/// connection then stops waiting, and the loop, which hands its answer to
+/// a waiting connection only, takes nothing for it. So is a loop that
+/// already has as many requests waiting as it holds, at once: the request
+/// is not added to them.
+fn accept_sim_network(
+    stream: &mut UnixStream,
+    control: &Control,
+    limits: Limits,
+    network: SimNetwork,
+) -> Result<End, End> {
+    if !control.deployed.load(Ordering::SeqCst) {
+        return Err(refused(stream, Refusal::NotDeployed));
+    }
+    let (answer, answered) = mpsc::sync_channel(0);
+    match control.accept.try_send(AcceptRequest { network, answer }) {
+        Ok(()) => {}
+        Err(mpsc::TrySendError::Full(_)) => return Err(refused(stream, Refusal::LoopBusy)),
+        Err(mpsc::TrySendError::Disconnected(_)) => return Err(End::Stopping),
+    }
+    match loops_answer(answered, limits.answer) {
+        Ok(Ok(())) => {
+            let line = encode_line(&DaemonReply::SimNetworkAccepted, MAX_REPLY_LINE_BYTES)
+                .map_err(|_| End::Io(ErrorKind::InvalidData))?;
+            write_line(stream, &line, limits)?;
+            Ok(End::Answered)
+        }
+        Ok(Err(reason)) => Err(refused(stream, reason.into())),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(refused(stream, Refusal::LoopBusy)),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(End::Stopping),
+    }
+}
+
+/// The loop's answer on `answered`, waited for at most `wait`. The
+/// receiving end is given up before this returns, so a loop that comes to
+/// the request after the wait finds no one to hand its answer to.
+fn loops_answer(
+    answered: mpsc::Receiver<Result<(), NotAccepted>>,
+    wait: Duration,
+) -> Result<Result<(), NotAccepted>, mpsc::RecvTimeoutError> {
+    answered.recv_timeout(wait)
 }
 
 /// Reads the one request line, a byte at a time so nothing after its
@@ -226,13 +286,26 @@ pub(crate) fn setsockopt_end(error: io::Error) -> End {
     }
 }
 
+/// The end for a write that failed with `kind`: the client has left when
+/// the write found it gone ([`peer::gone`]), and any other failure is the
+/// connection's I/O error.
+pub(crate) fn write_end(kind: ErrorKind) -> End {
+    if peer::gone(kind) {
+        End::ClientLeft
+    } else {
+        End::Io(kind)
+    }
+}
+
 /// Writes the refusal and reports it as the connection's end; the caller
-/// then closes the connection.
-fn refused(stream: &mut UnixStream, reason: Refusal) -> End {
+/// then closes the connection. A refusal that cannot be written ends the
+/// connection as any write that failed does ([`write_end`]): its client
+/// has left, or the failure is the connection's I/O error.
+pub(crate) fn refused(stream: &mut UnixStream, reason: Refusal) -> End {
     match encode_line(&DaemonReply::Refused { reason }, MAX_REPLY_LINE_BYTES) {
         Ok(line) => match stream.write_all(&line) {
             Ok(()) => End::Refused(reason),
-            Err(error) => End::Io(error.kind()),
+            Err(error) => write_end(error.kind()),
         },
         // A fixed refusal always encodes; were it not to, the client is
         // still not served.
@@ -300,12 +373,7 @@ fn write_before(stream: &mut UnixStream, line: &[u8], deadline: Instant) -> Resu
             Ok(written) => rest = &rest[written..],
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) if error.kind() == ErrorKind::WouldBlock => thread::sleep(WRITE_RETRY),
-            Err(error) => {
-                return Err(match error.kind() {
-                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset => End::ClientLeft,
-                    kind => End::Io(kind),
-                });
-            }
+            Err(error) => return Err(write_end(error.kind())),
         }
     }
     Ok(())

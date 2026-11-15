@@ -5,7 +5,9 @@
 //! the daemon's loop waits for (a probe, a router poll, a node call) widens
 //! the gap between two readings, and it writes `usage/sim-meter.json`
 //! every [`PERSIST_EVERY`] and when it stops. The loop tells it which
-//! interface the egress is and reads the meter back.
+//! interface the egress is and reads the meter back, and the egress rates
+//! over the last minute, which the thread keeps from what each reading
+//! counted (`daemon-core`'s [`EgressRates`]).
 //!
 //! A reading the meter refuses (a counter of 2^32 or more) or a counter
 //! that cannot be read is the thread's fault, which ends it: the daemon
@@ -17,6 +19,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use mooring_daemon_core::capacity::rates::{EgressRate, EgressRates};
 use mooring_daemon_core::meter::{CounterReading, SimMeter};
 use mooring_macsys::MacsysError;
 use mooring_model::CalendarDate;
@@ -53,6 +56,8 @@ pub(crate) type Reader =
 #[derive(Debug)]
 struct Shared {
     meter: SimMeter,
+    /// What the readings counted over the last minute.
+    rates: EgressRates,
     watched: Option<Watched>,
     /// The fault that ended the thread.
     fault: Option<String>,
@@ -81,6 +86,7 @@ impl MeterThread {
         let shared = Arc::new((
             Mutex::new(Shared {
                 meter,
+                rates: EgressRates::new(),
                 watched: None,
                 fault: None,
                 write_failure: None,
@@ -109,9 +115,9 @@ impl MeterThread {
         Ok(())
     }
 
-    /// The meter as counted so far; the thread's fault, if it has ended,
-    /// is the error.
-    pub(crate) fn meter(&self) -> Result<SimMeter, LocalError> {
+    /// What the thread shares, while it runs: the thread's fault, if it
+    /// has ended, is the error.
+    fn running(&self) -> Result<MutexGuard<'_, Shared>, LocalError> {
         let shared = self.lock()?;
         if let Some(fault) = &shared.fault {
             return Err(LocalError::MeterFault {
@@ -121,7 +127,20 @@ impl MeterThread {
         if self.handle.as_ref().is_none_or(JoinHandle::is_finished) {
             return Err(LocalError::MeterThread);
         }
-        Ok(shared.meter.clone())
+        Ok(shared)
+    }
+
+    /// The meter as counted so far; the thread's fault, if it has ended,
+    /// is the error.
+    pub(crate) fn meter(&self) -> Result<SimMeter, LocalError> {
+        Ok(self.running()?.meter.clone())
+    }
+
+    /// The egress rates over the last minute at `now`, when the readings
+    /// cover one ([`EgressRates::over_last_minute`]); the thread's fault,
+    /// if it has ended, is the error.
+    pub(crate) fn rates(&self, now: UnixTime) -> Result<Option<EgressRate>, LocalError> {
+        Ok(self.running()?.rates.over_last_minute(now))
     }
 
     /// Why the latest write failed, while it does.
@@ -182,7 +201,8 @@ fn run(
     }
 }
 
-/// One reading, counted; a fault as text.
+/// One reading, counted, and what it counted taken into the rates; a
+/// fault as text.
 fn read_once(lock: &Mutex<Shared>, reader: &mut Reader, watched: Watched) -> Result<(), String> {
     let Some(reading) = reader(watched).map_err(|error| chain(&error))? else {
         return Ok(());
@@ -190,10 +210,14 @@ fn read_once(lock: &Mutex<Shared>, reader: &mut Reader, watched: Watched) -> Res
     let mut shared = lock
         .lock()
         .map_err(|_| "the meter's lock is poisoned".to_owned())?;
-    shared
+    let counted = shared
         .meter
         .observe(reading)
-        .map_err(|error| chain(&LocalError::Meter(Box::new(error))))
+        .map_err(|error| chain(&LocalError::Meter(Box::new(error))))?;
+    if let Some(counted) = counted {
+        shared.rates.observe(counted);
+    }
+    Ok(())
 }
 
 /// Writes the meter, keeping the [`KEPT_DAYS`] before its latest

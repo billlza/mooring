@@ -32,6 +32,9 @@ use mooring_daemon_core::router::{
     RouterSettings, RouterStatus, RouterStatusParts, RouterUnavailableReason, RouterWifi, Rsrp,
     Rsrq, Rssi, Sinr, ThermalState, WebAppVersion, WifiApStatus, WwanCounters,
 };
+use mooring_daemon_core::sim_network::{
+    BaselineOrigin, RecordedUnder, SimNetwork, SimNetworkRecord,
+};
 use mooring_daemon_core::snapshot::{self, Ledgers, NodePoll, SimTotals, StatusInputs};
 use mooring_daemon_core::status::{
     AgentUnreachable, CarrierCheck, DegradedReason, DownReason, EgressFacts, EngineExit,
@@ -73,6 +76,9 @@ struct Inputs {
     exit: ExitSection,
     sim_daily: Vec<DailySimBytes>,
     sim_accuracy: MeterAccuracy,
+    /// How the record of the SIM's network was begun, and what the M7
+    /// reported at the polls before the panel's own.
+    sim_network: (BaselineOrigin, Vec<(SimNetwork, UnixTime)>),
     router: RouterReading,
     capacity: Option<CapacityStatus>,
     ledgers: Vec<NodeLedger>,
@@ -95,6 +101,21 @@ fn assemble(inputs: Inputs) -> MacStatusV2 {
             (node, NodePoll { polled_at, status })
         })
         .collect();
+    // The daemon's record of the SIM's network after those polls and the
+    // panel's own, if it found the M7 attached.
+    let under = RecordedUnder::of(inputs.deployment.exit());
+    let (origin, mut reported) = inputs.sim_network;
+    if let RouterReading::Available { polled_at, status } = &inputs.router {
+        reported.extend(SimNetwork::of(status).map(|network| (network, *polled_at)));
+    }
+    let sim_network = reported
+        .iter()
+        .fold(
+            SimNetworkRecord::new(under.clone(), origin),
+            |record, (network, at)| record.observed(&under, Some((network, *at))),
+        )
+        .status()
+        .clone();
     snapshot::assemble(StatusInputs {
         deployment: &inputs.deployment,
         at: inputs.at,
@@ -107,6 +128,7 @@ fn assemble(inputs: Inputs) -> MacStatusV2 {
             daily: &inputs.sim_daily,
             accuracy: inputs.sim_accuracy,
         },
+        sim_network,
         router: inputs.router,
         capacity: inputs.capacity,
         ledgers: Ledgers::Pulled(&inputs.ledgers),
@@ -348,6 +370,18 @@ fn attached(band: u16, dl_bandwidth: LteBandwidth, lte: [Option<i16>; 4]) -> Rad
         },
         session_secs: 522_950,
     })
+}
+
+/// What the M7 reports of a SIM named `spn`, or of one without a name,
+/// on the network `mcc` `mnc`.
+fn sim_on(spn: Option<&str>, mcc: &str, mnc: &str) -> SimNetwork {
+    SimNetwork {
+        spn: spn.map(|name| CarrierName::parse(name).unwrap()),
+        plmn: Plmn {
+            mcc: Mcc::parse(mcc).unwrap(),
+            mnc: Mnc::parse(mnc).unwrap(),
+        },
+    }
 }
 
 fn ledger(
@@ -595,6 +629,12 @@ pub(crate) fn serving() -> MacStatusV2 {
             ],
         ),
         sim_accuracy: MeterAccuracy::Exact,
+        // The M7 has reported this SIM since the carrier check was
+        // recorded.
+        sim_network: (
+            BaselineOrigin::Recorded,
+            vec![(sim_on(None, "234", "20"), at("2026-10-01", 9 * HOUR))],
+        ),
         router: router(
             before(now, 44),
             Some("M7_GENERIC_v07.01.81.00"),
@@ -914,6 +954,22 @@ fn degraded() -> MacStatusV2 {
         exit,
         sim_daily,
         sim_accuracy: MeterAccuracy::Exact,
+        // The record began with another SIM in the M7 (M2a's, named
+        // CMLink, on 234 30); the M7 has reported this one since the
+        // evening before.
+        sim_network: (
+            BaselineOrigin::NoRecord,
+            vec![
+                (
+                    sim_on(Some("CMLink"), "234", "30"),
+                    at("2026-10-01", 9 * HOUR),
+                ),
+                (
+                    sim_on(None, "234", "20"),
+                    at("2026-10-07", 18 * HOUR + 40 * MINUTE),
+                ),
+            ],
+        ),
         router: router(
             before(now, 51),
             None,
@@ -1072,6 +1128,9 @@ fn down() -> MacStatusV2 {
         exit,
         sim_daily,
         sim_accuracy: MeterAccuracy::LowerBound,
+        // The record could not be read when the daemon started, and no
+        // poll has found the M7 attached since.
+        sim_network: (BaselineOrigin::RecordUnreadable, Vec::new()),
         router: RouterReading::Unavailable {
             reason: RouterUnavailableReason::Unreachable,
             last_polled_at: Some(before(now, 6 * MINUTE)),

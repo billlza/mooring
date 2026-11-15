@@ -23,6 +23,9 @@
 //! - `user agree <uid>` records that the user accepted the agreement
 //!   revision this build ships, dated today (UTC), as a bookkeeping record
 //!   that keeps the configuration generation;
+//! - `user set-quota <uid> (--gb <n> | --none)` sets or removes the user's
+//!   own quota per SIM billing cycle, as a bookkeeping record too; the
+//!   nightly apply job is what suspends and resumes by it;
 //! - `user export <uid> [--format singbox|clash] --out <path>` writes the
 //!   user's file for CFM with mode 0600, never overwriting one, reading
 //!   only that user's secrets and only once every check has passed;
@@ -73,10 +76,11 @@
 //! sample per poll of the M7 appended to `radio/<UTC day>.jsonl` under the
 //! support directory (the newest 90 day files are kept), and:
 //!
-//! - `router history [--since <date>] [--until <date>] [--json]` prints
-//!   those samples' days (yesterday and today by default): the changes
-//!   between polls and the hourly signal, or the document Mooring.app
-//!   charts. It reads the files and touches no network.
+//! - `router history [--since <date>] [--until <date>] [--json | --csv
+//!   <samples|events>]` prints those samples' days (yesterday and today by
+//!   default): the changes between polls and the hourly signal, the
+//!   document Mooring.app charts, or a table for tools that read columns
+//!   (design §15.6 rule 13). It reads the files and touches no network.
 //!
 //! Nothing is logged by a command: its only output is what it prints and
 //! its error on stderr. The daemon writes its own log,
@@ -141,6 +145,8 @@ mod user;
 mod user_forget;
 #[cfg(target_os = "macos")]
 mod user_history;
+#[cfg(target_os = "macos")]
+mod user_quota;
 
 use std::io;
 use std::process::ExitCode;

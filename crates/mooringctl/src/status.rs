@@ -24,7 +24,7 @@ use mooring_model::time::UnixTime;
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::app::{Env, support_dir};
-use crate::daemon::RunPaths;
+use crate::daemon::{RunPaths, peer};
 use crate::error::{CommandError, LocalError};
 use crate::router::error::reason_phrase;
 use crate::router::output::{summary, utc_stamp};
@@ -111,7 +111,7 @@ pub(crate) fn status(
                 return Err(CommandError::Local(LocalError::DaemonRefused { reason }));
             }
             DaemonReply::Status(status) => status,
-            DaemonReply::RetryQueued => {
+            DaemonReply::RetryQueued | DaemonReply::SimNetworkAccepted => {
                 return Err(CommandError::Local(LocalError::DaemonUnexpectedReply));
             }
         };
@@ -219,9 +219,10 @@ pub(crate) fn check_protocol(
 }
 
 /// Sends `request` on `stream`. A busy daemon writes its refusal and
-/// closes without reading the request, so a broken pipe here is not the
-/// answer: the refusal is still there to read, and the read that follows
-/// reports it (or the end of the stream).
+/// closes without reading the request, so a write that finds the daemon
+/// gone ([`peer::gone`]) is not the answer: the refusal is still there to
+/// read, and the read that follows reports it (or the end of the stream).
+/// Any other failure of the write is the error it is.
 pub(crate) fn send_request(
     mut stream: UnixStream,
     request: DaemonRequest,
@@ -230,17 +231,33 @@ pub(crate) fn send_request(
     let line = encode_line(&request, MAX_REQUEST_LINE_BYTES).map_err(LocalError::ClientEncode)?;
     match stream.write_all(&line) {
         Ok(()) => Ok(stream),
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::BrokenPipe | ErrorKind::ConnectionReset
-            ) =>
-        {
-            Ok(stream)
-        }
+        Err(error) if peer::gone(error.kind()) => Ok(stream),
         Err(source) => Err(LocalError::DaemonIo {
             path: socket.to_path_buf(),
             source,
+        }),
+    }
+}
+
+/// One request and its one reply: connects, sends `request` and reads
+/// the reply's line, within [`ANSWER_TIMEOUT`]. A daemon that sends no
+/// reply in that time is `DaemonSilent`.
+pub(crate) fn ask(socket: &Path, request: DaemonRequest) -> Result<DaemonReply, LocalError> {
+    ask_within(socket, request, ANSWER_TIMEOUT)
+}
+
+/// [`ask`], the reply being waited for `limit`.
+pub(crate) fn ask_within(
+    socket: &Path,
+    request: DaemonRequest,
+    limit: Duration,
+) -> Result<DaemonReply, LocalError> {
+    let mut reader = connect(socket, request, limit)?;
+    let deadline = Instant::now() + limit;
+    match read_reply_line(&mut reader, socket, deadline, &|| true)? {
+        Next::Line(line) => decode_reply(&line).map_err(LocalError::DaemonReply),
+        Next::Deadline | Next::ParentGone => Err(LocalError::DaemonSilent {
+            secs: limit.as_secs(),
         }),
     }
 }

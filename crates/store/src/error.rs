@@ -76,6 +76,8 @@ io_ops! {
     ReadLatch => "read the exit's latch",
     /// Removing the exit's latch.
     RemoveLatch => "remove the exit's latch",
+    /// Opening or reading the daemon's record of the SIM's network.
+    ReadSimNetwork => "read the record of the SIM's network",
     /// Opening or reading the SIM meter's document, or inspecting the
     /// usage directory to read it.
     ReadSimMeter => "read the SIM meter",
@@ -107,6 +109,8 @@ io_ops! {
     ReadPaymentPull => "read the payment pull's settings",
     /// Opening or reading the daemon's record of pending applies.
     ReadPendingApplies => "read the record of pending applies",
+    /// Opening or reading the daemon's record of direct-probe round trips.
+    ReadRoundTrips => "read the record of direct-probe round trips",
     /// Opening or reading the Mac's copy of the nodes' abuse records, or
     /// inspecting the abuse directory to read it.
     ReadAbuseRecords => "read the abuse records",

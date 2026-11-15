@@ -9,6 +9,9 @@
 //! - [`meter`]: the SIM meter, the line's bytes per UTC day from the
 //!   egress interface's counters.
 //! - [`forecast`]: the SIM forecast from the meter's daily bins.
+//! - [`sim_network`]: what the M7 reported of the SIM and its network
+//!   when the carrier check and the billing cycle were recorded, and
+//!   whether it reports something else now.
 //! - [`capacity`]: whether the uplink over the mobile line is saturated.
 //! - [`usage`]: per-user usage from the agents' usage series, and activity.
 //! - [`alert`]: alert conditions and the alert state machine.
@@ -21,6 +24,8 @@
 //! - [`radio_history`]: the sample each poll of the M7 leaves, its line in
 //!   the day files the store keeps, and the events and hourly statistics
 //!   `router history` prints.
+//! - [`radio_table`]: those samples and events as tables, the columns
+//!   `router history --csv` prints.
 //! - [`status`]: [`MacStatusV2`] itself.
 //! - [`snapshot`]: a [`MacStatusV2`] assembled from what the daemon holds
 //!   at one instant.
@@ -80,9 +85,11 @@ pub mod policy;
 pub mod portal;
 pub mod power;
 pub mod radio_history;
+pub mod radio_table;
 pub mod report;
 pub mod router;
 pub mod share;
+pub mod sim_network;
 pub mod snapshot;
 pub mod status;
 pub mod usage;

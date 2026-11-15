@@ -9,9 +9,9 @@
 
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::time::Instant;
 
-use mooring_daemon_core::control::{DaemonReply, DaemonRequest, decode_reply};
+use mooring_daemon_core::control::{DaemonReply, DaemonRequest};
+use mooring_daemon_core::exit::DirectProbe;
 use mooring_macsys::InterfaceAddrV4;
 use mooring_model::collections::NonEmpty;
 use mooring_model::exit::{EgressCheck, FlowCap, Pairing};
@@ -30,7 +30,7 @@ use crate::node::dial::facing_the_m7;
 use crate::prompt::Answer;
 use crate::router;
 use crate::state::{load, output, state_change, store_failure};
-use crate::status::{ANSWER_TIMEOUT, Next, connect, read_reply_line};
+use crate::status::ask;
 
 /// `exit init --interface <bsd> --cycle-anchor <date> --flow-cap <n>
 /// [--yes]` (design §7, "What `exit init` records"): creates the deployment
@@ -309,22 +309,7 @@ pub(crate) fn set_enabled(
 /// its next tick; `mooringctl status` then shows what it found.
 pub(crate) fn retry(env: &mut Env<'_>, out: &mut dyn Write) -> Result<(), CommandError> {
     let socket = RunPaths::under(&support_dir(env)?).socket;
-    let mut reader = connect(&socket, DaemonRequest::Retry, ANSWER_TIMEOUT)?;
-    let line = match read_reply_line(
-        &mut reader,
-        &socket,
-        Instant::now() + ANSWER_TIMEOUT,
-        &|| true,
-    )? {
-        Next::Line(line) => line,
-        Next::Deadline | Next::ParentGone => {
-            return Err(LocalError::DaemonSilent {
-                secs: ANSWER_TIMEOUT.as_secs(),
-            }
-            .into());
-        }
-    };
-    match decode_reply(&line).map_err(LocalError::DaemonReply)? {
+    match ask(&socket, DaemonRequest::Retry)? {
         DaemonReply::RetryQueued => {
             writeln!(
                 out,
@@ -334,7 +319,9 @@ pub(crate) fn retry(env: &mut Env<'_>, out: &mut dyn Write) -> Result<(), Comman
             Ok(())
         }
         DaemonReply::Refused { reason } => Err(LocalError::DaemonRefused { reason }.into()),
-        DaemonReply::Status(_) => Err(LocalError::DaemonUnexpectedReply.into()),
+        DaemonReply::Status(_) | DaemonReply::SimNetworkAccepted => {
+            Err(LocalError::DaemonUnexpectedReply.into())
+        }
     }
 }
 
@@ -361,7 +348,7 @@ pub(crate) fn observe(
         let NodeAddress::Public(address) = site.address;
         let reflector = SocketAddrV4::new(address.get(), node.ports.reflector().get());
         match (env.probe)(index, reflector) {
-            Ok(ip) => {
+            Ok(DirectProbe { ip, .. }) => {
                 observed += 1;
                 let verdict = match check {
                     None => "no carrier check is recorded yet",
