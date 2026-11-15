@@ -33,6 +33,7 @@ mod regular_files;
 mod router_pin;
 mod secrets;
 mod sim_meter;
+mod sim_network;
 mod status_snapshot;
 mod taxonomy;
 mod user_usage;

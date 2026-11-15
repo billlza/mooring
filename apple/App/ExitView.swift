@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // The exit screen (design §15.3): the exit's state and why, the latched
-// violations with their evidence, the egress and the carrier check, the
-// two engines, the Mac's power and any foreign network.
+// violations with their evidence, the egress and the carrier check (with
+// the notice when the M7 reports another SIM or network than the one the
+// check was recorded with), the two engines, the Mac's power and any
+// foreign network.
 
 import MooringKit
 import SwiftUI
@@ -21,6 +23,9 @@ struct ExitView: View {
                     Text(detail)
                 }
                 LabeledContent("Since", value: exit.since.text)
+                if let found = exit.violationLatchedAt {
+                    LabeledContent("Violation found", value: found.text)
+                }
             } header: {
                 Text("State")
             } footer: {
@@ -31,15 +36,22 @@ struct ExitView: View {
             if !exit.latches.isEmpty {
                 Section {
                     ForEach(exit.latches, id: \.self) { latch in
-                        LabeledContent(latch.at.text) {
-                            Text(latch.violation.text)
-                                .foregroundStyle(.red)
+                        VStack(alignment: .leading, spacing: 4) {
+                            LabeledContent(latch.at.text) {
+                                Text(latch.violation.text)
+                                    .foregroundStyle(.red)
+                            }
+                            Text(latch.violation.remedy)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 } header: {
                     Text("Latched violations")
                 } footer: {
-                    Text("A latch survives daemon restarts; the exit stays down until it is cleared.")
+                    Text(
+                        "A latch survives daemon restarts. `mooringctl exit retry` clears it, and so does a configuration change such as `exit record-carrier --replace`; the exit then probes afresh."
+                    )
                 }
             }
             Section("Egress") {
@@ -57,9 +69,12 @@ struct ExitView: View {
                 }
             }
             Section("Carrier check") {
+                if let change = status.sim.network.change {
+                    SimNetworkNotice(change: change)
+                }
                 if let check = exit.carrierCheck {
                     LabeledContent("Carrier address", value: check.egressIp)
-                    LabeledContent("In the carrier's prefixes") {
+                    LabeledContent("In the recorded carrier prefixes") {
                         Text(check.inCarrierPrefixes ? String(localized: "yes") : String(localized: "no"))
                             .foregroundStyle(check.inCarrierPrefixes ? Color.primary : Color.red)
                     }

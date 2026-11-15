@@ -32,10 +32,10 @@ use crate::store::malformed;
 /// How long a bin is kept after it ends: 48 hours (F7, design §11.5).
 pub(crate) const SERIES_KEEP_SECS: u64 = 48 * 3600;
 
-/// The longest gap between two polls that one stretch spans: three
-/// accounting intervals, so a missed poll or a quick restart of the watch
-/// or of Xray (the nightly reboot included) keeps the series whole.
-pub(crate) const MAX_POLL_GAP_SECS: u64 = 3 * mooring_agent_proto::ACCOUNTING_INTERVAL_SECS;
+/// The longest gap between two polls that one stretch spans. The Mac
+/// relies on it when it places a bin's bytes in time, so the protocol
+/// states it.
+pub(crate) use mooring_agent_proto::MAX_POLL_GAP_SECS;
 
 /// One stretch of consecutive polls: from its first, whose counters are
 /// only a baseline, to its latest.

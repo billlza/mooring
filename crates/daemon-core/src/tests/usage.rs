@@ -224,6 +224,29 @@ fn each_period_counts_exactly_the_bins_that_start_in_it() {
     );
 }
 
+/// The report counts the cycle's REALITY downlink of each user per node
+/// that counted any: neither the uplink nor Hysteria2's, and nothing from
+/// before the cycle began (a traffic pack refunded in full reads it,
+/// design §9.6). The usage of the cycle carries the same.
+#[test]
+fn the_cycles_reality_downlink_is_counted_per_node() {
+    let ids = user_ids();
+    let (u1, u2, u3) = (&ids[0], &ids[1], &ids[2]);
+    let report = aggregate(
+        &deployment_billed_on(20),
+        &[lon1(u1, u2, u3), ams1(u1)],
+        at("2026-10-08", 10 * HOUR),
+    )
+    .unwrap();
+    let expected = BTreeMap::from([
+        (u1.clone(), BTreeMap::from([(node("lon1"), 207)])),
+        (u2.clone(), BTreeMap::new()),
+        (u3.clone(), BTreeMap::from([(node("lon1"), 9)])),
+    ]);
+    assert_eq!(report.cycle_reality_downlink, expected);
+    assert_eq!(report.cycle_usage().reality_downlink, expected);
+}
+
 #[test]
 fn a_user_without_traffic_has_a_zero_row_and_no_shares() {
     let ids = user_ids();

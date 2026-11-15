@@ -8,6 +8,8 @@ mod aggregate;
 pub mod history;
 mod retention;
 
+pub use aggregate::{ServedBefore, boundary_after};
+
 use std::collections::BTreeMap;
 
 use mooring_agent_proto::{

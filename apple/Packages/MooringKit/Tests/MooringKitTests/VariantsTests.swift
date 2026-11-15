@@ -115,6 +115,7 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
         #expect(try decode(PowerSource.self, "power_source") == PowerSource.allCases)
         #expect(try decode(DrainOutcome.self, "drain_outcome") == DrainOutcome.allCases)
         #expect(try decode(MeterAccuracy.self, "meter_accuracy") == MeterAccuracy.allCases)
+        #expect(try decode(BaselineOrigin.self, "baseline_origin") == BaselineOrigin.allCases)
         #expect(try decode(AgentUnreachable.self, "agent_unreachable") == AgentUnreachable.allCases)
         #expect(try decode(Severity.self, "severity") == Severity.allCases)
         #expect(try decode(MacEngine.self, "mac_engine") == MacEngine.allCases)
@@ -200,7 +201,7 @@ struct ListWithObjects: Sendable, CustomTestStringConvertible {
 
     /// The fixture lists every group the mirror reads, and no other.
     @Test func everyGroupOfTheFixtureIsRead() throws {
-        #expect(try Self.document().count == 62)
+        #expect(try Self.document().count == 63)
     }
 
     /// The fixture's reported node is one the operator halted after every

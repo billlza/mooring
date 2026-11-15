@@ -106,5 +106,6 @@ pub(super) fn usage(deployment: &Deployment, now: UnixTime, served: &[(u64, u64)
             .keys()
             .map(|user| (user.clone(), Some(given.get(user).copied().unwrap_or(0))))
             .collect(),
+        reality_downlink: BTreeMap::new(),
     }
 }

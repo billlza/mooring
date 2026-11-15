@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The MATLAB package under matlab/ (design §15.6 rule 13), tested on a
+# hosted runner: the exit Mac has no MATLAB, and D-7 keeps builds off it.
+# The tests read the two golden tables of contract/history-fixtures, which
+# the Rust tests pin byte for byte to what `mooringctl router history
+# --csv` prints, so a change of the tables runs these tests too. A test
+# that issues a warning fails. The last step holds the package's own
+# files to the line coverage the project asks of its code.
+name: matlab
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - matlab/**
+      - contract/history-fixtures/radio-samples.csv
+      - contract/history-fixtures/radio-events.csv
+      - .github/workflows/matlab.yml
+  pull_request:
+    paths:
+      - matlab/**
+      - contract/history-fixtures/radio-samples.csv
+      - contract/history-fixtures/radio-events.csv
+      - .github/workflows/matlab.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: matlab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest release this runner image is supported by, and the
+        # newest.
+        release: [R2024b, R2026b]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: matlab-actions/setup-matlab@f9e43010f1ae678f7cfa0542fe2a4f60f7d1ad8d # v3.1.0
+        with:
+          release: ${{ matrix.release }}
+      - uses: matlab-actions/run-tests@214a16e600ef2c705a4b2dd6c0794dc6957682a9 # v3.3.0
+        with:
+          source-folder: matlab
+          select-by-folder: matlab/tests
+          strict: true
+          code-coverage-cobertura: matlab-coverage.xml
+      - name: Line coverage of the package, at least 95 %
+        run: |
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          classes = ET.parse("matlab-coverage.xml").getroot().findall("./packages/package/classes/class")
+          total = covered = 0
+          for found in sorted(classes, key=lambda found: found.get("filename")):
+              name = found.get("filename")
+              if "+mooring" not in name:
+                  continue
+              lines = found.findall("./lines/line")
+              hit = sum(1 for line in lines if int(line.get("hits")) > 0)
+              missed = [line.get("number") for line in lines if int(line.get("hits")) == 0]
+              print(f"{hit:4d} of {len(lines):4d}  {name}" + (f"  not run: {', '.join(missed)}" if missed else ""))
+              total += len(lines)
+              covered += hit
+          if total == 0:
+              named = sorted(found.get("filename") for found in classes)
+              sys.exit(f"the report names no line of the package; it names {named}")
+          print(f"{covered} of {total} lines, {covered / total:.2%}")
+          sys.exit(0 if covered >= 0.95 * total else "under 95 %")
+          PY

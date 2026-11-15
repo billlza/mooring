@@ -3,7 +3,8 @@
 // The SIM meter's section of a deployment's status (`mooring-daemon-core`'s
 // `status::SimMeterStatus`, design §10.1 step 5, §15.2): the billing cycle,
 // the line's bytes, whether they are exact, the thresholds with the stop
-// policy and the plan's line, and the forecast.
+// policy and the plan's line, the forecast, and the network the M7 reports
+// for the SIM (`SimNetwork.swift`).
 
 import Foundation
 
@@ -205,7 +206,7 @@ public enum ForecastView: Decodable, Hashable, Sendable {
     }
 }
 
-/// The SIM meter.
+/// The SIM: its meter, and the network the M7 reports for it.
 public struct SimMeterStatus: Decodable, Hashable, Sendable {
     public let cycle: BillingCycle
     public let rxBytes: UInt64
@@ -213,12 +214,13 @@ public struct SimMeterStatus: Decodable, Hashable, Sendable {
     public let accuracy: MeterAccuracy
     public let thresholds: SimThresholds
     public let forecast: ForecastView
+    public let network: SimNetworkStatus
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case cycle
         case rxBytes = "rx_bytes"
         case txBytes = "tx_bytes"
-        case accuracy, thresholds, forecast
+        case accuracy, thresholds, forecast, network
     }
 
     public init(from decoder: any Decoder) throws {
@@ -229,5 +231,6 @@ public struct SimMeterStatus: Decodable, Hashable, Sendable {
         accuracy = try object.decode(MeterAccuracy.self, forKey: .accuracy)
         thresholds = try object.decode(SimThresholds.self, forKey: .thresholds)
         forecast = try object.decode(ForecastView.self, forKey: .forecast)
+        network = try object.decode(SimNetworkStatus.self, forKey: .network)
     }
 }

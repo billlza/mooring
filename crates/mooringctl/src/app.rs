@@ -300,6 +300,9 @@ pub(crate) fn run(
         Command::Sim(SimCommand::SetAnchor { anchor, yes }) => {
             crate::sim::set_anchor(env, out, anchor, yes)
         }
+        Command::Sim(SimCommand::AcceptNetwork { yes }) => {
+            crate::sim::accept_network(env, out, yes)
+        }
         Command::Status {
             follow,
             json,
@@ -378,8 +381,14 @@ fn execute(
         } => pin(env, out, &interface, yes, replace),
         RouterCommand::SetPassword { stdin } => set_password(env, out, stdin),
         RouterCommand::Status { interface, json } => status(env, out, &interface, json),
-        RouterCommand::History { since, until, json } => {
-            router::history::history(env, out, since, until, json)
+        RouterCommand::History {
+            since,
+            until,
+            json,
+            csv,
+        } => {
+            let form = router::history::Form::of(json, csv);
+            router::history::history(env, out, since, until, form)
         }
         RouterCommand::Capture {
             interface,

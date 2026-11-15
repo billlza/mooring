@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Mooring.app (design §5.1, §15): the operator's console. It runs only the
+// Mooring.app (design §5.1, §15): the operator's console. It runs the
 // `mooringctl` inside its own bundle, reads `status --follow --json` and,
 // for the Router screen, `router history --json`, and never touches a
-// secret or a daemon file. It is a menu-bar app (LSUIElement); the console
-// window opens at launch and from the menu, which raises it in front of
-// other apps' windows (ConsoleWindowFront).
+// secret or a daemon file. The one other program it runs is the system's
+// `/bin/launchctl`, for its own two launch agents only: it reads launchd's
+// records of them and, while a start is carried through after a new build,
+// starts the apply job (DaemonService). It is a menu-bar app (LSUIElement);
+// the console window opens at launch and from the menu, which raises it in
+// front of other apps' windows (ConsoleWindowFront).
 
 import MooringKit
 import SwiftUI

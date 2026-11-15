@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The watch's view and `Status` (design §11.3, §11.5): a view that cannot
-//! be written reported at the next tick; `Status` serving the view with the
+//! be written reported at the next tick; the engines a view shows, read at
+//! its reading, which is dated less than a reading's interval before the
+//! tick; `Status` serving the view with the
 //! live holds, the halt and the last commit, an error before the watch's
 //! first tick, and a refusal for a view that is not one; and the last
 //! commit, the newest committed record, where names that are not records
@@ -12,11 +14,12 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use mooring_agent_proto::{
-    AgentError, AgentEventKind, AppliedGeneration, Generation, Holds, IoOp, LineRequest,
-    OperatorHold, Response, Role, Sha256Hex, TxnState, WatchError, WatchErrorKind,
+    AgentError, AgentEventKind, AppliedGeneration, EngineRun, Generation, HOST_READING_SECS, Holds,
+    IoOp, LineRequest, OperatorHold, Response, Role, Sha256Hex, TxnState, UnixTime,
+    WATCH_TICK_SECS, WatchError, WatchErrorKind,
 };
 
-use super::world::{OCT_8, World, email, halt, minute, tick};
+use super::world::{BOOT_SECS, OCT_8, World, email, halt, minute, tick};
 use crate::gate::write_holds;
 use crate::host::Node;
 use crate::store::malformed;
@@ -24,6 +27,46 @@ use crate::tests::serve::{ask, frame};
 use crate::tests::{ENOTDIR, occupy_temporary, scratch};
 use crate::txn::record::last_committed;
 use crate::watch::Watch;
+
+/// What the Mac relies on to tell when a run of Xray began (design §9.6):
+/// the engines a view shows are those its reading read, and the reading
+/// is dated less than a reading's interval before the view's own tick.
+/// Here Xray starts again before every tick, for three minutes: each view
+/// shows the start its reading read, a reading is taken every minute, and
+/// no view carries one a minute old.
+#[test]
+fn a_views_engines_are_of_a_reading_dated_less_than_its_interval_before_the_tick() {
+    let world = World::new();
+    world.install(1, TxnState::Committed);
+    let node = world.node(OCT_8);
+    let mut watch = Watch::start(&world.paths).unwrap();
+    // The start each reading read, by the reading's time.
+    let mut read = BTreeMap::new();
+    for step in 0..3 * HOST_READING_SECS / WATCH_TICK_SECS {
+        let started = 1_000 + step;
+        world.xray().active_since = Some(started);
+        tick(&mut watch, &world, &node);
+        let view = world.status();
+        let age = view.at.as_secs() - view.host.at.as_secs();
+        assert!(
+            age < HOST_READING_SECS,
+            "tick {step}: a reading {age} s old"
+        );
+        let since = *read.entry(view.host.at).or_insert(started);
+        let EngineRun::Active { uptime_secs, .. } = view.engines.xray.run else {
+            panic!("tick {step}: {:?}", view.engines.xray.run);
+        };
+        assert_eq!(uptime_secs, BOOT_SECS - since, "tick {step}");
+    }
+    assert_eq!(
+        read,
+        BTreeMap::from([
+            (UnixTime::from_secs(OCT_8), 1_000),
+            (UnixTime::from_secs(OCT_8 + 60), 1_012),
+            (UnixTime::from_secs(OCT_8 + 120), 1_024),
+        ])
+    );
+}
 
 #[test]
 fn a_view_that_cannot_be_written_is_reported_at_the_next_tick() {

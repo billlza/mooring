@@ -12,14 +12,25 @@
 //!   granted before the refund, starting where it ended, a live period only
 //!   after a live one (as a grant builds on them). The order's quota per
 //!   billing cycle goes with its time.
-//! - **A traffic pack** counts, from the refund on, only what the user had
-//!   used of it: their bytes served in its billing cycle beyond the rest of
-//!   their quota, at most the pack's bytes
+//! - **A traffic pack** counts, once Mooring has learned the user's use at
+//!   the refund's time, only what the user had used of it: their bytes
+//!   served in its billing cycle by then beyond the rest of their quota, at
+//!   most the pack's bytes
 //!   ([`UserEntitlements::pack_bytes_in`](super::UserEntitlements::pack_bytes_in)).
-//!   The ledger records what the daemon's usage report said of the user's
-//!   use when it applied the refund ([`PackUse`]); when the report could
-//!   not tell, the pack is taken back whole, and nothing is taken back once
-//!   the pack's cycle had ended.
+//!   The first usage report that covers the refund's time tells the use
+//!   ([`PaymentLedger::settle`](super::PaymentLedger::settle)). Until one
+//!   does, the refund waits and the pack counts in full, so that nothing
+//!   the user used is taken back ([`PackUse::Awaiting`]); and nothing is
+//!   taken back once the pack's cycle has ended.
+//! - **A REALITY download that was open at a pack's refund** is counted
+//!   only when its connection closes, and no count tells it from one
+//!   begun later. So the use learned takes in what each node counts of
+//!   the user's REALITY downlink from then on
+//!   ([`PackUse::Served`]'s `open_downloads`), until that node's Xray is
+//!   seen to have started again since the refund ([`RunBegan`]) or the
+//!   pack's cycle ends. Until then such a download begun after the refund
+//!   counts as used of the pack too, which is the price of never taking
+//!   back what the user had used.
 //!
 //! The time taken back is not recorded: it follows from the grants and the
 //! refunds the ledger holds, replayed in the order of their entries
@@ -27,49 +38,180 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mooring_model::{UnixTime, UserId};
+use mooring_agent_proto::{EngineRun, HOST_READING_SECS, StatusV1};
+use mooring_model::{NodeId, UnixTime, UserId};
 use serde::{Deserialize, Serialize};
 
 use super::ids::OrderId;
 use super::ledger::{GrantOutcome, OrderRecord};
-use crate::usage::CycleUsage;
+use crate::usage::{DownlinkCount, ServedBefore};
 
-/// What Mooring knew of a user's use of a traffic pack's billing cycle when
-/// it applied the refund in full that takes the pack back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What Mooring knows of a user's use of a traffic pack at the time of the
+/// refund in full that takes the pack back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackUse {
-    /// The user's bytes served in the pack's billing cycle, by the daemon's
-    /// usage report then.
+    /// The user's bytes served in the pack's billing cycle by the refund's
+    /// time, as the nodes had counted them, at most: never fewer than they
+    /// had counted. The first usage report that covered the refund's time
+    /// told them, at `learned_at`; from then on the pack counts only what
+    /// the user had used of it.
     Served {
         /// The bytes.
         bytes: u64,
+        /// When Mooring learned them.
+        learned_at: UnixTime,
+        /// The nodes that may still count a download that was open at the
+        /// refund: Xray counts the downlink of a REALITY connection only
+        /// when the connection closes. For each, the user's REALITY
+        /// downlink of the cycle that `bytes` holds from it. What the node
+        /// counts beyond that counts as used too: it is added at every
+        /// reading while the node is here
+        /// ([`PaidPack::taken_back_by`](super::PaidPack::taken_back_by)),
+        /// and into `bytes` when the node leaves, which it does once its
+        /// Xray is seen to have started again since the refund, or when
+        /// the pack's cycle ends
+        /// ([`PaymentLedger::settle`](super::PaymentLedger::settle)).
+        open_downloads: BTreeMap<NodeId, u64>,
     },
-    /// The report could not tell: it was behind (a node not collected
-    /// lately, as while one cannot be reached), or it did not know the
-    /// user's figure. The pack is taken back whole.
-    Unknown,
-    /// The report was of a later billing cycle: the pack's had ended, and
-    /// nothing of it is taken back.
+    /// No usage report has covered the refund's time yet: a node cannot be
+    /// reached, the collection is behind, or it has no figure for the user.
+    /// The pack counts in full meanwhile, so that nothing the user used is
+    /// taken back.
+    Awaiting,
+    /// The pack's billing cycle ended before a report covered the refund's
+    /// time, or had ended when Mooring learned of the refund: nothing of
+    /// the pack is taken back.
     CycleEnded,
 }
 
-impl PackUse {
-    /// What `usage`, the daemon's report of the billing cycle when it
-    /// applies the refund (`None` when it has none), says of `user`'s use
-    /// of a pack granted at `granted_at`.
-    pub(super) fn of(usage: Option<&CycleUsage>, user: &UserId, granted_at: UnixTime) -> Self {
-        match usage {
-            Some(usage) if usage.cycle.contains(granted_at) => usage
-                .served
-                .get(user)
-                .copied()
-                .flatten()
-                .map_or(Self::Unknown, |bytes| Self::Served { bytes }),
-            Some(usage) if granted_at < usage.cycle.starts_at() => Self::CycleEnded,
-            _ => Self::Unknown,
+/// When the run of Xray that a node's latest status shows began, between
+/// two bounds: the status tells it to the watch's reading, not to the
+/// second ([`RunBegan::of`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunBegan {
+    /// The run began at this instant or later.
+    pub no_earlier_than: UnixTime,
+    /// The run began at this instant or earlier.
+    pub no_later_than: UnixTime,
+}
+
+impl RunBegan {
+    /// When the run of Xray that `status` shows began, by the node's
+    /// clock; `None` while its Xray does not run.
+    ///
+    /// The status carries the watch's latest reading of the unit. The
+    /// reading is dated by the tick that took it, less than
+    /// [`HOST_READING_SECS`] before `watch_at`; the watch reads the unit
+    /// later in that tick; and the time since the unit became active is
+    /// the difference of two figures each rounded down to a second.
+    ///
+    /// - The run began no earlier than `watch_at` less that time, less
+    ///   the reading's interval and a second.
+    /// - It began no later than `watch_at` less that time, plus a second
+    ///   and what the tick took to reach the unit, for which the
+    ///   reading's interval is allowed: a tick runs a handful of local
+    ///   commands, and one that took as long would be the watch's fault
+    ///   to report.
+    ///
+    /// Figures that go before the epoch tell nothing.
+    #[must_use]
+    pub fn of(status: &StatusV1) -> Option<Self> {
+        let EngineRun::Active { uptime_secs, .. } = status.engines.xray.run else {
+            return None;
+        };
+        let read_by = status.watch_at.as_secs().checked_sub(uptime_secs)?;
+        Some(Self {
+            no_earlier_than: UnixTime::from_secs(read_by.checked_sub(HOST_READING_SECS + 1)?),
+            no_later_than: UnixTime::from_secs(read_by.checked_add(HOST_READING_SECS + 1)?),
+        })
+    }
+}
+
+/// What the nodes of `open` have counted of a user's REALITY downlink
+/// beyond what the use at a refund held from each
+/// ([`PackUse::Served`]'s `open_downloads`), given `counted`, what each
+/// node has counted of it in the cycle; a node `counted` leaves out has
+/// counted none. Saturates at `u64::MAX`.
+pub(super) fn counted_since(open: &BTreeMap<NodeId, u64>, counted: &BTreeMap<NodeId, u64>) -> u64 {
+    open.iter().fold(0, |total: u64, (node, held)| {
+        let now = counted.get(node).copied().unwrap_or(0);
+        total.saturating_add(now.saturating_sub(*held))
+    })
+}
+
+/// Takes out of `open` the nodes whose Xray is seen to have started again
+/// since a refund, for `user`'s pack, and returns them, in id order, with
+/// the bytes they had counted of the user's REALITY downlink beyond what
+/// the use held from them.
+///
+/// A node leaves when both hold:
+///
+/// - the run of Xray its latest status shows began at `boundary` or later
+///   ([`boundary_after`](crate::usage::boundary_after) the refund's time),
+///   as far as the status tells: every connection that was open at the
+///   refund ended with the run before, and Xray counts nothing of a
+///   connection it was stopped with;
+/// - the node's figures were sampled when the run had begun for certain,
+///   so that they hold all the node counted before it.
+///
+/// The usage is asked only when a status shows such a run.
+pub(super) fn close_restarted(
+    open: &mut BTreeMap<NodeId, u64>,
+    boundary: UnixTime,
+    user: &UserId,
+    usage: &dyn RefundUsage,
+) -> (Vec<NodeId>, u64) {
+    let began: Vec<(NodeId, RunBegan)> = open
+        .keys()
+        .filter_map(|node| {
+            usage
+                .xray_began(node)
+                .filter(|run| run.no_earlier_than >= boundary)
+                .map(|run| (node.clone(), run))
+        })
+        .collect();
+    let mut left = Vec::new();
+    let mut added = 0_u64;
+    if began.is_empty() {
+        return (left, added);
+    }
+    let Some(counted) = usage.reality_downlink(user) else {
+        return (left, added);
+    };
+    for (node, run) in began {
+        let Some(count) = counted
+            .get(&node)
+            .filter(|count| count.sampled_at >= run.no_later_than)
+        else {
+            continue;
+        };
+        if let Some(held) = open.remove(&node) {
+            added = added.saturating_add(count.bytes.saturating_sub(held));
+            left.push(node);
         }
     }
+    (left, added)
+}
+
+/// What the usage collected and the nodes' statuses tell at one instant of
+/// the traffic packs refunded in full (design §9.6), as
+/// [`PaymentLedger::settle`](super::PaymentLedger::settle) reads them.
+pub trait RefundUsage {
+    /// What the nodes had counted for `user` in the billing cycle before
+    /// `at`, at most
+    /// ([`CollectedUsage::cycle_served_before`](crate::usage::CollectedUsage::cycle_served_before));
+    /// `None` while the usage cannot tell.
+    fn served_before(&self, user: &UserId, at: UnixTime) -> Option<ServedBefore>;
+
+    /// `user`'s REALITY downlink of the billing cycle on every node
+    /// ([`CollectedUsage::cycle_reality_downlink`](crate::usage::CollectedUsage::cycle_reality_downlink));
+    /// `None` while the usage cannot tell.
+    fn reality_downlink(&self, user: &UserId) -> Option<BTreeMap<NodeId, DownlinkCount>>;
+
+    /// When the run of Xray that `node`'s latest status shows began;
+    /// `None` without a status that shows Xray running.
+    fn xray_began(&self, node: &NodeId) -> Option<RunBegan>;
 }
 
 /// What a refund in full took back of its order's service period.
@@ -94,8 +236,8 @@ pub enum RefundEffect {
     Nothing,
     /// The first refund in full of a service period.
     Time(TimeTakenBack),
-    /// The first refund in full of a traffic pack, with what Mooring knew
-    /// of the user's use.
+    /// The first refund in full of a traffic pack, with what Mooring knows
+    /// of the user's use at its time.
     Pack(PackUse),
 }
 
@@ -161,7 +303,9 @@ impl TakeBacks {
                 Some(span) => {
                     RefundEffect::Time(take_time(&mut spans, &record.order, span, seq, at))
                 }
-                None => pack_taken_back(record).map_or(RefundEffect::Nothing, RefundEffect::Pack),
+                None => pack_taken_back(record)
+                    .cloned()
+                    .map_or(RefundEffect::Nothing, RefundEffect::Pack),
             };
             effects.insert(seq, effect);
         }
@@ -204,19 +348,14 @@ fn granted_period(record: &OrderRecord) -> Option<(UnixTime, UnixTime)> {
     }
 }
 
-/// What the first refund in full of `record` recorded of the use of the
-/// pack it takes back, if the order's grant gave a pack and a refund in
-/// full names it. The ledger records a use on every such refund
-/// ([`PaymentLedger::decode`](super::PaymentLedger::decode) refuses one
-/// without); none would be a use Mooring did not know.
-pub(super) fn pack_taken_back(record: &OrderRecord) -> Option<PackUse> {
-    let grant = record.grant?;
-    if grant.outcome != GrantOutcome::Pack {
-        return None;
-    }
-    record
-        .first_refund_in_full()
-        .map(|refund| refund.pack_use.unwrap_or(PackUse::Unknown))
+/// What `record`'s refund in full records of the use of the pack it takes
+/// back; `None` for an order that gave no pack, or has no refund in full.
+/// The ledger records a use on the first refund in full of a granted pack
+/// and on no other refund
+/// ([`PaymentLedger::decode`](super::PaymentLedger::decode) refuses a file
+/// that breaks either).
+pub(super) fn pack_taken_back(record: &OrderRecord) -> Option<&PackUse> {
+    record.first_refund_in_full()?.pack_use.as_ref()
 }
 
 /// Takes back the time of `order`'s period, `span`, from `at` on, for the

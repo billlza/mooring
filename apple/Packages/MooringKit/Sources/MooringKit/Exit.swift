@@ -549,4 +549,31 @@ public struct ExitSection: Decodable, Hashable, Sendable {
         foreignNetworks = try object.decode([ForeignNetworkFinding].self, forKey: .foreignNetworks)
         allowedNetworks = try object.decode([AllowedNetwork].self, forKey: .allowedNetworks)
     }
+
+    /// When the violation the exit is down for was found: the time of the
+    /// latch that carries the state's violation, the earliest when several
+    /// do. `nil` unless the exit is down for a violation a latch carries.
+    ///
+    /// `since` is not that time: it is when the state last became what it
+    /// is, so a daemon restart moves it, and so does another reason that
+    /// held the exit down for a while in front of the latch (a foreign
+    /// network, the M7 unplugged).
+    public var violationLatchedAt: UnixTime? {
+        guard case .down(.violation(let violation)) = state else { return nil }
+        return latches.lazy.filter { $0.violation == violation }.map(\.at).min()
+    }
+
+    /// The latches the state does not show: every latch, unless the exit
+    /// is down for the violation one carries, which leaves the others.
+    ///
+    /// Preflight looks at a latch only after it has checked that the exit
+    /// is enabled, the SIM's plan and stop, the egress, the foreign
+    /// networks and the carrier check's record (design §10.2), and a
+    /// sleeping Mac's exit is paused whatever is latched. So another
+    /// reason can stand in front of a latch, which then keeps the exit
+    /// down once that reason is gone.
+    public var latchesBehindTheState: [Latch] {
+        guard case .down(.violation(let violation)) = state else { return latches }
+        return latches.filter { $0.violation != violation }
+    }
 }

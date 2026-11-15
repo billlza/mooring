@@ -10,7 +10,7 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,8 +26,8 @@ use crate::daemon::deployed::Stopped;
 use crate::daemon::hub::Hub;
 use crate::daemon::serve::AcceptFailed;
 use crate::daemon::{
-    Control, Intervals, LoopState, RunPaths, acceptor_end, after_poll, deployment_exists, say,
-    serve_until_stopped, spawn_acceptor, start,
+    Asked, Control, Intervals, LoopState, RunPaths, acceptor_end, after_poll, deployment_exists,
+    say, serve_until_stopped, spawn_acceptor, start,
 };
 use crate::error::{CommandError, LocalError};
 use crate::router::error::{RouterError, UnreachableCause};
@@ -37,17 +37,11 @@ fn short_dir() -> TempDir {
     tempfile::Builder::new().tempdir_in("/tmp").unwrap()
 }
 
-/// What the loop and the connections share, as `run` makes it.
-fn control() -> (Arc<Control>, mpsc::Receiver<()>) {
-    let (retry, retries) = mpsc::channel();
-    (
-        Arc::new(Control {
-            hub: Hub::default(),
-            retry,
-            deployed: AtomicBool::new(false),
-        }),
-        retries,
-    )
+/// What the loop and the connections share, as `run` makes it, and the
+/// loop's ends of it.
+fn control() -> (Arc<Control>, Asked) {
+    let (control, asked) = Control::new();
+    (Arc::new(control), asked)
 }
 
 /// The log's lines after the daemon's stamp and prefix.
@@ -70,7 +64,7 @@ fn the_router_console_polls_until_the_acceptor_ends() {
     let mut harness = Harness::new(9);
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
-    let (control, retries) = control();
+    let (control, asked) = control();
     let (ended, acceptor_ended) = mpsc::channel();
     ended.send(()).unwrap();
     let mut log = Vec::new();
@@ -81,7 +75,7 @@ fn the_router_console_polls_until_the_acceptor_ends() {
             &support,
             &control,
             &acceptor_ended,
-            &retries,
+            &asked,
             Intervals::DAEMON,
         )
     });
@@ -109,7 +103,7 @@ fn a_deployment_that_appears_is_served_from_the_next_poll() {
     let mut harness = Harness::new(9);
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
-    let (control, retries) = control();
+    let (control, asked) = control();
     let (_ended, acceptor_ended) = mpsc::channel::<()>();
     let quick = Intervals {
         router_poll: Duration::from_millis(20),
@@ -128,7 +122,7 @@ fn a_deployment_that_appears_is_served_from_the_next_poll() {
                     &support,
                     &control,
                     &acceptor_ended,
-                    &retries,
+                    &asked,
                     quick,
                 )
             });
@@ -164,7 +158,7 @@ fn a_deployment_there_at_the_start_is_served_at_once() {
         .push_back(Ok(super::deployed::CARRIER));
     let support = harness.support_dir();
     fs::create_dir_all(RunPaths::under(&support).dir).unwrap();
-    let (control, retries) = control();
+    let (control, asked) = control();
     let (ended, acceptor_ended) = mpsc::channel();
     ended.send(()).unwrap();
     let mut log = Vec::new();
@@ -175,7 +169,7 @@ fn a_deployment_there_at_the_start_is_served_at_once() {
             &support,
             &control,
             &acceptor_ended,
-            &retries,
+            &asked,
             Intervals::DAEMON,
         )
     });
@@ -195,7 +189,7 @@ fn a_log_that_cannot_take_the_first_line_stops_the_daemon() {
     let mut harness = Harness::new(9);
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
-    let (control, retries) = control();
+    let (control, asked) = control();
     let (_ended, acceptor_ended) = mpsc::channel::<()>();
     let mut log = FailingLog::at("daemon started");
     let error = harness
@@ -206,7 +200,7 @@ fn a_log_that_cannot_take_the_first_line_stops_the_daemon() {
                 &support,
                 &control,
                 &acceptor_ended,
-                &retries,
+                &asked,
                 Intervals::DAEMON,
             )
         })
@@ -308,7 +302,7 @@ fn the_acceptor_s_end_is_its_error_or_its_panic() {
     let listener = UnixListener::bind(dir.path().join("c.sock")).unwrap();
     // A listener that never waits fails its first accept.
     listener.set_nonblocking(true).unwrap();
-    let (control, _retries) = control();
+    let (control, _asked) = control();
     let (acceptor, acceptor_ended) = spawn_acceptor(listener, &control).unwrap();
     acceptor_ended
         .recv_timeout(Duration::from_secs(10))

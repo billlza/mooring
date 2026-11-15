@@ -39,7 +39,7 @@ fn effective_quota(user: &User, automatic: Option<UserQuota>) -> Option<UserQuot
         now,
     )
     .unwrap();
-    effective_policy(user, automatic, &Entitlements::none(), cycle, now).quota
+    effective_policy(user, automatic, &Entitlements::none(), cycle, now, None).quota
 }
 
 const GB: u64 = 1_000_000_000;
@@ -81,6 +81,7 @@ fn usage(through: UnixTime, served: &[(UserId, u64)]) -> CycleUsage {
             .iter()
             .map(|(user, bytes)| (user.clone(), Some(*bytes)))
             .collect(),
+        reality_downlink: BTreeMap::new(),
     }
 }
 

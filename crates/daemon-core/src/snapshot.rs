@@ -21,6 +21,7 @@ use crate::payments::Entitlements;
 use crate::period::BillingCycle;
 use crate::policy::{ExpiryState, QuotaState, automatic_quota, effective_policy};
 use crate::router::RouterReading;
+use crate::sim_network::SimNetworkStatus;
 use crate::status::{
     ExitSection, ForecastView, MacStatusParts, MacStatusV2, MeterAccuracy, NodeAgentState,
     NodeReport, NodeRow, ProtocolVerdicts, SimMeterStatus, UsageView, UserRow,
@@ -78,6 +79,8 @@ pub struct StatusInputs<'a> {
     pub exit: ExitSection,
     /// The SIM meter.
     pub sim: SimTotals<'a>,
+    /// What the daemon's record says of the SIM's network.
+    pub sim_network: SimNetworkStatus,
     /// The router.
     pub router: RouterReading,
     /// The latest capacity view, if any.
@@ -154,16 +157,17 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV2, SnapshotError> 
         ),
         Ledgers::Unavailable(reason) => Some(Err(reason)),
     };
-    let (usage, mut by_user) = match report {
-        None => (UsageView::NotPulled, None),
+    let (usage, mut by_user, reality_downlink) = match report {
+        None => (UsageView::NotPulled, None, BTreeMap::new()),
         Some(Ok(report)) => (
             UsageView::Report {
                 periods: report.periods,
                 sampled_at: report.sampled_at,
             },
             Some(report.users),
+            report.cycle_reality_downlink,
         ),
-        Some(Err(reason)) => (UsageView::Unavailable { reason }, None),
+        Some(Err(reason)) => (UsageView::Unavailable { reason }, None, BTreeMap::new()),
     };
     let automatic = automatic_quota(deployment, inputs.at).map_err(SnapshotError::Quota)?;
     let cycle = BillingCycle::of_instant(sim.cycle(), inputs.at).map_err(SnapshotError::Cycle)?;
@@ -175,7 +179,14 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV2, SnapshotError> 
             None => None,
         };
         let activity = activity.remove(id).ok_or_else(missing)?;
-        let policy = effective_policy(user, automatic, inputs.entitlements, cycle, inputs.at);
+        let policy = effective_policy(
+            user,
+            automatic,
+            inputs.entitlements,
+            cycle,
+            inputs.at,
+            reality_downlink.get(id),
+        );
         let quota = match usage.as_ref().and_then(|usage| usage.cycle_served_bytes()) {
             Some(bytes) => QuotaState::of(policy.quota, bytes),
             None => QuotaState::without_usage(policy.quota),
@@ -239,6 +250,7 @@ pub fn assemble(inputs: StatusInputs<'_>) -> Result<MacStatusV2, SnapshotError> 
             accuracy: inputs.sim.accuracy,
             thresholds: sim.thresholds(),
             forecast,
+            network: inputs.sim_network,
         },
         router: inputs.router,
         capacity: inputs.capacity,

@@ -80,6 +80,14 @@
 //! UTC day, and [`read_sim_meter`] reads it back with a bound; the daemon
 //! encodes and decodes it (design §10.1).
 //!
+//! # The SIM's network
+//!
+//! [`write_sim_network`] replaces `run/sim-network.json`, what the M7
+//! reported of the SIM and its network when the carrier check and the
+//! billing cycle were recorded and what it reports instead now, and
+//! [`read_sim_network`] reads it back with a bound; the daemon encodes and
+//! decodes it (design §10.2, §15.3).
+//!
 //! # The radio history
 //!
 //! [`append_radio_line`] appends one sample line to the UTC day's file,
@@ -132,6 +140,7 @@ mod radio_history;
 mod router_pin;
 mod secrets;
 mod sim_meter;
+mod sim_network;
 mod status_snapshot;
 mod store;
 #[cfg(test)]
@@ -167,6 +176,7 @@ pub use secrets::{
     SnapshotReadError, SnapshotReadErrorKind, read_snapshot,
 };
 pub use sim_meter::{SIM_METER_FILE, USAGE_DIRECTORY, read_sim_meter, write_sim_meter};
+pub use sim_network::{SIM_NETWORK_FILE, read_sim_network, write_sim_network};
 pub use status_snapshot::{STATUS_SNAPSHOT_FILE, write_status_snapshot};
 pub use store::{LOCK_FILE, STATE_FILE, Store};
 

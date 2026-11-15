@@ -45,7 +45,7 @@ use std::num::NonZeroU64;
 
 use mooring_model::quota::{AutoQuotaPolicy, BudgetPercent, SimFactor};
 use mooring_model::user::{QuotaAction, SuspendReason, UserQuota, UserStatus};
-use mooring_model::{Deployment, ModelError, UnixTime, User, UserId};
+use mooring_model::{Deployment, ModelError, NodeId, UnixTime, User, UserId};
 use serde::{Deserialize, Serialize};
 
 use crate::alert::AlertCondition;
@@ -422,7 +422,13 @@ pub struct EffectivePolicy {
 ///   if any. The bytes of the traffic packs granted in `cycle` are added to
 ///   whichever applies, of a pack refunded in full only what the user had
 ///   used of it ([`UserEntitlements::pack_bytes_in`]); a user with no quota
-///   at all keeps none.
+///   at all keeps none. `downlink` is what each node has counted of the
+///   user's REALITY downlink in `cycle`, by the usage report the caller
+///   holds the quota against
+///   ([`UsageReport`](crate::usage::UsageReport)'s `cycle_reality_downlink`),
+///   or `None` without one: a refunded pack's use takes in what a node
+///   counts of it while a download that was open at the refund may be
+///   open there.
 /// - **Expiry.** Without a paid period, the user's own
 ///   `UserPolicy::expires_at`. With one, the later of the last period's end
 ///   (as the refunds in full leave it) and the user's own expiry; an own
@@ -435,6 +441,7 @@ pub fn effective_policy(
     paid: &Entitlements,
     cycle: BillingCycle,
     now: UnixTime,
+    downlink: Option<&BTreeMap<NodeId, u64>>,
 ) -> EffectivePolicy {
     let own = paid.user(&user.id);
     let base = match (user.policy.quota, own.and_then(|own| own.period_at(now))) {
@@ -444,7 +451,7 @@ pub fn effective_policy(
     };
     let quota = base.map(|quota| {
         let packs = own.map_or(0, |own| {
-            own.pack_bytes_in(cycle, now, quota.cycle_served_bytes.get())
+            own.pack_bytes_in(cycle, now, quota.cycle_served_bytes.get(), downlink)
         });
         UserQuota {
             cycle_served_bytes: quota.cycle_served_bytes.saturating_add(packs),
@@ -598,7 +605,8 @@ fn verdict(
     moment: Moment,
 ) -> Result<Verdict, PolicyError> {
     let now = moment.now;
-    let policy = effective_policy(user, automatic, paid, moment.cycle, now);
+    let downlink = usage.and_then(|usage| usage.reality_downlink.get(id));
+    let policy = effective_policy(user, automatic, paid, moment.cycle, now, downlink);
     let effective = policy.quota;
     let quota = match (effective, usage) {
         (None, _) => QuotaState::NoQuota,

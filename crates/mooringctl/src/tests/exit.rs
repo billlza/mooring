@@ -742,6 +742,12 @@ fn retry_asks_the_daemon_and_reports_its_answer() {
             "mooringctl: the daemon answered with a reply to another request\n",
         ),
         (
+            Some(DaemonReply::SimNetworkAccepted),
+            EXIT_LOCAL,
+            "",
+            "mooringctl: the daemon answered with a reply to another request\n",
+        ),
+        (
             None,
             EXIT_LOCAL,
             "",

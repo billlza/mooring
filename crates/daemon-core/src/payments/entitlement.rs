@@ -8,10 +8,10 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
-use mooring_model::{UnixTime, UserId};
+use mooring_model::{NodeId, UnixTime, UserId};
 
 use super::ids::OrderId;
-use super::refund::PackUse;
+use super::refund::{PackUse, counted_since};
 use crate::period::BillingCycle;
 
 /// A service period a paid order gave: from `from` until `until`, with a
@@ -48,14 +48,53 @@ pub struct PaidPack {
     pub refund: Option<PackRefund>,
 }
 
-/// A refund in full of a traffic pack (design §9.6): from `at` on, the
-/// pack counts only what the user had used of it, as `used` tells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A refund in full of a traffic pack (design §9.6): once Mooring has
+/// learned the user's use at `at`, the pack counts only what the user had
+/// used of it, as `used` tells.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackRefund {
     /// When the portal recorded the refund.
     pub at: UnixTime,
-    /// What Mooring knew of the user's use when it applied the refund.
+    /// What Mooring knows of the user's use then.
     pub used: PackUse,
+}
+
+impl PaidPack {
+    /// When the pack's refund in full was recorded and the user's bytes
+    /// served in the pack's cycle by then, if the refund has taken back by
+    /// `now` what the user had not used of the pack: Mooring had learned
+    /// that use by `now`. A pack whose refund still waits for the usage,
+    /// or whose cycle ended first, is not taken back: it counts in full.
+    ///
+    /// `downlink` is what each node has counted of the user's REALITY
+    /// downlink in the pack's cycle, per node that counted any, by the
+    /// usage report the caller reads the user's use from; `None` without
+    /// a figure for the user. What a node still open has counted beyond
+    /// what the use held from it may be a download that was open at the
+    /// refund, and is part of the use ([`PackUse::Served`]); whether the
+    /// pack is taken back does not depend on it.
+    #[must_use]
+    pub fn taken_back_by(
+        &self,
+        now: UnixTime,
+        downlink: Option<&BTreeMap<NodeId, u64>>,
+    ) -> Option<(UnixTime, u64)> {
+        match self.refund.as_ref()? {
+            PackRefund {
+                at,
+                used:
+                    PackUse::Served {
+                        bytes,
+                        learned_at,
+                        open_downloads,
+                    },
+            } if *learned_at <= now => {
+                let since = downlink.map_or(0, |counted| counted_since(open_downloads, counted));
+                Some((*at, bytes.saturating_add(since)))
+            }
+            PackRefund { .. } => None,
+        }
+    }
 }
 
 /// The periods and packs one user's orders gave.
@@ -98,49 +137,53 @@ impl UserEntitlements {
     /// of `base` bytes, the quota that applies without them (design §9.6,
     /// the operator's decisions of 2026-11-12: a pack counts in the billing
     /// cycle it is granted in, and in no other, and its order's `days` is
-    /// not applied). A pack refunded in full counts, from the refund on,
-    /// only what the user had used of it: the bytes they had used in the
-    /// cycle beyond the rest of their quota (`base` and the cycle's other
-    /// packs granted by the refund, as they counted then), at most its own:
-    /// none of it when Mooring did not know the use, and all of it when
-    /// the pack's cycle had ended before Mooring learned of the refund.
-    /// Refunds count in the order they were recorded. Saturates at
-    /// `u64::MAX`.
+    /// not applied). A pack refunded in full counts, once Mooring has
+    /// learned the user's use at the refund's time
+    /// ([`PaidPack::taken_back_by`]), only what the user had used of it:
+    /// the bytes they had used in the cycle by then beyond the rest of
+    /// their quota (`base` and the cycle's other packs granted by the
+    /// refund, as they counted then), at most its own. Until then it counts
+    /// in full, and it does for good when its cycle ended first: nothing
+    /// the user used is taken back. Refunds count in the order they were
+    /// recorded. `downlink` is what each node has counted of the user's
+    /// REALITY downlink in `cycle` ([`PaidPack::taken_back_by`]).
+    /// Saturates at `u64::MAX`.
     #[must_use]
-    pub fn pack_bytes_in(&self, cycle: BillingCycle, now: UnixTime, base: u64) -> u64 {
+    pub fn pack_bytes_in(
+        &self,
+        cycle: BillingCycle,
+        now: UnixTime,
+        base: u64,
+        downlink: Option<&BTreeMap<NodeId, u64>>,
+    ) -> u64 {
         let packs: Vec<&PaidPack> = self
             .packs
             .iter()
             .filter(|pack| cycle.contains(pack.granted_at))
             .collect();
         let mut counted: Vec<u64> = packs.iter().map(|pack| pack.bytes.get()).collect();
-        let mut refunded: Vec<(usize, &PaidPack, PackRefund)> = packs
+        // Each pack taken back by `now`: when its refund was recorded, and
+        // the user's use then.
+        let mut refunded: Vec<(usize, &PaidPack, UnixTime, u64)> = packs
             .iter()
             .copied()
             .enumerate()
             .filter_map(|(index, pack)| {
-                pack.refund
-                    .filter(|refund| refund.at <= now)
-                    .map(|refund| (index, pack, refund))
+                pack.taken_back_by(now, downlink)
+                    .map(|(at, used)| (index, pack, at, used))
             })
             .collect();
-        refunded.sort_by(|(_, left, earlier), (_, right, later)| {
-            (earlier.at, &left.order).cmp(&(later.at, &right.order))
+        refunded.sort_by(|(_, left, earlier, _), (_, right, later, _)| {
+            (earlier, &left.order).cmp(&(later, &right.order))
         });
-        for (index, pack, refund) in refunded {
+        for (index, pack, at, used) in refunded {
             let rest = packs
                 .iter()
                 .zip(&counted)
                 .enumerate()
-                .filter(|(other, (other_pack, _))| {
-                    *other != index && other_pack.granted_at <= refund.at
-                })
+                .filter(|(other, (other_pack, _))| *other != index && other_pack.granted_at <= at)
                 .fold(base, |total, (_, (_, bytes))| total.saturating_add(*bytes));
-            counted[index] = match refund.used {
-                PackUse::Served { bytes } => bytes.saturating_sub(rest).min(pack.bytes.get()),
-                PackUse::Unknown => 0,
-                PackUse::CycleEnded => pack.bytes.get(),
-            };
+            counted[index] = used.saturating_sub(rest).min(pack.bytes.get());
         }
         counted
             .into_iter()

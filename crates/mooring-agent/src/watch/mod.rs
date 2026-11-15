@@ -39,8 +39,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use mooring_agent_proto::{
-    ACCOUNTING_INTERVAL_SECS, AgentError, GateState, Generation, IoOp, MacDrainHold, TxnState,
-    UnixTime, WATCH_TICK_SECS, WatchConditions, WatchConfig, WatchError, WatchErrorKind,
+    AgentError, GateState, Generation, IoOp, MacDrainHold, TxnState, UnixTime, WATCH_TICK_SECS,
+    WatchConditions, WatchConfig, WatchError, WatchErrorKind,
 };
 
 use crate::gate;
@@ -55,8 +55,8 @@ use journaling::changes;
 use status::{EngineRestarts, Observed, WatchStatus};
 
 /// Seconds between readings: the accounting interval (design §11.3 step
-/// 4), at which the host is read too.
-pub(crate) const HOST_READING_SECS: u64 = ACCOUNTING_INTERVAL_SECS;
+/// 4), at which the host is read too. The Mac relies on it (design §9.6).
+pub(crate) use mooring_agent_proto::HOST_READING_SECS;
 
 /// What ends the watch.
 #[derive(Debug, Clone, PartialEq, Eq)]
