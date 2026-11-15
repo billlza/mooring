@@ -59,6 +59,10 @@ fn a_meter_thread_that_died_is_an_error() {
         "{:?}",
         meter.meter()
     );
+    assert!(matches!(
+        meter.rates(UnixTime::from_secs(NOW)),
+        Err(LocalError::MeterThread)
+    ));
 }
 
 /// A meter whose latest reading lies past the year 9999 cannot be dated,

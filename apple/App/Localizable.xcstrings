@@ -3562,12 +3562,12 @@
         }
       }
     },
-    "The daemon samples the egress once the exit runs.": {
+    "The daemon samples the egress while the exit probes, once it has read the egress's counters for a minute.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "出口运行后，守护进程才会对出口采样。"
+            "value": "出口探测期间，守护进程读满一分钟出口计数后才开始采样。"
           }
         }
       }

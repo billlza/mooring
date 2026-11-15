@@ -114,6 +114,14 @@
 //! the daemon first saw it, and [`read_pending_applies`] reads it back with
 //! a bound; the daemon encodes and decodes it (design §13.6, §15.3).
 //!
+//! # Round trips
+//!
+//! [`write_round_trips`] replaces `run/round-trips.json`, each node's
+//! direct-probe round trips over the last day, whose 10th percentile is
+//! the capacity monitor's idle reference, and [`read_round_trips`] reads it
+//! back with a bound; the daemon encodes and decodes it (console spec
+//! B.2.8, design §15.3).
+//!
 //! # Secrets
 //!
 //! The state holds no secrets. They live in a [`SecretStore`]; the
@@ -137,6 +145,7 @@ mod ordered;
 mod payments;
 mod pending_applies;
 mod radio_history;
+mod round_trips;
 mod router_pin;
 mod secrets;
 mod sim_meter;
@@ -167,6 +176,7 @@ pub use radio_history::{
     MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
     prune_radio_days, radio_day_path, read_radio_day,
 };
+pub use round_trips::{ROUND_TRIPS_FILE, read_round_trips, write_round_trips};
 pub use router_pin::{
     MAX_ROUTER_PIN_BYTES, ROUTER_PIN_FILE, RouterPin, RouterPinFault, StoredPin, read_router_pin,
     write_router_pin,

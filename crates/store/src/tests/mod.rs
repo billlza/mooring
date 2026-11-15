@@ -30,6 +30,7 @@ mod pending_applies;
 mod properties;
 mod radio_history;
 mod regular_files;
+mod round_trips;
 mod router_pin;
 mod secrets;
 mod sim_meter;

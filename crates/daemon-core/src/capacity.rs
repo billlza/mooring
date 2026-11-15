@@ -15,6 +15,13 @@
 //! samples at most 2 minutes apart) are inference from the console spec,
 //! to be calibrated with M8's measurements; they are values the daemon
 //! passes in, not constants of the logic.
+//!
+//! A sample's figures come from [`rates`], the egress rates over the last
+//! minute, and [`round_trips`], the direct probe's round trips over the
+//! last day, whose 10th percentile is the idle reference.
+
+pub mod rates;
+pub mod round_trips;
 
 use std::num::{NonZeroU16, NonZeroU64};
 
@@ -194,6 +201,20 @@ impl CapacityMonitor {
                 at: sample.at,
             });
         }
+        Ok(self.step(sample))
+    }
+
+    /// Forgets every sample before `sample` and takes it in: the view a
+    /// new monitor gives of it, whatever came before. For a sample the
+    /// monitor refused as out of order, when the clock stepped back: a run
+    /// across a gap of unknown length cannot be shown to have held.
+    pub fn restart(&mut self, sample: CapacitySample) -> CapacityStatus {
+        *self = Self::new(self.thresholds, self.baseline);
+        self.step(sample)
+    }
+
+    /// Takes in `sample`, which follows the previous one.
+    fn step(&mut self, sample: CapacitySample) -> CapacityStatus {
         let uplink_use = match self.baseline {
             None => UplinkUse::NoBaseline,
             Some(baseline) => UplinkUse::Measured {
@@ -236,14 +257,14 @@ impl CapacityMonitor {
             }
         };
         self.last_at = Some(sample.at);
-        Ok(CapacityStatus {
+        CapacityStatus {
             at: sample.at,
             tx_bps: sample.tx_bps,
             rx_bps: sample.rx_bps,
             uplink_use,
             rtt_inflation_ms,
             saturation,
-        })
+        }
     }
 }
 
@@ -395,6 +416,44 @@ mod tests {
         assert_eq!(
             CapacityErrorKind::ALL,
             [CapacityErrorKind::SampleOutOfOrder]
+        );
+    }
+
+    #[test]
+    fn a_restart_forgets_the_samples_before_it() {
+        let mut monitor = CapacityMonitor::new(CapacityThresholds::DEFAULT, Some(baseline()));
+        let full = 15 * MBIT;
+        let samples: Vec<_> = (0..=10)
+            .map(|minute| sample(1_000 + minute * 60, full, None))
+            .collect();
+        assert_eq!(
+            run(&mut monitor, &samples)[10],
+            Saturation::Saturated {
+                since: UnixTime::from_secs(1_000)
+            }
+        );
+        // A clock that stepped back gives a sample the monitor refuses.
+        let earlier = sample(1_300, full, None);
+        assert!(monitor.observe(earlier).is_err());
+        let fresh = CapacityMonitor::new(CapacityThresholds::DEFAULT, Some(baseline()))
+            .observe(earlier)
+            .unwrap();
+        assert_eq!(
+            fresh.saturation,
+            Saturation::Building {
+                since: UnixTime::from_secs(1_300)
+            }
+        );
+        assert_eq!(monitor.restart(earlier), fresh);
+        // The samples after it follow it: the run started with it.
+        assert_eq!(
+            monitor
+                .observe(sample(1_360, full, None))
+                .unwrap()
+                .saturation,
+            Saturation::Building {
+                since: UnixTime::from_secs(1_300)
+            }
         );
     }
 

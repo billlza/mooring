@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -25,8 +25,8 @@ use std::time::Instant;
 
 use mooring_agent_proto::{ClearableHold, GateReason, LineRequest, Response, ShutdownReason};
 use mooring_daemon_core::exit::{
-    CallFault, ExitPorts, InChainProbe, InChainTarget, NodeCall, RenderOutcome, Rendered,
-    RenderedProber, StartFault,
+    CallFault, DirectProbe, ExitPorts, InChainProbe, InChainTarget, NodeCall, RenderOutcome,
+    Rendered, RenderedProber, StartFault,
 };
 use mooring_daemon_core::status::{ProbeStage, ProcessEnd};
 use mooring_model::iface::{BsdName, ResolvedInterface, ResolvedInterfaces};
@@ -329,7 +329,7 @@ impl ExitPorts for DaemonPorts<'_, '_> {
         &mut self,
         via: &ResolvedInterface,
         reflector: SocketAddrV4,
-    ) -> Result<Ipv4Addr, ProbeStage> {
+    ) -> Result<DirectProbe, ProbeStage> {
         (self.env.probe)(via.index, reflector).map_err(|failure| failure.stage)
     }
 
