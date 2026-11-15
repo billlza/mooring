@@ -61,13 +61,13 @@ tmutil isexcluded <bans>
    - The user runs CFM on an Apple-silicon Mac with macOS 15 or later: CFM is arm64 only from 15.0.
    - The CFM build must be a 0.5-line release that has the mainland China direct switch (F10): CFM 0.5.0 (build 50030, tag `v0.5.0`, released 2026-10-18) or a later 0.5.x. The switch is `d828f92`; 0.5.0 is the first release with it.
    - Do not deliver a configuration to an older CFM. Without the switch, mainland sites fail, because the nodes deny `geoip:cn` and `geosite:cn` (§8.2).
-2. **Add the user.** First compare the person with the ban records (section 10): their name, and the phone number or Apple ID they call from. On any likeness, stop until you have checked. Then `mooringctl user add`, typing the user's label at its prompt (never as an argument, which the shell history keeps), with the client line CFM 0.5 (`Cfm05`). A user without an alias gets one with `user alias <uid>`: files are named after the alias, never the label.
+2. **Add the user.** First compare the person with the ban records (section 10): their name, and the contact they call from (FaceTime's number or Apple ID, WhatsApp's number, or Telegram's number or username). On any likeness, stop until you have checked. Then `mooringctl user add`, typing the user's label at its prompt (never as an argument, which the shell history keeps), with the client line CFM 0.5 (`Cfm05`). A user without an alias gets one with `user alias <uid>`: files are named after the alias, never the label.
 3. **Hand over the two documents:** [user-onboarding.md](user-onboarding.md) and [user-agreement.md](user-agreement.md).
    - Send the text from each title on. The operator notes in the comment at the top are not for users.
    - They hold no secrets, but they describe the service, so they never cross WeChat, QQ or any other mainland-China service, encrypted or not. Hand them over in person by AirDrop (never on paper, which a search finds), or put them in an encrypted image of their own, made and sent as in section 4 with its own passphrase.
-   - Say the portal's address on a FaceTime Audio call. Never write it in a message.
+   - Say the portal's address on a call: FaceTime Audio, WhatsApp or Telegram, the three the agreement names (its 「通话」). Never write it in a message.
 4. **Get the user's acceptance on the call.**
-   - On a FaceTime Audio call, the user says 「我已阅读并同意《Mooring 使用约定》第 N 版」, where N is the revision the build ships (`AgreementVersion::CURRENT`, now 2).
+   - On a call (FaceTime Audio, WhatsApp or Telegram), the user says 「我已阅读并同意《Mooring 使用约定》第 N 版」, where N is the revision the build ships (`AgreementVersion::CURRENT`, now 2).
    - Then run `mooringctl user agree <uid>`. It records the revision and the UTC day, and takes neither as an argument. It is a bookkeeping record: it keeps the generation, so it needs no apply (§7).
 5. **Bind the portal account.** The user registers at the portal and reads out, on the call, the account number (账号编号) its 「账户」 page shows. On the portal's host, run `mooring-portal --db <file> bind --account <number> --user <uid>`. Bind by that number, never by an email address: the portal does not verify addresses (its `docs/security.md` §2).
 6. **Payment.** The user buys a month or a traffic pack at the portal, by bank card. The payment pull grants it. With the card check (to be built with the payment work), a payment by a card the ban list holds grants nothing, and you refund it in the Stripe Dashboard (clause 3), since the portal holds no key that can refund. If it started an auto-renewing month, also cancel that subscription and delete the saved card. Compare the user's payments with the banned users' in the Stripe Dashboard (card, IP address, location, device), and copy nothing of a new user's payments out of Stripe. A payment made through the service reaches Stripe from the line's own address, and every user pays from Safari on a Mac (the guide, section 2), so neither is a likeness.
@@ -118,7 +118,9 @@ Refusals and what to do about each:
    ```
    Type the passphrase twice at the prompt. Never use `-passphrase`, which would put the passphrase in the process list and the shell history.
 4. Send the image. Whatever server it crosses may keep it, so only the passphrase protects it, and any channel may carry it except those that tie it to the user's real-name identity in mainland China: never WeChat, QQ (QQ Mail included), another mainland-China mail or cloud service, or iMessage to a mainland-China Apple ID. Send no words about the service with it.
-5. On a FaceTime Audio call, say the words once, and spell them if needed.
+5. On an end-to-end encrypted voice call, say the words once, and spell them if needed: FaceTime Audio, a WhatsApp call or a Telegram call (the operator added the last two on 2026-11-15).
+   - The call only: never type the words in a chat, WhatsApp's and Telegram's included.
+   - WhatsApp and Telegram are blocked in mainland China: a user there reaches them only through a proxy that already works, and otherwise has FaceTime.
    - Never use a WeChat or QQ call, or a carrier call into China.
    - Stay on the call while the user mounts the image and imports the file. The user must not tick "Remember password in my keychain".
 
@@ -170,8 +172,8 @@ Record nothing about the incident itself (what happened, where, to whom) in Moor
 
 ## 9. Support
 
-- The support channel is a FaceTime Audio call, or a meeting in person.
-- In WeChat, QQ or any other chat, the user and the operator only arrange a call: no words about the service, no file, no link, no screenshot.
+- The support channel is a call (FaceTime Audio, WhatsApp or Telegram, as the agreement's clause 5 has it), or a meeting in person.
+- In WeChat, QQ or any other chat, WhatsApp's and Telegram's text chats included, the user and the operator only arrange a call: no words about the service, no file, no link, no screenshot.
 - On the call, ask what the agreement's clause 5 asks for: when it started, which network, and whether every node fails.
 - **Outages (clause 1).** Make up an outage when every node failed for the user, or every user was paused, for 8 hours or more, for a reason on the operator's side.
   - The reasons that count: the Mac, the line, a node, a block (one on the user's carrier or region only counts too), or the line's shared cap.
@@ -187,8 +189,8 @@ On the user's request, tell the user what is held about them (clause 4 of the ag
 - **On the operator's Mac:** the label, the alias, the client line, the policy, the usage history and totals (`mooringctl user usage <uid>` prints them: each node's hourly and daily bins and its monthly, folded and lifetime totals, by id and alias and never the label; the five-minute bins, kept 7 days, are not printed), the last-active time, the status changes, the journal's operator actions that name the user (exports, reissues), the payments pulled from the portal, the abuse records pulled from the nodes (with the abuse guard; 13 months) and the acceptance.
 - **On each node:** the usage bins (48 hours), the monthly totals (until 7 days after the month), the last-active time, the user's row in the Mac report and, with the abuse guard, the abuse records (30 days) and the firewall's per-user connection counts (at most an hour).
 - **At the portal:** the account (number, email, password hash, the registration and password-change times), the sessions (token digests, login and expiry times), the link's token digest and its time, the binding and its time, the latest snapshot record, the CFM profile, and the orders. After a ban, only the email's digest, the Stripe fingerprints of the cards the user paid with (with the payment work) and the ban's time, until the service ends.
-- **After a ban, in the ban record on the operator's Mac:** the label, the phone number or Apple ID of the FaceTime calls, the ban's day, the copies of the user's hourly and daily usage, of their payments and of their abuse records, and what the Stripe Dashboard showed of those payments (IP address, location, device) (below).
-- **On the operator's phone and Mac:** FaceTime's call history with the user (number or Apple ID, call times), until the revocation.
+- **After a ban, in the ban record on the operator's Mac:** the label, the contact the calls used, the ban's day, the copies of the user's hourly and daily usage, of their payments and of their abuse records, and what the Stripe Dashboard showed of those payments (IP address, location, device) (below).
+- **On the operator's phone and Mac:** the call history with the user in the app you call them with, FaceTime, WhatsApp or Telegram (the contact and the call times), until the revocation. What Apple, WhatsApp and Telegram keep of the calls follows their own rules (clause 4).
 - **At Stripe:** the payments, with what the payment page collected (email, cardholder name), the card's brand, last four digits, expiry and country, and the IP address, location and device data Stripe's fraud checks gather; the saved card while auto-renewal runs.
 
 **Revocation for non-payment.** Revoke a user whose service expired three months before and was not renewed (clause 6 of the agreement), by hand until Mooring does it, then delete as below.
@@ -198,7 +200,7 @@ On the user's request, tell the user what is held about them (clause 4 of the ag
   - cancel the user's auto-renewal in the Stripe Dashboard;
   - settle any compensation or refund;
   - let the payment pull take the account's paid orders.
-- Then delete the user's saved card at Stripe, your FaceTime call history with them on your phone and Mac (clause 4; an earlier backup keeps its copy until it is deleted or overwritten, as clause 4 says), and their portal account on its host: `mooring-portal --db <file> delete-account --account <number>`. It removes the account with its sessions, binding, snapshot record, profile and link, and the orders go with it.
+- Then delete the user's saved card at Stripe, your call history with them on your phone and Mac, in whichever of FaceTime, WhatsApp and Telegram you called them with (clause 4; an earlier backup keeps its copy until it is deleted or overwritten, as clause 4 says), and their portal account on its host: `mooring-portal --db <file> delete-account --account <number>`. It removes the account with its sessions, binding, snapshot record, profile and link, and the orders go with it.
 - **A ban** (clause 3): the same steps, but once the payment pull has taken the account's paid orders, write the ban record (below). Then end with `mooring-portal --db <file> ban --account <number>` instead of `delete-account`, giving it the fingerprints of the cards the account paid with, read in the Stripe Dashboard (with the payment work).
   - It deletes the account as `delete-account` does, and keeps, until the service ends, the digest of the account's email and the ban's time, so that email cannot register again. With the payment work it is also to keep the cards' fingerprints. A later payment by one of those cards grants nothing: refund it in the Stripe Dashboard. Clause 4 says so.
   - An email stops only that email, and a card only that card: what keeps a banned person out is the binding by account number on a call (section 1), with the ban records checked before it.
@@ -212,7 +214,7 @@ On the user's request, tell the user what is held about them (clause 4 of the ag
   - Keep it in `<bans>` (section 0) as plain files, never in Contacts, Notes or any other synced app, until the service ends. Then delete it, with the portal's ban list.
   - It holds:
     - the user's label;
-    - the phone number or Apple ID of the FaceTime calls;
+    - the contact the calls used: FaceTime's number or Apple ID, WhatsApp's number, or Telegram's number or username;
     - the ban's day;
     - copies of what the Mac holds of the user's hourly and daily usage (bytes by node and protocol) and of their payments, taken after the last payment pull.
       - For the usage, run `mooringctl user usage <uid>` until its first line says `revoked`, which it says once every node has removed the user, and note the time on that line. Once each node listed as `applied` has a held hourly range covering that time's hour (or the next hour, if the time is in an hour's last minute), write the copy with `mooringctl user usage <uid> --bins-only --out <bans>/<file>`. With the daemon serving, that is a few minutes after the hour.
@@ -220,7 +222,7 @@ On the user's request, tell the user what is held about them (clause 4 of the ag
       - The copy holds whole hours and days only, since five-minute bins are not printed. It names the user by id and alias, never the label. It is a new file with mode 0600, which Mooring never deletes: it is part of the ban record and is deleted with it. Its `retention` field describes the Mac's own history, not the copy.
     - copies of the user's abuse records (with the abuse guard): pull the records of every node that served the user, then copy the user's from the Mac's copy.
     - what the Stripe Dashboard shows of those payments: IP address, location and device. Each payment carries the portal's order number, which Stripe keeps as the Checkout Session's `client_reference_id` (the portal's `docs/payments.md` §2), so they can still be found once the portal's orders are gone.
-  - Never write in it the portal login email: that would undo the portal's digest. When the FaceTime Apple ID is that same address, record it as the FaceTime contact all the same.
+  - Never write in it the portal login email: that would undo the portal's digest. When the FaceTime Apple ID is that same address, record it as the calls' contact all the same.
   - Never write in it what happened or any evidence (section 8), links or credentials. The abuse records' copy is the one exception, which clause 4 states: it holds each finding's kind and figures, never where or to whom.
 - **Recognising a banned person** (clause 4). Compare every new user with the ban records:
   - before `user add` (section 1);
@@ -229,7 +231,7 @@ On the user's request, tell the user what is held about them (clause 4 of the ag
 
   The line's own address and Safari on a Mac are no likeness (section 1, step 6). A likeness is a reason to check, never a ban by itself: ban only once you have confirmed that it is the same person.
 - A user who leaves may ask for the Mac's records to be deleted at once: revoke the user, then `mooringctl user forget <uid>` once the user is `Revoked`, instead of waiting for the 13-month rule (design §15.7), which the nightly apply job carries out otherwise. It removes the label, alias, agreement record and status at once, and the daemon deletes the usage history, the totals and the payment orders at its next tick (`console.md`, section 7); only the bare id stays, for a few weeks, so that a node's late report naming it is dropped. A ban record stays, and the abuse records stay for their 13 months (clause 4). A file you made with `user usage --out`, other than a ban record's copy, and the user's CFM files you exported, are yours to delete: no command deletes them.
-- The nodes' records expire on their own schedule (§11.5), and Stripe keeps its payment records by its own rules; tell the user so.
+- The nodes' records expire on their own schedule (§11.5), Stripe keeps its payment records by its own rules, and Apple, WhatsApp and Telegram what they keep of the calls by theirs; tell the user so.
 
 ## 11. The user portal
 

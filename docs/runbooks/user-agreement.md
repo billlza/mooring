@@ -172,10 +172,22 @@
       forget` for a user who leaves and asks. The ban records are kept
       until the service ends, outside Mooring's state, so neither the
       13-month rule nor `user forget` reaches them.
-    - The operator's phone and Mac keep FaceTime's call history with each
-      user: the number or Apple ID, and the call times. The operator
-      deletes it at the user's revocation (the operator's decision of
-      2026-11-07). A banned user's contact stays in the ban record.
+    - The operator's phone and Mac keep the call history of the app the
+      operator calls each user with, FaceTime, WhatsApp or Telegram (below,
+      2026-11-15): the contact (FaceTime's number or Apple ID, WhatsApp's
+      number, Telegram's number or username) and the call times. The
+      operator deletes it at the user's revocation (the operator's decision
+      of 2026-11-07, made for FaceTime and carried to the other two). A
+      banned user's contact stays in the ban record. What Apple, WhatsApp
+      and Telegram keep of the calls is theirs to keep; clause 4 says only
+      what their own pages state: the calls are end-to-end encrypted
+      (Telegram's FAQ; WhatsApp's announcement of 5 April 2016), and
+      WhatsApp records the calls' times and durations (its privacy policy,
+      the EEA version in force from 2 July 2026). That Apple and Telegram
+      can tell when two people called is an inference, from their calls
+      being set up through their servers, not a quotation. Where Telegram
+      keeps its call history was not found in its pages, so the text says
+      nothing of it.
     - Stripe and the user's card issuer are its new third parties. What
       Stripe keeps is its Checkout and Radar data: the payment page's
       fields, the card's brand, last four digits, expiry and country, and
@@ -208,7 +220,8 @@
       first three are kept until the service ends:
       - The ban record on the Mac (delivery.md, section 10). It holds:
         - the label;
-        - the phone number or Apple ID of the FaceTime calls;
+        - the contact the calls used (FaceTime's number or Apple ID,
+          WhatsApp's number, Telegram's number or username);
         - the ban's day;
         - copies of the user's hourly and daily usage (bytes by node and
           protocol) and of their payments;
@@ -220,8 +233,8 @@
         refunded. This is to be built with payment (above).
       - A comparison of every new user with the banned: when they join, at
         each payment, and while they are served.
-        - It uses records already kept: those above, FaceTime's call
-          history, and what the Stripe Dashboard shows of payments.
+        - It uses records already kept: those above, the call history,
+          and what the Stripe Dashboard shows of payments.
           Nothing is collected for it.
         - A likeness is a reason to check. The operator bans only once
           they have confirmed it is the same person.
@@ -298,16 +311,28 @@
   - Clause 6's three months: a user whose service expired three months
     before is revoked, by the operator until Mooring does it, and then
     deleted as clause 4 says (delivery.md, section 10).
+  - The calls: on 2026-11-15 the operator asked for more apps than
+    FaceTime for the calls with users, in their words:
+    «多加几个软件，不一定非得Facebook，what's app telegram，wechat都可以，emm wechat可能不太靠谱»
+    (no document names Facebook; read as FaceTime). On main that let an
+    image's passphrase go over WhatsApp or Telegram, while revision 1's
+    text kept the acceptance and support on FaceTime. Asked whether this
+    revision should name them too, the operator answered «写进第 2 版». So
+    every call this text names may be FaceTime, WhatsApp or Telegram
+    (defined as 「通话」 beside 「账户」), clause 4 names each app's records
+    and what the three companies can see, and clause 5 keeps the apps'
+    text chats to arranging a call. WeChat stays out (design F9).
+    Revision 2 was not published yet, so it stays revision 2.
 -->
 # 《Mooring 使用约定》第 2 版
 
-请完整读完下面的内容。同意的话，请在与运营者的 FaceTime 语音通话中说：
+请完整读完下面的内容。同意的话，请在与运营者的语音通话中说（用 FaceTime、WhatsApp 或 Telegram 都可以）：
 
 > 我已阅读并同意《Mooring 使用约定》第 2 版
 
 运营者记下你确认的日期后，你才能在门户上取得配置。
 
-门户是运营者的网站：你在上面注册账号、付款、查看自己的服务状态和用量，并取得 CFM 配置。它的网址由运营者在 FaceTime 通话中告诉你。本约定说的“账户”，是你使用本服务的资格；“门户账号”，是你登录门户用的邮箱和密码。
+门户是运营者的网站：你在上面注册账号、付款、查看自己的服务状态和用量，并取得 CFM 配置。它的网址由运营者在通话中告诉你。本约定说的“通话”，是你和运营者用 FaceTime、WhatsApp 或 Telegram 打的语音通话；“账户”，是你使用本服务的资格；“门户账号”，是你登录门户用的邮箱和密码。
 
 ## 这一版的变化
 
@@ -318,6 +343,7 @@
 - 服务到期 3 个月后仍未续费，你的账户会被作废（第 6 条）。
 - 用本服务从事违法活动的，会被封禁，以后换用别的邮箱、门户账号或银行卡也不能再使用本服务。为此，运营者会保留认出被封禁的人所需的记录，直到本服务停止，并把每位新用户与他们比对（第 3、4 条）。
 - 服务器会限制每位用户的连接，并根据连接的统计数字识别扫描、入侵、猜密码、攻击和群发邮件等用途，识别出来时立即切断你的服务（第 3、4 条）。
+- 和运营者通话，除了 FaceTime，也可以用 WhatsApp 或 Telegram 的语音通话。第 4 条写明这些通话会留下哪些记录、谁能看到。
 
 ## 1. 收费，不转售
 
@@ -333,7 +359,7 @@
 
 **自动续费：**
 - 开通时，Stripe 会保存你的银行卡，之后每期自动扣款，直到你取消。
-- 你可以随时取消：在门户上自己取消，或者在 FaceTime 通话中请运营者取消。取消后不再扣款，已付的这一期照常用到期满。
+- 你可以随时取消：在门户上自己取消，或者在通话中请运营者取消。取消后不再扣款，已付的这一期照常用到期满。
 - 扣款失败时不会续期：到期后服务暂停，付款后恢复。
 
 **中断时的补偿和退款：**
@@ -387,12 +413,13 @@
 - 从门户取回的你的付款记录：订单编号、买了什么、金额和币种、付款时间、为你开通了什么，以及开通的时间；
 - 你接受本约定的版本号和日期；
 - 从服务器取回的滥用记录（见下文「服务器上会保存」）；
-- 如果你被封禁：你的名字、你和运营者 FaceTime 通话用的电话号码或 Apple ID、封禁的日期，你按小时和按日汇总的流量记录、付款记录和滥用记录在封禁时的副本，以及 Stripe 后台显示的你付款时的 IP 地址、大致位置和设备信息，用来认出你是否换了账号回来（第 3 条）。
+- 如果你被封禁：你的名字、你和运营者通话用的联系方式、封禁的日期，你按小时和按日汇总的流量记录、付款记录和滥用记录在封禁时的副本，以及 Stripe 后台显示的你付款时的 IP 地址、大致位置和设备信息，用来认出你是否换了账号回来（第 3 条）。
 
 你的名字和别名只保存在运营者的电脑上，不会发送到服务器或门户。
 
-**运营者的手机和电脑上，FaceTime 的通话记录会保存：**
-- 你和运营者通话用的电话号码或 Apple ID，以及每次通话的时间。
+**运营者的手机和电脑上，通话用的软件会保存通话记录：**
+- 你和运营者通话用的联系方式：FaceTime 的电话号码或 Apple ID、WhatsApp 的电话号码，或者 Telegram 的电话号码或用户名；
+- 每次通话的时间。
 
 **服务器（你在 CFM 里连接的节点）上会保存：**
 - 按用户编号统计的流量明细和每月合计，以及每个编号最近一次使用的时间；
@@ -418,7 +445,7 @@
 - 开通自动续费时，你的银行卡，用于以后的扣款。
 
 **与被封禁的人比对：**
-- 在你加入时、每次付款时，以及你使用本服务期间，运营者会把你与被封禁的人比对：名字和 FaceTime 联系方式；登录邮箱；付款用的银行卡；按小时和按日汇总的流量记录和付款记录；以及 Stripe 后台显示的付款 IP 地址、大致位置和设备信息。
+- 在你加入时、每次付款时，以及你使用本服务期间，运营者会把你与被封禁的人比对：名字和通话用的联系方式；登录邮箱；付款用的银行卡；按小时和按日汇总的流量记录和付款记录；以及 Stripe 后台显示的付款 IP 地址、大致位置和设备信息。
 - 比对只用本条写明会保存的记录，不为此另外收集任何信息。
 - 比对出的相似之处只是核实的理由：运营者确认是同一个人后，才会封禁。
 
@@ -442,12 +469,13 @@
 - 英国移动运营商能看到目标 IP 地址，以及大多数加密连接开头的域名（SNI），看不到你的地址，也看不到 HTTPS 加密的内容。
 - 你访问的网站看到的是英国移动网络的地址。
 - 你的发卡行会记录每笔付款的金额、时间和收款方的名称，并记在你的实名账户里。
+- 通话的内容是端到端加密的，Apple（FaceTime）、WhatsApp 和 Telegram 都听不到；但通话要经过它们的服务器接通，它们能知道你们什么时候打过电话。WhatsApp 的隐私政策写明，它会记录通话的时间和时长。
 
 **保存多久：**
 - 运营者的电脑上：五分钟粒度的流量记录保存 7 天，按小时汇总的保存 35 天，按日和按月的合计保存 13 个月。
 - 你的累计总量、最近一次使用的时间、账户状态变化和这些操作记录、付款记录、你接受本约定的记录，以及你的名字和别名，在你的账户作废 13 个月后全部删除；你被封禁时，其中一部分另有副本保存在封禁记录里（见下一条）。
-- 你被封禁时，运营者电脑上的封禁记录（第 3 条）保留到本服务停止：你的名字、FaceTime 联系方式、封禁的日期，流量记录、付款记录和滥用记录的副本，以及你付款时的 IP 地址、大致位置和设备信息。封禁后发现是误封的，这些记录随即删除。
-- FaceTime 通话记录：你的账户作废时，运营者在手机和电脑上删除和你的通话记录；这些设备此前的备份里如果还有，要到备份被删除或覆盖时才会消失。
+- 你被封禁时，运营者电脑上的封禁记录（第 3 条）保留到本服务停止：你的名字、通话用的联系方式、封禁的日期，流量记录、付款记录和滥用记录的副本，以及你付款时的 IP 地址、大致位置和设备信息。封禁后发现是误封的，这些记录随即删除。
+- 通话记录：你的账户作废时，运营者在手机和电脑上删除这些软件里和你的通话记录；这些设备此前的备份里如果还有，要到备份被删除或覆盖时才会消失。Apple、WhatsApp 和 Telegram 自己保存的通话信息，按它们各自的规定保存，运营者不能删除。
 - 服务器上：流量明细保存 48 小时，每月合计在当月结束 7 天后删除，运营者的电脑会在此之前取回它们；你最近一次使用的时间在你的账户作废、服务器不再为你服务时删除。
 - 滥用记录：服务器上保存 30 天；运营者电脑上的副本保存 13 个月。你退出或请运营者删除你的记录时，这些记录也不提前删除：它们用来证明运营者及时处理了滥用。你被封禁时，它们复制到封禁记录里，保留到本服务停止。
 - 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会保留你登录邮箱的摘要、你付款用过的银行卡在 Stripe 的识别码（Stripe 给同一个卡号的编号，不是卡号本身），以及封禁的时间，直到本服务停止：用来拒绝这个邮箱再注册，并认出用这些卡付的款（不开通服务，退回付款，见第 3 条）。封禁后发现是误封的，这些也随即删除。门户不保存邮箱本身，但拿到门户数据的人，可以很快核对一个或一批邮箱是否被封禁过：一台普通电脑一两个小时就能核对一百万个。像 QQ 号邮箱这样由数字组成的邮箱，要把所有号码逐个试一遍，需要大量计算，随手做不到；但如果有人租用足够多的电脑，几天内就能试完，而且试完这一遍，就能同时认出所有被封禁过的这类邮箱。
@@ -465,7 +493,7 @@
   - 用下载的文件导入的，到门户重新下载，导入新文件后，在 CFM 里删除旧的那份配置。
 
   连不上的时候，也可以先试一次「更新」。具体步骤见《使用指南》。
-- 门户打不开、又需要新配置时，运营者会按备用的方式给你一份新文件：一个加密磁盘映像，口令由运营者在 FaceTime 通话中念给你。导入新文件后，在 CFM 里删除旧的那份配置。
+- 门户打不开、又需要新配置时，运营者会按备用的方式给你一份新文件：一个加密磁盘映像，口令由运营者在通话中念给你。导入新文件后，在 CFM 里删除旧的那份配置。
 - 账户被暂停时，订阅链接暂时取不到配置；恢复后，同一条链接照常可用：
   - 配额用尽的，暂停到下一个计费周期，或者到你买了够补上超出部分的流量包；
   - 到期的，暂停到你续费；
@@ -473,12 +501,12 @@
   - 运营者收到关于你的投诉、正在核查的，暂停到核查结束。
 
   账户作废或被封禁时，链接永久失效。
-- 仍然不行的话，通过 FaceTime 语音告诉运营者：
+- 仍然不行的话，在通话中告诉运营者：
   - 从什么时候开始；
   - 你用的是什么网络：哪家运营商，手机网络还是宽带；
   - 是否所有节点都不通。
 
-  在微信等聊天软件里只约通话时间，不要提本服务，也不要发截图、链接或配置文件。
+  在微信等聊天软件里，以及 WhatsApp 和 Telegram 的文字聊天里，只约通话时间，不要提本服务，也不要发截图、链接或配置文件。
 - 运营者会尽力维持服务，但不保证随时可用；8 小时或更长的中断按第 1 条补偿。
 
 ## 6. 更新与退出
