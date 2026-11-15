@@ -217,7 +217,7 @@ import Testing
         let objects = try JSONPaths.expectEveryObjectRefusesAnUnknownKey(in: json) {
             _ = try EventsDocument.decode(line: $0)
         }
-        #expect(objects == 509)
+        #expect(objects == 557)
     }
 
     /// Every key of every object of the document is required, the `null`
@@ -227,7 +227,7 @@ import Testing
         let (removed, nulls) = try JSONPaths.expectEveryKeyIsRequired(in: json) {
             _ = try EventsDocument.decode(line: $0)
         }
-        #expect(removed == 733)
+        #expect(removed == 805)
         #expect(nulls == 1)
     }
 
