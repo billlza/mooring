@@ -278,14 +278,14 @@ pub enum WatchError {
     /// The abuse guard holds `users` users cut on this node (design §11.8):
     /// every flow of theirs is refused until the operator lifts the cut.
     /// It names no user (§15.5); `AbuseRecords` does, to the operator.
-    #[error("{users} users are cut off on this node for abuse")]
+    #[error("users cut off on this node for abuse: {users}")]
     AbuseCut {
         /// How many users are cut.
         users: u16,
     },
     /// `users` users who are not cut have a finding at its alert level
     /// from the last [`crate::ABUSE_SUSPECTED_SECS`] (design §11.8).
-    #[error("{users} users have abuse findings below their cut levels")]
+    #[error("users with abuse findings below their cut levels: {users}")]
     AbuseSuspected {
         /// How many users.
         users: u16,
@@ -571,7 +571,11 @@ mod tests {
         );
         assert_eq!(
             WatchError::AbuseCut { users: 1 }.to_string(),
-            "1 users are cut off on this node for abuse"
+            "users cut off on this node for abuse: 1"
+        );
+        assert_eq!(
+            WatchError::AbuseSuspected { users: 2 }.to_string(),
+            "users with abuse findings below their cut levels: 2"
         );
         assert_eq!(
             WatchError::AbuseGuardUnavailable {

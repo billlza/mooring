@@ -54,8 +54,8 @@ events 2026-11-15 to 2026-11-15 UTC: 91 entries
   2026-11-15 00:52:00 UTC  lon1          raised: the clock is not synchronised by NTP
   2026-11-15 00:53:00 UTC  lon1          raised: a reboot has been required since 1791331200
   2026-11-15 00:54:00 UTC  lon1          raised: the probe's traffic on reality, hy2 is not being counted
-  2026-11-15 00:55:00 UTC  lon1          raised: 1 users are cut off on this node for abuse
-  2026-11-15 00:56:00 UTC  lon1          raised: 2 users have abuse findings below their cut levels
+  2026-11-15 00:55:00 UTC  lon1          raised: users cut off on this node for abuse: 1
+  2026-11-15 00:56:00 UTC  lon1          raised: users with abuse findings below their cut levels: 2
   2026-11-15 00:57:00 UTC  lon1          raised: the abuse guard cannot measure: its sets could not be read
   2026-11-15 00:58:00 UTC  lon1          cleared: WgReadFailed
   2026-11-15 00:59:00 UTC  lon1          cleared: NftFailed
