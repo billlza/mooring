@@ -14,7 +14,9 @@ use mooring_model::ids::NodeId;
 use mooring_model::secret::SecretRef;
 
 use crate::error::{ChangeErrorKind, CleanupFailure, IoOp, StoreError, StoreErrorKind};
-use crate::secrets::{SecretOp, SecretStoreError, SecretStoreErrorKind, SnapshotReadErrorKind};
+use crate::secrets::{
+    ReaderFault, SecretOp, SecretStoreError, SecretStoreErrorKind, SnapshotReadErrorKind,
+};
 
 /// `ALL` lists each kind once, and each kind's name is its Display text.
 fn assert_complete<K: Copy + Ord + Display>(
@@ -35,7 +37,7 @@ fn assert_complete<K: Copy + Ord + Display>(
 #[test]
 fn kind_lists_are_complete() {
     assert_complete(StoreErrorKind::ALL, StoreErrorKind::name, 30);
-    assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 3);
+    assert_complete(SecretStoreErrorKind::ALL, SecretStoreErrorKind::name, 5);
     assert_complete(SnapshotReadErrorKind::ALL, SnapshotReadErrorKind::name, 2);
     assert_complete(ChangeErrorKind::ALL, ChangeErrorKind::name, 2);
     assert_eq!(
@@ -111,6 +113,40 @@ fn an_invalid_item_names_its_reference_and_kind_only() {
     };
     assert_eq!(missing.kind(), SecretStoreErrorKind::SecretMissing);
     assert_eq!(missing.to_string(), "secret router/admin is missing");
+}
+
+/// `Unanswered` and `ReaderFailed` are produced by a store that reads on
+/// threads of their own (`mooringctl`'s daemon): each names the reference
+/// and what befell its read, never the item.
+#[test]
+fn a_read_without_an_answer_names_its_reference_and_what_befell_it() {
+    let unanswered = SecretStoreError::Unanswered {
+        secret_ref: SecretRef::RouterAdmin,
+    };
+    assert_eq!(unanswered.kind(), SecretStoreErrorKind::Unanswered);
+    assert_eq!(
+        unanswered.to_string(),
+        "the keychain has not yet answered the read of router/admin \
+         (macOS may be asking at the Mac's screen)"
+    );
+    let not_started = SecretStoreError::ReaderFailed {
+        secret_ref: SecretRef::PortalPullToken,
+        fault: ReaderFault::NotStarted(io::ErrorKind::WouldBlock),
+    };
+    assert_eq!(not_started.kind(), SecretStoreErrorKind::ReaderFailed);
+    assert_eq!(
+        not_started.to_string(),
+        "the read of portal/pull-token has no answer: its thread could not be started \
+         (operation would block)"
+    );
+    let ended = SecretStoreError::ReaderFailed {
+        secret_ref: SecretRef::RouterAdmin,
+        fault: ReaderFault::Ended,
+    };
+    assert_eq!(
+        ended.to_string(),
+        "the read of router/admin has no answer: its thread ended without an answer"
+    );
 }
 
 /// Each filesystem operation has a description of its own, a lowercase

@@ -164,7 +164,10 @@ extension DownReason {
         case .simPlanUnrecorded:
             String(localized: "The SIM plan is not recorded (`mooringctl sim set-plan`).")
         case .secretsUnavailable:
-            String(localized: "The keychain could not be read.")
+            String(
+                localized:
+                    "The keychain has not given the daemon the exit's secrets. After a new build, macOS asks on this Mac's screen whether to allow them: choose Always Allow, then enter the login password."
+            )
         case .agentNotEnabled(let node):
             String(localized: "The agent on \(node.text) is not enabled.")
         case .engineSpawnFailed(let engine):

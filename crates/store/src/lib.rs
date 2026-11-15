@@ -202,8 +202,8 @@ pub use router_pin::{
     write_router_pin,
 };
 pub use secrets::{
-    InMemorySecretStore, SecretOp, SecretStore, SecretStoreError, SecretStoreErrorKind,
-    SnapshotReadError, SnapshotReadErrorKind, read_snapshot,
+    InMemorySecretStore, ReaderFault, SecretOp, SecretStore, SecretStoreError,
+    SecretStoreErrorKind, SnapshotReadError, SnapshotReadErrorKind, read_snapshot,
 };
 pub use sim_meter::{SIM_METER_FILE, USAGE_DIRECTORY, read_sim_meter, write_sim_meter};
 pub use sim_network::{SIM_NETWORK_FILE, read_sim_network, write_sim_network};

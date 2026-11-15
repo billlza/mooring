@@ -1587,6 +1587,13 @@ Each tick does the following:
    - If `state.json` changed, re-read state. Neither counter alone detects every change, because `Bookkeeping` records (§7) keep both.
    - Secrets are re-read once per config generation and set of applied nodes, and kept in memory. *Corrected 2026-11-03:* they were re-read once per generation only, but `node apply` records a node applied as bookkeeping, which keeps the generation; with the exit enabled, the tick after the first apply rendered from secrets read while no node was applied, which held none of that node's, and the daemon stopped with the render's error.
    - `errSecInteractionNotAllowed` at read time → `Down(SecretsUnavailable)`.
+   - *Corrected 2026-11-15:* the daemon read the keychain on its loop's thread. The legacy login keychain does not answer `errSecInteractionNotAllowed` for an item whose access list does not name the binary; it asks at the Mac's screen and waits. The SDK's `SecItem.h` says that `kSecUseNoAuthenticationUI` applies only to the data-protection keychain, and that legacy items still ask. So after the 2026-11-15 deployment of main `ab5eadb`, the first read of the M7's password held the daemon in `Deployed::open`, before its first poll and before any status was published or logged. That lasted for as long as no one was at the screen.
+   - Since then the daemon reads on threads of their own (`mooringctl`'s `daemon::secrets`). It waits at most 3 s for an answer. A read not answered by then is `SecretStoreError::Unanswered`, and the read goes on:
+     - the engines' secrets → `Down(SecretsUnavailable)`;
+     - the M7's password → a failed poll (`LocalFailure`, the log naming the read);
+     - the pull token → a failed pull, tried again later.
+   - The loop goes on publishing, logging and answering the control socket. The read's answer is the next read's of that reference. Until it comes, each read of that reference is `Unanswered` at once and starts none, so macOS asks once per item and per build.
+   - The command line's reads still wait for the answer: its operator is at the screen.
 2. **Interfaces.**
    - `macsys` resolves the selectors from `NET_RT_IFLIST2`.
    - Zero matches or several matches is a typed error. An IPv4 address outside the selector's subnet is `EgressSubnetMismatch`.
@@ -2105,7 +2112,7 @@ A stored `TargetSpec` re-checks the attestation when decoded, but not the deny l
 **Keychain.**
 - `kSecUseDataProtectionKeychain`, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, `kSecAttrSynchronizable=false`, access group `<TEAM>.com.bill.mooring.secrets`. These are the same attributes as CFM's `CredentialVaultStorage.swift:133-150`.
 - Only the bundled `mooringctl` holds the entitlement. Development lanes use the in-memory `SecretStore`.
-- Revision 7's development build, signed only ad hoc (§15.6 rule 10), keeps one item, the M7's admin password, in the legacy login keychain (`LoginKeychain` in `mooringctl`). Its access list names the binary that wrote it, so macOS asks the user to allow access after each rebuild; only the user can answer. M5 reads it there, writes it to the data-protection keychain and deletes it.
+- Revision 7's development build, signed only ad hoc (§15.6 rule 10), keeps one item, the M7's admin password, in the legacy login keychain (`LoginKeychain` in `mooringctl`). Its access list names the binary that wrote it, so macOS asks the user to allow access after each rebuild; only the user can answer. A read waits until the user does, so the daemon reads on threads of their own and waits at most 3 s (§10.1, *corrected 2026-11-15*). M5 reads it there, writes it to the data-protection keychain and deletes it.
 - Optional M5 spike: a non-exportable Secure Enclave SSH key via `sc_auth` and `ssh-keychain.dylib`. Adopt it only if a LaunchAgent can use it unattended.
 
 **Backups (revision 8).** The retention periods the agreement states (§11.5, §15.7) hold only if no backup keeps the records longer. The Mac's data directory (`~/Library/Application Support/Mooring/`: `state.json`, the usage store, the journals and the SSH material), its log directory (`~/Library/Logs/Mooring/`, §15.10) and the export folder are therefore excluded from Time Machine. M5's daemon sets the exclusion with `tmutil addexclusion`, a sticky exclusion that needs no root, `doctor` reports it when it is missing, and `user export` warns when its `--out` folder is not excluded (`tmutil isexcluded`). Until then `delivery.md` (section 0) sets it by hand for the export folder. F18's escrow image, if adopted, is the only backup.

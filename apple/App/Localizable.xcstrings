@@ -4152,12 +4152,22 @@
         }
       }
     },
-    "The keychain or the kernel's tables failed on this Mac; the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause.": {
+    "The keychain has not given the daemon the exit's secrets. After a new build, macOS asks on this Mac's screen whether to allow them: choose Always Allow, then enter the login password.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这台 Mac 上的钥匙串或内核表出了问题；原因见守护进程日志（~/Library/Logs/Mooring/daemon.log）。"
+            "value": "钥匙串还没有把出口的密钥交给守护进程。装上新构建后，macOS 会在这台 Mac 的屏幕上询问是否允许：选择「始终允许」，再输入登录密码。"
+          }
+        }
+      }
+    },
+    "The keychain or the kernel's tables failed on this Mac, or, after a new build, the keychain waits for its question on this Mac's screen (choose Always Allow, then enter the login password); the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac 上的钥匙串或内核表出了问题，或者装上新构建后，钥匙串在等你回答这台 Mac 屏幕上的询问（选择「始终允许」，再输入登录密码）；原因见守护进程日志（~/Library/Logs/Mooring/daemon.log）。"
           }
         }
       }

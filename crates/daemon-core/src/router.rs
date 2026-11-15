@@ -1089,8 +1089,10 @@ pub enum RouterUnavailableReason {
     /// The device's answer could not be read as a status.
     Malformed,
     /// The Mac could not run the poll: its keychain or its kernel's tables
-    /// failed, so the M7 was not asked or its answer not kept. The daemon's
-    /// log names the cause.
+    /// failed, or its keychain has not answered the read of the admin
+    /// password within the daemon's wait (macOS asks at the Mac's screen
+    /// after a new build), so the M7 was not asked or its answer not kept.
+    /// The daemon's log names the cause.
     LocalFailure,
 }
 

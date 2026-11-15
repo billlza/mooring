@@ -373,7 +373,7 @@ extension RouterUnavailableReason {
         case .malformed:
             "The M7's answer did not match what this build reads; the daemon's log names the field."
         case .localFailure:
-            "The keychain or the kernel's tables failed on this Mac; the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause."
+            "The keychain or the kernel's tables failed on this Mac, or, after a new build, the keychain waits for its question on this Mac's screen (choose Always Allow, then enter the login password); the daemon's log (~/Library/Logs/Mooring/daemon.log) names the cause."
         }
     }
 }

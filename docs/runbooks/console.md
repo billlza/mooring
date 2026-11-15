@@ -88,6 +88,18 @@ On the first poll, macOS asks two questions. Allow both:
 
 Rebuilding `mooringctl` changes its signature (it is signed ad hoc), so a new build is installed with the daemon stopped (section 1), and macOS asks again for the keychain. Installing a new build may ask again for local network access.
 
+macOS asks once per keychain item and per build:
+- the M7's password at the first poll;
+- each applied node's four secrets when the exit first starts its engines;
+- the payment pull's token at its first pull.
+
+Each question waits at the Mac's screen until it is answered. A daemon built since 2026-11-15 does not wait for the answer (design §10.1). Each read gets 3 s, and then the daemon goes on without the item:
+- the M7 panel says "The Mac could not poll the M7";
+- the exit is down with `secrets_unavailable`;
+- the log names the item ("the keychain has not yet answered the read of router/admin").
+
+Answer each question with **Always Allow** and the login password; the daemon takes the answer at its next read, with no restart. A daemon built before then stopped at the first question, with nothing after "power helper started" in its log, until the question was answered. Either way, be at the Mac's own screen after installing a new build, until every question is answered: until then the exit stays down.
+
 **Open Mooring at Login** in the menu makes the console open at login too. macOS records it for the app it is chosen in, so choose it in the installed app.
 
 **Power, with a deployment.** The daemon starts the power helper from the app (`Contents/MacOS/mooring-power`) and does not start without it. While the exit is enabled and the Mac is on mains, the helper holds two assertions that keep the Mac awake; `pmset -g assertions` lists them as "Mooring exit". On battery it releases them and the exit is `Degraded` (`OnBattery`). Mooring never changes `pmset` settings.
@@ -341,6 +353,11 @@ By hand, with any build: start the job twice, about 20 s apart, in the minute yo
 - Start it from the app's menu (section 2).
 - Run `launchctl print gui/$(id -u)/com.bill.mooring.daemon` to see its state and last exit, and read the last lines of `~/Library/Logs/Mooring/daemon.log`.
 - `job state = spawn failed` with `last exit code = 78: EX_CONFIG`, and no new line in the log, means launchd refused the app's `mooringctl` under another build's launch constraint, as it does at the first start after every new build is installed (section 1). An app built since 2026-11-13 says so in its banner, "macOS refuses the daemon's start", and **Finish Starting** there carries the start through. By hand: **Stop the Daemon**, then **Start the Daemon at Login**. Either way macOS asks again for the keychain and may ask for local network access. With `job state = spawn failed` but no 78 yet, wait for the 78 first: launchd has the record replaced only after its second failed start.
+
+**After a new build, the M7 panel says "The Mac could not poll the M7" or the exit is down with `secrets_unavailable`:** the daemon's log says "the keychain has not yet answered the read of …". A keychain question is waiting at the Mac's screen.
+- Answer it with **Always Allow** and the login password. One may follow for each item (section 2).
+- The daemon takes each answer at its next read.
+- A daemon built before 2026-11-15 instead stops before its first status, with nothing after "power helper started" in its log. Answer the question the same way: the daemon then goes on.
 
 **The exit is `Degraded` with `PowerHelperExited`:** the power helper ended, so nothing keeps the Mac awake. The daemon's log says why and how it ended ("the power helper ended: … (exit status …)"), and the daemon starts it again a minute later ("the power helper started again").
 
