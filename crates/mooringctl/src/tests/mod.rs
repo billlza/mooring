@@ -14,6 +14,7 @@ mod apply;
 mod apply_job;
 mod canary;
 mod cancel;
+mod capacity;
 mod capture;
 mod console;
 mod control;

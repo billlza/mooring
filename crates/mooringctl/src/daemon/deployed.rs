@@ -6,8 +6,10 @@
 //! [`super::POLL_INTERVAL`] and each node's agent every [`NODE_POLL_EVERY`]
 //! (`Status`, design §10.5) in the slot after a direct-probe round, so
 //! neither delays a probe; and it publishes the deployment's status when
-//! the exit's state changes and at least every [`PUBLISH_EVERY`]. The SIM
-//! meter reads the egress counters on a thread of its own, and the power
+//! the exit's state changes and at least every [`PUBLISH_EVERY`], with the
+//! capacity monitor's view after each tick that sampled ([`Capacity`]).
+//! The SIM meter reads the egress counters on a thread of its own, and the
+//! power
 //! helper's events arrive on one (design §10.3, [`crate::runtime::power`]):
 //! the power source, the assertions it holds while the exit is enabled on
 //! mains, and the Mac's sleeps, each drained before the daemon lets it
@@ -43,6 +45,7 @@ use mooring_model::time::UnixTime;
 use mooring_model::{Deployment, ExitSite, NodeId};
 use mooring_store::{Store, read_allowed_networks, read_latch, read_sim_meter};
 
+use super::capacity::{Capacity, Probed};
 use super::{
     AcceptRequest, Asked, Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending,
     poll_router_on, publish, radio::RadioHistoryWriter, router_after_poll, say,
@@ -191,6 +194,8 @@ pub(crate) struct Deployed<'e, 'a> {
     payments: Puller,
     /// The record of pending applies (design §13.6, §15.3).
     pending: Pending,
+    /// The capacity monitor and the record of round trips (design §15.3).
+    capacity: Capacity,
     nodes_polled: Option<Instant>,
     polls: BTreeMap<NodeId, NodePoll>,
     unreachable: BTreeMap<NodeId, NodeAgentState>,
@@ -283,6 +288,14 @@ impl<'e, 'a> Deployed<'e, 'a> {
         if let Some(note) = unread {
             say(log, now, &note)?;
         }
+        let (capacity, unread) = Capacity::open(
+            &run_dir,
+            state.deployment.exit().uplink_baseline,
+            intervals.round_trips_persist,
+        );
+        if let Some(note) = unread {
+            say(log, now, &note)?;
+        }
         let (sim_network, begun) = NetworkWatch::open(&run_dir, state.deployment.exit());
         if let Some(note) = begun {
             say(log, now, &note)?;
@@ -334,6 +347,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
             usage_failure: None,
             payments,
             pending,
+            capacity,
             nodes_polled: None,
             polls: BTreeMap::new(),
             unreachable: BTreeMap::new(),
@@ -413,6 +427,17 @@ impl<'e, 'a> Deployed<'e, 'a> {
         }
         if previous.as_ref() != Some(&section.state) {
             say(log, now, &format!("exit: {:?}", section.state))?;
+        }
+        let probed = Probed {
+            probing: self.machine.probing(),
+            round_trip: self.machine.round_trip(),
+        };
+        let rates = self.meter.rates(now)?;
+        for note in self
+            .capacity
+            .track(deployment, now, &probed, rates, Instant::now())
+        {
+            say(log, now, &note)?;
         }
         let due = self
             .router_polled
@@ -556,7 +581,7 @@ impl<'e, 'a> Deployed<'e, 'a> {
                 },
                 sim_network: self.sim_network.status(),
                 router,
-                capacity: None,
+                capacity: self.capacity.status(),
                 ledgers: self.usage.ledgers(),
                 through: now,
                 polls: &self.polls,
