@@ -131,9 +131,9 @@ fn export_profiles_holds_only_the_users_named() {
 
 /// A bundle that withholds every user named is written, reading no secret
 /// (the keychain is empty here): the portal stops serving them on import.
-/// A missing acceptance pauses the link, as a suspension does; a
-/// revocation ends it. Nothing is warned about: a paused link comes back
-/// once a bundle delivers the user again.
+/// A user without the acceptance is offered nothing at the portal until
+/// they accept it, and a revocation ends the link. Nothing is warned
+/// about: neither is a fault of the bundle.
 #[test]
 fn a_bundle_withholding_everyone_is_written_without_reading_a_secret() {
     let deployment = fixture(|parts| {
