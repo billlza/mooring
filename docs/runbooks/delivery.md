@@ -33,7 +33,7 @@ The last command must print `[Excluded]`.
    - Send the text from each title on. The operator notes in the comment at the top are not for users.
    - They hold no secrets, but they describe the service, so they never cross WeChat, QQ or any other mainland-China service, encrypted or not. Put them in an encrypted image of their own, with its own passphrase, made as in section 4 and handed over as in section 3 or 4; never on paper, which a search finds.
 4. **Get the user's acceptance on the call.**
-   - On a FaceTime Audio call, the user says 「我已阅读并同意《Mooring 使用约定》第 N 版」, where N is the revision the build ships (`AgreementVersion::CURRENT`, now 1).
+   - On a FaceTime Audio call, the user says 「我已阅读并同意《Mooring 使用约定》第 N 版」, where N is the revision the build ships (`AgreementVersion::CURRENT`, now 1). The agreement's text names FaceTime for this, so a WhatsApp or Telegram call (section 4) does not carry the acceptance until a revision names it.
    - Then run `mooringctl user agree <uid>`. It records the revision and the UTC day, and takes neither as an argument. It is a bookkeeping record: it keeps the generation, so it needs no apply (§7).
 5. **Apply in the window.** `user add` changed the configuration, so every node the user holds needs `node apply` before the export. The apply restarts the engines and drops every user's connections for a few seconds, so run `node apply` yourself between 03:00 and 03:45 China time (19:00 to 19:45 UTC), before the nodes' 04:00 reboot; the nightly job that is to do it at 03:20 (§13.6) is not built yet. While no user is connected, as for the first users before the pilot starts, apply at any time. Deliver after the apply.
 
@@ -84,7 +84,9 @@ In person, too, the file goes in the encrypted image of section 4 (steps 1 to 3)
    ```
    Type the passphrase twice at the prompt. Never use `-passphrase`, which would put the passphrase in the process list and the shell history.
 4. Send the image. Whatever server it crosses may keep it, so only the passphrase protects it, and any channel may carry it except those that tie it to the user's real-name identity in mainland China: never WeChat, QQ (QQ Mail included), another mainland-China mail or cloud service, or iMessage to a mainland-China Apple ID. Send no words about the service with it.
-5. On a FaceTime Audio call, say the words once, and spell them if needed.
+5. On an end-to-end encrypted voice call, say the words once, and spell them if needed: FaceTime Audio, a WhatsApp call or a Telegram call (the operator added the last two on 2026-11-15).
+   - The call only: never type the words in a chat, WhatsApp's and Telegram's included.
+   - WhatsApp and Telegram are blocked in mainland China: a user there reaches them only through a proxy that already works, and otherwise has FaceTime.
    - Never use a WeChat or QQ call, or a carrier call into China.
    - Stay on the call while the user mounts the image and imports the file. The user must not tick "Remember password in my keychain".
 
@@ -131,7 +133,7 @@ Record nothing about the incident itself (what happened, where, to whom) in Moor
 
 ## 9. Support
 
-- The support channel is a FaceTime Audio call, or a meeting in person.
+- The support channel is a FaceTime Audio call, which the agreement's clause 5 names, or a meeting in person.
 - In WeChat, QQ or any other chat, the user and the operator only arrange a call: no words about the service, no file, no screenshot.
 - On the call, ask what the agreement's clause 5 asks for: when it started, which network, and whether every node fails.
 

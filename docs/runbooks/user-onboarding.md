@@ -13,6 +13,10 @@
     comes in an encrypted image, never by AirDrop. The installer in step 1
     of section 1 is a public file and may still go by AirDrop, from a
     device other than the exit Mac (delivery.md, section 1).
+  - The passphrase's call may be FaceTime, WhatsApp or Telegram (the
+    operator, 2026-11-15). The acceptance (section 0) and the call when
+    nothing connects (section 8) stay on FaceTime, as the agreement's text
+    says; they change only with a revision that names the others.
   - The 「凭据」 step in section 3 needs the core stopped, not just both
     switches off. The profile menu's 「凭据」 waits until the core is off
     (apps/cfw-tauri-shell/ui/src/app.js:1059 and 1098-1100 at v0.5.0, 1095
@@ -51,8 +55,8 @@
 配置文件总是放在一个加密磁盘映像（.dmg 文件）里交给你。
 
 - **映像：** 运营者会把映像发给你；当面时，也可能用 U 盘交给你。
-- **口令：** 六个英文单词，由运营者念给你：当面时当场念，不见面时在 FaceTime 语音通话中念。输入时全部用小写，单词之间各空一格。
-  - 不要通过微信、QQ 或普通电话索要口令，也不要把口令写下来发给任何人。
+- **口令：** 六个英文单词，由运营者念给你：当面时当场念；不见面时在语音通话中念，FaceTime、WhatsApp 或 Telegram 的语音通话都可以。输入时全部用小写，单词之间各空一格。
+  - 口令只在通话中念，不会写在任何聊天里。不要通过微信、QQ 或普通电话索要口令，也不要把口令写下来发给任何人。
   - 双击映像输入口令时，**不要**勾选“在我的钥匙串中记住密码”。
 - **任何时候：** 映像、配置文件、本指南和《使用约定》都不要经过微信、QQ（包括文件传输助手和 QQ 邮箱）、其他国内邮箱或网盘，或中国大陆 Apple ID 的 iMessage 和 iCloud（包括同步到 iCloud 的「桌面」和「文稿」文件夹），也不要转发到手机。
 
