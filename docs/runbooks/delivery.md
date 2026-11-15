@@ -3,7 +3,7 @@
 
 This runbook is for the operator. It covers a user's first file, every later file, and what to do after a leak or a seizure.
 
-The rules come from design §9.2, §9.4, §13.4, §13.5 and §13.6, and from decisions F9–F11. The operator delegated those decisions to the recommended default on 2026-10-15 (§20.2). The in-person channel changed on 2026-11-15: no AirDrop (section 3).
+The rules come from design §9.2, §9.4, §13.4, §13.5 and §13.6, and from decisions F9–F11. The operator delegated those decisions to the recommended default on 2026-10-15 (§20.2). The in-person channel is the operator's own choice of 2026-11-15: no AirDrop (section 3).
 
 Of the commands named here `hdiutil`, `tmutil` and `mooringctl user add | alias | agree | export` exist today (the `mooringctl` ones since 2026-10-18, in the development build, which keeps its secrets in the login keychain until M5's data-protection keychain; they need the state that `exit init` will create). The other `mooringctl` commands below (`user reissue`, `node apply`, `apply`, `doctor`) arrive in M5, and so does the console's rotation tracker. Until then this runbook is the procedure they will follow. The portal's `mooringctl portal export` and `user export-profiles` (2026-11-06) exist too, but refuse to run until the agreement covers the portal (section 11). `mooringctl user usage` (2026-11-07), which section 10 uses, exists too.
 

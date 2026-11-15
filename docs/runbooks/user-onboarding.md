@@ -8,11 +8,11 @@
     the two English messages quoted in section 4 and section 8
     (crates/cfw-engine-api/src/lib.rs). M6 still checks every CFM step
     against the real build (design §22).
-  - Section 2 follows the in-person channel as changed on 2026-11-15
-    (design §9.4; delivery.md, section 3): the file always comes in an
-    encrypted image, never by AirDrop. The installer in step 1 of section 1
-    is a public file and may still go by AirDrop, from a device other than
-    the exit Mac (delivery.md, section 1).
+  - Section 2 follows the in-person channel the operator chose on
+    2026-11-15 (design §9.4; delivery.md, section 3): the file always
+    comes in an encrypted image, never by AirDrop. The installer in step 1
+    of section 1 is a public file and may still go by AirDrop, from a
+    device other than the exit Mac (delivery.md, section 1).
   - The 「凭据」 step in section 3 needs the core stopped, not just both
     switches off. The profile menu's 「凭据」 waits until the core is off
     (apps/cfw-tauri-shell/ui/src/app.js:1059 and 1098-1100 at v0.5.0, 1095
