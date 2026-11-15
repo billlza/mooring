@@ -8,7 +8,7 @@
 //! while that lasts and once when it recovers.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mooring_daemon_core::MacStatusV2;
 use mooring_daemon_core::events::{ExitPhase, MacEvent, MacEventKind, decode_mac_line};
@@ -65,7 +65,7 @@ fn status(edit: impl FnOnce(&mut mooring_daemon_core::MacStatusParts)) -> MacSta
     MacStatusV2::new(parts).unwrap()
 }
 
-fn support(harness: &Harness) -> std::path::PathBuf {
+fn support(harness: &Harness) -> PathBuf {
     let support = harness.support_dir();
     fs::create_dir_all(&support).unwrap();
     support
@@ -184,8 +184,27 @@ fn the_old_days_of_every_journal_are_removed_once_a_day() {
             append_node_events(&support, &node(name), day(date), b"{}\n").unwrap();
         }
     }
-    let stray = support.join(EVENTS_DIRECTORY).join("mac").join("notes.txt");
-    fs::write(&stray, b"").unwrap();
+    // A stray beside the Mac's days, beside the nodes' directories and
+    // beside a node's days.
+    let events = support.join(EVENTS_DIRECTORY);
+    let strays = [
+        events.join("mac").join("notes.txt"),
+        events.join("nodes").join("notes.txt"),
+        events.join("nodes").join("lon1").join("notes.txt"),
+    ];
+    for stray in &strays {
+        fs::write(stray, b"").unwrap();
+    }
+    let named = |strays: &[PathBuf]| {
+        let names: Vec<String> = strays
+            .iter()
+            .map(|stray| stray.display().to_string())
+            .collect();
+        format!(
+            "the event journals' directories hold files that are not theirs: {}\n",
+            names.join(", ")
+        )
+    };
     let mut log = Vec::new();
     let mut journals = Journals::open(&mut log, &support, at(NOW)).unwrap();
     let kept = |support: &Path| {
@@ -204,14 +223,8 @@ fn the_old_days_of_every_journal_are_removed_once_a_day() {
         )
     );
     let text = String::from_utf8(log.clone()).unwrap();
-    assert!(
-        text.ends_with(&format!(
-            "the event journals' directories hold files that are not theirs: {}\n",
-            stray.display()
-        )),
-        "{text}"
-    );
-    assert!(stray.exists());
+    assert!(text.ends_with(&named(&strays)), "{text}");
+    assert!(strays.iter().all(|stray| stray.exists()));
     // Not again the same day: an old file put back stays.
     append_mac_events(&support, day("2025-09-15"), b"{}\n").unwrap();
     log.clear();
@@ -238,23 +251,19 @@ fn the_old_days_of_every_journal_are_removed_once_a_day() {
     assert_eq!(log, b"");
     // Once the strays are gone, nothing is said of them; one that comes
     // back is named again.
-    fs::remove_file(&stray).unwrap();
+    for stray in &strays {
+        fs::remove_file(stray).unwrap();
+    }
     journals
         .record(&mut log, &support, &status(|_| {}), at(NOW + 2 * 86_400))
         .unwrap();
     assert_eq!(log, b"");
-    fs::write(&stray, b"").unwrap();
+    fs::write(&strays[1], b"").unwrap();
     journals
         .record(&mut log, &support, &status(|_| {}), at(NOW + 3 * 86_400))
         .unwrap();
     let text = String::from_utf8(log).unwrap();
-    assert!(
-        text.ends_with(&format!(
-            "the event journals' directories hold files that are not theirs: {}\n",
-            stray.display()
-        )),
-        "{text}"
-    );
+    assert!(text.ends_with(&named(&strays[1..2])), "{text}");
 }
 
 /// A journal that cannot be written, or pruned, is logged once while that

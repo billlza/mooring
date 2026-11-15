@@ -332,13 +332,42 @@ fn the_lines_go_to_the_copys_newest_day_when_the_clock_reads_an_earlier_one() {
     harness.now.set(NOW + 2 * 86_400);
     answer(&harness, page(4..5, 5));
     tick(&mut harness, &mut reader, &deployment, Duration::ZERO);
-    assert_eq!(
-        copy(&harness, day("2026-10-15")),
-        [line_at(
-            UnixTime::from_secs(NOW + 2 * 86_400),
-            NodeEntry::Event(event(4))
-        )]
+    let next_day = line_at(
+        UnixTime::from_secs(NOW + 2 * 86_400),
+        NodeEntry::Event(event(4)),
     );
+    assert_eq!(copy(&harness, day("2026-10-15")), [next_day]);
+    // That day is the copy's newest now: with the clock back on an earlier
+    // one, the lines go to its file.
+    harness.now.set(NOW);
+    answer(&harness, page(5..6, 6));
+    tick(&mut harness, &mut reader, &deployment, Duration::ZERO);
+    let mut newest = vec![next_day];
+    newest.extend(read(5..6));
+    assert_eq!(copy(&harness, day("2026-10-15")), newest);
+    assert_eq!(copy(&harness, day("2026-10-14")), expected);
+    assert_eq!(copy(&harness, today()), []);
+}
+
+/// A newer day file that holds no whole line is the copy's newest day all
+/// the same, whether an older file holds one or none does: with the clock
+/// on an earlier day, the lines go to it, its torn line cut.
+#[test]
+fn a_newer_day_file_without_a_whole_line_is_still_the_copys_newest_day() {
+    let deployment = lon1_alone();
+    let older = line_at(earlier(86_400), NodeEntry::Event(event(1)));
+    for (planted, numbers) in [(vec![older], 2..3), (Vec::new(), 0..1)] {
+        let (mut harness, mut reader) = ready(&deployment);
+        plant(&harness, day("2026-10-12"), &planted);
+        let torn = node_events_path(&harness.support_dir(), &node("lon1"), day("2026-10-14"));
+        fs::write(&torn, b"{\"version\":1,\"read_").unwrap();
+        answer(&harness, page(numbers.clone(), numbers.end));
+        tick(&mut harness, &mut reader, &deployment, Duration::ZERO);
+        assert_eq!(asked(&harness), [("lon1".to_owned(), numbers.start)]);
+        assert_eq!(copy(&harness, day("2026-10-14")), read(numbers));
+        assert_eq!(copy(&harness, today()), []);
+        assert_eq!(copy(&harness, day("2026-10-12")), planted);
+    }
 }
 
 /// A failed read, a page of another kind or a refused page is logged once

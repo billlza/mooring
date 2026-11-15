@@ -283,16 +283,23 @@ fn a_line_out_of_its_rule_is_refused() {
                 "{bad}"
             );
         }
-        // Another version is refused as such, whatever keys it brings.
-        let newer = line.replacen("{\"version\":1,", "{\"version\":2,\"extra\":0,", 1);
-        assert_eq!(
-            decode_mac_line(newer.as_bytes()),
-            Err(EventsError::UnsupportedVersion { version: 2 })
-        );
-        assert_eq!(
-            decode_node_line(newer.as_bytes()),
-            Err(EventsError::UnsupportedVersion { version: 2 })
-        );
+        // Another version, older or newer, is refused as such, whatever
+        // keys it brings.
+        for version in [0, 2] {
+            let other = line.replacen(
+                "{\"version\":1,",
+                &format!("{{\"version\":{version},\"extra\":0,"),
+                1,
+            );
+            assert_eq!(
+                decode_mac_line(other.as_bytes()),
+                Err(EventsError::UnsupportedVersion { version })
+            );
+            assert_eq!(
+                decode_node_line(other.as_bytes()),
+                Err(EventsError::UnsupportedVersion { version })
+            );
+        }
     }
     // Each journal's lines are its own.
     assert_eq!(
@@ -605,12 +612,14 @@ fn a_document_out_of_its_rule_is_refused() {
             .unwrap_err()
             .to_string()
     };
-    let mut newer = json.clone();
-    newer["version"] = Value::from(2);
-    assert_eq!(
-        refused(&newer),
-        EventsError::UnsupportedDocumentVersion { found: 2 }.to_string()
-    );
+    for found in [0, 2] {
+        let mut other = json.clone();
+        other["version"] = Value::from(found);
+        assert_eq!(
+            refused(&other),
+            EventsError::UnsupportedDocumentVersion { found }.to_string()
+        );
+    }
     let mut unknown = json.clone();
     unknown["extra"] = Value::from(0);
     assert!(refused(&unknown).contains("unknown field"));
