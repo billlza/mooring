@@ -746,19 +746,22 @@ impl PaymentLedger {
             let user = record.user.clone();
             let granted = Granted::MakeUp(record.number);
             match record.gift {
-                MakeUpGift::Period { quota_bytes, .. } => {
-                    if let Some((from, until)) = take_backs.make_up_period(record) {
-                        entitlements.add_period(
-                            user,
-                            PaidPeriod {
-                                granted,
-                                from,
-                                until,
-                                quota_bytes,
-                                livemode: true,
-                            },
-                        );
-                    }
+                MakeUpGift::Period {
+                    from,
+                    until,
+                    quota_bytes,
+                } => {
+                    let (from, until) = take_backs.make_up_span(record.number, from, until);
+                    entitlements.add_period(
+                        user,
+                        PaidPeriod {
+                            granted,
+                            from,
+                            until,
+                            quota_bytes,
+                            livemode: true,
+                        },
+                    );
                 }
                 MakeUpGift::Traffic { bytes } => entitlements.add_pack(
                     user,

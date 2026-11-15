@@ -370,14 +370,24 @@ impl TakeBacks {
     #[must_use]
     pub fn make_up_period(&self, record: &MakeUpRecord) -> Option<(UnixTime, UnixTime)> {
         match record.gift {
-            MakeUpGift::Period { from, until, .. } => Some(
-                self.made_up
-                    .get(&record.number)
-                    .copied()
-                    .unwrap_or((from, until)),
-            ),
+            MakeUpGift::Period { from, until, .. } => {
+                Some(self.make_up_span(record.number, from, until))
+            }
             MakeUpGift::Traffic { .. } => None,
         }
+    }
+
+    /// Where the period of make-up `number`, given from `from` until
+    /// `until`, lies after the refunds in full: moved earlier by those that
+    /// took back time it followed, and where it was given when none did.
+    #[must_use]
+    pub(crate) fn make_up_span(
+        &self,
+        number: MakeUpNumber,
+        from: UnixTime,
+        until: UnixTime,
+    ) -> (UnixTime, UnixTime) {
+        self.made_up.get(&number).copied().unwrap_or((from, until))
     }
 
     /// What the refund of entry `seq` did; [`RefundEffect::Nothing`] for a
