@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The legacy login keychain as a [`SecretStore`] (design §12): the store
-//! of this unsigned development slice, for the M7's admin password.
+//! of this unsigned development slice, for the M7's admin password and
+//! every other secret.
 //!
 //! Items are generic passwords under the service [`SERVICE`], one account
 //! per [`SecretRef`] (its text, `router/admin`), labelled [`LABEL`]. No
 //! data-protection keychain, access group or entitlement is used: those
-//! need a signed build and arrive with M5, which moves the item (read
+//! need a signed build and arrive with M5, which moves the items (read
 //! here, write there, delete here). macOS asks the user to allow access
-//! when a rebuilt binary first reads the item; only the user can answer.
+//! when a rebuilt binary first reads an item; only the user can answer.
 //!
 //! An item is found by its service and account only, never by its label:
 //! a `put` adds the item, and when one exists (`errSecDuplicateItem`)
@@ -18,9 +19,10 @@
 //!
 //! The pure parts, [`status_error`], [`decode_item`] and which store a
 //! command gets ([`CommandSecrets::for_command`]), are tested; the live
-//! keychain is never touched by tests. The daemon reads it through
-//! [`daemon_store`], which waits for no question at the Mac's screen
-//! (`daemon::secrets`); a command's reads wait for the operator's answer.
+//! keychain is never touched by tests. The daemon, and launchd's apply job
+//! with it, read it through [`daemon_store`], which waits for no question
+//! at the Mac's screen (`daemon::secrets`); a command's reads wait for the
+//! operator's answer.
 
 use std::str;
 use std::sync::Arc;
@@ -63,14 +65,16 @@ pub(crate) fn daemon_store() -> DaemonSecrets<LoginKeychain> {
     DaemonSecrets::new(read, LoginKeychain, ANSWER_WITHIN)
 }
 
-/// The store a command gets. Only `mooringctl daemon` runs with no one at
-/// the Mac's screen, so only its reads wait for no question there; every
-/// other command's operator is at the screen and answers it.
+/// The store a command gets. Only what launchd runs, `mooringctl daemon`
+/// and the apply job's `apply --pending`, runs with no one at the Mac's
+/// screen, so only their reads wait for no question there; every other
+/// command's operator, `apply --now`'s included, is at the screen and
+/// answers it.
 #[derive(Debug)]
 pub(crate) enum CommandSecrets {
     /// A command's: the login keychain.
     Login(LoginKeychain),
-    /// The daemon's ([`daemon_store`]).
+    /// The daemon's ([`daemon_store`]), which the apply job reads as well.
     Daemon(DaemonSecrets<LoginKeychain>),
 }
 
@@ -78,7 +82,7 @@ impl CommandSecrets {
     /// The store `command` gets.
     pub(crate) fn for_command(command: &Command) -> Self {
         match command {
-            Command::Daemon => Self::Daemon(daemon_store()),
+            Command::Daemon | Command::Apply { pending: true, .. } => Self::Daemon(daemon_store()),
             _ => Self::Login(LoginKeychain),
         }
     }

@@ -105,9 +105,12 @@ pub(crate) enum Command {
     Apply {
         /// Run only between 19:15 and 19:45 UTC (03:15 to 03:45 Beijing
         /// time), as launchd's hourly firing does; outside it, do nothing.
+        /// A keychain read not answered within 3 s fails the node apply
+        /// that needs it, as in the daemon.
         #[arg(long)]
         pending: bool,
-        /// Run at once, whatever the time.
+        /// Run at once, whatever the time. Keychain reads wait for your
+        /// answer at the Mac's screen.
         #[arg(long)]
         now: bool,
         /// Print the outcome as one JSON line instead of a report.

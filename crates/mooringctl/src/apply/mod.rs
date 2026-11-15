@@ -31,6 +31,11 @@
 //!    confirmed generation is older than the deployment's, by id, through
 //!    the exit's egress as the daemon resolves it, with the engines in the
 //!    support directory; one that fails is reported, and the next one runs.
+//!    Each reads every secret the deployment requires. `--pending` reads
+//!    them as the daemon does (`daemon::secrets`): a read the keychain has
+//!    not answered within 3 s, as after a new build while macOS asks at
+//!    the Mac's screen, fails the node, and the next night's run reads
+//!    again. `--now` waits for the operator's answer at the screen.
 //!
 //! The report names users by id, on standard output; the log,
 //! `~/Library/Logs/Mooring/apply.log`, counts them and names none, since a
