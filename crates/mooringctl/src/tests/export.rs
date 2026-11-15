@@ -9,7 +9,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use mooring_export::{ExportFormat, export_user};
-use mooring_model::{Deployment, SecretEntry, UnixTime, UserId};
+use mooring_model::{
+    AgreementRecord, AgreementVersion, CalendarDate, Deployment, SecretEntry, UnixTime, UserId,
+};
 use mooring_store::{InMemorySecretStore, SecretStore};
 
 use super::support::{BackupAnswer, Harness, NOW};
@@ -137,7 +139,7 @@ fn export_needs_the_agreement_and_user_agree_is_enough() {
     assert_eq!(
         refused.stderr,
         format!(
-            "mooringctl: no file was written: record the user's acceptance with `mooringctl user agree {user}` once the user has accepted the agreement (docs/runbooks/user-agreement.md)\n  caused by: user {user} has not accepted agreement revision 1: no acceptance is recorded\n"
+            "mooringctl: no file was written: record the user's acceptance with `mooringctl user agree {user}` once the user has accepted the agreement (docs/runbooks/user-agreement.md)\n  caused by: user {user} has not accepted agreement revision 1 or a later one: no acceptance is recorded\n"
         )
     );
     assert!(!out.exists());
@@ -152,6 +154,30 @@ fn export_needs_the_agreement_and_user_agree_is_enough() {
         fs::read(&out).unwrap(),
         expected(&after, &user, ExportFormat::SingBoxJson)
     );
+}
+
+/// A user who accepted revision 1, as every pilot user did before revision
+/// 2 (2026-11-06), gets their file without accepting again, and their
+/// record stays as it was (the operator's decision of 2026-11-15).
+#[test]
+fn a_user_who_accepted_revision_1_gets_a_file_without_accepting_again() {
+    let first = AgreementRecord {
+        version: AgreementVersion::FIRST,
+        accepted_on: CalendarDate::parse("2026-10-18").unwrap(),
+    };
+    assert!(first.version < AgreementVersion::CURRENT);
+    let deployment = fixture(|parts| parts.users[0].agreement = Some(first));
+    let user = first_user(&deployment);
+    let (mut harness, folder) = exporting(deployment.clone());
+    let out = folder.join("user.json");
+    let written = harness.run(&["user", "export", user.as_str(), "--out", arg(&out)]);
+    assert_eq!(written.code, 0, "{}", written.stderr);
+    assert_eq!(
+        fs::read(&out).unwrap(),
+        expected(&deployment, &user, ExportFormat::SingBoxJson)
+    );
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.users().get(&user).unwrap().agreement, Some(first));
 }
 
 /// Every other refusal the export makes before reading a secret is

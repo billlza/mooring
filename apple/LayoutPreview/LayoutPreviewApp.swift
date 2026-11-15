@@ -120,7 +120,8 @@ private enum PreviewError: Error { case missingFixture, invalidFixture }
 struct LayoutPreviewApp: App {
     @State private var scenario: Scenario = .usageUnavailable
     @State private var model: ConsoleModel
-    @State private var history = HistoryModel(command: nil)
+    @State private var history = DocumentModel<RadioHistory>(command: nil)
+    @State private var events = DocumentModel<EventsDocument>(command: nil)
     @State private var daemon = DaemonService()
     @State private var daemonState: PreviewDaemonState = .started
 
@@ -138,7 +139,7 @@ struct LayoutPreviewApp: App {
 
     var body: some Scene {
         Window("Mooring Layout Preview", id: ConsoleWindow.id) {
-            ConsoleView(model: model, daemon: daemon, history: history)
+            ConsoleView(model: model, daemon: daemon, history: history, events: events)
                 .frame(minWidth: 780, minHeight: 540)
                 .toolbar {
                     Picker("Fixture", selection: $scenario) {

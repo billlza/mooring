@@ -12,12 +12,20 @@
 //! Both connect through [`connect_within`]: a reflector answers and closes
 //! at once, and its close can come before the connect's own poll looks,
 //! which [`connect_outcome`] reads as the connection it is.
+//!
+//! The direct probe also times its connection's opening, the capacity
+//! monitor's round trip (console spec B.2.8): the SYN crosses the line's
+//! uplink queue and the SYN-ACK its downlink queue, so a full queue shows
+//! as a longer opening. The reflector's answer is not timed, as it would
+//! count a second round trip. When the reflector's close comes before the
+//! connect's poll, the time runs to that close, a few milliseconds more.
 
 use std::io::{self, ErrorKind, Read};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
+use mooring_daemon_core::exit::DirectProbe;
 use mooring_daemon_core::status::ProbeStage;
 use mooring_model::iface::InterfaceIndex;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -43,11 +51,12 @@ pub(crate) struct ProbeFailure {
     pub(crate) kind: Option<ErrorKind>,
 }
 
-/// Probes `reflector` through the interface `index`.
+/// Probes `reflector` through the interface `index`: the address it saw,
+/// and how long the connection took to open.
 pub(crate) fn direct(
     index: InterfaceIndex,
     reflector: SocketAddrV4,
-) -> Result<Ipv4Addr, ProbeFailure> {
+) -> Result<DirectProbe, ProbeFailure> {
     let started = Instant::now();
     let failed = |stage| {
         move |error: io::Error| ProbeFailure {
@@ -60,9 +69,12 @@ pub(crate) fn direct(
     socket
         .bind_device_by_index_v4(Some(NonZeroU32::from(index)))
         .map_err(failed(ProbeStage::Connect))?;
+    let connecting = Instant::now();
     connect_within(&socket, &SocketAddr::V4(reflector).into(), PROBE_TIMEOUT)
         .map_err(failed(ProbeStage::Connect))?;
-    read_address(socket.into(), started, PROBE_TIMEOUT)
+    let rtt = connecting.elapsed();
+    let ip = read_address(socket.into(), started, PROBE_TIMEOUT)?;
+    Ok(DirectProbe { ip, rtt })
 }
 
 /// Probes through the probe inbound on the loopback `port`: the address

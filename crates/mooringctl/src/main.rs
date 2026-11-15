@@ -37,7 +37,8 @@
 //!   `--out` writes the document to a new file with mode 0600.
 //!
 //! The user portal's two files (design §9.5, `docs/portal-contract.md`),
-//! both refused until a revision of the user agreement covers the portal:
+//! made only for users who accepted the agreement revision this build
+//! ships (revisions from 2 on cover the portal):
 //!
 //! - `portal export --user <uid>... --out <path>` writes the snapshot of
 //!   the users named (status, usage this cycle, quota, expiry; no
@@ -82,6 +83,16 @@
 //!   document Mooring.app charts, or a table for tools that read columns
 //!   (design §15.6 rule 13). It reads the files and touches no network.
 //!
+//! The event journals (design §15.7) add, to the daemon, the Mac's events
+//! appended to `events/mac/<UTC day>.jsonl` and each node's journal read
+//! into `events/nodes/<node>/<UTC day>.jsonl` (the last 393 days kept),
+//! and:
+//!
+//! - `events [--since <date>] [--until <date>] [--json]` prints those days
+//!   (the last seven by default) in the order of their times, or the
+//!   document Mooring.app lists. It reads the files and touches no
+//!   network.
+//!
 //! Nothing is logged by a command: its only output is what it prints and
 //! its error on stderr. The daemon writes its own log,
 //! `~/Library/Logs/Mooring/daemon.log` (rotated at 5 MiB, standard error
@@ -106,6 +117,8 @@ mod collected_usage;
 mod daemon;
 #[cfg(target_os = "macos")]
 mod error;
+#[cfg(target_os = "macos")]
+mod events;
 #[cfg(target_os = "macos")]
 mod exit;
 #[cfg(target_os = "macos")]

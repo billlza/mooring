@@ -269,13 +269,28 @@ impl UserPolicy {
 pub struct AgreementVersion(NonZeroU16);
 
 impl AgreementVersion {
+    /// Revision 1, the first. An acceptance of any revision is one of it or
+    /// of a later one, so it is what `user export` requires (decision F9, as
+    /// the operator amended it on 2026-11-15).
+    pub const FIRST: Self = match NonZeroU16::new(1) {
+        Some(revision) => Self(revision),
+        None => panic!("agreement revisions count from 1"),
+    };
+
     /// The revision of the user agreement (`docs/runbooks/user-agreement.md`)
-    /// this build requires: `user export` refuses a user whose record is of
-    /// another revision, or who has none (decision F9). A new revision of the
+    /// this build ships: the one `user agree` records, which every new user
+    /// accepts. A user who accepted an earlier revision is served under it
+    /// (decision F9, as the operator amended it on 2026-11-15): no later
+    /// revision takes away what theirs gave, a file, or the portal from the
+    /// revision that covers it on ([`User::accepted`]). A new revision of the
     /// text changes this constant in the same commit; the export crate's
     /// `agreement_text` test pins the text of this revision by its SHA-256,
-    /// so an edit made without a new revision fails it.
-    pub const CURRENT: Self = Self(NonZeroU16::MIN);
+    /// so an edit made without a new revision fails it. Revision 2
+    /// (2026-11-06) covers the user portal and payment.
+    pub const CURRENT: Self = match NonZeroU16::new(2) {
+        Some(revision) => Self(revision),
+        None => panic!("agreement revisions count from 1"),
+    };
 
     /// The agreement revision `revision`.
     #[must_use]
@@ -297,8 +312,9 @@ impl fmt::Display for AgreementVersion {
 }
 
 /// The acceptance a refusal names, when a user has none of the revision
-/// required: none at all, or one of another revision. Every refusal for the
-/// agreement (a user export's, the portal's) words it this way.
+/// required or of a later one: none at all, or one of an earlier revision.
+/// Every refusal for the agreement (a user export's, the portal's) words it
+/// this way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RecordedAgreement(pub Option<AgreementVersion>);
 
@@ -313,9 +329,12 @@ impl fmt::Display for RecordedAgreement {
 
 /// That a user accepted a revision of the user agreement, and on which day
 /// (a calendar day, never compared with a clock). Since decision F9
-/// (2026-10-15) `user export` requires a record of
-/// [`AgreementVersion::CURRENT`]. Mac-only, like the label: never rendered,
-/// sent or exported.
+/// (2026-10-15) `user export` requires a record, of any revision since the
+/// operator amended F9 on 2026-11-15, and the portal one of the first
+/// revision that covers it or of a later one ([`User::accepted`]).
+/// Mac-only, like the label: never rendered, sent or exported. The portal's
+/// profile bundle only says that a user is withheld for want of that
+/// acceptance (design §9.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgreementRecord {
@@ -358,13 +377,17 @@ impl User {
         self.status == UserStatus::Active && self.per_node.contains_key(node)
     }
 
-    /// Whether the user accepted agreement revision `required`: a record of
-    /// exactly that revision (decision F9). `Err` gives what is recorded
-    /// instead, for the refusal to name. A user export, the portal snapshot
-    /// and the portal bundle all check an acceptance with this one rule.
+    /// Whether the user accepted agreement revision `required` or a later
+    /// one (decision F9, as the operator amended it on 2026-11-15): a
+    /// revision accepted stays the user's when a later one ships, so a new
+    /// revision never makes a new acceptance the only way to keep the
+    /// service. `Err` gives what is recorded instead, for the refusal to
+    /// name. A user export ([`AgreementVersion::FIRST`]: any acceptance), the
+    /// portal snapshot and the portal bundle (the first revision that covers
+    /// the portal) all check an acceptance with this one rule.
     pub fn accepted(&self, required: AgreementVersion) -> Result<(), RecordedAgreement> {
         match self.agreement {
-            Some(record) if record.version == required => Ok(()),
+            Some(record) if record.version >= required => Ok(()),
             recorded => Err(RecordedAgreement(recorded.map(|record| record.version))),
         }
     }
@@ -460,36 +483,56 @@ mod tests {
     }
 
     #[test]
-    fn the_current_agreement_revision_is_the_first() {
-        assert_eq!(AgreementVersion::CURRENT.get(), 1);
-        assert_eq!(AgreementVersion::CURRENT.to_string(), "1");
+    fn the_current_agreement_revision_is_the_second() {
+        assert_eq!(AgreementVersion::CURRENT.get(), 2);
+        assert_eq!(AgreementVersion::CURRENT.to_string(), "2");
         assert_eq!(
             AgreementVersion::new(NonZeroU16::new(12).unwrap()).to_string(),
             "12"
         );
     }
 
-    /// An acceptance counts for exactly its revision; the refusal names
-    /// what is recorded instead.
+    /// An acceptance counts for its revision and every earlier one, never
+    /// for a later one; no record counts for none. The refusal names what
+    /// is recorded instead.
     #[test]
-    fn an_acceptance_counts_for_exactly_its_revision() {
-        let first = AgreementVersion::CURRENT;
-        let second = AgreementVersion::new(NonZeroU16::new(first.get() + 1).unwrap());
+    fn an_acceptance_counts_for_its_revision_and_the_earlier_ones() {
+        let current = AgreementVersion::CURRENT;
+        let newer = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
+        let first = AgreementVersion::FIRST;
+        assert_eq!(first.get(), 1);
+        assert!(first < current);
         let mut user = user();
         assert_eq!(user.accepted(first), Err(RecordedAgreement(None)));
+        assert_eq!(user.accepted(current), Err(RecordedAgreement(None)));
         user.agreement = Some(AgreementRecord {
-            version: first,
+            version: current,
             accepted_on: date("2026-10-20"),
         });
+        assert_eq!(user.accepted(current), Ok(()));
         assert_eq!(user.accepted(first), Ok(()));
-        assert_eq!(user.accepted(second), Err(RecordedAgreement(Some(first))));
+        assert_eq!(user.accepted(newer), Err(RecordedAgreement(Some(current))));
+        // An older acceptance, revision 1's as every pilot user's before
+        // revision 2, counts for revision 1 and not for the current one.
+        user.agreement = Some(AgreementRecord {
+            version: first,
+            accepted_on: date("2026-10-18"),
+        });
+        assert_eq!(user.accepted(first), Ok(()));
+        assert_eq!(user.accepted(current), Err(RecordedAgreement(Some(first))));
+        // One of a revision after this build's counts for this build's.
+        user.agreement = Some(AgreementRecord {
+            version: newer,
+            accepted_on: date("2026-11-20"),
+        });
+        assert_eq!(user.accepted(current), Ok(()));
         assert_eq!(
             RecordedAgreement(None).to_string(),
             "no acceptance is recorded"
         );
         assert_eq!(
-            RecordedAgreement(Some(first)).to_string(),
-            format!("the recorded acceptance is of revision {first}")
+            RecordedAgreement(Some(current)).to_string(),
+            format!("the recorded acceptance is of revision {current}")
         );
     }
 

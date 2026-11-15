@@ -23,9 +23,10 @@ pub enum PortalError {
     /// operator names, never every user by default.
     #[error(transparent)]
     Named(#[from] NamedUsersError),
-    /// The user has not accepted the revision the portal requires.
+    /// The user has accepted neither the revision the portal requires nor
+    /// a later one.
     #[error(
-        "user {user} has not accepted agreement revision {required}: {}",
+        "user {user} has not accepted agreement revision {required} or a later one: {}",
         RecordedAgreement(*.recorded)
     )]
     AgreementNotAccepted {
@@ -33,7 +34,7 @@ pub enum PortalError {
         user: UserId,
         /// The revision the user accepted, if a record exists.
         recorded: Option<AgreementVersion>,
-        /// The revision required.
+        /// The revision required, the first that covers the portal.
         required: AgreementVersion,
     },
     /// The snapshot's time is past 9999-12-31, where the contract's

@@ -66,6 +66,24 @@ pub(crate) enum Command {
         #[arg(long, requires = "follow")]
         until_parent_exits: bool,
     },
+    /// The event journals the daemon keeps (UTC day files under the support
+    /// directory): the Mac's own (its starts, the exit's phases, the power,
+    /// sleeps and wakes, nodes' agents lost and answering again) and each
+    /// node's as the daemon read it, in the order of their times. The last
+    /// seven days by default.
+    Events {
+        /// The first UTC day (YYYY-MM-DD); six days before --until by
+        /// default.
+        #[arg(long, value_name = "DATE")]
+        since: Option<CalendarDate>,
+        /// The last UTC day (YYYY-MM-DD); today by default.
+        #[arg(long, value_name = "DATE")]
+        until: Option<CalendarDate>,
+        /// Print one JSON line (an event journal document, what Mooring.app
+        /// reads) instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Relay standard input and output over the one-time socket of the
     /// mooringctl that started ssh, which opened the connection to the node
     /// through the M7: management SSH's ProxyCommand.
@@ -212,8 +230,9 @@ pub(crate) enum UserCommand {
     /// credentials included) or why it is withheld, to a new file with mode
     /// 0600 (never overwritten). Name every user bound to a portal account:
     /// the portal refuses a bundle that leaves one out, and `mooring-portal
-    /// bound-users` on its host prints them as --user arguments. Refused
-    /// until the user agreement covers the portal.
+    /// bound-users` on its host prints them as --user arguments. A user who
+    /// has not accepted revision 2 of the agreement, the first that covers
+    /// the portal, or a later one, is withheld.
     ExportProfiles {
         /// A user bound to a portal account; give one --user per user. Only
         /// the users named are in the bundle.
@@ -267,8 +286,9 @@ pub(crate) enum PortalCommand {
     /// Write the portal snapshot of the users named, for `mooring-portal
     /// import`: their status, usage this billing cycle, quota and expiry,
     /// by user id and without credentials, to a new file with mode 0600
-    /// (never overwritten). Refused until the user agreement covers the
-    /// portal.
+    /// (never overwritten). Refused if a user named has not accepted
+    /// revision 2 of the agreement, the first that covers the portal, or a
+    /// later one.
     Export {
         /// A user to include; give one --user per user. Only the users
         /// named are exported.

@@ -11,6 +11,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use mooring_daemon_core::control::{DaemonReply, DaemonRequest};
+use mooring_daemon_core::exit::DirectProbe;
 use mooring_macsys::InterfaceAddrV4;
 use mooring_model::collections::NonEmpty;
 use mooring_model::exit::{EgressCheck, FlowCap, Pairing};
@@ -347,7 +348,7 @@ pub(crate) fn observe(
         let NodeAddress::Public(address) = site.address;
         let reflector = SocketAddrV4::new(address.get(), node.ports.reflector().get());
         match (env.probe)(index, reflector) {
-            Ok(ip) => {
+            Ok(DirectProbe { ip, .. }) => {
                 observed += 1;
                 let verdict = match check {
                     None => "no carrier check is recorded yet",

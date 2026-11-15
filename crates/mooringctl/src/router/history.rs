@@ -25,7 +25,7 @@ use mooring_daemon_core::radio_history::{
 use mooring_daemon_core::radio_table::{events_table, samples_table};
 use mooring_model::CalendarDate;
 use mooring_model::error::ModelError;
-use mooring_store::{RadioDay, radio_day_path, read_radio_day};
+use mooring_store::{DayLines, radio_day_path, read_radio_day};
 
 use crate::app::{Env, support_dir};
 use crate::cli::HistoryTableArg;
@@ -150,7 +150,7 @@ fn read_days(
                 samples: Vec::new(),
                 torn: false,
             },
-            Some(RadioDay { lines, torn }) => {
+            Some(DayLines { lines, torn }) => {
                 let path = radio_day_path(dir, date);
                 let mut samples = Vec::new();
                 for (index, line) in lines.split_inclusive(|&byte| byte == b'\n').enumerate() {

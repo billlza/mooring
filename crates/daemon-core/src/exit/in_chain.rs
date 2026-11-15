@@ -371,7 +371,7 @@ impl ExitMachine {
         let addresses = inputs.deployment.node_addresses();
         let uplink = match egress
             .interfaces
-            .uplink_address(|uplink| ports.probe(uplink, reflector))
+            .uplink_address(|uplink| ports.probe(uplink, reflector).map(|probe| probe.ip))
         {
             Ok(uplink) => uplink,
             Err(stage) => return Outcome::Failed(stage),
@@ -415,7 +415,7 @@ impl ExitMachine {
     }
 
     /// A direct probe of a bracket: it updates the carrier check and is
-    /// judged as every direct probe is.
+    /// judged as every direct probe is; its round trip is not the round's.
     fn bracket_probe<P: ExitPorts>(
         &mut self,
         inputs: &TickInputs<'_>,
@@ -427,7 +427,8 @@ impl ExitMachine {
     ) -> Result<Ipv4Addr, Outcome> {
         let ip = ports
             .probe(egress.interfaces.egress(), reflector)
-            .map_err(Outcome::Failed)?;
+            .map_err(Outcome::Failed)?
+            .ip;
         self.carrier_check = Some(CarrierCheck {
             egress_ip: ip,
             in_carrier_prefixes: check.in_carrier(ip),
