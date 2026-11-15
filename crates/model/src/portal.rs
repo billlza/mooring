@@ -11,7 +11,10 @@
 //! where a user's data is kept and how files reach users. Revision 1 named
 //! neither the portal's host (clause 4) nor a link (clauses 2 and 5);
 //! revision 2 (2026-11-06) covers both. So nothing about a user goes to the
-//! portal before the user has accepted a revision that covers it.
+//! portal before the user has accepted a revision that covers it, revision
+//! 2 or a later one: a later revision never takes the portal from a user
+//! who accepted revision 2 (decision F9, as the operator amended it on
+//! 2026-11-15).
 //!
 //! Both portal exporters take a [`PortalAgreement`] and refuse everything
 //! while its [`PortalAgreement::required`] is an error. `mooringctl` passes
@@ -39,7 +42,8 @@ pub const PORTAL_AGREEMENT_SINCE: Option<AgreementVersion> = match NonZeroU16::n
 };
 
 /// Whether this build may send anything about a user to the portal, and
-/// which agreement revision the user must have accepted first.
+/// which agreement revision the user must have accepted first, that one or
+/// a later one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PortalAgreement {
     since: Option<AgreementVersion>,
@@ -58,14 +62,16 @@ impl PortalAgreement {
         Self { since }
     }
 
-    /// The revision a user must have accepted before anything about them
-    /// goes to the portal: [`AgreementVersion::CURRENT`], as for a user
-    /// export (decision F9), once it is at or past the first revision that
-    /// covers the portal. `PortalNotCovered` before that.
+    /// The revision a user must have accepted, it or a later one
+    /// ([`crate::User::accepted`]), before anything about them goes to the
+    /// portal: the first revision that covers the portal, once
+    /// [`AgreementVersion::CURRENT`] is at or past it, so that a later
+    /// revision withholds no one who accepted that one (decision F9, as the
+    /// operator amended it on 2026-11-15). `PortalNotCovered` before that.
     pub const fn required(self) -> Result<AgreementVersion, PortalNotCovered> {
         let current = AgreementVersion::CURRENT;
         match self.since {
-            Some(since) if since.get() <= current.get() => Ok(current),
+            Some(since) if since.get() <= current.get() => Ok(since),
             Some(_) | None => Err(PortalNotCovered { current }),
         }
     }
@@ -107,7 +113,8 @@ mod tests {
     }
 
     /// Covered from the first covering revision on, and only then; the
-    /// revision required is always the one the build ships.
+    /// revision required is that first covering one, not the one the build
+    /// ships, so a later revision withholds no one who accepted it.
     #[test]
     fn the_gate_opens_at_the_first_revision_that_covers_the_portal() {
         let current = AgreementVersion::CURRENT;
@@ -117,6 +124,9 @@ mod tests {
             PortalAgreement::since(Some(current)).required(),
             Ok(current)
         );
+        let first = AgreementVersion::FIRST;
+        assert!(first < current);
+        assert_eq!(PortalAgreement::since(Some(first)).required(), Ok(first));
         assert_eq!(
             PortalAgreement::since(Some(revision(current.get() + 1))).required(),
             closed

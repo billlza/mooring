@@ -10,7 +10,7 @@
 
 use std::process::Command;
 
-use mooring_model::{AgreementVersion, PortalAgreement};
+use mooring_model::{PORTAL_AGREEMENT_SINCE, PortalAgreement};
 
 /// With an empty home, each command exits 1 and creates no file: past the
 /// gate, it is refused for the state that an empty home lacks. A binary
@@ -18,8 +18,8 @@ use mooring_model::{AgreementVersion, PortalAgreement};
 #[test]
 fn the_built_binary_passes_the_gate_it_ships() {
     assert_eq!(
-        PortalAgreement::SHIPPED.required(),
-        Ok(AgreementVersion::CURRENT)
+        PortalAgreement::SHIPPED.required().ok(),
+        PORTAL_AGREEMENT_SINCE
     );
     let home = tempfile::tempdir().unwrap();
     let out = home.path().join("portal.json");

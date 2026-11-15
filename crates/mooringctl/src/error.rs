@@ -136,8 +136,8 @@ pub(crate) enum LocalError {
         #[source]
         source: io::Error,
     },
-    /// The user has not accepted the agreement revision this build ships
-    /// (decision F9).
+    /// The user has accepted no revision of the agreement (decision F9, as
+    /// the operator amended it on 2026-11-15).
     #[error(
         "no file was written: record the user's acceptance with `mooringctl user agree {user}` once the user has accepted the agreement (docs/runbooks/user-agreement.md)"
     )]

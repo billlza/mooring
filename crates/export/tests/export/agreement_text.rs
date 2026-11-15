@@ -2,9 +2,10 @@
 
 //! The user agreement's text is bound to its revision (decision F9): users
 //! accept a revision, so any change to the text they read must come with a
-//! new `AgreementVersion::CURRENT`, which every user then accepts again
-//! before their next file. A Level 1 drift check: it detects an accidental
-//! edit, not a malicious one.
+//! new `AgreementVersion::CURRENT`, which new users accept and earlier ones
+//! may, keeping the service under theirs until they do (F9 as the operator
+//! amended it on 2026-11-15). A Level 1 drift check: it detects an
+//! accidental edit, not a malicious one.
 
 use mooring_model::{AgreementVersion, PortalAgreement};
 use sha2::{Digest as _, Sha256};
@@ -12,7 +13,7 @@ use sha2::{Digest as _, Sha256};
 const AGREEMENT: &str = include_str!("../../../../docs/runbooks/user-agreement.md");
 
 /// SHA-256 of the user-visible text of revision 2.
-const REVISION_2_SHA256: &str = "f9f9ea2e7e2e4fa2f8e7c01e537908220fec9da31fc5cd168ecbd629cfb68d54";
+const REVISION_2_SHA256: &str = "108d7489a30e2f41b92ed527a964dfe0da430381b876bd85bc785145305b5154";
 
 /// The text the user reads: everything after the operator notes, a comment
 /// whose closing `-->` stands on its own line (the licence comment before it

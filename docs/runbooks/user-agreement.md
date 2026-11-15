@@ -2,13 +2,16 @@
 <!--
   Operator notes (not part of the text the user reads):
   - This is revision 2. The revision must equal `AgreementVersion::CURRENT` in
-    crates/model/src/user.rs, and `user export` refuses users who accepted
-    another revision (decision F9, design §9.2).
+    crates/model/src/user.rs, the revision `user agree` records. `user export`
+    refuses only a user who accepted no revision, and the portal serves only
+    one who accepted revision 2 or a later one (decision F9, design §9.2, as
+    the operator amended it on 2026-11-15: below).
   - The text from the title on is pinned by its SHA-256
     (crates/export/tests/export/agreement_text.rs). Any change to it is a new
-    revision: bump the constant and record the new digest in the same commit,
-    and every user accepts again before their next file. These notes may
-    change without a new revision.
+    revision: bump the constant and record the new digest in the same commit.
+    New users accept the new revision; a user who accepted an earlier one is
+    asked to, and keeps their service under theirs until they do (clause 6).
+    These notes may change without a new revision.
   - Send users the text from the title on, never these notes (delivery.md,
     step 3 of section 1).
   - Revision 2 is the operator's revision of 2026-11-06 (design §9.4, §9.5):
@@ -16,13 +19,31 @@
     download, in the format CFM 0.5.x imports; payment through Stripe; every
     user on the portal, with files only as the backup when the portal cannot
     be reached. Users were to be asked to confirm it only once payment was
-    built, so this revision waited for the payment work: merged, it makes
-    `user export` refuse every user who accepted revision 1. Payment is live
+    built, so this revision waited for the payment work. Payment is live
     at the portal since 2026-11-14, and on 2026-11-15 the operator asked for
     this revision to be finished at once («立刻把PR28完整做完», relayed by the
     portal's session), for a user who registered that day. Never run a
     build of the unmerged revision against the real state: its `user agree`
     records revision 2, which a build of main then refuses to lower.
+  - No user is paused or made to accept a new revision: the operator's
+    decision of 2026-11-15, in their words «老用户照旧服务», after objecting
+    that a new revision must not pause the users of the old one to make
+    them accept it. A user who accepted only revision 1 keeps the service
+    revision 1 gave them, free, with files from `user export` delivered by
+    sections 2 to 6 of delivery.md as before, and is offered the portal,
+    its payments and renewals once they accept this revision. A later
+    revision binds only those who accept it, and whoever accepted revision
+    2 keeps the portal (`PORTAL_AGREEMENT_SINCE` stays 2). The text says so
+    in its opening, the change list and clause 6, and clause 5 no longer
+    pauses a link for a new revision. Revision 2 was not published yet, so
+    it stays revision 2. What revision 1 does not name must not reach a
+    user still under it: the abuse guard (below); a ban's records kept
+    until the service ends (clause 3), where revision 1 revokes a user who
+    breaks it and deletes their records 13 months later; and clause 6's
+    revocation 3 months after an unrenewed expiry, since revision 1's
+    service is free and its expiry pauses the service until the operator
+    resumes it (the nightly job of #47, a draft, revokes only a user who
+    accepted a revision that names it, and reports the others).
   - It covers the user portal (docs/portal-contract.md), so it sets
     `PORTAL_AGREEMENT_SINCE` (crates/model/src/portal.rs) to revision 2;
     agreement_text.rs checks that the text names the portal (门户) exactly
@@ -81,10 +102,10 @@
     and docs/contract/cfm-profiles-v2.md at commit edf5d01): shown once,
     stored as a digest, regenerated or disabled by the user, disabled by a
     password change. A suspended user (for quota, expiry, the operator, or
-    abuse review) and one who has not accepted the current revision keep
-    their link, which returns nothing until they are served again; only
-    revocation, a ban included, ends it for good (the operator's decision
-    of 2026-11-06; the portal pauses links since 120ca8a). A paused link
+    abuse review) keeps their link, which returns nothing until they are
+    served again; only revocation, a ban included, ends it for good (the
+    operator's decision of 2026-11-06; the portal pauses links since
+    120ca8a). No new revision pauses a link (above). A paused link
     can be disabled at the portal but not regenerated, as the portal makes
     links only for an account with a profile: of clause 2's
     「重新生成……或停用它」, a paused user has the second (the portal's test
@@ -384,6 +405,8 @@
 
 运营者记下你确认的日期后，你才能在门户上取得配置。
 
+已经确认过第 1 版的，不确认这一版也照常使用本服务：仍按第 1 版执行，配置文件仍由运营者按原来的方式交给你。只有门户要等你确认这一版后才能使用。
+
 门户是运营者的网站：你在上面注册账号、付款、查看自己的服务状态和用量，并取得 CFM 配置。它的网址由运营者在通话中告诉你。本约定说的“通话”，是你和运营者用 FaceTime、WhatsApp 或 Telegram 打的语音通话；“账户”，是你使用本服务的资格；“门户账号”，是你登录门户用的邮箱和密码。
 
 ## 这一版的变化
@@ -396,6 +419,7 @@
 - 用本服务从事违法活动的，会被封禁，以后换用别的邮箱、门户账号或银行卡也不能再使用本服务。为此，运营者会保留认出被封禁的人所需的记录，直到本服务停止，并把每位新用户与他们比对（第 3、4 条）。
 - 服务器会限制每位用户的连接，并根据连接的统计数字识别扫描、入侵、猜密码、攻击和群发邮件等用途，识别出来时立即切断你的服务（第 3、4 条）。
 - 和运营者通话，除了 FaceTime，也可以用 WhatsApp 或 Telegram 的语音通话。第 4 条写明这些通话会留下哪些记录、谁能看到。
+- 本约定以后更新时，不需要你重新确认：服务照常继续，对你仍按你确认过的那一版执行（第 6 条）。
 
 ## 1. 收费，不转售
 
@@ -553,7 +577,6 @@
 - 账户被暂停时，订阅链接暂时取不到配置；恢复后，同一条链接照常可用：
   - 配额用尽的，暂停到下一个计费周期，或者到你买了够补上超出部分的流量包；
   - 到期的，暂停到你续费；
-  - 你还没确认本约定的新版本的，暂停到你确认；
   - 运营者收到关于你的投诉、正在核查的，暂停到核查结束。
 
   账户作废或被封禁时，链接永久失效。
@@ -567,7 +590,7 @@
 
 ## 6. 更新与退出
 
-- 本约定更新后，你需要重新确认新版本，门户才会继续为你提供配置。在此之前，已经导入 CFM 的配置仍然可以用，但门户不会给你新的配置。
+- 本约定以后更新时，你不需要重新确认：你的服务和门户都照常继续，对你仍按你确认过的那一版执行。你同意新版本的，可以在通话中确认。
 - 你可以随时退出：运营者会作废你的账户、取消你的自动续费，并删除你的门户账号。已付的费用不退；第 1 条规定的退款除外。
 - 服务到期 3 个月后仍未续费，运营者会作废你的账户，并按第 4 条删除你的记录。
 - 你违反本约定时，运营者可以暂停、作废或封禁你的账户（第 3 条），已付的费用不退。
