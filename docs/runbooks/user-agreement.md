@@ -15,18 +15,23 @@
     configurations through the user portal, by subscription link or JSON
     download, in the format CFM 0.5.x imports; payment through Stripe; every
     user on the portal, with files only as the backup when the portal cannot
-    be reached. Users are asked to confirm it only once payment is built, so
-    this revision lands with the payment work: merged earlier, it would make
-    `user export` refuse every user who accepted revision 1. Never run a
+    be reached. Users were to be asked to confirm it only once payment was
+    built, so this revision waited for the payment work: merged, it makes
+    `user export` refuse every user who accepted revision 1. Payment is live
+    at the portal since 2026-11-14, and on 2026-11-15 the operator asked for
+    this revision to be finished at once («立刻把PR28完整做完», relayed by the
+    portal's session), for a user who registered that day. Never run a
     build of the unmerged revision against the real state: its `user agree`
     records revision 2, which a build of main then refuses to lower.
   - It covers the user portal (docs/portal-contract.md), so it sets
     `PORTAL_AGREEMENT_SINCE` (crates/model/src/portal.rs) to revision 2;
     agreement_text.rs checks that the text names the portal (门户) exactly
     when that gate is open.
-  - The portal's commits cited here are on its branch
-    feature/cfm-subscription-links, which had not been published when these
-    notes were written; if that branch is rewritten, cite them again.
+  - The portal's commits cited here were made on its branch
+    feature/cfm-subscription-links. On 2026-11-15 all of them were on its
+    repository's published default branch with the same hashes, and in
+    c7dced0, the commit the portal runs on moorlight.app (recorded there on
+    2026-11-14).
   - Clause 1 states the operator's payment decisions of 2026-11-06 (the
     portal's docs/payments.md):
     - Stripe, from the portal; a prepaid month, an auto-renewing month and
@@ -38,8 +43,14 @@
     - Quotas count per billing cycle, the line's (design §7), so a month
       buys service until its expiry with that cycle's quota, and renewing
       early moves the expiry, not the quota. Cancelling auto-renewal is
-      possible at the portal (to be built with payment) and through the
-      operator.
+      possible on Stripe's customer portal, through the link the portal's
+      subscription page shows a bound account with a renewal (the portal's
+      templates/shop.html and i18n zh.rs at c7dced0), and through the
+      operator. Since 2026-11-14 the portal sells a prepaid month (30 days,
+      100 GB) and two traffic packs, and no auto-renewing month, so clause
+      1 offers auto-renewal only when the portal does; Stripe's live
+      account takes cards only (the portal's docs/payments.md, the live
+      cutover of 2026-11-14).
     - A traffic pack counts only in the billing cycle in which it is
       granted, until that cycle ends: what is left unused does not carry
       over, and the order's days are recorded and not applied (the
@@ -100,12 +111,39 @@
     mode, sing-box sends the names on GeoSite cn to AliDNS and DNSPod by
     DoH dialled directly (crates/cfw-singbox-config/src/mainland.rs:41-57
     and 84-99). Clause 4 says all three; they are read from the source,
-    and M6 checks them on the real build.
+    and M6 checks them on the real build. On 2026-11-15 they were read
+    again in the build the portal's download page offers since
+    2026-11-12, 0.5.1 build 51006 (tag v0.5.1-build.51006, 7a3ba4f): the
+    same strings in its zh-Hans catalogue and the same logic, moved to
+    ui/src/state.js:113, PacketTunnelProvider.swift:465-471,
+    projection/dns.rs:66-84, projection/projector.rs:71-75 and
+    projection/route.rs:80, with fetch.rs and mainland.rs unchanged; the
+    profile's details still show the link (ui/src/profiles-view.js:102).
   - Clause 4 adds the portal's host: a UK VPS of its own, neither a node nor
     the Mac (the operator's decision of 2026-11-06). What it keeps is the
     portal's schema at 520c358 (accounts, sessions, bindings, snapshot
-    records, CFM profiles, links), the ban list (852eb24's migration 3)
-    and, once payment is built, its orders.
+    records, CFM profiles, links), the ban list (852eb24's migration 3),
+    and since payment its migrations 5 to 8, read at c7dced0 on
+    2026-11-15: orders with their journal, what Stripe said by its ids
+    (payments with their card check, refunds and dispute; invoices;
+    subscriptions), payments that match no order, the banned cards'
+    digests, Mac mini bookings, operators, and the messages between users
+    and the operator. Clause 4 lists each kind a user's data is in:
+    - What Stripe said is kept by Stripe's ids, not by account, so
+      deleting an account leaves it until 45 days after the portal heard
+      it and the next settling run (the portal's crates/store/src/settle.rs,
+      FORGET_AFTER_SECS); a payment that matches no order stays until it
+      does, is refunded in full or the operator dismisses it.
+    - A conversation keeps its latest 200 messages (feedback.rs, MAX_KEPT)
+      and goes with the account; `seen_at` is when the user saw an
+      operator's message, which clause 4's 「不会记录」 names as the one
+      page view kept. Only an operator's session has `confirmed_at`.
+    - A Mac mini booking goes when the user withdraws it, books the same
+      machine on other terms, the operator closes it, or the account goes
+      (the portal's docs/rentals.md).
+    - The portal's own pages still name FaceTime alone for the calls (its
+      i18n zh.rs); revision 2's 「通话」 covers FaceTime, so they hold, and
+      the portal may name the other two later.
     - The operator deletes a user's portal account, and with it everything
       there, when the user is revoked or leaves (delivery.md, section 10);
       orders go with the account.
@@ -124,22 +162,29 @@
       passes, one lane, a fixed public salt) since the portal's e0604f2. A
       sign-up computes the same digest to check the list, and keeps nothing
       of it. No key kept out of the database and its backups is built, so a
-      copy of them can still test addresses. With payment, the list is
-      also to keep the Stripe fingerprints of the cards the banned user
-      paid with (clause 3), to be built as follows:
+      copy of them can still test addresses. With payment, the list also
+      keeps the cards the banned user paid with (clause 3), built in the
+      portal's migration 5 and its db99ab3 as planned here, and read at
+      c7dced0:
       - The portal holds no Stripe key (its docs/payments.md §2), so the
         operator reads the fingerprints in the Stripe Dashboard at the ban
-        and gives them to the ban command.
+        and gives them to the ban command (`ban --card`, `ban-cards`).
+        The list keeps each as its BLAKE2s-256 digest, unkeyed: a
+        fingerprint is random and means nothing outside the operator's
+        Stripe account (the portal's docs/security.md §11). Clause 4 says
+        「识别码的摘要」. The command-line arguments would stay in the
+        host's shell history, so delivery.md section 10 turns it off.
       - The fingerprint is on the payment's Charge
         (`payment_method_details.card.fingerprint`), not on the Checkout
-        Session the portal now handles. So the portal is to read
-        `charge.succeeded` and join it to the order by its PaymentIntent.
-        Stripe does not order its events, so no order is to be pulled
-        before its charge is checked.
-      - A match keeps only a flag on the order, never the fingerprint,
-        and grants nothing. The operator refunds it in the Dashboard. If
-        it started an auto-renewing month, the operator also cancels that
-        subscription and deletes the saved card.
+        Session. The portal reads the charge's events and joins them to
+        the order by its PaymentIntent. Stripe does not order its events,
+        so no order is entered before its card is checked (settle.rs).
+      - A match keeps only a flag on the payment (`card = 'banned'`) and
+        holds the order for the operator (`card_banned`), never entered
+        for Mooring and never passed by the operator pages. The operator
+        refunds it in the Dashboard. If it started an auto-renewing month,
+        the operator also cancels that subscription and deletes the saved
+        card.
       - A fingerprint names a card number, so a replacement card escapes
         it. A wallet payment (Apple Pay, Google Pay) may carry the
         token's fingerprint instead (Stripe's API reference for
@@ -230,7 +275,7 @@
       - The email's digest at the portal (below).
       - The Stripe fingerprints of the cards the user paid with, at the
         portal. Later payments by those cards grant nothing and are
-        refunded. This is to be built with payment (above).
+        refunded. The portal keeps their digests (above).
       - A comparison of every new user with the banned: when they join, at
         each payment, and while they are served.
         - It uses records already kept: those above, the call history,
@@ -352,14 +397,14 @@
 **怎么付费：**
 - 付款从门户开始，在支付公司 Stripe 的付款页上完成，只接受银行卡。不要用转账或其他方式付钱给运营者。
 - 可以买两种服务：
-  - 按月套餐：一个月的服务。服务期内，每个计费周期有一定的流量配额。可以每次预付一个月，也可以开通自动续费。预付的可以提前续费：续上的时间从原来的到期日接着算，但不增加本计费周期的流量。
+  - 按月套餐：一个月的服务。服务期内，每个计费周期有一定的流量配额。可以每次预付一个月；门户上提供自动续费时，也可以开通自动续费。预付的可以提前续费：续上的时间从原来的到期日接着算，但不增加本计费周期的流量。
   - 流量包：额外的流量，只在开通它的那个计费周期内有效，到这个周期结束为止；没用完的不带到下个周期。本计费周期什么时候结束，门户的订阅页上有写（「下次重置」）。
 - 每种套餐包含多少天、多少流量，每种流量包包含多少流量，以及它们的价格和币种，以门户上公布的为准。付款前，Stripe 的付款页会显示这次要付的金额。
 - 付款后，运营者的电脑会定时从门户取回付款记录，为你开通或续期，所以要等一段时间才生效。到期后，服务会暂停，续费后恢复。
 
 **自动续费：**
 - 开通时，Stripe 会保存你的银行卡，之后每期自动扣款，直到你取消。
-- 你可以随时取消：在门户上自己取消，或者在通话中请运营者取消。取消后不再扣款，已付的这一期照常用到期满。
+- 你可以随时取消：从门户订阅页上的链接进入 Stripe 的页面自己取消（用付款时填写的邮箱登录），或者在通话中请运营者取消。取消后不再扣款，已付的这一期照常用到期满。
 - 扣款失败时不会续期：到期后服务暂停，付款后恢复。
 
 **中断时的补偿和退款：**
@@ -401,7 +446,7 @@
 - 识别出来时，服务器立即切断你的服务，并通知运营者核实。核实是误判的，运营者马上恢复你的服务，并按第 1 条补回被切断的时间；确认是滥用或违法活动的，按下一条封禁，已付的费用不退。
 - 运营者确认你用本服务从事违法活动时，会封禁你：作废你的账户，删除你的门户账号，你的订阅链接永久失效。已付的费用不退。
 - 被封禁后，你不得再使用本服务，换用别的邮箱、门户账号或银行卡也不行。运营者会保留认出你所需的记录，直到本服务停止，并把每位新用户与被封禁的人比对（第 4 条）。封禁之后，如果有人用你付过款的银行卡付款，运营者不开通服务，并退回这笔付款。
-- 封禁后发现是误封的，运营者会删除第 4 条所说的封禁记录、邮箱摘要和银行卡识别码，你可以重新加入，并按第 1 条补回被封禁时还没用到的天数。
+- 封禁后发现是误封的，运营者会删除第 4 条所说的封禁记录、邮箱摘要和银行卡识别码的摘要，你可以重新加入，并按第 1 条补回被封禁时还没用到的天数。
 
 ## 4. 运营者能看到什么、保存多久
 
@@ -436,9 +481,12 @@
 - 你的门户账号对应的用户编号，以及绑定的时间；
 - 运营者导入的你的服务状态：账户状态（包括暂停的原因和时间）、本计费周期的流量、配额和到期时间；
 - 你的 CFM 配置，包括你的凭据和服务器地址。门户要把它原样交给 CFM，所以它不加密保存；
-- 你的订单记录：买了什么、金额、付款时间和付款状态（包括退款），以及 Stripe 的付款编号。
+- 你的订单记录：买了什么、金额和币种、下单和付款的时间、付款状态（包括退款和争议），以及 Stripe 的付款编号；开通了自动续费的，还有自动续费的状态。门户还记下付款用的银行卡是否与被封禁的人付款用过的卡相同；需要运营者核对的订单，记下要核对的原因；
+- 对不上任何订单的付款：金额、币种、付款时间、对不上的原因和 Stripe 的付款编号，等运营者处理；
+- 你在门户上给运营者的留言和运营者的回复：内容、发送的时间，以及你看到回复的时间。留言里不要写你的真实姓名、订阅链接或配置文件的内容；
+- 你在门户上预订 Mac mini 时：预订的配置、计费方式、价格和预订的时间。
 
-门户不保存你的名字、别名和 IP 地址，也不保存你的银行卡信息：卡号只在 Stripe 的付款页上填写。你被封禁时，门户会保留你付款用过的银行卡的识别码（见「保存多久」）。
+门户不保存你的名字、别名和 IP 地址，也不保存你的银行卡信息：卡号只在 Stripe 的付款页上填写。你被封禁时，门户会保留你付款用过的银行卡的识别码的摘要（见「保存多久」）。
 
 **Stripe 上会保存：**
 - 你在付款页上填写的信息（例如邮箱和持卡人姓名）；卡的品牌、后四位、有效期和发卡国家；每笔付款的金额和时间；以及付款时 Stripe 为防欺诈自动收集的 IP 地址、大致位置和设备信息。运营者能在 Stripe 的后台看到这些，看不到完整的卡号。
@@ -452,7 +500,7 @@
 **运营者的电脑、服务器和门户不会记录：**
 - 你访问的网站、域名、IP 地址、DNS 查询或网址；不保存任何连接日志；
 - 你的 IP 地址和设备信息，被封禁的人的封禁记录除外；
-- 你在门户上看了哪些页面，以及 CFM 什么时候更新了订阅；
+- 你在门户上看了哪些页面（只记下你看到运营者回复的时间，见上文），以及 CFM 什么时候更新了订阅；
 - 运营者不检查你的流量内容。
 
 **无法避免：**
@@ -478,7 +526,7 @@
 - 通话记录：你的账户作废时，运营者在手机和电脑上删除这些软件里和你的通话记录；这些设备此前的备份里如果还有，要到备份被删除或覆盖时才会消失。Apple、WhatsApp 和 Telegram 自己保存的通话信息，按它们各自的规定保存，运营者不能删除。
 - 服务器上：流量明细保存 48 小时，每月合计在当月结束 7 天后删除，运营者的电脑会在此之前取回它们；你最近一次使用的时间在你的账户作废、服务器不再为你服务时删除。
 - 滥用记录：服务器上保存 30 天；运营者电脑上的副本保存 13 个月。你退出或请运营者删除你的记录时，这些记录也不提前删除：它们用来证明运营者及时处理了滥用。你被封禁时，它们复制到封禁记录里，保留到本服务停止。
-- 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除。你被封禁时也一样，但门户会保留你登录邮箱的摘要、你付款用过的银行卡在 Stripe 的识别码（Stripe 给同一个卡号的编号，不是卡号本身），以及封禁的时间，直到本服务停止：用来拒绝这个邮箱再注册，并认出用这些卡付的款（不开通服务，退回付款，见第 3 条）。封禁后发现是误封的，这些也随即删除。门户不保存邮箱本身，但拿到门户数据的人，可以很快核对一个或一批邮箱是否被封禁过：一台普通电脑一两个小时就能核对一百万个。像 QQ 号邮箱这样由数字组成的邮箱，要把所有号码逐个试一遍，需要大量计算，随手做不到；但如果有人租用足够多的电脑，几天内就能试完，而且试完这一遍，就能同时认出所有被封禁过的这类邮箱。
+- 门户上：运营者每次导入新的服务状态和配置，都会替换旧的；登录会话在你退出登录或修改密码时删除，否则 30 天后到期，之后被清除；你和运营者的留言只保留最近的 200 条；Mac mini 的预订在你撤回或运营者处理完时删除。你的账户作废时（包括你退出时），运营者会删除你的门户账号，门户上关于你的记录随之删除；只是门户从 Stripe 收到的你的付款情况（退款、争议、银行卡核对的结果和自动续费的状态）按 Stripe 的编号保存，要到收到 45 天后、门户下一次处理付款时才清除，对不上订单的付款保留到它对上订单、被全额退款或运营者处理完。你被封禁时也一样，但门户会保留你登录邮箱的摘要、你付款用过的银行卡在 Stripe 的识别码的摘要（识别码是 Stripe 给同一个卡号的编号，不是卡号本身），以及封禁的时间，直到本服务停止：用来拒绝这个邮箱再注册，并认出用这些卡付的款（不开通服务，退回付款，见第 3 条）。封禁后发现是误封的，这些也随即删除。门户不保存邮箱本身，但拿到门户数据的人，可以很快核对一个或一批邮箱是否被封禁过：一台普通电脑一两个小时就能核对一百万个。像 QQ 号邮箱这样由数字组成的邮箱，要把所有号码逐个试一遍，需要大量计算，随手做不到；但如果有人租用足够多的电脑，几天内就能试完，而且试完这一遍，就能同时认出所有被封禁过的这类邮箱。
 - Stripe 上：你的账户作废时，运营者会取消你的自动续费，并删除 Stripe 上保存的你的银行卡。付款记录本身由 Stripe 按它自己的规定保存，运营者不能删除。
 - 你可以随时请运营者告诉你，运营者保存了哪些关于你的记录。退出时，你可以请运营者立即删除运营者电脑上的这些记录（滥用记录除外），不必等 13 个月；门户上的记录在运营者删除你的门户账号时删除；服务器上的记录按上面的期限自动删除。
 

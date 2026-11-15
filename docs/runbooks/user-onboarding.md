@@ -5,7 +5,8 @@
     2026-11-06 for the user portal (§9.5): configurations come from the
     portal, by subscription link or download, and the encrypted image is the
     backup when the portal cannot be reached. This guide goes with revision
-    2 of the agreement, and so to users only once payment is built.
+    2 of the agreement, and so to users once a build that ships it is
+    installed (payment, the condition, is live since 2026-11-14).
   - The CFM wording was checked on 2026-10-18 against CFM 0.5.0 (build
     50030, tag v0.5.0, commit 502adf9), the first release with the mainland
     China direct switch (d828f92): its zh-Hans catalogue
@@ -29,11 +30,24 @@
     ready core running as a local proxy (src/engine.rs:64-74 at v0.5.0,
     66-76 at release/0.5.1). The core stops with 「停止内核」 on the 「常规」
     page (ui/src/general.js:141 at v0.5.0, 149 at release/0.5.1).
+  - On 2026-11-15 the CFM steps were read again in the build the portal's
+    download page offers since 2026-11-12, 0.5.1 build 51006 (tag
+    v0.5.1-build.51006, 7a3ba4f): every phrase this guide quotes is in its
+    zh-Hans catalogue; fetch.rs is unchanged; 「凭据」 still waits for the
+    core to be off (ui/src/profile-menu.js:31, engine-identity.js:8);
+    turning both switches off still keeps a ready core
+    (src/engine.rs:81); 「停止内核」 is ui/src/general.js:150.
   - The portal's wording (「我的账户」, 「账户」, 「订阅」, 「账号编号」,
     「生成订阅链接」, 「重新生成」, 「停用链接」, 「下载配置文件（JSON）」) is the
     portal's zh catalogue (crates/web/src/i18n/zh.rs) at its commit
-    ac7e285; the payment steps are written before the portal has them and
-    are checked again when payment is built.
+    ac7e285. On 2026-11-15 they and the payment steps were checked
+    against the portal that runs on moorlight.app (c7dced0): the phrases
+    are in its catalogue, the purchase is on the 「订阅」 page, and a
+    renewal is cancelled on Stripe's customer portal through the link
+    「在 Stripe 管理或取消自动续费」 (i18n zh.rs:307), which shows only for a
+    bound account with a renewal. The portal sells no auto-renewing month
+    since its live cutover of 2026-11-14, so section 2 names it as
+    conditional.
   - The calls (2026-11-15): every call this guide names may be FaceTime,
     WhatsApp or Telegram, as revision 2 of the agreement names them (its
     「通话」, the operator's «写进第 2 版»). Their text chats only arrange a
@@ -72,7 +86,7 @@
    - 登录邮箱就是你的登录名。不要用能对应你实名的邮箱，例如 QQ 邮箱。
    - 密码至少 12 个字符，不要和其他网站共用，也不要让浏览器记住它。
 2. 登录后，在「我的账户」的「账户」页找到你的账号编号，在通话中念给运营者。运营者据此把门户账号和你的服务对应起来。
-3. 在门户上选择要买的按月套餐或流量包，按页面提示付款。付款在 Stripe 的付款页上完成，只能用银行卡；付款后要等一段时间才生效。开通了自动续费的，可以在门户上自己取消，也可以在通话中请运营者取消。
+3. 在门户上选择要买的按月套餐或流量包，按页面提示付款。付款在 Stripe 的付款页上完成，只能用银行卡；付款后要等一段时间才生效。门户上提供自动续费时，开通了的，可以在「订阅」页点「在 Stripe 管理或取消自动续费」，用付款时填写的邮箱登录 Stripe 后自己取消，也可以在通话中请运营者取消。
 4. 忘记门户密码时，告诉运营者：门户不能自己找回密码，运营者会删除你的门户账号，你重新注册，再把新的账号编号念给运营者。
 
 ## 3. 取得配置并导入
