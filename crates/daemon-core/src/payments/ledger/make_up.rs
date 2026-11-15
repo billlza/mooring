@@ -200,11 +200,14 @@ pub struct MadeUp {
 
 impl PaymentLedger {
     /// Records on a copy at `now` the make-up `ask` gives `user`, for
-    /// `reason` ([`self`](self) module). Refused for a user being revoked
-    /// or revoked, for time without a live service period to extend, and
-    /// for a period that would end beyond the calendar. Whether `user` has
-    /// a quota that traffic adds to is the caller's to know
-    /// ([`crate::make_up`]): the ledger does not hold the user's quota.
+    /// `reason` (design §9.6): days from where a live grant would start,
+    /// with the quota of the user's live period that ends last, or traffic
+    /// for the billing cycle it is given in. Refused for a user being
+    /// revoked or revoked, for time without a live service period to
+    /// extend, for a period that would end beyond the calendar, and once
+    /// every number is spent. Whether `user` has a quota that traffic adds
+    /// to is the caller's to know ([`crate::make_up`]): the ledger does
+    /// not hold the user's quota.
     pub fn make_up(
         &self,
         user: &User,
