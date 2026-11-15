@@ -47,8 +47,8 @@ pub(super) fn roll_back(
 /// the links, what changed, and the health gate; with no previous
 /// generation the node goes back to serving nothing: no `current`, engines
 /// and tunnel stopped, and the ruleset it had before Mooring's first one
-/// reloaded. Live: the links, the host profile's files as text, and the
-/// running Xray's clients ([`to_previous_live`]). The failed generation's
+/// reloaded. Live: the links, the running Xray's clients, and the host
+/// profile's files as text ([`to_previous_live`]). The failed generation's
 /// directory is removed once `current` no longer names it: a revert that
 /// could not switch back keeps it, so that `current` and the fixed links
 /// into it stay whole. If any of it fails, the first failure is returned;
@@ -73,7 +73,7 @@ pub(crate) fn revert(
         Ok(current) if current == failed => Ok(()),
         Ok(_) => remove_failed(paths, failed),
         // Where `current` points is unknown: the directory stays, and the
-        // node is stopped as for any failure of the revert.
+        // revert has failed, as for any failure of it.
         Err(error) => Err(RollbackCause::Swap {
             errno: errno(&error),
         }),
@@ -114,34 +114,53 @@ fn to_previous(
 }
 
 /// The live undo of `failed`, applied live after `previous` (design
-/// §13.6): the links back; the previous generation's host-profile files
-/// back as text, with no command run, since a change applied live applied
-/// none; and, if Xray's configuration differed, the running Xray brought to
-/// hold exactly the previous file's clients through its API
-/// ([`xray_users::take_back`]). Nothing restarts or stops, and no health
-/// gate runs: the engines kept running what they ran, and a gate failure
-/// that was not the change's would only stop them.
+/// §13.6): the links back; if the change touched Xray's configuration, the
+/// running Xray brought to hold exactly the clients of the generation
+/// `current` then names, through its API ([`xray_users::take_back`]); and
+/// the previous generation's host-profile files back as text, with no
+/// command run, since a change applied live applied none. Links that could
+/// not go back leave `current` on the failed generation, and the running
+/// Xray is brought to its clients instead: the node then serves what
+/// `current` names, which is what an `Apply` of the same bundle, answered
+/// `Unchanged`, reports (design §11.2 step 9). Each part runs whatever the
+/// others did, and the first failure is returned. Nothing restarts or
+/// stops, and no health gate runs: the engines kept running what they ran,
+/// and a gate failure that was not the change's would only stop them.
 fn to_previous_live(
     paths: &Paths,
     node: &dyn Node,
     failed: Option<&BundleHeader>,
     previous: Generation,
 ) -> Result<(), RollbackCause> {
-    swap(paths, previous).map_err(|error| RollbackCause::Swap {
+    let swapped = swap(paths, previous).map_err(|error| RollbackCause::Swap {
         errno: error.raw_os_error(),
-    })?;
-    let dir = paths.generation(previous);
+    });
     let header = stage::installed_header(paths, previous)
         .map_err(|error| RollbackCause::Swap {
             errno: errno(&error),
-        })?
-        .ok_or(RollbackCause::Swap { errno: None })?;
-    install_host(paths, &dir, Applied::Changed)?;
+        })
+        .and_then(|header| header.ok_or(RollbackCause::Swap { errno: None }));
+    let on = gate::current_generation(paths).map_err(|error| RollbackCause::Swap {
+        errno: errno(&error),
+    });
+    // A header that cannot be read counts as Xray's configuration changed.
     let xray = ManagedFile::XrayConfig;
-    if failed.is_none_or(|failed| failed.files.get(xray) != header.files.get(xray)) {
-        xray_users::take_back(paths, node, &dir)?;
-    }
-    Ok(())
+    let touched = match (failed, &header) {
+        (Some(failed), Ok(header)) => failed.files.get(xray) != header.files.get(xray),
+        _ => true,
+    };
+    let taken = match &on {
+        Ok(on) if touched => xray_users::take_back(paths, node, &paths.generation(*on)),
+        Ok(_) => Ok(()),
+        Err(cause) => Err(cause.clone()),
+    };
+    let installed = match &on {
+        Ok(on) if *on == previous => {
+            install_host(paths, &paths.generation(previous), Applied::Changed).map(drop)
+        }
+        Ok(_) | Err(_) => Ok(()),
+    };
+    swapped.and(header.map(drop)).and(taken).and(installed)
 }
 
 /// The node back to serving nothing (design §11.2 step 8): both engines and

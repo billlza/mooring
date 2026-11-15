@@ -19,7 +19,8 @@ use super::{
     ADU, INBOUNDS, RESTART_XRAY, XRAY_ACTIVE, adding, client, count, exactly, held, listed,
 };
 use crate::blobs::digest_of;
-use crate::tests::FakeNode;
+use crate::tests::{EEXIST, EISDIR, FakeNode};
+use crate::txn::record::{Change, Pending, pending};
 use crate::txn::{self, Why};
 
 /// What no transaction under `Refused` may run on a node that serves
@@ -712,4 +713,136 @@ fn a_live_undo_adds_back_what_the_previous_file_lists() {
     );
     assert_undone(&world, &node, "held otherwise");
     assert_eq!(count(&node.calls(), ADU), 2, "the opening, then the undo's");
+}
+
+/// Links that cannot go back leave `current` on the failed generation. The
+/// undo then brings the running Xray to that generation's clients, which an
+/// `Unchanged` for it reports as served (design §11.2 step 9), and fails
+/// with the links' own cause. Nothing is restarted or stopped.
+#[test]
+fn links_that_cannot_go_back_bring_xray_to_the_generation_they_name() {
+    let (world, _, state) = opened_live(|_| {});
+    assert_eq!(state, TxnState::AwaitingConfirm);
+    // A client of the opening lost since, as to a read-back that failed.
+    {
+        let faults = world.faults.borrow();
+        let mut held = faults.xray.held.borrow_mut();
+        held.get_mut("reality-in")
+            .unwrap()
+            .retain(|held| held["email"] != client(1, "reality")["email"]);
+    }
+    let link = world.paths.current();
+    std::fs::create_dir(link.with_extension(format!("swap.{}", std::process::id()))).unwrap();
+    let node = world.node(3000);
+    let error = AgentError::LiveRollbackFailed {
+        generation: Generation::new(2),
+        cause: RollbackCause::Swap {
+            errno: Some(EEXIST),
+        },
+    };
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Requested),
+        Err(error.clone())
+    );
+    assert_eq!(world.state(2), TxnState::Failed { error });
+    assert_eq!(world.current().as_deref(), Some("gen-2"));
+    for (tag, _) in INBOUNDS {
+        assert_eq!(held(&world, tag), listed(&world, 2, tag), "{tag}");
+    }
+    assert_eq!(
+        removals(&world),
+        [],
+        "the generation lists every client held"
+    );
+    assert_undisrupted(&node.calls(), "links that cannot go back");
+}
+
+/// Host-profile files that cannot be put back keep nothing from the running
+/// Xray: each part of the undo runs, and the first failure is the one
+/// reported.
+#[test]
+fn host_files_that_cannot_be_put_back_still_let_xray_be_taken_back() {
+    let (world, _, state) = opened_live(|_| {});
+    assert_eq!(state, TxnState::AwaitingConfirm);
+    let installed = world.paths.host_file(HostFile::Sysctl);
+    std::fs::remove_file(&installed).unwrap();
+    std::fs::create_dir(&installed).unwrap();
+    let node = world.node(3000);
+    let error = AgentError::LiveRollbackFailed {
+        generation: Generation::new(2),
+        cause: RollbackCause::Swap {
+            errno: Some(EISDIR),
+        },
+    };
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Requested),
+        Err(error.clone())
+    );
+    assert_eq!(world.state(2), TxnState::Failed { error });
+    assert_eq!(world.current().as_deref(), Some("gen-1"));
+    for (tag, _) in INBOUNDS {
+        assert_eq!(held(&world, tag), listed(&world, 1, tag), "{tag}");
+    }
+    assert_eq!(removals(&world), emails_of(1));
+    assert_undisrupted(&node.calls(), "host files that cannot be put back");
+}
+
+/// A failed generation whose header cannot be read counts as having changed
+/// Xray's clients: the undo still brings the running Xray back.
+#[test]
+fn an_unreadable_failed_header_still_lets_xray_be_taken_back() {
+    let (world, _, state) = opened_live(|_| {});
+    assert_eq!(state, TxnState::AwaitingConfirm);
+    std::fs::remove_file(
+        world
+            .paths
+            .generation(Generation::new(2))
+            .join(txn::stage::BUNDLE_FILE),
+    )
+    .unwrap();
+    let node = world.node(3000);
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Requested),
+        Ok(Generation::new(2))
+    );
+    assert_undone(&world, &node, "an unreadable header");
+    assert_eq!(removals(&world), emails_of(1));
+}
+
+/// A change an agent of protocol 2 recorded names no `restarts`. That
+/// agent restarted whatever its change needed, so the change reads as
+/// `Allowed` and is reverted by restarting.
+#[test]
+fn a_change_recorded_before_protocol_3_is_reverted_by_restarting() {
+    let (world, _, state) = opened_live(|_| {});
+    assert_eq!(state, TxnState::AwaitingConfirm);
+    let file = world.paths.pending();
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    let written = record["change"]["Apply"]
+        .as_object_mut()
+        .unwrap()
+        .remove("restarts");
+    assert_eq!(written, Some(Value::from("Refused")));
+    std::fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
+    let Some(Pending { change, .. }) = pending(&world.paths).unwrap() else {
+        panic!("the change is pending");
+    };
+    assert_eq!(
+        change,
+        Change::Apply {
+            previous: Generation::new(1),
+            restarts: Restarts::Allowed,
+        }
+    );
+    let node = world.node(3000);
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Requested),
+        Ok(Generation::new(2))
+    );
+    let calls = node.calls();
+    assert_eq!(exactly(&calls, RESTART_XRAY).len(), 1, "{calls:#?}");
+    assert_eq!(count(&calls, "xray api rmu"), 0, "{calls:#?}");
+    for (tag, _) in INBOUNDS {
+        assert_eq!(held(&world, tag), listed(&world, 1, tag), "{tag}");
+    }
 }

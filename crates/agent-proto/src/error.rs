@@ -375,10 +375,11 @@ pub enum AgentError {
     /// The rollback of a change applied live, which takes it back out of
     /// the running Xray through its API, failed (design §13.6). Nothing was
     /// restarted or stopped and the gate is as it was; until its next
-    /// restart the running Xray may hold clients its files do not list.
+    /// restart the running Xray may hold other clients than its files list,
+    /// more or fewer.
     #[error(
         "the live rollback of generation {generation} failed; nothing was restarted or stopped, \
-         and until its next restart the running Xray may hold clients its files do not list"
+         and until its next restart the running Xray may hold other clients than its files list"
     )]
     LiveRollbackFailed {
         /// The generation that failed.
