@@ -49,6 +49,21 @@ classdef RadioDegradationTest < matlab.unittest.TestCase
             samples = testCase.attachedOnLte(at, readings);
         end
 
+        function samples = anotherSimThreeDaysAgo(testCase, kind)
+            % The eight days' polls, of the given kinds: five days on
+            % network 234-20 with a SINR of 20, then, as after another
+            % SIM, the last three days on 234-30 with a SINR of 10.
+            [at, daysBack] = testCase.eightDays();
+            count = numel(at);
+            codes = repmat("234-30", count, 1);
+            codes(daysBack >= 3) = "234-20";
+            readings = repmat(testCase.Steady, count, 1);
+            readings(:, 3) = 10;
+            readings(daysBack >= 3, 3) = 20;
+            samples = radioPolls(testCase.Folder, at, kind, readings, ...
+                repmat("lte", count, 1), ones(count, 1), codes);
+        end
+
         function samples = lowerInTheLastDay(testCase)
             % RSRP 2.9 dB lower, RSRQ 2 dB lower and SINR 3 dB lower in
             % the last 24 hours than in the week before.
@@ -64,8 +79,10 @@ classdef RadioDegradationTest < matlab.unittest.TestCase
 
     methods (Test)
         function aMedianLowerByItsThresholdIsDegraded(testCase)
-            [indicators, verdict] = mooring.radioDegradation(testCase.lowerInTheLastDay());
+            [indicators, verdict, network] = mooring.radioDegradation(testCase.lowerInTheLastDay());
 
+            % Every poll is on one network: the one judged.
+            testCase.verifyEqual(network, "234-30");
             testCase.verifyClass(indicators, "table");
             testCase.verifyEqual(string(indicators.Properties.VariableNames), ["indicator", "recent", ...
                 "baseline", "change", "threshold", "spread", "worse_when", "recent_count", ...
@@ -326,6 +343,220 @@ classdef RadioDegradationTest < matlab.unittest.TestCase
                 MinDays=2);
             testCase.verifyEqual(indicators.state, judged);
             testCase.verifyEqual(verdict, "degraded");
+        end
+
+        function aDayThePollsBeginInAfterItsFirstHourIsNoBaselineDay(testCase)
+            % The SINR of the seven days before the last, the nearest
+            % first: 10, 10, 10, 20, 20, 20 and 20, and 10 in the last
+            % day. The median of the seven is 20, and of the nearer six
+            % 15. The windows are counted back from the last poll, at
+            % 23:50: the first hour of each ends at 00:50.
+            [at, daysBack] = testCase.eightDays();
+            sinr = 10 * ones(numel(at), 1);
+            sinr(daysBack >= 4) = 20;
+
+            % The polls begin at 00:50 of the earliest day, the last
+            % moment of its first hour: the day counts.
+            [indicators, verdict] = mooring.radioDegradation(testCase.sinrByDay(at(6:end), sinr(6:end)));
+            testCase.verifyEqual(indicators.baseline_days, testCase.SevenDays);
+            testCase.verifyEqual(indicators.baseline(3), 20);
+            testCase.verifyEqual(indicators.change(3), -10);
+            testCase.verifyEqual(indicators.spread(3), 0);
+            testCase.verifyEqual(indicators.state(3), "degraded");
+            testCase.verifyEqual(verdict, "degraded");
+
+            % At 01:00 they begin after it. The day holds 138 polls, and
+            % is a part of a day: the six days after it are the baseline,
+            % which the last day is within three times their spread of.
+            [indicators, verdict] = mooring.radioDegradation(testCase.sinrByDay(at(7:end), sinr(7:end)));
+            testCase.verifyEqual(indicators.baseline_days, [6; 6; 6; 6; 0; 0; 0; 6; 6; 6; 6]);
+            testCase.verifyEqual(indicators.baseline(3), 15);
+            testCase.verifyEqual(indicators.change(3), -5);
+            testCase.verifyEqual(indicators.spread(3), 5);
+            testCase.verifyEqual(indicators.state(3), "ok");
+            testCase.verifyEqual(verdict, "ok");
+
+            % A failed poll is a poll: the first hour of the earliest day
+            % holds six, and the day counts for the readings of its 138
+            % other polls.
+            count = numel(at);
+            kind = repmat("attached", count, 1);
+            kind(1:6) = "failed";
+            readings = repmat(testCase.Steady, count, 1);
+            readings(:, 3) = sinr;
+            samples = radioPolls(testCase.Folder, at, kind, readings, ...
+                repmat("lte", count, 1), ones(count, 1));
+            indicators = mooring.radioDegradation(samples);
+            testCase.verifyEqual(indicators.baseline_days, testCase.SevenDays);
+            testCase.verifyEqual(indicators.baseline(3), 20);
+        end
+
+        function theDaysOnAnotherNetworkAreNoBaseline(testCase)
+            samples = testCase.anotherSimThreeDaysAgo(repmat("attached", 1152, 1));
+
+            % The last day is judged against the two days before it on its
+            % own network, and two are one too few to judge by.
+            [indicators, verdict, network] = mooring.radioDegradation(samples);
+            testCase.verifyEqual(network, "234-30");
+            testCase.verifyEqual(indicators.recent_count, [144; 144; 144; 144; 0; 0; 0; 144; 144; 144; 144]);
+            testCase.verifyEqual(indicators.baseline_days, [2; 2; 2; 2; 0; 0; 0; 2; 2; 2; 2]);
+            testCase.verifyEqual(indicators.recent(3), 10);
+            testCase.verifyEqual(indicators.baseline(3), 10);
+            testCase.verifyEqual(indicators.change(3), 0);
+            testCase.verifyEqual(indicators.state, repmat("insufficient_data", 11, 1));
+            testCase.verifyEqual(verdict, "insufficient_data");
+            % They are days like the last one.
+            [indicators, verdict] = mooring.radioDegradation(samples, MinDays=2);
+            testCase.verifyEqual(indicators.state(3), "ok");
+            testCase.verifyEqual(verdict, "ok");
+
+            % With every poll taken, five of the seven earlier days are
+            % the other network's, and the new SIM reads as a link that
+            % became 10 dB worse.
+            [indicators, verdict, network] = mooring.radioDegradation(samples, Network="all");
+            testCase.verifyTrue(ismissing(network));
+            testCase.verifyEqual(indicators.baseline_days(3), 7);
+            testCase.verifyEqual(indicators.baseline(3), 20);
+            testCase.verifyEqual(indicators.change(3), -10);
+            testCase.verifyEqual(indicators.spread(3), 0);
+            testCase.verifyEqual(indicators.state(3), "degraded");
+            testCase.verifyEqual(verdict, "degraded");
+
+            % The network before, by its codes: its own last day against
+            % its own four days before that.
+            [indicators, verdict, network] = mooring.radioDegradation(samples, Network="234-20");
+            testCase.verifyEqual(network, "234-20");
+            testCase.verifyEqual(indicators.recent_count(3), 144);
+            testCase.verifyEqual(indicators.recent(3), 20);
+            testCase.verifyEqual(indicators.baseline_days(3), 4);
+            testCase.verifyEqual(indicators.baseline(3), 20);
+            testCase.verifyEqual(indicators.state(3), "ok");
+            testCase.verifyEqual(verdict, "ok");
+        end
+
+        function theDayAnotherSimWentInIsNoBaselineDay(testCase)
+            % Every evening from 18:00 UTC the SINR is 5, and 15 the rest
+            % of the day, on both networks. The other SIM went in at 18:00
+            % two days before the last day: of that day 234-30 holds the
+            % evening alone.
+            [at, daysBack] = testCase.eightDays();
+            count = numel(at);
+            evening = mod(floor(at / 3600), 24) >= 18;
+            readings = repmat(testCase.Steady, count, 1);
+            readings(:, 3) = 15;
+            readings(evening, 3) = 5;
+            codes = repmat("234-20", count, 1);
+            codes(daysBack < 2 | (daysBack == 2 & evening)) = "234-30";
+            samples = radioPolls(testCase.Folder, at, repmat("attached", count, 1), readings, ...
+                repmat("lte", count, 1), ones(count, 1), codes);
+
+            % The evening's 36 polls are enough for a window to count, and
+            % an evening is no day: with it the baseline would be 10,
+            % between a day's 15 and an evening's 5. The one whole day
+            % before the last is the baseline.
+            [indicators, verdict, network] = mooring.radioDegradation(samples, MinDays=1);
+            testCase.verifyEqual(network, "234-30");
+            testCase.verifyEqual(indicators.recent(3), 15);
+            testCase.verifyEqual(indicators.baseline_days, [1; 1; 1; 1; 0; 0; 0; 1; 1; 1; 1]);
+            testCase.verifyEqual(indicators.baseline(3), 15);
+            testCase.verifyEqual(indicators.state(3), "ok");
+            testCase.verifyEqual(verdict, "ok");
+            % And one day is too few to judge by.
+            [indicators, verdict] = mooring.radioDegradation(samples);
+            testCase.verifyEqual(indicators.state, repmat("insufficient_data", 11, 1));
+            testCase.verifyEqual(verdict, "insufficient_data");
+
+            % The last evening against the evenings before it: the one
+            % the SIM went in on is whole.
+            [indicators, verdict] = mooring.radioDegradation(samples, Recent=hours(6), MinDays=2);
+            testCase.verifyEqual(indicators.recent_count(3), 36);
+            testCase.verifyEqual(indicators.baseline_days(3), 2);
+            testCase.verifyEqual(indicators.recent(3), 5);
+            testCase.verifyEqual(indicators.baseline(3), 5);
+            testCase.verifyEqual(indicators.state(3), "ok");
+            testCase.verifyEqual(verdict, "ok");
+
+            % The network before, whose last 24 hours end at 17:50: the
+            % samples begin six hours into the fifth day before them.
+            [indicators, verdict, network] = mooring.radioDegradation(samples, Network="234-20");
+            testCase.verifyEqual(network, "234-20");
+            testCase.verifyEqual(indicators.recent_count(3), 144);
+            testCase.verifyEqual(indicators.baseline_days(3), 4);
+            testCase.verifyEqual(indicators.recent(3), 15);
+            testCase.verifyEqual(indicators.baseline(3), 15);
+            testCase.verifyEqual(indicators.state(3), "ok");
+            testCase.verifyEqual(verdict, "ok");
+        end
+
+        function aPollWithoutCodesIsJudgedWithTheNetworkBeforeIt(testCase)
+            % Fifteen of the last day's polls failed. A failed poll holds
+            % no network's codes; these follow polls on 234-30.
+            [at, daysBack] = testCase.eightDays();
+            kind = repmat("attached", numel(at), 1);
+            last = find(daysBack == 0);
+            kind(last(1:15)) = "failed";
+            samples = testCase.anotherSimThreeDaysAgo(kind);
+
+            [indicators, verdict, network] = mooring.radioDegradation(samples, MinDays=2);
+            testCase.verifyEqual(network, "234-30");
+            testCase.verifyEqual(indicators.recent_count, [129; 129; 129; 129; 0; 0; 0; 144; 129; 129; 129]);
+            testCase.verifyEqual(indicators.recent(8), 15 / 144, "AbsTol", 1e-12);
+            testCase.verifyEqual(indicators.baseline(8), 0);
+            testCase.verifyEqual(indicators.baseline_days(8), 2);
+            testCase.verifyEqual(indicators.state(8), "degraded");
+            testCase.verifyEqual(verdict, "degraded");
+
+            % The failed polls that follow the last poll on 234-20 are
+            % 234-20's: the first fifteen polls of the first day on
+            % 234-30 failed, and 234-20's last 24 hours, counted back from
+            % the last of them, hold fifteen failed polls of 144.
+            kind = repmat("attached", numel(at), 1);
+            first = find(daysBack == 2);
+            kind(first(1:15)) = "failed";
+            samples = testCase.anotherSimThreeDaysAgo(kind);
+            [indicators, ~, network] = mooring.radioDegradation(samples, Network="234-20");
+            testCase.verifyEqual(network, "234-20");
+            testCase.verifyEqual(indicators.recent_count(8), 144);
+            testCase.verifyEqual(indicators.recent(8), 15 / 144, "AbsTol", 1e-12);
+            testCase.verifyEqual(indicators.baseline(8), 0);
+            % And not 234-30's, whose polls begin after them, two and a
+            % half hours into that day: a part of a day, and no baseline.
+            indicators = mooring.radioDegradation(samples, MinDays=2);
+            testCase.verifyEqual(indicators.recent(8), 0);
+            testCase.verifyEqual(indicators.baseline(8), 0);
+            testCase.verifyEqual(indicators.baseline_days(8), 1);
+        end
+
+        function aNetworkNoPollIsOnIsRefused(testCase)
+            samples = testCase.anotherSimThreeDaysAgo(repmat("attached", 1152, 1));
+            try
+                mooring.radioDegradation(samples, Network="234-99");
+                testCase.verifyFail("The samples were judged.");
+            catch failure
+                testCase.verifyEqual(string(failure.identifier), "mooring:radio:UnknownNetwork");
+                testCase.verifySubstring(failure.message, "No poll is on network 234-99");
+                testCase.verifySubstring(failure.message, "the samples' networks are 234-20, 234-30");
+            end
+            % A word that is neither "last" nor "all" names no network.
+            testCase.verifyError(@() mooring.radioDegradation(samples, Network="first"), ...
+                "mooring:radio:UnknownNetwork");
+
+            % Samples without a network's codes have none to name, and are
+            % judged whole.
+            none = noRadioSamples(testCase.Folder);
+            try
+                mooring.radioDegradation(none, Network="234-30");
+                testCase.verifyFail("The samples were judged.");
+            catch failure
+                testCase.verifyEqual(string(failure.identifier), "mooring:radio:UnknownNetwork");
+                testCase.verifySubstring(failure.message, "no poll of the samples holds a network's codes");
+            end
+            [~, verdict, network] = mooring.radioDegradation(none);
+            testCase.verifyEqual(verdict, "insufficient_data");
+            testCase.verifyTrue(ismissing(network));
+            [~, verdict, network] = mooring.radioDegradation(none, Network="all");
+            testCase.verifyEqual(verdict, "insufficient_data");
+            testCase.verifyTrue(ismissing(network));
         end
 
         function aShortRecentWindowIsComparedWithTheSameHoursOfTheDay(testCase)

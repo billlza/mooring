@@ -19,9 +19,11 @@ function hourly = radioHourly(samples)
 %                         the median of the polls that hold the reading
 %
 %   A share, a mean or a median of no poll is NaN. SAMPLES without rows
-%   give HOURLY without rows.
+%   give HOURLY without rows. An hour holds its polls whatever network
+%   they were on; mooring.radioNetworks gives the same of each network.
 %
-%   See also mooring.readRadioSamples, mooring.radioForecast.
+%   See also mooring.readRadioSamples, mooring.radioForecast,
+%   mooring.radioNetworks.
 
 % SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -35,42 +37,9 @@ function hourly = radioHourly(samples)
         first = min(hourIndex);
         count = max(hourIndex) - first + 1;
     end
-    bin = hourIndex - first + 1;
     start = datetime((first + (0:count - 1)') * 3600, "ConvertFrom", "posixtime", "TimeZone", "UTC");
 
-    attached = samples.service == "attached";
-    attachedCount = binCount(bin, attached, count);
-    readings = mooring.internal.radioReadings();
-    names = ["polls", "failed", "no_service", "attached", "nr5g_share", ...
-        "ca_secondary_mean", "temperature_c", readings];
-    values = cell(1, numel(names));
-    values{1} = binCount(bin, true(size(bin)), count);
-    values{2} = binCount(bin, samples.outcome == "failed", count);
-    values{3} = binCount(bin, samples.service == "no_service", count);
-    values{4} = attachedCount;
-    values{5} = binCount(bin, attached & samples.network_service == "nr5g", count) ./ attachedCount;
-    values{6} = binStatistic(bin, samples.ca_secondary_count, count, @mean);
-    values{7} = binStatistic(bin, samples.temperature_c, count, @median);
-    for index = 1:numel(readings)
-        values{7 + index} = binStatistic(bin, samples.(readings(index)), count, @median);
-    end
+    [names, values] = mooring.internal.pollSummary(samples, hourIndex - first + 1, count);
     hourly = timetable(start, values{:}, 'VariableNames', cellstr(names));
     hourly.Properties.DimensionNames{1} = 'hour';
-end
-
-function total = binCount(bin, flags, count)
-% How many of the flagged rows each bin holds.
-    total = zeros(count, 1);
-    if any(flags)
-        total = accumarray(bin(flags), 1, [count 1]);
-    end
-end
-
-function result = binStatistic(bin, values, count, statistic)
-% The statistic of each bin's values that are not NaN; NaN without one.
-    result = nan(count, 1);
-    known = ~isnan(values);
-    if any(known)
-        result = accumarray(bin(known), values(known), [count 1], statistic, NaN);
-    end
 end

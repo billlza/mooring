@@ -1,4 +1,4 @@
-function writeRadioSamples(file, at, kind, readings, network, carriers)
+function writeRadioSamples(file, at, kind, readings, network, carriers, codes)
 %WRITERADIOSAMPLES A samples table of made-up polls, as mooringctl prints one.
 %   writeRadioSamples(FILE, AT, KIND, READINGS, NETWORK, CARRIERS) writes
 %   one row per poll, for N polls:
@@ -14,6 +14,10 @@ function writeRadioSamples(file, at, kind, readings, network, carriers)
 %   READINGS, NETWORK and CARRIERS count for the attached polls only.
 %   Every read has an uptime of 1000 s and 44 degrees; every attached poll
 %   is on band B3 of network 234-30 with a session of 600 s.
+%
+%   writeRadioSamples(..., CODES) gives each attached poll its network's
+%   codes: N by 1 strings, as "234-20", or "" for a poll that reports
+%   none.
 
 % SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -24,6 +28,7 @@ function writeRadioSamples(file, at, kind, readings, network, carriers)
         readings (:,7) double
         network (:,1) string
         carriers (:,1) double
+        codes (:,1) string = repmat("234-30", numel(at), 1)
     end
     stamp = string(datetime(at, "ConvertFrom", "posixtime", "TimeZone", "UTC"), ...
         "yyyy-MM-dd'T'HH:mm:ss'Z'");
@@ -39,7 +44,8 @@ function writeRadioSamples(file, at, kind, readings, network, carriers)
     on = kind == "attached";
     if any(on)
         rows(on) = time(on) + ",read,,1000,44,normal,attached," + network(on) + "," + data(on) ...
-            + ",B3," + compose("%d", carriers(on)) + "," + join(cells(on, :), ",", 2) + ",234-30,600";
+            + ",B3," + compose("%d", carriers(on)) + "," + join(cells(on, :), ",", 2) ...
+            + "," + codes(on) + ",600";
     end
 
     layout = mooring.internal.radioFormat("samples");

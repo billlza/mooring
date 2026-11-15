@@ -24,7 +24,14 @@ classdef RadioForecastTest < matlab.unittest.TestCase
             % One SINR per hour, the last of them for the hour from 23:00
             % on 2026-10-13: two attached polls in each hour, ten and
             % forty minutes past it, both with the hour's SINR; no poll in
-            % an hour whose SINR is NaN. The RSRP is -100 throughout.
+            % an hour whose SINR is NaN. The RSRP is -100 throughout, and
+            % every poll is on network 234-30.
+            samples = testCase.hourlyOn(sinr, repmat("234-30", numel(sinr), 1));
+        end
+
+        function samples = hourlyOn(testCase, sinr, codes)
+            % The same, each hour's polls on the network whose codes
+            % `codes` gives for the hour.
             start = testCase.LastHour - 3600 * (numel(sinr) - 1:-1:0)';
             polled = ~isnan(sinr);
             at = [start(polled) + 600; start(polled) + 2400];
@@ -32,7 +39,16 @@ classdef RadioForecastTest < matlab.unittest.TestCase
             readings = [repmat([-100, -12], count, 1), [sinr(polled); sinr(polled)], ...
                 repmat([-70, NaN, NaN, NaN], count, 1)];
             samples = radioPolls(testCase.Folder, at, repmat("attached", count, 1), ...
-                readings, repmat("lte", count, 1), zeros(count, 1));
+                readings, repmat("lte", count, 1), zeros(count, 1), [codes(polled); codes(polled)]);
+        end
+
+        function samples = anotherSimFiveDaysAgo(testCase)
+            % Ten days by the hour: five on network 234-20 at 30 dB,
+            % then, as after another SIM, five on 234-30 at 20 dB, each
+            % with the evening's dip.
+            sinr = RadioForecastTest.steady(240);
+            sinr(1:120) = sinr(1:120) + 10;
+            samples = testCase.hourlyOn(sinr, [repmat("234-20", 120, 1); repmat("234-30", 120, 1)]);
         end
     end
 
@@ -71,10 +87,12 @@ classdef RadioForecastTest < matlab.unittest.TestCase
             testCase.verifyEqual(forecast.low, expected, "AbsTol", 1e-9);
             testCase.verifyEqual(forecast.high, expected, "AbsTol", 1e-9);
 
-            testCase.verifyEqual(sort(string(fieldnames(fit)))', sort(["metric", "hours", "trend", ...
-                "slope_per_day", "profile", "residual_low", "residual_high", "backtest_hours", ...
-                "backtest_mae", "naive_mae"]));
+            testCase.verifyEqual(sort(string(fieldnames(fit)))', sort(["metric", "network", "hours", ...
+                "trend", "slope_per_day", "profile", "residual_low", "residual_high", ...
+                "backtest_hours", "backtest_mae", "naive_mae"]));
             testCase.verifyEqual(fit.metric, "lte_sinr_db");
+            % Every poll is on one network: the one fitted.
+            testCase.verifyEqual(fit.network, "234-30");
             testCase.verifyEqual(fit.hours, 240);
             testCase.verifyEqual(fit.trend, false);
             testCase.verifyEqual(fit.slope_per_day, 0, "AbsTol", 1e-9);
@@ -216,6 +234,67 @@ classdef RadioForecastTest < matlab.unittest.TestCase
             testCase.verifyEqual(fit.naive_mae, 3.6, "AbsTol", 1e-9);
         end
 
+        function theHoursOnAnotherNetworkAreNotFitted(testCase)
+            samples = testCase.anotherSimFiveDaysAgo();
+            ahead = (1:48)';
+            dip = RadioForecastTest.evening(mod(23 + ahead, 24));
+
+            % The pattern is the last network's five days.
+            [forecast, fit] = mooring.radioForecast(samples);
+            testCase.verifyEqual(fit.network, "234-30");
+            testCase.verifyEqual(fit.hours, 120);
+            testCase.verifyEqual(posixtime(forecast.hour), testCase.LastHour + 3600 * ahead);
+            testCase.verifyEqual(forecast.expected, 20 + dip, "AbsTol", 1e-9);
+            testCase.verifyEqual(forecast.low, 20 + dip, "AbsTol", 1e-9);
+            testCase.verifyEqual(forecast.high, 20 + dip, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.profile, 20 + RadioForecastTest.evening((0:23)'), "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.slope_per_day, 0, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.backtest_hours, 48);
+            testCase.verifyEqual(fit.backtest_mae, 0, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.naive_mae, 0, "AbsTol", 1e-9);
+
+            % With every poll taken an hour of the day holds five values
+            % of each network: the forecast lies between the two, 5 dB
+            % over what the network gives, and the band is 5 dB each way.
+            [forecast, fit] = mooring.radioForecast(samples, Network="all");
+            testCase.verifyTrue(ismissing(fit.network));
+            testCase.verifyEqual(fit.hours, 240);
+            testCase.verifyEqual(forecast.expected, 25 + dip, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.residual_low, -5, "AbsTol", 1e-9);
+            testCase.verifyEqual(fit.residual_high, 5, "AbsTol", 1e-9);
+
+            % The network before, by its codes: the hours after its own
+            % last one.
+            [forecast, fit] = mooring.radioForecast(samples, Network="234-20");
+            testCase.verifyEqual(fit.network, "234-20");
+            testCase.verifyEqual(fit.hours, 120);
+            testCase.verifyEqual(posixtime(forecast.hour), testCase.LastHour - 120 * 3600 + 3600 * ahead);
+            testCase.verifyEqual(forecast.expected, 30 + dip, "AbsTol", 1e-9);
+
+            testCase.verifyError(@() mooring.radioForecast(samples, Network="234-99"), ...
+                "mooring:radio:UnknownNetwork");
+        end
+
+        function tooFewHoursOnTheLastNetworkAreRefused(testCase)
+            % Seven days on 234-20, then 71 hours on 234-30.
+            samples = testCase.hourlyOn(RadioForecastTest.steady(239), ...
+                [repmat("234-20", 168, 1); repmat("234-30", 71, 1)]);
+            try
+                mooring.radioForecast(samples);
+                testCase.verifyFail("A forecast was made.");
+            catch failure
+                testCase.verifyEqual(string(failure.identifier), "mooring:radio:TooFewHours");
+                testCase.verifySubstring(failure.message, ...
+                    "71 of the last 71 hours hold a lte_sinr_db reading on network 234-30; a forecast needs 72");
+            end
+            % The caller may take fewer hours, or every poll.
+            [~, fit] = mooring.radioForecast(samples, MinHours=48);
+            testCase.verifyEqual(fit.network, "234-30");
+            testCase.verifyEqual(fit.hours, 71);
+            [~, fit] = mooring.radioForecast(samples, Network="all");
+            testCase.verifyEqual(fit.hours, 239);
+        end
+
         function tooFewHoursAreRefused(testCase)
             few = testCase.hourly(RadioForecastTest.rising(71));
             try
@@ -225,6 +304,15 @@ classdef RadioForecastTest < matlab.unittest.TestCase
                 testCase.verifyEqual(string(failure.identifier), "mooring:radio:TooFewHours");
                 testCase.verifySubstring(failure.message, "71 of the last 71 hours hold a lte_sinr_db reading");
                 testCase.verifySubstring(failure.message, "needs 72");
+            end
+            % With every poll taken the message names no network.
+            try
+                mooring.radioForecast(few, Network="all");
+                testCase.verifyFail("A forecast was made.");
+            catch failure
+                testCase.verifyEqual(string(failure.identifier), "mooring:radio:TooFewHours");
+                testCase.verifySubstring(failure.message, ...
+                    "71 of the last 71 hours hold a lte_sinr_db reading; a forecast needs 72");
             end
             % The caller may ask for less, down to two days.
             [forecast, fit] = mooring.radioForecast(few, MinHours=48);
