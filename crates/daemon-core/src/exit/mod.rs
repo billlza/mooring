@@ -69,6 +69,15 @@
 //! `Paused`: no tick starts the engine again, so no handshake can complete
 //! between the drain and the sleep, until [`ExitMachine::wake`]. The next
 //! tick after that runs the preflight with a fresh direct probe.
+//!
+//! # Round trips
+//!
+//! A direct probe that is answered also says how long its connection took
+//! to open ([`DirectProbe::rtt`]): one round trip through the line's
+//! queues. The latest round that passed gives the capacity monitor its
+//! round trip ([`ExitMachine::round_trip`]), the answering node's; the
+//! probes that bracket an in-chain probe give none, and no verdict reads
+//! a round trip.
 
 mod in_chain;
 
@@ -319,12 +328,13 @@ pub trait ExitPorts {
     /// Stops the running engine: its end.
     fn stop(&mut self) -> Result<ProcessEnd, Self::Error>;
 
-    /// The address `reflector` saw, through `via`.
+    /// The address `reflector` saw, through `via`, and how long the
+    /// connection took to open.
     fn probe(
         &mut self,
         via: &ResolvedInterface,
         reflector: SocketAddrV4,
-    ) -> Result<Ipv4Addr, ProbeStage>;
+    ) -> Result<DirectProbe, ProbeStage>;
 
     /// Persists the latch, or its absence.
     fn persist_latch(&mut self, latch: Option<&LatchRecord>) -> Result<(), Self::Error>;
@@ -379,10 +389,33 @@ struct Blocked {
     digest: Sha256Digest,
 }
 
+/// A direct probe the reflector answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DirectProbe {
+    /// The address the reflector saw: the carrier's, as the internet sees
+    /// the line.
+    pub ip: Ipv4Addr,
+    /// How long the connection to the reflector took to open: one round
+    /// trip, through the line's queues both ways.
+    pub rtt: Duration,
+}
+
+/// The round trip of the latest direct-probe round, which passed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RoundTrip {
+    /// The node whose reflector answered.
+    pub node: NodeId,
+    /// Its probe's round trip.
+    pub rtt: Duration,
+    /// When the round ran, on the daemon's monotonic clock
+    /// ([`TickInputs::mono`]): it tells one round from the next.
+    pub probed: Duration,
+}
+
 /// The latest direct-probe round.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Round {
-    Passed,
+    Passed { node: NodeId, rtt: Duration },
     Failed { node: NodeId, stage: ProbeStage },
 }
 
@@ -475,6 +508,32 @@ impl ExitMachine {
         Some(self.probed_at.map_or(Duration::ZERO, |at| {
             every.saturating_sub(mono.saturating_sub(at))
         }))
+    }
+
+    /// Whether the latest tick reached the direct probes: the exit is
+    /// enabled, not paused, and every check before them passed.
+    #[must_use]
+    pub const fn probing(&self) -> bool {
+        self.probing
+    }
+
+    /// The round trip of the latest direct-probe round, while the latest
+    /// tick reached the probes and that round passed: the answering
+    /// node's. It stays the same between rounds; a failed round, a wake,
+    /// and a tick that stopped before the probes leave none.
+    #[must_use]
+    pub fn round_trip(&self) -> Option<RoundTrip> {
+        if !self.probing {
+            return None;
+        }
+        match (&self.round, self.probed_at) {
+            (Some(Round::Passed { node, rtt }), Some(probed)) => Some(RoundTrip {
+                node: node.clone(),
+                rtt: *rtt,
+                probed,
+            }),
+            _ => None,
+        }
     }
 
     /// The latest in-chain probe of each node, through each protocol.
@@ -791,20 +850,20 @@ impl ExitMachine {
             let NodeAddress::Public(address) = site.address;
             let reflector = SocketAddrV4::new(address.get(), node.ports.reflector().get());
             match ports.probe(egress.interfaces.egress(), reflector) {
-                Ok(ip) => {
-                    observed = Some(ip);
+                Ok(probe) => {
+                    observed = Some((node.id.clone(), probe));
                     break;
                 }
                 Err(stage) => failure = Some((node.id.clone(), stage)),
             }
         }
-        let Some(ip) = observed else {
+        let Some((node, DirectProbe { ip, rtt })) = observed else {
             self.failed_rounds = self.failed_rounds.saturating_add(1);
             self.round = failure.map(|(node, stage)| Round::Failed { node, stage });
             return None;
         };
         self.failed_rounds = 0;
-        self.round = Some(Round::Passed);
+        self.round = Some(Round::Passed { node, rtt });
         self.carrier_check = Some(CarrierCheck {
             egress_ip: ip,
             in_carrier_prefixes: check.in_carrier(ip),

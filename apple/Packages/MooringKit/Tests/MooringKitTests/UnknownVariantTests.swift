@@ -52,14 +52,16 @@ private struct UnknownVariantError: Decodable {
         TaggedEnum(StopPolicy.self), TaggedEnum(Crossing.self), TaggedEnum(ForecastView.self),
         TaggedEnum(UsageView.self), TaggedEnum(SuspendReason.self), TaggedEnum(UserStatus.self),
         TaggedEnum(QuotaState.self), TaggedEnum(ExpiryState.self), TaggedEnum(RadioState.self),
-        TaggedEnum(SampledRadio.self), TaggedEnum(RadioEventKind.self),
+        TaggedEnum(SampledRadio.self), TaggedEnum(RadioEventKind.self), TaggedEnum(ExitPhase.self),
+        TaggedEnum(MacEventKind.self), TaggedEnum(AgentEventKind.self),
     ]
 
     /// The enums that are always objects (the console document, the router
-    /// panel, a radio poll): a string is refused before any variant is
-    /// looked at, as not an object.
+    /// panel, a radio poll, a journal's entry and a node's line): a string
+    /// is refused before any variant is looked at, as not an object.
     static let alwaysAnObject = [
         TaggedEnum(ConsoleStatus.self), TaggedEnum(RouterReading.self), TaggedEnum(RadioPoll.self),
+        TaggedEnum(JournalEntry.self), TaggedEnum(NodeEntry.self),
     ]
 
     /// An unknown variant in the form of an object, its value an object or

@@ -65,7 +65,10 @@ fn at() -> UnixTime {
 
 /// The status assembled before any node poll, with `ledgers` and the nodes
 /// the last poll did not reach.
-fn assembled(ledgers: Ledgers<'_>, unreachable: &BTreeMap<NodeId, NodeAgentState>) -> MacStatusV2 {
+pub(super) fn assembled(
+    ledgers: Ledgers<'_>,
+    unreachable: &BTreeMap<NodeId, NodeAgentState>,
+) -> MacStatusV2 {
     assembled_with(ledgers, unreachable, &Entitlements::none())
 }
 

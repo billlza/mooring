@@ -66,6 +66,24 @@ pub(crate) enum Command {
         #[arg(long, requires = "follow")]
         until_parent_exits: bool,
     },
+    /// The event journals the daemon keeps (UTC day files under the support
+    /// directory): the Mac's own (its starts, the exit's phases, the power,
+    /// sleeps and wakes, nodes' agents lost and answering again) and each
+    /// node's as the daemon read it, in the order of their times. The last
+    /// seven days by default.
+    Events {
+        /// The first UTC day (YYYY-MM-DD); six days before --until by
+        /// default.
+        #[arg(long, value_name = "DATE")]
+        since: Option<CalendarDate>,
+        /// The last UTC day (YYYY-MM-DD); today by default.
+        #[arg(long, value_name = "DATE")]
+        until: Option<CalendarDate>,
+        /// Print one JSON line (an event journal document, what Mooring.app
+        /// reads) instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Relay standard input and output over the one-time socket of the
     /// mooringctl that started ssh, which opened the connection to the node
     /// through the M7: management SSH's ProxyCommand.

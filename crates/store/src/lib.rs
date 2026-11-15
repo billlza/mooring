@@ -98,6 +98,17 @@
 //! §15.7). The daemon writes, the CLI reads: both through this crate, which
 //! alone knows the directory, the names and the framing.
 //!
+//! # The event journals
+//!
+//! The Mac's journal, `events/mac/<YYYY-MM-DD>.jsonl`, and each node's
+//! journal as the Mac read it, `events/nodes/<node>/<YYYY-MM-DD>.jsonl`, are
+//! day files kept as the radio history's are: [`append_mac_events`] and
+//! [`append_node_events`] append whole lines, [`read_mac_events`] and
+//! [`read_node_events`] read a day's whole lines within a bound, the
+//! listings give the days and [`event_nodes`] the nodes, and the prunes
+//! remove the day files of the days before the oldest one kept, which the
+//! daemon names (design §15.7).
+//!
 //! # The payment pull
 //!
 //! [`write_payment_ledger`] replaces `payments/ledger.json`, the daemon's
@@ -114,6 +125,14 @@
 //! the daemon first saw it, and [`read_pending_applies`] reads it back with
 //! a bound; the daemon encodes and decodes it (design §13.6, §15.3).
 //!
+//! # Round trips
+//!
+//! [`write_round_trips`] replaces `run/round-trips.json`, each node's
+//! direct-probe round trips over the last day, whose 10th percentile is
+//! the capacity monitor's idle reference, and [`read_round_trips`] reads it
+//! back with a bound; the daemon encodes and decodes it (console spec
+//! B.2.8, design §15.3).
+//!
 //! # Secrets
 //!
 //! The state holds no secrets. They live in a [`SecretStore`]; the
@@ -129,14 +148,17 @@
 #![deny(missing_docs)]
 
 mod allowed_networks;
+mod day_files;
 mod durable;
 mod error;
+mod events;
 mod latch;
 mod migrate;
 mod ordered;
 mod payments;
 mod pending_applies;
 mod radio_history;
+mod round_trips;
 mod router_pin;
 mod secrets;
 mod sim_meter;
@@ -151,9 +173,16 @@ pub use allowed_networks::{
     ALLOWED_NETWORKS_FILE, AllowedNetworksFault, Declaration, MAX_ALLOWED_NETWORKS_BYTES,
     allowed_networks_fit, declare_allowed_network, read_allowed_networks, revoke_allowed_network,
 };
+pub use day_files::{DAY_FILE_SUFFIX, DayLines, Listed, Pruned};
 pub use error::{
     ChangeError, ChangeErrorKind, CleanupFailure, IoOp, RadioHistoryFault, StoreError,
     StoreErrorKind,
+};
+pub use events::{
+    EVENTS_DIRECTORY, EventNodes, MAC_EVENTS_DIRECTORY, MAX_EVENTS_DAY_BYTES,
+    NODE_EVENTS_DIRECTORY, append_mac_events, append_node_events, event_nodes, list_mac_event_days,
+    list_node_event_days, mac_events_path, node_events_path, prune_mac_events_before,
+    prune_node_events_before, read_mac_events, read_node_events,
 };
 pub use latch::{LATCH_FILE, clear_latch, read_latch, write_latch};
 pub use migrate::migrate;
@@ -164,9 +193,10 @@ pub use payments::{
 };
 pub use pending_applies::{PENDING_APPLIES_FILE, read_pending_applies, write_pending_applies};
 pub use radio_history::{
-    MAX_RADIO_DAY_BYTES, Pruned, RADIO_DAY_SUFFIX, RADIO_DIRECTORY, RadioDay, append_radio_line,
-    prune_radio_days, radio_day_path, read_radio_day,
+    MAX_RADIO_DAY_BYTES, RADIO_DIRECTORY, append_radio_line, prune_radio_days, radio_day_path,
+    read_radio_day,
 };
+pub use round_trips::{ROUND_TRIPS_FILE, read_round_trips, write_round_trips};
 pub use router_pin::{
     MAX_ROUTER_PIN_BYTES, ROUTER_PIN_FILE, RouterPin, RouterPinFault, StoredPin, read_router_pin,
     write_router_pin,

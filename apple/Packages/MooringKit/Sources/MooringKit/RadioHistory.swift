@@ -240,3 +240,14 @@ public struct RadioHistory: Decodable, Hashable, Sendable {
         events.filter { $0.at >= since }
     }
 }
+
+extension RadioHistory: CommandDocument {
+    /// The document of the CLI's default range, yesterday and today; the
+    /// Router screen takes the last 24 hours from the samples' times.
+    public static let arguments = ["router", "history", "--json"]
+
+    /// The two days of the default range are at most 2 × 1440 lines of
+    /// under 400 bytes, about 1.2 MB, with the events after them; 4 MiB
+    /// leaves room for an M7 polled oftener.
+    public static let outputLimit = 4 << 20
+}

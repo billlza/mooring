@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use mooring_agent_proto::{LineRequest, RequestKind, Response, Sha256Hex};
+use mooring_daemon_core::exit::DirectProbe;
 use mooring_daemon_core::meter::CounterReading;
 use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::status::PowerSource;
@@ -979,6 +980,9 @@ pub(crate) struct Harness {
     /// The direct probes' answers, in order, and the reflectors asked.
     pub(crate) probes: RefCell<VecDeque<Result<Ipv4Addr, ProbeFailure>>>,
     pub(crate) probed: RefCell<Vec<(InterfaceIndex, SocketAddrV4)>>,
+    /// The round trip of every direct probe answered: 40 ms unless a test
+    /// changes it.
+    pub(crate) probe_rtt: Cell<Duration>,
     /// How many times the daemon pointed standard error at its log; the
     /// test process's own stderr is never touched.
     pub(crate) redirected: Cell<u32>,
@@ -1076,6 +1080,7 @@ impl Harness {
             readings: Arc::default(),
             probes: RefCell::new(VecDeque::new()),
             probed: RefCell::new(Vec::new()),
+            probe_rtt: Cell::new(Duration::from_millis(40)),
             redirected: Cell::new(0),
             portal_agreement: PortalAgreement::SHIPPED,
             portal: FakePortal::default(),
@@ -1183,6 +1188,7 @@ impl Harness {
         };
         let probe = |index: InterfaceIndex, reflector: SocketAddrV4| {
             self.probed.borrow_mut().push((index, reflector));
+            let rtt = self.probe_rtt.get();
             self.probes
                 .borrow_mut()
                 .pop_front()
@@ -1190,6 +1196,7 @@ impl Harness {
                     stage: mooring_daemon_core::status::ProbeStage::Connect,
                     kind: Some(io::ErrorKind::ConnectionRefused),
                 }))
+                .map(|ip| DirectProbe { ip, rtt })
         };
         let redirected = &self.redirected;
         let redirect = move |_: std::os::fd::BorrowedFd<'_>| {

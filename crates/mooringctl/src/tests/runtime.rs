@@ -19,6 +19,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use mooring_daemon_core::capacity::rates::EgressRate;
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::{COUNTER_MODULUS, CounterReading, CycleBytes, SimMeter};
 use mooring_daemon_core::network::{AllowedNetwork, ForeignNetworkFinding, IpFamily};
@@ -567,7 +568,7 @@ fn lo0() -> InterfaceIndex {
 fn a_reflector_that_closes_before_the_connect_is_polled_is_still_read() {
     for _ in 0..1000 {
         assert_eq!(
-            direct(lo0(), reflector(b"45.67.89.10\n")),
+            direct(lo0(), reflector(b"45.67.89.10\n")).map(|probe| probe.ip),
             Ok(Ipv4Addr::new(45, 67, 89, 10))
         );
     }
@@ -576,7 +577,7 @@ fn a_reflector_that_closes_before_the_connect_is_polled_is_still_read() {
 #[test]
 fn the_direct_probe_reads_the_address_the_reflector_saw() {
     assert_eq!(
-        direct(lo0(), reflector(b"45.67.89.10\n")),
+        direct(lo0(), reflector(b"45.67.89.10\n")).map(|probe| probe.ip),
         Ok(Ipv4Addr::new(45, 67, 89, 10))
     );
     for (answer, stage) in [
@@ -600,6 +601,31 @@ fn the_direct_probe_reads_the_address_the_reflector_saw() {
     let failure = direct(lo0(), SocketAddrV4::new(Ipv4Addr::LOCALHOST, closed)).unwrap_err();
     assert_eq!(failure.stage, ProbeStage::Connect);
     assert_eq!(failure.kind, Some(ErrorKind::ConnectionRefused));
+}
+
+/// A reflector that answers `delay` after it accepted the connection.
+fn slow_reflector(answer: &'static [u8], delay: Duration) -> SocketAddrV4 {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            std::thread::sleep(delay);
+            stream.write_all(answer).unwrap();
+        }
+    });
+    SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)
+}
+
+/// The direct probe's round trip is the connection's opening, not the
+/// wait for the answer, which the probe still reads within its time-out.
+#[test]
+fn the_direct_probe_times_the_connection_not_the_answer() {
+    let delay = Duration::from_millis(600);
+    let started = Instant::now();
+    let probe = direct(lo0(), slow_reflector(b"45.67.89.10\n", delay)).unwrap();
+    assert!(started.elapsed() >= delay);
+    assert_eq!(probe.ip, Ipv4Addr::new(45, 67, 89, 10));
+    assert!(probe.rtt < delay / 2, "{:?}", probe.rtt);
 }
 
 /// A stand-in engine: `check` accepts the config `good`, or any JSON
@@ -937,6 +963,49 @@ fn the_meter_thread_counts_what_it_reads_and_writes_the_file_when_it_stops() {
     assert_eq!(written.last(), Some(&counted(MIDNIGHT + 14, 9_192)));
 }
 
+/// The meter's thread keeps the rates of what it read over the last
+/// minute: none before the loop names the egress or while less than a
+/// minute is covered, the minute's bytes per second once it is, and none
+/// again after counters that restarted.
+#[test]
+fn the_meter_thread_gives_the_last_minutes_rates() {
+    let support = tempfile::tempdir().unwrap();
+    // 31 readings 2 s apart, 25 kB received between each two.
+    let (reader, queue) = scripted(
+        (0..=30)
+            .map(|step| counted(MIDNIGHT + 2 * step, 25_000 * step))
+            .collect(),
+    );
+    let meter = MeterThread::start(
+        support.path().to_path_buf(),
+        SimMeter::new(),
+        reader,
+        Duration::from_millis(5),
+        Duration::from_secs(3_600),
+    )
+    .unwrap();
+    let now = UnixTime::from_secs(MIDNIGHT + 60);
+    assert_eq!(meter.rates(now).unwrap(), None);
+    meter.watch(Some(watched())).unwrap();
+    until(|| queue.lock().unwrap().is_empty());
+    until(|| meter.rates(now).unwrap().is_some());
+    assert_eq!(
+        meter.rates(now).unwrap(),
+        Some(EgressRate {
+            tx_bps: 0,
+            rx_bps: 100_000
+        })
+    );
+    // Counters that restarted say nothing of a rate.
+    queue
+        .lock()
+        .unwrap()
+        .push_back(counted(MIDNIGHT + 62, 1_024));
+    let later = UnixTime::from_secs(MIDNIGHT + 62);
+    until(|| meter.rates(later).unwrap().is_none());
+    assert!(queue.lock().unwrap().is_empty());
+}
+
 #[test]
 fn a_reading_the_meter_refuses_ends_the_thread_with_its_fault() {
     let support = tempfile::tempdir().unwrap();
@@ -963,6 +1032,11 @@ fn a_reading_the_meter_refuses_ends_the_thread_with_its_fault() {
         }
         other => panic!("{other:?}"),
     }
+    // Nor are its rates read as if it still counted.
+    assert!(matches!(
+        meter.rates(UnixTime::from_secs(MIDNIGHT + 2)),
+        Err(LocalError::MeterFault { .. })
+    ));
     let failing: Reader = Box::new(|_| Err(LocalError::Kernel(MacsysError::TableChanged)));
     let meter = MeterThread::start(
         support.path().to_path_buf(),

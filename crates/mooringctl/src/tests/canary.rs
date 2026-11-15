@@ -83,7 +83,10 @@ fn no_connection_class_reaches_the_canary_through_another_interface() {
     assert_eq!(accepted.load(Ordering::SeqCst), 0, "a connection leaked");
     // The positive control: bound to the loopback, each class reaches the
     // canary.
-    assert_eq!(direct(lo0(), target), Ok(Ipv4Addr::new(198, 51, 100, 17)));
+    assert_eq!(
+        direct(lo0(), target).map(|probe| probe.ip),
+        Ok(Ipv4Addr::new(198, 51, 100, 17))
+    );
     drop(connect(&M7Egress::for_tests(lo0()), target, Duration::from_secs(5)).unwrap());
     // The canary answers no HTTP, so the client fails after connecting.
     assert!(

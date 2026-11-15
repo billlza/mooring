@@ -23,9 +23,10 @@ use proptest::prelude::*;
 
 use crate::alert::MacEngine;
 use crate::exit::{
-    CRASH_LIMIT, CallFault, Egress, EgressFault, ExitMachine, ExitPorts, FAILED_ROUNDS_TOLERATED,
-    IN_CHAIN_FIRST, InChainProbe, InChainTarget, NODE_CALL_RETRY, NodeCall, RenderOutcome,
-    Rendered, RenderedProber, START_GRACE, SimUse, StartFault, TickInputs,
+    CRASH_LIMIT, CallFault, DirectProbe, Egress, EgressFault, ExitMachine, ExitPorts,
+    FAILED_ROUNDS_TOLERATED, IN_CHAIN_FIRST, InChainProbe, InChainTarget, NODE_CALL_RETRY,
+    NodeCall, RenderOutcome, Rendered, RenderedProber, RoundTrip, START_GRACE, SimUse, StartFault,
+    TickInputs,
 };
 use crate::network::{AllowedNetwork, ForeignNetworkFinding};
 use crate::status::{
@@ -67,6 +68,8 @@ struct Fault;
 struct Fake {
     answers: VecDeque<Result<Ipv4Addr, ProbeStage>>,
     answer: Result<Ipv4Addr, ProbeStage>,
+    /// The round trip of every direct probe that is answered.
+    rtt: Duration,
     render: Result<Rendered<&'static str>, RenderOutcome>,
     check: Result<(), StartFault>,
     start: Result<(), StartFault>,
@@ -100,6 +103,7 @@ impl Fake {
         Self {
             answers: VecDeque::new(),
             answer: Ok(CARRIER),
+            rtt: Duration::from_millis(40),
             render: Ok(config("one")),
             check: Ok(()),
             start: Ok(()),
@@ -192,11 +196,15 @@ impl ExitPorts for Fake {
         &mut self,
         via: &ResolvedInterface,
         reflector: SocketAddrV4,
-    ) -> Result<Ipv4Addr, ProbeStage> {
+    ) -> Result<DirectProbe, ProbeStage> {
         assert!(via.bsd_name.as_str().starts_with("en"));
         assert_eq!(reflector.port(), 27900);
         self.log.push(Event::Probe(*reflector.ip()));
-        self.answers.pop_front().unwrap_or(self.answer)
+        let rtt = self.rtt;
+        self.answers
+            .pop_front()
+            .unwrap_or(self.answer)
+            .map(|ip| DirectProbe { ip, rtt })
     }
 
     fn persist_latch(&mut self, latch: Option<&LatchRecord>) -> Result<(), Fault> {
@@ -1137,6 +1145,95 @@ fn failed_rounds_stop_a_running_engine_only_past_the_tolerance() {
         world.tick(&mut machine, &mut fake).state,
         ExitState::Starting
     );
+}
+
+/// The latest round's round trip, for the capacity monitor: the answering
+/// node's, kept between rounds while the exit probes; none after a failed
+/// round, while the exit is disabled, or once the Mac woke, until a round
+/// passes again.
+#[test]
+fn a_passing_round_gives_the_answering_nodes_round_trip() {
+    let mut world = World::new();
+    let mut machine = world.machine();
+    let mut fake = Fake::new();
+    assert!(!machine.probing());
+    assert_eq!(machine.round_trip(), None);
+    // ams1 does not answer; lon1 does, in 35 ms.
+    fake.answers = VecDeque::from([Err(ProbeStage::Connect)]);
+    fake.rtt = Duration::from_millis(35);
+    world.tick(&mut machine, &mut fake);
+    assert!(machine.probing());
+    let lon1 = RoundTrip {
+        node: NodeId::parse("lon1").unwrap(),
+        rtt: Duration::from_millis(35),
+        probed: Duration::from_secs(world.mono),
+    };
+    assert_eq!(machine.round_trip(), Some(lon1.clone()));
+    fake.take_log();
+    // Between rounds it stays.
+    fake.rtt = Duration::from_millis(900);
+    world.advance(2);
+    world.tick(&mut machine, &mut fake);
+    assert!(
+        !fake
+            .take_log()
+            .iter()
+            .any(|event| matches!(event, Event::Probe(_)))
+    );
+    assert_eq!(machine.round_trip(), Some(lon1));
+    // The next round: ams1 answers.
+    world.advance(28);
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(
+        machine.round_trip(),
+        Some(RoundTrip {
+            node: NodeId::parse("ams1").unwrap(),
+            rtt: Duration::from_millis(900),
+            probed: Duration::from_secs(world.mono),
+        })
+    );
+    // A failed round leaves none, though the exit still probes.
+    world.advance(30);
+    fake.answers = VecDeque::from([Err(ProbeStage::Connect), Err(ProbeStage::Read)]);
+    world.tick(&mut machine, &mut fake);
+    assert!(machine.probing());
+    assert_eq!(machine.round_trip(), None);
+    world.advance(30);
+    world.tick(&mut machine, &mut fake);
+    assert!(machine.round_trip().is_some());
+    // Disabled: no probing, and none.
+    world.enabled = false;
+    world.advance(2);
+    world.tick(&mut machine, &mut fake);
+    assert!(!machine.probing());
+    assert_eq!(machine.round_trip(), None);
+    // Woken: none until the wake's own round.
+    world.enabled = true;
+    world.advance(30);
+    world.tick(&mut machine, &mut fake);
+    assert!(machine.round_trip().is_some());
+    machine.wake();
+    assert_eq!(machine.round_trip(), None);
+    world.advance(2);
+    world.tick(&mut machine, &mut fake);
+    assert_eq!(
+        machine.round_trip().map(|round| round.probed),
+        Some(Duration::from_secs(world.mono))
+    );
+}
+
+/// The direct probes that bracket an in-chain probe are no direct-probe
+/// round: the round trip stays the round's.
+#[test]
+fn the_bracket_probes_leave_the_round_trip_alone() {
+    let (mut world, mut machine, mut fake) = before_the_round();
+    let round = machine.round_trip().unwrap();
+    assert_eq!(round.rtt, Duration::from_millis(40));
+    fake.rtt = Duration::from_millis(900);
+    world.advance(IN_CHAIN_FIRST.as_secs());
+    world.tick(&mut machine, &mut fake);
+    assert!(fake.take_log().contains(&Event::InChain(47101)));
+    assert_eq!(machine.round_trip(), Some(round));
 }
 
 #[test]

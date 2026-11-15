@@ -73,8 +73,10 @@ pub(crate) struct Env<'a> {
     pub(crate) probe: &'a dyn Fn(
         mooring_model::iface::InterfaceIndex,
         std::net::SocketAddrV4,
-    )
-        -> Result<std::net::Ipv4Addr, crate::runtime::probe::ProbeFailure>,
+    ) -> Result<
+        mooring_daemon_core::exit::DirectProbe,
+        crate::runtime::probe::ProbeFailure,
+    >,
     /// Points standard error at the daemon's log
     /// (`mooring_macsys::redirect_stderr` in the binary).
     pub(crate) redirect_stderr: &'a crate::daemon::log::RedirectStderr<'a>,
@@ -332,6 +334,9 @@ pub(crate) fn run(
             json,
         ),
         Command::SshRelay { socket } => crate::node::dial::ssh_relay(&socket),
+        Command::Events { since, until, json } => {
+            crate::events::events(env, out, since, until, json)
+        }
         Command::Daemon => daemon(env),
         Command::Apply {
             pending,
