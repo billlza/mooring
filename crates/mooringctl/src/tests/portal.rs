@@ -298,7 +298,7 @@ fn a_refused_snapshot_writes_nothing() {
     assert_eq!(
         outcome.stderr,
         format!(
-            "mooringctl: no file was written: the portal snapshot was refused\n  caused by: user {} has not accepted agreement revision {}: no acceptance is recorded\n",
+            "mooringctl: no file was written: the portal snapshot was refused\n  caused by: user {} has not accepted agreement revision {} or a later one: no acceptance is recorded\n",
             named[1],
             AgreementVersion::CURRENT
         )
