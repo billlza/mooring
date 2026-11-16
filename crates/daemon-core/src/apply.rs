@@ -7,11 +7,14 @@
 //! and carries the decisions out, one change each, then applies the nodes.
 //!
 //! - **When** ([`in_window`]). launchd fires the job every hour at minute
-//!   20 of the Mac's local time; it runs only between 19:15 and 19:45 UTC
-//!   (03:15 to 03:45 Beijing time), so in BST and GMT alike exactly one
-//!   firing a day runs, at 19:20 UTC, before the nodes' 20:00 UTC reboot. A
-//!   firing launchd delivers late, after a sleep, outside that span does
-//!   nothing.
+//!   20 of the Mac's local time; the whole job runs only between 19:15 and
+//!   19:45 UTC (03:15 to 03:45 Beijing time), so in BST and GMT alike
+//!   exactly one firing a day runs it, at 19:20 UTC, before the nodes'
+//!   20:00 UTC reboot. Every other firing, one launchd delivers late after
+//!   a sleep included, only resumes the suspensions at expiry that a
+//!   payment has lifted ([`plan_expiry_resumes`]; the operator's decision
+//!   of 2026-11-14), so that a user who pays is served within the hour; it
+//!   suspends no one and lifts no other suspension.
 //! - **The policy step** ([`plan_policy`]). The suspensions `evaluate`
 //!   proposes at the run's `now`, each recorded at that `now`; and the
 //!   resumes of suspensions whose cause has gone: a suspension for quota
@@ -174,39 +177,110 @@ pub fn plan_policy(
             PolicyAction::Warn(_) => warnings.push(action),
         }
     }
-    let cap = deployment.capacity().max_active_users;
-    let mut working = deployment.clone();
-    let mut resumes = Vec::new();
-    let mut held_back = Vec::new();
+    let tried = resume_within_cap(deployment, paid, usage, now, lapsed)?;
     let mut kept = paid_short;
-    for candidate in lapsed {
-        if !room_for_one(&working, cap) {
-            held_back.push(candidate);
-            continue;
-        }
-        let trial = resumed(&working, &candidate.user)?;
-        match suspended_again(&trial, paid, usage, now, &candidate.user)? {
-            Some(again) => kept.push(Kept {
-                lapsed: candidate,
-                again,
-            }),
-            None => {
-                working = trial;
-                resumes.push(candidate);
-            }
-        }
-    }
+    kept.extend(tried.kept);
     kept.sort_by(|left, right| {
         (left.lapsed.since, &left.lapsed.user).cmp(&(right.lapsed.since, &right.lapsed.user))
     });
     Ok(PolicyPlan {
         now,
         suspensions,
-        resumes,
-        held_back,
+        resumes: tried.resumes,
+        held_back: tried.held_back,
         kept,
         warnings,
     })
+}
+
+/// The suspensions at expiry of `deployment` whose expiry (with what the
+/// users' paid orders gave, `paid`) is no longer past at `now`, earliest
+/// first and then by id: what an hourly firing outside the window tries to
+/// resume ([`plan_expiry_resumes`]). A suspension for quota after `now`
+/// refuses it, as it refuses the night's step.
+pub fn expiry_resumes_due(
+    deployment: &Deployment,
+    paid: &Entitlements,
+    now: UnixTime,
+) -> Result<Vec<Lapsed>, PolicyError> {
+    let (lapsed, _) = lapsed_suspensions(deployment, paid, None, now)?;
+    Ok(lapsed
+        .into_iter()
+        .filter(|lapsed| lapsed.why == Lapse::NoLongerExpired)
+        .collect())
+}
+
+/// What an hourly firing outside the window carries out at `now` (the
+/// operator's decision of 2026-11-14: a user who pays is served within the
+/// hour): the resumes of the suspensions at expiry that a payment has
+/// lifted ([`expiry_resumes_due`]), within the cap and kept for a user who
+/// would be suspended again at once, as the night's step resumes them. It
+/// suspends no one, lifts no other suspension and warns of nothing: those
+/// wait for the night's run, so that no one is cut off during the day.
+pub fn plan_expiry_resumes(
+    deployment: &Deployment,
+    paid: &Entitlements,
+    usage: Option<&CycleUsage>,
+    now: UnixTime,
+) -> Result<PolicyPlan, PolicyError> {
+    let due = expiry_resumes_due(deployment, paid, now)?;
+    let tried = resume_within_cap(deployment, paid, usage, now, due)?;
+    Ok(PolicyPlan {
+        now,
+        suspensions: Vec::new(),
+        resumes: tried.resumes,
+        held_back: tried.held_back,
+        kept: tried.kept,
+        warnings: Vec::new(),
+    })
+}
+
+/// What [`resume_within_cap`] made of the lapsed suspensions it was given.
+struct Tried {
+    /// Those resumed, in the order given.
+    resumes: Vec<Lapsed>,
+    /// Those the cap held back, in the order given.
+    held_back: Vec<Lapsed>,
+    /// Those kept, since the user would be suspended again at once.
+    kept: Vec<Kept>,
+}
+
+/// Each of `lapsed`, in order, resumed while the users active in
+/// `deployment`, with the resumes before it, are fewer than the cap; a
+/// resume is tried on a copy of the deployment and kept only if `evaluate`
+/// there proposes no suspension for the user.
+fn resume_within_cap(
+    deployment: &Deployment,
+    paid: &Entitlements,
+    usage: Option<&CycleUsage>,
+    now: UnixTime,
+    lapsed: Vec<Lapsed>,
+) -> Result<Tried, PolicyError> {
+    let cap = deployment.capacity().max_active_users;
+    let mut working = deployment.clone();
+    let mut tried = Tried {
+        resumes: Vec::new(),
+        held_back: Vec::new(),
+        kept: Vec::new(),
+    };
+    for candidate in lapsed {
+        if !room_for_one(&working, cap) {
+            tried.held_back.push(candidate);
+            continue;
+        }
+        let trial = resumed(&working, &candidate.user)?;
+        match suspended_again(&trial, paid, usage, now, &candidate.user)? {
+            Some(again) => tried.kept.push(Kept {
+                lapsed: candidate,
+                again,
+            }),
+            None => {
+                working = trial;
+                tried.resumes.push(candidate);
+            }
+        }
+    }
+    Ok(tried)
 }
 
 /// Every suspension of `deployment` whose cause has gone at `now`, earliest

@@ -19,8 +19,8 @@ use mooring_model::node::NodeLifecycle;
 use mooring_model::secret::SecretEntry;
 use mooring_model::{
     AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Capability, ClientLine,
-    ClientProfile, LocalLabel, ModelError, NodeId, User, UserId, UserNodePublic, UserPolicy,
-    UserStatus,
+    ClientProfile, LocalLabel, ModelError, NodeId, SuspendReason, User, UserId, UserNodePublic,
+    UserPolicy, UserStatus,
 };
 use mooring_store::{Store, read_snapshot, update_config_with_secrets};
 
@@ -42,13 +42,25 @@ const fn line_name(line: ClientLine) -> &'static str {
     }
 }
 
-/// `user add [--client cfm05|cfm04] [--mlkem]` (design §9.4, §15.3): adds
-/// an active user on `line`, with fresh credentials (a short id, a VLESS
-/// UUID, a Hysteria2 password and a loopback UUID) on every node that is
-/// not retiring, so that the user holds every node it can be served by.
-/// The label is read at the terminal, never from an argument, which the
-/// shell history would keep, and is never printed. The user has no alias
-/// and no agreement record yet.
+/// How a user added starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Start {
+    /// Active: served once every node is applied.
+    Active,
+    /// Suspended at expiry, its expiry the time it is added (`--unpaid`):
+    /// served once a payment lifts the suspension and the apply job
+    /// resumes it (design §9.6, §13.6).
+    Unpaid,
+}
+
+/// `user add [--client cfm05|cfm04] [--mlkem] [--unpaid]` (design §9.4,
+/// §15.3): adds a user on `line`, active or, with `--unpaid`, suspended at
+/// expiry as of the time it is added, with fresh credentials (a short id,
+/// a VLESS UUID, a Hysteria2 password and a loopback UUID) on every node
+/// that is not retiring, so that the user holds every node it can be
+/// served by. The label is read at the terminal, never from an argument,
+/// which the shell history would keep, and is never printed. The user has
+/// no alias and no agreement record yet.
 ///
 /// A Mac with no deployment, or a state that cannot be read, is refused
 /// before the label is asked for. The label may wait as long as the
@@ -56,18 +68,22 @@ const fn line_name(line: ClientLine) -> &'static str {
 /// once it is there: a planned node cancelled meanwhile is gone with a
 /// record that keeps the generation (`node cancel`), and a user given
 /// credentials on it from an earlier read would be refused by the store
-/// (`UnknownNode`), after the label was typed.
+/// (`UnknownNode`), after the label was typed. An unpaid user's time is
+/// read then too.
 ///
 /// The credentials are written to the keychain before the state that
-/// references them (`update_config_with_secrets`); the model refuses a
-/// user over the cap, and then nothing is written. Adding a user is a
-/// configuration change, so every node needs `node apply` before the
-/// user's file can be exported.
+/// references them (`update_config_with_secrets`); the model refuses an
+/// active user over the cap, and then nothing is written. An unpaid user
+/// is not active, so the cap holds back its resume, not its addition.
+/// Adding a user is a configuration change, so every node needs `node
+/// apply` before the user's file can be exported; for an unpaid user that
+/// apply serves no one new, and nothing restarts.
 pub(crate) fn add(
     env: &mut Env<'_>,
     out: &mut dyn Write,
     line: ClientLine,
     mlkem: bool,
+    start: Start,
 ) -> Result<(), CommandError> {
     let capabilities = if mlkem {
         if !line.accepts(Capability::RealityMlkemOptIn) {
@@ -117,13 +133,29 @@ pub(crate) fn add(
         .map(NodeId::as_str)
         .collect::<Vec<_>>()
         .join(", ");
+    let (status, policy) = match start {
+        Start::Active => (UserStatus::Active, UserPolicy::NONE),
+        Start::Unpaid => {
+            let now = (env.clock)()?;
+            (
+                UserStatus::Suspended {
+                    reason: SuspendReason::Expired,
+                    since: now,
+                },
+                UserPolicy {
+                    expires_at: Some(now),
+                    quota: None,
+                },
+            )
+        }
+    };
     let user = User {
         id: id.clone(),
         label,
         client: ClientProfile { line, capabilities },
-        status: UserStatus::Active,
+        status,
         per_node,
-        policy: UserPolicy::NONE,
+        policy,
         alias: None,
         agreement: None,
     };
@@ -143,9 +175,19 @@ pub(crate) fn add(
     } else {
         format!("credentials on {nodes}")
     };
+    let (unpaid, then) = match start {
+        Start::Active => (
+            "",
+            "`node apply` each of those nodes, then `user agree` and `user export`",
+        ),
+        Start::Unpaid => (
+            "; suspended until paid (its expiry is the time it was added)",
+            "`node apply` each of those nodes (nothing restarts: no node serves the user yet), then `user agree` and `user export`; once the user's payment is granted, the apply job resumes them at its next hourly run",
+        ),
+    };
     out.write_all(
         format!(
-            "added user {id}: {}, {held}\nnext: `mooringctl user alias {id}`, then `node apply` each of those nodes, then `user agree` and `user export`\n",
+            "added user {id}: {}, {held}{unpaid}\nnext: `mooringctl user alias {id}`, then {then}\n",
             line_name(line)
         )
         .as_bytes(),

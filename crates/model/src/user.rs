@@ -92,9 +92,11 @@ pub enum SuspendReason {
 pub enum UserStatus {
     /// The user is served.
     Active,
-    /// Served nowhere and exported nowhere, but still holding its per-node
-    /// credentials (their secrets stay referenced), so resuming restores
-    /// service without delivering a new file into China.
+    /// Served nowhere, but still holding its per-node credentials (their
+    /// secrets stay referenced), so resuming restores service without
+    /// delivering a new file into China. Exported only when suspended at
+    /// expiry: a user added before their first payment is given the file
+    /// that serves once they have paid (`mooring-export`'s `export_user`).
     Suspended {
         /// Why.
         reason: SuspendReason,
