@@ -540,14 +540,18 @@ fn the_json_outcome_names_each_part() {
             "policy": {"carried_out": {
                 "suspended": [{"user": FIRST, "reason": "expired"}],
                 "resumed": [],
+                "revoked": [],
                 "held_back": [],
                 "kept": [],
+                "revocation_awaiting_pull": [],
+                "revocation_not_covered": [],
                 "failed": [],
                 "quotas_unchecked": [],
                 "usage_behind": "ams1 may have counted traffic, but no usage ledger is given for it"
             }},
             "removals": {"done": {"removed": [], "kept_ids_dropped": false, "failed": []}},
-            "nodes": []
+            "nodes": [],
+            "revocations": {"done": {"committed": [], "failed": [], "pending": []}}
         })
     );
     assert_eq!(outcome.stdout.lines().count(), 1);
@@ -597,6 +601,39 @@ fn a_node_behind_is_applied() {
         outcome.stdout
     );
     assert!(log(&harness).contains("mooringctl apply: lon1: applied\n"));
+}
+
+/// The job's log found readable by others is made private again when a
+/// run opens it, and the run's first line says so; the next run finds it
+/// private and says nothing of it.
+#[test]
+fn the_jobs_log_is_made_private_again() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut harness = job(unapplied(|_| {}));
+    let path = log_path(&harness);
+    let dir = path.parent().unwrap();
+    fs::create_dir_all(dir).unwrap();
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&path, "").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+        0o600
+    );
+    let first = log(&harness);
+    assert!(
+        first.starts_with(
+            "2026-10-13 19:20:00 UTC mooringctl apply: apply.log had mode 0644; set to 0600\n\
+             2026-10-13 19:20:00 UTC mooringctl apply: run (--now)\n"
+        ),
+        "{first}"
+    );
+    harness.run(&["apply", "--now"]);
+    let second = log(&harness);
+    assert_eq!(second.matches("had mode").count(), 1, "{second}");
 }
 
 /// While a run holds the job's lock, another does nothing and fails.
@@ -651,7 +688,7 @@ fn apply_takes_exactly_one_form() {
 /// such change fails and is reported; the state keeps the operator's.
 #[test]
 fn a_change_the_operator_made_since_the_plan_is_kept() {
-    use mooring_daemon_core::apply::plan_policy;
+    use mooring_daemon_core::apply::{UnrenewedPlan, plan_policy};
     use mooring_daemon_core::payments::Entitlements;
 
     use crate::apply::policy::carry_out;
@@ -695,7 +732,7 @@ fn a_change_the_operator_made_since_the_plan_is_kept() {
             Ok(parts)
         })
         .unwrap();
-    let done = carry_out(&store, &plan, None);
+    let done = carry_out(&store, &plan, &UnrenewedPlan::default(), None);
     assert!(done.suspended.is_empty() && done.resumed.is_empty());
     let failed: Vec<(String, Change)> = done
         .failed

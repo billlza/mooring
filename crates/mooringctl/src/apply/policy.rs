@@ -5,12 +5,15 @@
 //! The step plans at the run's `now` from the deployment the run read,
 //! what the users' paid orders gave and the cycle's usage, and carries the
 //! plan out one configuration change each: every suspension, at that
-//! `now`, then every resume, earliest suspension first. Each change reads
-//! the state again and edits the user under the store's lock, so a user
-//! the operator changed meanwhile is left alone: a suspension only of a
-//! user still active, a resume only of a user still under the suspension
-//! the plan resumes. A change that fails is reported and the next one is
-//! made.
+//! `now`, then every resume, earliest suspension first, then every
+//! revocation at expiry (2026-11-12: a user suspended at expiry whose
+//! service was not renewed in three months, when the agreement they
+//! accepted provides for it; `daemon-core`'s `unrenewed`). Each change
+//! reads the state again and edits the user under the store's lock, so a
+//! user the operator changed meanwhile is left alone: a suspension only of
+//! a user still active, a resume only of a user still under the suspension
+//! the plan resumes, a revocation only of a user still suspended at expiry
+//! as planned. A change that fails is reported and the next one is made.
 //!
 //! The removals follow: each user whose revocation is 13 months old, then
 //! the kept ids whose records have expired, each a bookkeeping record of
@@ -18,9 +21,13 @@
 
 use std::path::Path;
 
-use mooring_daemon_core::apply::{PolicyPlan, forgotten_expired, plan_policy, removals_due};
-use mooring_daemon_core::error::PolicyErrorKind;
+use mooring_daemon_core::apply::{
+    PolicyPlan, UnrenewedPlan, forgotten_expired, plan_policy, removals_due, unrenewed,
+};
+use mooring_daemon_core::error::{PolicyError, PolicyErrorKind};
 use mooring_daemon_core::policy::{PolicyAction, PolicyWarning};
+use mooring_model::revocation::ExpiryRevocation;
+use mooring_model::user::SuspendReason;
 use mooring_model::{Bookkeeping, Deployment, ModelError, UnixTime, User, UserId, UserStatus};
 use mooring_store::Store;
 
@@ -30,7 +37,7 @@ use super::report::{
 };
 use crate::collected_usage::{Usage, usage};
 use crate::daemon::chain;
-use crate::payments::command::entitlements;
+use crate::payments::command::entitlements_known;
 
 /// Why the store refused one of the step's changes.
 #[derive(Debug, thiserror::Error)]
@@ -38,7 +45,7 @@ enum Moved {
     /// The user has left the deployment since the plan.
     #[error("the user is no longer in the deployment")]
     Gone,
-    /// The user's suspension is not the one the plan resumes.
+    /// The user's status is not the suspension the plan resumes or revokes.
     #[error("the user's status changed since the run planned this")]
     Changed,
     /// The model refused the transition.
@@ -46,15 +53,17 @@ enum Moved {
     Model(#[from] ModelError),
 }
 
-/// Plans the policy step at `now` for `deployment` and carries it out.
+/// Plans the policy step at `now` for `deployment` and carries it out;
+/// `gate` says which users the agreement lets the step revoke at expiry.
 pub(super) fn step(
     store: &Store,
     support: &Path,
     deployment: &Deployment,
     now: UnixTime,
+    gate: ExpiryRevocation,
 ) -> PolicyOutcome {
-    let paid = match entitlements(support) {
-        Ok(paid) => paid,
+    let (paid, known) = match entitlements_known(support) {
+        Ok(read) => read,
         Err(error) => return refused(RefusalKind::PaymentFiles, &error),
     };
     let usage = match usage(support, deployment, now) {
@@ -65,22 +74,35 @@ pub(super) fn step(
         Usage::Report(report) => (Some(report.cycle_usage()), None),
         Usage::Behind(error) => (None, Some(chain(error))),
     };
-    match plan_policy(deployment, &paid, cycle.as_ref(), now) {
-        Ok(plan) => PolicyOutcome::CarriedOut(Box::new(carry_out(store, &plan, behind))),
-        Err(error) => {
-            let kind = match error.kind() {
-                PolicyErrorKind::QuotaSuspensionAfterNow => RefusalKind::ClockSteppedBack,
-                _ => RefusalKind::Policy,
-            };
-            refused(kind, &error)
+    let planned = plan_policy(deployment, &paid, cycle.as_ref(), now).and_then(|plan| {
+        let revocations = unrenewed(deployment, &paid, known, now, gate)?;
+        Ok((plan, revocations))
+    });
+    match planned {
+        Ok((plan, revocations)) => {
+            PolicyOutcome::CarriedOut(Box::new(carry_out(store, &plan, &revocations, behind)))
         }
+        Err(error) => refused(refusal_kind(&error), &error),
     }
 }
 
-/// Carries `plan` out on the state as it is now, one change each, and
-/// reports it; `behind` says why no usage report could be made, if none
-/// could.
-pub(crate) fn carry_out(store: &Store, plan: &PolicyPlan, behind: Option<String>) -> PolicyDone {
+/// What refused the step, from the error that refused it.
+fn refusal_kind(error: &PolicyError) -> RefusalKind {
+    match error.kind() {
+        PolicyErrorKind::QuotaSuspensionAfterNow => RefusalKind::ClockSteppedBack,
+        _ => RefusalKind::Policy,
+    }
+}
+
+/// Carries `plan` out on the state as it is now, then the `revocations` at
+/// expiry, one change each, and reports it; `behind` says why no usage
+/// report could be made, if none could.
+pub(crate) fn carry_out(
+    store: &Store,
+    plan: &PolicyPlan,
+    revocations: &UnrenewedPlan,
+    behind: Option<String>,
+) -> PolicyDone {
     let mut done = PolicyDone {
         usage_behind: behind,
         quotas_unchecked: plan
@@ -96,6 +118,8 @@ pub(crate) fn carry_out(store: &Store, plan: &PolicyPlan, behind: Option<String>
             .collect(),
         held_back: plan.held_back.clone(),
         kept: plan.kept.clone(),
+        revocation_awaiting_pull: revocations.awaiting_pull.clone(),
+        revocation_not_covered: revocations.not_covered.clone(),
         ..PolicyDone::default()
     };
     for suspension in &plan.suspensions {
@@ -125,6 +149,25 @@ pub(crate) fn carry_out(store: &Store, plan: &PolicyPlan, behind: Option<String>
             Err(error) => done.failed.push(FailedChange {
                 user: lapsed.user.clone(),
                 change: Change::Resume,
+                error,
+            }),
+        }
+    }
+    for due in &revocations.revoke {
+        let planned = UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: due.since,
+        };
+        match change(store, &due.user, |user| {
+            if user.status != planned {
+                return Err(Moved::Changed);
+            }
+            Ok(user.revoke(plan.now)?)
+        }) {
+            Ok(()) => done.revoked.push(due.clone()),
+            Err(error) => done.failed.push(FailedChange {
+                user: due.user.clone(),
+                change: Change::Revoke,
                 error,
             }),
         }

@@ -4,6 +4,10 @@
 //! §13.2 step 5): renders the node's bundle for the current generation,
 //! uploads the blobs it lacks, runs the transaction, confirms it from a new
 //! session and records what the node confirmed (`Bookkeeping::Applied`).
+//! Then it records each revocation the node's confirmation settles (design
+//! §13.5, [`crate::revocation`]): the bundle left out every user pending
+//! revocation, so their credentials on the node go from the keychain once
+//! each record is committed.
 
 use std::io::Write;
 use std::path::Path;
@@ -22,6 +26,7 @@ use crate::error::{CommandError, LocalError};
 use crate::node::engines::Engines;
 use crate::node::session::{deployed_node, ops_session};
 use crate::node::{NodeError, NodeSession, upload_missing};
+use crate::revocation;
 use crate::state::{load, output, store_failure};
 
 /// How often the transaction's state is read.
@@ -32,8 +37,41 @@ pub(crate) const POLL: Duration = Duration::from_secs(2);
 /// gate itself precedes.
 pub(crate) const MAX_WAIT: Duration = Duration::from_secs(300);
 
-/// `node apply`.
+/// `node apply`: the transaction ([`transact`]), then the revocations the
+/// node's confirmation settles, each said, with what each revoked user
+/// still waits on. A revocation that could not be recorded, or whose
+/// keychain items were not all deleted, fails the command after the rest:
+/// the node is applied all the same.
 pub(crate) fn apply(
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    node: &NodeId,
+    interface: &BsdName,
+    engines: &Path,
+) -> Result<(), CommandError> {
+    transact(env, out, node, interface, engines)?;
+    let store = Store::new(support_dir(env)?);
+    let at = (env.clock)()?;
+    let commits = revocation::commit(&store, env.secrets, at, Some(node))?;
+    for line in commits.lines() {
+        writeln!(out, "{line}").map_err(output)?;
+    }
+    if commits.failed.is_empty() {
+        Ok(())
+    } else {
+        Err(LocalError::RevocationsNotRecorded {
+            node: node.clone(),
+            failures: commits.failed.len(),
+        }
+        .into())
+    }
+}
+
+/// Applies the node's bundle for the current generation and records what
+/// the node confirmed: everything of `node apply` but the revocations, as
+/// the apply job applies each node behind before it records those of every
+/// node.
+pub(crate) fn transact(
     env: &mut Env<'_>,
     out: &mut dyn Write,
     node: &NodeId,

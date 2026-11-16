@@ -2,9 +2,11 @@
 
 //! The apply job's node applies (design §13.6): every node that confirmed
 //! a generation older than the deployment's, by id, each as `node apply`
-//! does it, through the exit's egress as the daemon resolves it
-//! (`exit_interfaces`) and with the engines in the support directory, as
-//! the daemon runs them. A node not yet applied, or leaving, is not
+//! does it (`node::apply::transact`), through the exit's egress as the
+//! daemon resolves it (`exit_interfaces`) and with the engines in the
+//! support directory, as the daemon runs them. The revocations the
+//! confirmations settle are recorded after the last, for every node at
+//! once (`revocation::commit`). A node not yet applied, or leaving, is not
 //! applied: its first apply is the operator's (design §13.2). A node that
 //! cannot be reached, or whose apply fails, is reported, and the next one
 //! runs; an egress that does not resolve fails each node without dialling.
@@ -63,7 +65,7 @@ pub(super) fn apply_behind(
     for node in behind {
         let result = match &egress {
             Ok(interface) => {
-                match crate::node::apply::apply(env, progress, &node, interface, &engines) {
+                match crate::node::apply::transact(env, progress, &node, interface, &engines) {
                     Ok(()) => NodeResult::Applied,
                     Err(error) => NodeResult::Failed {
                         error: chain(&error),

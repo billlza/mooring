@@ -202,10 +202,10 @@ On the user's request, tell the user what is held about them (clause 4 of the ag
 - **On the operator's phone and Mac:** the call history with the user in the app you call them with, FaceTime, WhatsApp or Telegram (the contact and the call times), until the revocation. What Apple, WhatsApp and Telegram keep of the calls follows their own rules (clause 4).
 - **At Stripe:** the payments, with what the payment page collected (email, cardholder name), the card's brand, last four digits, expiry and country, and the IP address, location and device data Stripe's fraud checks gather; the saved card while auto-renewal runs.
 
-**Revocation for non-payment.** Revoke a user whose service expired three months before and was not renewed (clause 6 of revision 2), by hand until Mooring does it, then delete as below. Never revoke for it a user still under revision 1: their service is free, and revision 1 names no such revocation (its expiry pauses the service until you resume it).
+**Revocation for non-payment.** The nightly apply job revokes a user suspended at expiry whose service expired three months before and was not renewed, if they accepted revision 2 or a later one (clause 6 of revision 2; `revoke.md`, section 4); then delete as below. It only reports a user still under revision 1, and never revoke one for it yourself: their service is free, and revision 1 names no such revocation (its expiry pauses the service until you resume it).
 
 **Deletion.**
-- When the user is revoked, for leaving or otherwise, first finish what the portal's account still serves (the portal's `docs/payments.md`, "删除账号"):
+- When the user is revoked (`mooringctl user revoke <uid>`, `revoke.md`), for leaving or otherwise, first finish what the portal's account still serves (the portal's `docs/payments.md`, "删除账号"):
   - cancel the user's auto-renewal in the Stripe Dashboard;
   - settle any compensation or refund;
   - let the payment pull take the account's paid orders.

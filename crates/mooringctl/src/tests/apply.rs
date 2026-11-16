@@ -515,6 +515,17 @@ pub(crate) fn bundle_and_header(
     engines: &std::path::Path,
     deployment: &Deployment,
 ) -> (mooring_render::VpsBundle, mooring_agent_proto::BundleHeader) {
+    bundle_and_header_of(harness, engines, deployment, "lon1")
+}
+
+/// The bundle of `deployment`'s `node` with the harness's engine pins, and
+/// its header after the scripted `Hello`.
+pub(crate) fn bundle_and_header_of(
+    harness: &Harness,
+    engines: &std::path::Path,
+    deployment: &Deployment,
+    node: &str,
+) -> (mooring_render::VpsBundle, mooring_agent_proto::BundleHeader) {
     let pins: Vec<(&str, &str)> = harness
         .engine_pins
         .iter()
@@ -526,7 +537,7 @@ pub(crate) fn bundle_and_header(
         .clone();
     let secrets = mooring_fixtures::two_nodes_three_users().unwrap().secrets;
     let bundle =
-        mooring_render::vps::bundle(deployment, &node_id("lon1"), &secrets, &catalog).unwrap();
+        mooring_render::vps::bundle(deployment, &node_id(node), &secrets, &catalog).unwrap();
     let Response::Hello(hello) = super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) else {
         unreachable!()
     };

@@ -136,6 +136,8 @@ mod portal;
 #[cfg(target_os = "macos")]
 mod prompt;
 #[cfg(target_os = "macos")]
+mod revocation;
+#[cfg(target_os = "macos")]
 mod router;
 #[cfg(target_os = "macos")]
 mod runtime;
@@ -160,6 +162,8 @@ mod user_history;
 mod user_make_up;
 #[cfg(target_os = "macos")]
 mod user_quota;
+#[cfg(target_os = "macos")]
+mod user_revoke;
 
 use std::io;
 use std::process::ExitCode;
@@ -207,6 +211,7 @@ fn main() -> ExitCode {
         redirect_stderr: &mooring_macsys::redirect_stderr,
         portal_agreement: mooring_model::PortalAgreement::SHIPPED,
         portal: &curl,
+        expiry_revocation: mooring_model::ExpiryRevocation::SHIPPED,
     };
     let code = run(
         cli.command,

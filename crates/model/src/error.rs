@@ -539,6 +539,21 @@ pub enum ModelError {
         /// The node.
         node: NodeId,
     },
+    /// A revocation step names a node that has not confirmed the
+    /// deployment's configuration generation, so it may still serve the
+    /// user: only a node applied at the generation, whose bundle leaves out
+    /// every user pending revocation, commits a revocation (design §13.5).
+    #[error(
+        "node {node} has not confirmed configuration generation {generation}, so it may still serve user {user}; apply it first"
+    )]
+    RevocationUnconfirmed {
+        /// The user.
+        user: UserId,
+        /// The node.
+        node: NodeId,
+        /// The deployment's generation, which the node has not confirmed.
+        generation: ConfigGeneration,
+    },
     /// An agreement record would replace the recorded revision with an
     /// older one, as after a downgrade; a recorded revision never goes back.
     #[error(
@@ -766,6 +781,8 @@ kinds! {
         RevocationAlreadyStarted,
         /// See [`ModelError::NoCredentialsOnNode`].
         NoCredentialsOnNode,
+        /// See [`ModelError::RevocationUnconfirmed`].
+        RevocationUnconfirmed,
         /// See [`ModelError::AgreementRegressed`].
         AgreementRegressed,
         /// See [`ModelError::CarrierAlreadyRecorded`].
@@ -873,6 +890,7 @@ impl ModelError {
             Self::UserNotRevoked { .. } => ModelErrorKind::UserNotRevoked,
             Self::RevocationAlreadyStarted { .. } => ModelErrorKind::RevocationAlreadyStarted,
             Self::NoCredentialsOnNode { .. } => ModelErrorKind::NoCredentialsOnNode,
+            Self::RevocationUnconfirmed { .. } => ModelErrorKind::RevocationUnconfirmed,
             Self::AgreementRegressed { .. } => ModelErrorKind::AgreementRegressed,
             Self::CarrierAlreadyRecorded => ModelErrorKind::CarrierAlreadyRecorded,
             Self::NodeNotRetiring { .. } => ModelErrorKind::NodeNotRetiring,
@@ -1316,6 +1334,22 @@ mod tests {
                 .record(Bookkeeping::RevocationCommitted {
                     user: user_id(1),
                     node: node_id("par1"),
+                    at: REVOKED_AT,
+                })
+                .unwrap_err(),
+            ),
+            (
+                K::RevocationUnconfirmed,
+                Deployment::try_from({
+                    let mut parts = two_node_parts();
+                    parts.config_generation = ConfigGeneration::new(2).unwrap();
+                    parts.users[0].status = UserStatus::RevokePending;
+                    parts
+                })
+                .unwrap()
+                .record(Bookkeeping::RevocationCommitted {
+                    user: user_id(1),
+                    node: node_id("lon1"),
                     at: REVOKED_AT,
                 })
                 .unwrap_err(),
