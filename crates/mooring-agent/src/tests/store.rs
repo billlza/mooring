@@ -11,7 +11,7 @@ use mooring_agent_proto::{AgentError, Holds, IoOp, OperatorHold, UnixTime};
 
 use super::{EACCES, EISDIR, ModeFault, scratch};
 use crate::store::{
-    Lock, append_json_line, errno, malformed, read_json, remove, write_atomic, write_json,
+    Lock, Scratch, append_json_line, errno, malformed, read_json, remove, write_atomic, write_json,
 };
 
 /// A value serde cannot write, as no value the agent stores is: its
@@ -129,6 +129,26 @@ fn a_path_without_a_directory_is_refused_before_anything_is_written() {
         write_atomic(Path::new("/"), b"", 0o640).unwrap_err().kind(),
         io::ErrorKind::InvalidInput
     );
+}
+
+/// A scratch file is written where its directory is missing, as a reboot
+/// leaves the validators' directory: the directory is made (0750), the
+/// file has mode 0600, and it goes when dropped.
+#[test]
+fn a_scratch_file_makes_its_directory_and_goes_when_dropped() {
+    let (_dir, paths) = scratch();
+    let validate = paths.validate_dir();
+    assert!(!validate.exists());
+    let file = validate.join("wgexit.stripped");
+    let written = Scratch::write(file.clone(), b"[Interface]\n").unwrap();
+    assert_eq!(written.path(), file);
+    assert_eq!(fs::read(&file).unwrap(), b"[Interface]\n");
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode(&file), 0o600);
+    assert_eq!(mode(&validate), 0o750);
+    drop(written);
+    assert!(!file.exists());
+    assert_eq!(fs::read_dir(&validate).unwrap().count(), 0);
 }
 
 #[test]

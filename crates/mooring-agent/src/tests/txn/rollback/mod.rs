@@ -354,6 +354,42 @@ fn a_stripped_tunnel_configuration_whose_write_fails_late_is_removed() {
     assert!(!validate.join("wgexit.stripped").exists());
 }
 
+/// A reboot empties `/run`, and the validators' scratch directory with it.
+/// Nothing makes the directory again before `txn-recover` rolls a pending
+/// change back: tmpfiles makes only `/run/mooring` and its `gate.lock`,
+/// and a rollback validates nothing. A tunnel whose peers alone changed
+/// is still synced: its stripped copy is written where the directory is
+/// made again, and then removed.
+#[test]
+fn a_rollback_after_a_reboot_syncs_the_tunnel_without_the_scratch_directory() {
+    let world = awaiting_second(peers_only);
+    let validate = world.paths.validate_dir();
+    fs::remove_dir_all(&validate).unwrap();
+    let node = world.node(3000);
+    assert_eq!(
+        txn::revert_pending(&world.paths, &node, Why::Rebooted),
+        Ok(Generation::new(2))
+    );
+    assert_eq!(
+        world.state(2),
+        TxnState::Failed {
+            error: AgentError::RevertedUnconfirmed {
+                generation: Generation::new(2)
+            }
+        }
+    );
+    assert_eq!(world.current().as_deref(), Some("gen-1"));
+    let calls = node.calls();
+    index_of(&calls, "/usr/bin/wg syncconf wgexit");
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.contains("restart wg-quick@wgexit")),
+        "{calls:#?}"
+    );
+    assert_eq!(fs::read_dir(&validate).unwrap().count(), 0);
+}
+
 /// Every failure after the swap is rolled back: here the record of the
 /// stage reached cannot be written once the change is applied, and the
 /// previous generation is put back rather than the change left switched.
