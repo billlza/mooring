@@ -167,6 +167,13 @@ pub(crate) fn run(
         Command::User(UserCommand::ExportProfiles { users, out: path }) => {
             crate::user::export_profiles(env, out, err, &users, &path)
         }
+        Command::User(UserCommand::MakeUp {
+            user,
+            days,
+            gb,
+            reason,
+            yes,
+        }) => crate::user_make_up::make_up(env, out, &user, days, gb, reason.into(), yes),
         Command::User(UserCommand::Usage {
             user,
             json,

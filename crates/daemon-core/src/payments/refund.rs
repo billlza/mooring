@@ -10,8 +10,10 @@
 //!   when it had ended. Each period that followed it moves as much earlier,
 //!   and so does each that followed those, so that no gap opens: a period
 //!   granted before the refund, starting where it ended, a live period only
-//!   after a live one (as a grant builds on them). The order's quota per
-//!   billing cycle goes with its time.
+//!   after a live one (as a grant builds on them). A make-up's period moves
+//!   so too: it is live, and was granted before every entry after the
+//!   cursor it records; no refund takes a make-up back. The order's quota
+//!   per billing cycle goes with its time.
 //! - **A traffic pack** counts, once Mooring has learned the user's use at
 //!   the refund's time, only what the user had used of it: their bytes
 //!   served in its billing cycle by then beyond the rest of their quota, at
@@ -43,7 +45,7 @@ use mooring_model::{NodeId, UnixTime, UserId};
 use serde::{Deserialize, Serialize};
 
 use super::ids::OrderId;
-use super::ledger::{GrantOutcome, OrderRecord};
+use super::ledger::{GrantOutcome, Granted, MakeUpGift, MakeUpNumber, MakeUpRecord, OrderRecord};
 use crate::usage::{DownlinkCount, ServedBefore};
 
 /// What Mooring knows of a user's use of a traffic pack at the time of the
@@ -224,8 +226,10 @@ pub struct TimeTakenBack {
     /// until then is taken back: none when the two are equal, the period
     /// having ended before the refund.
     pub until: UnixTime,
-    /// The periods that followed it, by order, each moved as much earlier.
-    pub moved: Vec<OrderId>,
+    /// The periods that followed it, orders' and make-ups', each moved as
+    /// much earlier: the orders in id order, then the make-ups in number
+    /// order.
+    pub moved: Vec<Granted>,
 }
 
 /// What a refund did.
@@ -248,25 +252,30 @@ struct Span {
     from: UnixTime,
     until: UnixTime,
     livemode: bool,
-    /// The grant's entry number.
+    /// The last entry before it: an order's grant's own number, and the
+    /// cursor a make-up records. It was granted before every entry
+    /// numbered higher.
     granted: u64,
 }
 
-/// What the refunds in full did to the ledger's orders, replayed from its
-/// grants and refunds in the order of their entries.
+/// What the refunds in full did to the ledger's orders and make-ups,
+/// replayed from its grants and refunds in the order of their entries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TakeBacks {
     periods: BTreeMap<OrderId, (UnixTime, UnixTime)>,
+    made_up: BTreeMap<MakeUpNumber, (UnixTime, UnixTime)>,
     effects: BTreeMap<u64, RefundEffect>,
 }
 
 impl TakeBacks {
-    /// Replays the refunds in full of `orders`. Only a user with a refund
-    /// in full has periods that may move, so only theirs are held.
-    pub(super) fn of<'a, I>(orders: I) -> Self
+    /// Replays the refunds in full of `orders`, which may move the periods
+    /// of `orders` and `make_ups`. Only a user with a refund in full has
+    /// periods that may move, so only theirs are held.
+    pub(super) fn of<'a, I, M>(orders: I, make_ups: M) -> Self
     where
         I: IntoIterator<Item = &'a OrderRecord>,
         I::IntoIter: Clone,
+        M: IntoIterator<Item = &'a MakeUpRecord>,
     {
         let orders = orders.into_iter();
         let mut refunds: Vec<(u64, &OrderRecord, UnixTime)> = orders
@@ -286,7 +295,7 @@ impl TakeBacks {
         for record in orders.filter(|record| reached.contains(&record.terms.user)) {
             if let (Some(grant), Some((from, until))) = (record.grant, granted_period(record)) {
                 spans.insert(
-                    record.order.clone(),
+                    Granted::Order(record.order.clone()),
                     Span {
                         user: record.terms.user.clone(),
                         from,
@@ -297,23 +306,49 @@ impl TakeBacks {
                 );
             }
         }
+        for record in make_ups
+            .into_iter()
+            .filter(|record| reached.contains(&record.user))
+        {
+            if let MakeUpGift::Period { from, until, .. } = record.gift {
+                spans.insert(
+                    Granted::MakeUp(record.number),
+                    Span {
+                        user: record.user.clone(),
+                        from,
+                        until,
+                        livemode: true,
+                        granted: record.after,
+                    },
+                );
+            }
+        }
         let mut effects = BTreeMap::new();
         for (seq, record, at) in refunds {
-            let effect = match spans.get(&record.order).cloned() {
-                Some(span) => {
-                    RefundEffect::Time(take_time(&mut spans, &record.order, span, seq, at))
-                }
+            let refunded = Granted::Order(record.order.clone());
+            let effect = match spans.get(&refunded).cloned() {
+                Some(span) => RefundEffect::Time(take_time(&mut spans, &refunded, span, seq, at)),
                 None => pack_taken_back(record)
                     .cloned()
                     .map_or(RefundEffect::Nothing, RefundEffect::Pack),
             };
             effects.insert(seq, effect);
         }
+        let mut periods = BTreeMap::new();
+        let mut made_up = BTreeMap::new();
+        for (granted, span) in spans {
+            match granted {
+                Granted::Order(order) => {
+                    periods.insert(order, (span.from, span.until));
+                }
+                Granted::MakeUp(number) => {
+                    made_up.insert(number, (span.from, span.until));
+                }
+            }
+        }
         Self {
-            periods: spans
-                .into_iter()
-                .map(|(order, span)| (order, (span.from, span.until)))
-                .collect(),
+            periods,
+            made_up,
             effects,
         }
     }
@@ -327,6 +362,32 @@ impl TakeBacks {
     pub fn period(&self, record: &OrderRecord) -> Option<(UnixTime, UnixTime)> {
         granted_period(record)
             .map(|granted| self.periods.get(&record.order).copied().unwrap_or(granted))
+    }
+
+    /// The period make-up `record` gave, as it counts after the refunds in
+    /// full: moved earlier by those that took back time it followed, and
+    /// as long as it was given. `None` for a make-up of traffic.
+    #[must_use]
+    pub fn make_up_period(&self, record: &MakeUpRecord) -> Option<(UnixTime, UnixTime)> {
+        match record.gift {
+            MakeUpGift::Period { from, until, .. } => {
+                Some(self.make_up_span(record.number, from, until))
+            }
+            MakeUpGift::Traffic { .. } => None,
+        }
+    }
+
+    /// Where the period of make-up `number`, given from `from` until
+    /// `until`, lies after the refunds in full: moved earlier by those that
+    /// took back time it followed, and where it was given when none did.
+    #[must_use]
+    pub(crate) fn make_up_span(
+        &self,
+        number: MakeUpNumber,
+        from: UnixTime,
+        until: UnixTime,
+    ) -> (UnixTime, UnixTime) {
+        self.made_up.get(&number).copied().unwrap_or((from, until))
     }
 
     /// What the refund of entry `seq` did; [`RefundEffect::Nothing`] for a
@@ -358,12 +419,12 @@ pub(super) fn pack_taken_back(record: &OrderRecord) -> Option<&PackUse> {
     record.first_refund_in_full()?.pack_use.as_ref()
 }
 
-/// Takes back the time of `order`'s period, `span`, from `at` on, for the
-/// refund of entry `seq`, and moves the periods that followed it as much
-/// earlier.
+/// Takes back the time of `refunded`'s period, `span`, from `at` on, for
+/// the refund of entry `seq`, and moves the periods that followed it as
+/// much earlier.
 fn take_time(
-    spans: &mut BTreeMap<OrderId, Span>,
-    order: &OrderId,
+    spans: &mut BTreeMap<Granted, Span>,
+    refunded: &Granted,
     span: Span,
     seq: u64,
     at: UnixTime,
@@ -372,7 +433,7 @@ fn take_time(
     let mut moved = Vec::new();
     if from < span.until {
         spans.insert(
-            order.clone(),
+            refunded.clone(),
             Span {
                 until: from,
                 ..span.clone()
@@ -381,9 +442,9 @@ fn take_time(
         // Each boundary reached: where the periods that follow it started,
         // where they start now, and whether the period before it is live.
         let mut boundaries = vec![(span.until, from, span.livemode)];
-        let mut reached = BTreeSet::from([order.clone()]);
+        let mut reached = BTreeSet::from([refunded.clone()]);
         while let Some((was, now, live)) = boundaries.pop() {
-            let followers: Vec<(OrderId, Span)> = spans
+            let followers: Vec<(Granted, Span)> = spans
                 .iter()
                 .filter(|(id, other)| {
                     !reached.contains(*id)

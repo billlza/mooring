@@ -10,10 +10,12 @@
 //! - [`PaymentLedger`]: `payments/ledger.json`, the cursor and every order
 //!   the portal named with what Mooring did about it; a page is applied to
 //!   a copy ([`PaymentLedger::apply`]), which the daemon writes before it
-//!   keeps it, so the cursor and the grants are one write.
+//!   keeps it, so the cursor and the grants are one write. It also holds
+//!   the make-ups, the time or traffic the operator gives without a
+//!   payment ([`PaymentLedger::make_up`]).
 //! - [`Entitlements`]: the service periods and traffic packs of the orders
-//!   that count, which `policy::effective_policy` combines with each
-//!   user's own record.
+//!   that count and of the make-ups, which `policy::effective_policy`
+//!   combines with each user's own record.
 //! - [`PullSettings`]: `payment-pull.json`, where to pull from and
 //!   whether the operator rehearses.
 //!
@@ -48,9 +50,10 @@ pub use feed::{
 };
 pub use ids::{Currency, IdError, MAX_PLAN_ID_CHARS, ORDER_ID_CHARS, OrderId, PlanId};
 pub use ledger::{
-    Applied, Closed, DisputeRecord, GrantOutcome, GrantRecord, HeldReason, LEDGER_VERSION,
-    LedgerEvent, MAX_LEDGER_BYTES, OrderRecord, PaymentLedger, Pruned, RefundRecord, Settlement,
-    Stop, StopReason,
+    Applied, Closed, DisputeRecord, GrantOutcome, GrantRecord, Granted, HeldReason, LEDGER_VERSION,
+    LedgerEvent, MAKE_UP_AGREEMENT_SINCE, MAX_LEDGER_BYTES, MadeUp, MakeUpAsk, MakeUpGift,
+    MakeUpNumber, MakeUpReason, MakeUpRecord, MakeUpRefusal, OrderRecord, PaymentLedger, Pruned,
+    RefundRecord, Settlement, Stop, StopReason,
 };
 pub use refund::{PackUse, RefundEffect, RefundUsage, RunBegan, TakeBacks, TimeTakenBack};
 pub use settings::{

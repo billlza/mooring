@@ -14,6 +14,7 @@ use mooring_daemon_core::PortalError;
 use mooring_daemon_core::control::Refusal;
 use mooring_daemon_core::exit::EgressFault;
 use mooring_daemon_core::meter::MeterError;
+use mooring_daemon_core::payments::MakeUpNumber;
 use mooring_daemon_core::router::RouterUnavailableReason;
 use mooring_daemon_core::sim_network::NotAccepted;
 use mooring_daemon_core::snapshot::SnapshotError;
@@ -27,7 +28,10 @@ use mooring_model::ids::LocalLabel;
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretKind;
-use mooring_model::{CalendarDate, NodeId, PortalNotCovered, PublicAlias, UserId};
+use mooring_model::{
+    AgreementVersion, CalendarDate, NodeId, PortalNotCovered, PublicAlias, RecordedAgreement,
+    UserId,
+};
 use mooring_render::RenderError;
 use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadError, StoreError};
 
@@ -659,6 +663,53 @@ pub(crate) enum LocalError {
     /// The daemon answered with a reply to another request.
     #[error("the daemon answered with a reply to another request")]
     DaemonUnexpectedReply,
+    /// `user make-up` was given both `--days` and `--gb`, or neither.
+    #[error("give `user make-up` either --days or --gb: one of them, not both")]
+    MakeUpAsk,
+    /// `user make-up` for a user who is being revoked or is revoked.
+    #[error(
+        "user {user} is being revoked or is revoked, and a make-up is given only to a user who is not; nothing was recorded"
+    )]
+    MakeUpUserRevoked {
+        /// The user.
+        user: UserId,
+    },
+    /// `user make-up` for a user who accepted no revision of the agreement
+    /// that provides for make-ups: none, or only an earlier one.
+    #[error(
+        "user {user} has not accepted agreement revision {required} or a later one, the revisions that provide for make-ups: {}; nothing was recorded",
+        RecordedAgreement(*.recorded)
+    )]
+    MakeUpAgreementNotAccepted {
+        /// The user.
+        user: UserId,
+        /// The revision the user accepted, if a record exists.
+        recorded: Option<AgreementVersion>,
+        /// The first revision that provides for make-ups.
+        required: AgreementVersion,
+    },
+    /// The daemon was asked for a make-up and gave no answer: whether it
+    /// recorded the make-up is not known.
+    #[error(
+        "the daemon gave no answer to the make-up, so whether it was recorded is not known: `mooringctl portal payments` lists every make-up recorded; read it before asking again"
+    )]
+    MakeUpUnanswered {
+        /// What came instead of the answer.
+        #[source]
+        source: Box<LocalError>,
+    },
+    /// The daemon recorded the make-up, and the command could not write
+    /// the line that says so: it was recorded all the same.
+    #[error(
+        "make-up {number} was recorded, but writing the output failed; `mooringctl portal payments` lists it, so do not ask for it again"
+    )]
+    MadeUpUnsaid {
+        /// The make-up's number.
+        number: MakeUpNumber,
+        /// Why the line could not be written.
+        #[source]
+        source: io::Error,
+    },
     /// The daemon sent nothing for longer than a poll takes.
     #[error("the daemon sent no status for {secs} s")]
     DaemonSilent {
@@ -1243,6 +1294,30 @@ pub(crate) const fn refusal_text(reason: Refusal) -> &'static str {
         }
         Refusal::LoopBusy => {
             "its loop did not come to the request in time; nothing was changed, try again"
+        }
+        Refusal::UnknownUser => "the deployment holds no user of that id; nothing was recorded",
+        Refusal::UserRevoked => "the user is being revoked or is revoked; nothing was recorded",
+        Refusal::AgreementNotAccepted => {
+            "the user accepted no revision of the agreement that provides for make-ups; nothing was recorded"
+        }
+        Refusal::NoPaidPeriod => {
+            "the user has no paid service period to extend, so days of service give them nothing; nothing was recorded (give traffic instead)"
+        }
+        Refusal::NoQuota => {
+            "the user has no quota this billing cycle, so traffic adds nothing; nothing was recorded (give days instead)"
+        }
+        Refusal::QuotaUnknown => {
+            "the user's quota cannot be computed now, as the console says; nothing was recorded"
+        }
+        Refusal::BeyondCalendar => "the service would end after 9999-12-31; nothing was recorded",
+        Refusal::MakeUpNumbersSpent => {
+            "the payment ledger has numbered as many make-ups as it can; nothing was recorded"
+        }
+        Refusal::LedgerUnreadable => {
+            "the payment ledger could not be read when the daemon started, so nothing is recorded in it until the daemon starts again; nothing was recorded"
+        }
+        Refusal::LedgerNotWritten => {
+            "the payment ledger could not be written, as the daemon's log says; nothing was recorded"
         }
     }
 }

@@ -44,12 +44,15 @@ use std::time::{Duration, Instant};
 use mooring_daemon_core::RouterStatus;
 use mooring_daemon_core::console::{ConsoleStatus, UndeployedStatus};
 use mooring_daemon_core::control::{
-    CONTROL_SOCKET_FILE, DaemonReply, MAX_REPLY_LINE_BYTES, RUN_DIRECTORY, encode_line,
+    CONTROL_SOCKET_FILE, DaemonReply, MAX_REPLY_LINE_BYTES, RUN_DIRECTORY, Refusal, encode_line,
 };
+use mooring_daemon_core::payments::{MakeUpAsk, MakeUpReason, MakeUpRecord};
 use mooring_daemon_core::router::{RouterReading, RouterUnavailableReason};
 use mooring_daemon_core::sim_network::{NotAccepted, SimNetwork};
+use mooring_model::UserId;
 use mooring_model::iface::BsdName;
 use mooring_model::time::UnixTime;
+use mooring_model::user::SuspendReason;
 use mooring_store::{STATE_FILE, write_status_snapshot};
 
 use crate::app::Env;
@@ -253,16 +256,65 @@ pub(crate) fn deployment_exists(support_dir: &Path) -> Result<bool, LocalError> 
     }
 }
 
+/// Where the daemon's loop hands a waiting connection its answer: a
+/// channel that holds nothing. [`Handover::send`] returns `Ok` only once
+/// the connection has taken the answer, and fails once the connection has
+/// stopped waiting for it, so the loop acts on an answer only when it was
+/// heard. A channel with room for the answer would take a send that lands
+/// as the connection's wait runs out, and the loop would act on an answer
+/// that the connection, which then says `LoopBusy`, never took.
+#[derive(Debug)]
+pub(crate) struct Handover<T>(mpsc::SyncSender<T>);
+
+impl<T> Handover<T> {
+    /// A handover, and the end the connection waits on.
+    pub(crate) fn pair() -> (Self, mpsc::Receiver<T>) {
+        let (sender, receiver) = mpsc::sync_channel(0);
+        (Self(sender), receiver)
+    }
+
+    /// Hands `answer` to the connection, waiting until it takes it; the
+    /// answer comes back when the connection no longer waits.
+    pub(crate) fn send(&self, answer: T) -> Result<(), mpsc::SendError<T>> {
+        self.0.send(answer)
+    }
+}
+
 /// A request to take a network as the SIM's network on record (`sim
 /// accept-network`, design §10.2), from a connection to the daemon's loop.
 #[derive(Debug)]
 pub(crate) struct AcceptRequest {
     /// The network the operator was shown and named.
     pub(crate) network: SimNetwork,
-    /// Where the loop's answer goes. It holds nothing: the loop's send
-    /// succeeds only into the hands of a connection still waiting, so the
-    /// loop knows whether its answer was heard.
-    pub(crate) answer: mpsc::SyncSender<Result<(), NotAccepted>>,
+    /// Where the loop's answer goes, so that the loop knows whether it
+    /// was heard.
+    pub(crate) answer: Handover<Result<(), NotAccepted>>,
+}
+
+/// What came of a make-up the loop took: the make-up as the ledger
+/// written records it, with why the user is suspended if they are, or that
+/// the ledger could not be written (`LedgerNotWritten`).
+pub(crate) type MakeUpOutcome = Result<(MakeUpRecord, Option<SuspendReason>), Refusal>;
+
+/// A request to give a user a make-up (`user make-up`, design §9.6), from
+/// a connection to the daemon's loop. The loop answers in two steps, so
+/// that it writes the ledger only for a connection that is waiting, and
+/// that connection hears what came of the write.
+#[derive(Debug)]
+pub(crate) struct MakeUpRequest {
+    /// The user.
+    pub(crate) user: UserId,
+    /// What to give.
+    pub(crate) ask: MakeUpAsk,
+    /// Why.
+    pub(crate) reason: MakeUpReason,
+    /// Where the loop says what it decided: `Ok` before it writes the
+    /// ledger with the make-up, or why it records nothing. The loop
+    /// writes nothing for a connection that did not take its `Ok`.
+    pub(crate) decided: Handover<Result<(), Refusal>>,
+    /// Where the loop says what came of the write. It holds one outcome,
+    /// so the loop never waits on it.
+    pub(crate) recorded: mpsc::SyncSender<MakeUpOutcome>,
 }
 
 /// What the control socket's connections share with the daemon's loop:
@@ -280,6 +332,9 @@ pub(crate) struct Control {
     /// each tick, so it fills only while the loop is held up and askers
     /// come and go; a request that finds it full is refused as `LoopBusy`.
     pub(crate) accept: mpsc::SyncSender<AcceptRequest>,
+    /// `user make-up`s, which the loop answers after its next tick; held
+    /// as the networks to take are.
+    pub(crate) make_up: mpsc::SyncSender<MakeUpRequest>,
     /// Whether the loop serves a deployment.
     pub(crate) deployed: AtomicBool,
 }
@@ -291,6 +346,8 @@ pub(crate) struct Asked {
     pub(crate) retries: mpsc::Receiver<()>,
     /// The networks to take as the SIM's network on record.
     pub(crate) acceptances: mpsc::Receiver<AcceptRequest>,
+    /// The make-ups to give.
+    pub(crate) make_ups: mpsc::Receiver<MakeUpRequest>,
 }
 
 impl Control {
@@ -299,16 +356,19 @@ impl Control {
     pub(crate) fn new() -> (Self, Asked) {
         let (retry, retries) = mpsc::channel();
         let (accept, acceptances) = mpsc::sync_channel(MAX_CLIENTS);
+        let (make_up, make_ups) = mpsc::sync_channel(MAX_CLIENTS);
         (
             Self {
                 hub: Hub::default(),
                 retry,
                 accept,
+                make_up,
                 deployed: AtomicBool::new(false),
             },
             Asked {
                 retries,
                 acceptances,
+                make_ups,
             },
         )
     }

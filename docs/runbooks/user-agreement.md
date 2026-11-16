@@ -232,19 +232,22 @@
       keeps no access log, and TLS ends on that host.
     - The Mac's new records are the payments it pulls (design §9.6), which
       clause 4 puts under the 13-month rule, and the operator's ban records
-      (clause 3). The daemon deletes a removed user's payment orders
-      (design §9.6, the ledger's retention): when the nightly apply job
-      removes the user 13 months after the revocation, or after `user
-      forget` for a user who leaves and asks. The ban records are kept
-      until the service ends, outside Mooring's state, so neither the
+      (clause 3). The daemon deletes a removed user's payment orders and
+      make-ups (design §9.6, the ledger's retention): when the nightly
+      apply job removes the user 13 months after the revocation, or after
+      `user forget` for a user who leaves and asks. The ban records are
+      kept until the service ends, outside Mooring's state, so neither the
       13-month rule nor `user forget` reaches them.
     - Clause 4 also names the make-ups the operator gives (clauses 1 and
       3): each one's number, what it gave (a service period, its dates and
       its quota, or traffic), its reason and its time, deleted with the
       payments under the 13-month rule. The operator decided on 2026-11-15
       that the text names them, in their words: «要写明». The command that
-      gives and records them, `mooringctl user make-up`, is #71's. The
-      copies kept at a ban still name the payments alone.
+      gives and records them, `mooringctl user make-up`, is #71's. It
+      gives one only to a user who accepted revision 2 or a later one:
+      revision 1 names none, and asked on 2026-11-16 whether a user who
+      accepted only revision 1 may be given one, the operator answered
+      «不可以». The copies kept at a ban still name the payments alone.
     - The operator's phone and Mac keep the call history of the app the
       operator calls each user with, FaceTime, WhatsApp or Telegram (below,
       2026-11-15): the contact (FaceTime's number or Apple ID, WhatsApp's
