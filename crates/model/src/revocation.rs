@@ -9,10 +9,12 @@
 //! The rule needs the user's word. Revision 1 of the agreement, which users
 //! accepted until revision 2, says that an expired service stays suspended
 //! until the operator resumes it, and promises no revocation for it. So the
-//! rule waits for a revision whose clause 6 states it
-//! ([`EXPIRY_REVOCATION_SINCE`]) and for the user's acceptance of that
-//! revision ([`ExpiryRevocation::covers`]); a user it does not cover is
-//! reported to the operator instead, who decides.
+//! rule covers only a user who accepted a revision whose clause 6 states
+//! it, revision 2 or a later one ([`EXPIRY_REVOCATION_SINCE`],
+//! [`ExpiryRevocation::covers`]); a user it does not cover is reported to
+//! the operator instead, who decides.
+
+use std::num::NonZeroU16;
 
 use crate::error::ModelError;
 use crate::removal::months_after;
@@ -34,14 +36,17 @@ pub fn revocation_due(expired: UnixTime) -> Result<UnixTime, ModelError> {
 }
 
 /// The first revision of the user agreement whose clause 6 says that a
-/// service expired three months before and not renewed ends in revocation.
-/// `None` while no revision this build ships says so.
-///
-/// Writing that revision sets it, in the commit that raises
-/// [`AgreementVersion::CURRENT`] and records the text's digest
-/// (`crates/export/tests/export/agreement_text.rs`, which also requires the
-/// text to state the three months exactly while the gate is open).
-pub const EXPIRY_REVOCATION_SINCE: Option<AgreementVersion> = None;
+/// service expired three months before and not renewed ends in revocation:
+/// revision 2, set when the revocation was merged with the build that
+/// raised [`AgreementVersion::CURRENT`] to it
+/// (`crates/export/tests/export/agreement_text.rs` requires the text to
+/// state the three months while the gate is open, and only then). It stays
+/// 2 when later revisions raise `CURRENT`, so a later revision never takes
+/// a user who accepted revision 2 out of the rule.
+pub const EXPIRY_REVOCATION_SINCE: Option<AgreementVersion> = match NonZeroU16::new(2) {
+    Some(revision) => Some(AgreementVersion::new(revision)),
+    None => panic!("agreement revisions count from 1"),
+};
 
 /// Whether this build revokes a user three months after its expiry, and
 /// which agreement revision the user must have accepted first.
@@ -56,8 +61,9 @@ impl ExpiryRevocation {
     pub const SHIPPED: Self = Self::since(EXPIRY_REVOCATION_SINCE);
 
     /// The gate of this build if `since` were the first revision providing
-    /// for the revocation. The binary passes [`Self::SHIPPED`]; tests open
-    /// the gate with `since(Some(AgreementVersion::CURRENT))`.
+    /// for the revocation. The binary passes [`Self::SHIPPED`]; tests close
+    /// the gate with `since(None)`, as a build whose agreement does not
+    /// provide for it has it.
     #[must_use]
     pub const fn since(since: Option<AgreementVersion>) -> Self {
         Self { since }
@@ -79,8 +85,6 @@ impl ExpiryRevocation {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU16;
-
     use super::*;
     use crate::date::CalendarDate;
     use crate::testing::user;
@@ -98,6 +102,16 @@ mod tests {
 
     fn revision(number: u16) -> AgreementVersion {
         AgreementVersion::new(NonZeroU16::new(number).unwrap())
+    }
+
+    /// A user who accepted revision `version`, or none.
+    fn accepted(version: Option<u16>) -> User {
+        let mut found = user(1, &[]);
+        found.agreement = version.map(|number| AgreementRecord {
+            version: revision(number),
+            accepted_on: CalendarDate::parse("2026-11-12").unwrap(),
+        });
+        found
     }
 
     /// Three calendar months, at the same time of day: the boundary is that
@@ -134,19 +148,24 @@ mod tests {
         );
     }
 
+    /// Revision 2 is the first that provides for the revocation, and stays
+    /// so: a later revision raises `CURRENT`, never the revision from which
+    /// the rule covers a user. A user on revision 1, or with no acceptance
+    /// recorded, is never covered.
+    #[test]
+    fn the_revocation_covers_from_revision_2() {
+        assert_eq!(EXPIRY_REVOCATION_SINCE, Some(revision(2)));
+        let shipped = ExpiryRevocation::SHIPPED;
+        assert!(shipped.covers(&accepted(Some(AgreementVersion::CURRENT.get()))));
+        assert!(!shipped.covers(&accepted(Some(AgreementVersion::FIRST.get()))));
+        assert!(!shipped.covers(&accepted(None)));
+    }
+
     /// A user is covered by an acceptance of the first providing revision
     /// or a later one; no acceptance, an earlier revision, and a closed
     /// gate cover no one.
     #[test]
     fn only_an_acceptance_of_a_providing_revision_covers_a_user() {
-        let accepted = |version: Option<u16>| {
-            let mut found = user(1, &[]);
-            found.agreement = version.map(|number| AgreementRecord {
-                version: revision(number),
-                accepted_on: CalendarDate::parse("2026-11-12").unwrap(),
-            });
-            found
-        };
         let from_two = ExpiryRevocation::since(Some(revision(2)));
         assert!(!from_two.covers(&accepted(None)));
         assert!(!from_two.covers(&accepted(Some(1))));

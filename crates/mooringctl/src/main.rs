@@ -37,7 +37,8 @@
 //!   `--out` writes the document to a new file with mode 0600.
 //!
 //! The user portal's two files (design §9.5, `docs/portal-contract.md`),
-//! both refused until a revision of the user agreement covers the portal:
+//! made only for users who accepted the agreement revision this build
+//! ships (revisions from 2 on cover the portal):
 //!
 //! - `portal export --user <uid>... --out <path>` writes the snapshot of
 //!   the users named (status, usage this cycle, quota, expiry; no
@@ -157,6 +158,8 @@ mod user;
 mod user_forget;
 #[cfg(target_os = "macos")]
 mod user_history;
+#[cfg(target_os = "macos")]
+mod user_make_up;
 #[cfg(target_os = "macos")]
 mod user_quota;
 #[cfg(target_os = "macos")]

@@ -12,7 +12,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 use mooring_model::{
-    ClientLine, ClientProfile, LocalLabel, NodeId, UnixTime, User, UserId, UserPolicy, UserStatus,
+    AgreementRecord, AgreementVersion, CalendarDate, ClientLine, ClientProfile, LocalLabel, NodeId,
+    UnixTime, User, UserId, UserPolicy, UserStatus,
 };
 use serde_json::{Value, json};
 
@@ -21,6 +22,7 @@ use crate::usage::{DownlinkCount, ServedBefore};
 
 mod feed;
 mod ledger;
+mod make_ups;
 mod open_downloads;
 mod policy;
 mod refunds;
@@ -112,7 +114,9 @@ pub(super) fn secs(seconds: u64) -> UnixTime {
 }
 
 /// A user with `id`, in `status`, with `expires_at` as their own record
-/// and no quota of their own.
+/// and no quota of their own, who accepted the agreement's current
+/// revision, as every paying user has: the portal takes revision 2 or a
+/// later one, and only such a user is given a make-up.
 pub(super) fn user(id_text: &str, status: UserStatus, expires_at: Option<u64>) -> User {
     User {
         id: id(id_text),
@@ -128,7 +132,10 @@ pub(super) fn user(id_text: &str, status: UserStatus, expires_at: Option<u64>) -
             quota: None,
         },
         alias: None,
-        agreement: None,
+        agreement: Some(AgreementRecord {
+            version: AgreementVersion::CURRENT,
+            accepted_on: CalendarDate::utc_of(NOW).unwrap(),
+        }),
     }
 }
 

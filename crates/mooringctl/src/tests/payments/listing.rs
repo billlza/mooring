@@ -4,11 +4,12 @@
 //! kind of order, outcome and stop.
 
 use std::collections::BTreeMap;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use mooring_daemon_core::payments::{
-    Closed, FeedPage, GrantOutcome, HeldReason, LedgerEvent, OrderId, PackUse, PaymentLedger,
-    PortalOrigin, PullSettings, RefundEffect, RefundUsage, RunBegan, Stop, StopReason,
-    TimeTakenBack,
+    Closed, FeedPage, GrantOutcome, Granted, HeldReason, LedgerEvent, MakeUpAsk, MakeUpNumber,
+    MakeUpReason, OrderId, PackUse, PaymentLedger, PortalOrigin, PullSettings, RefundEffect,
+    RefundUsage, RunBegan, Stop, StopReason, TimeTakenBack,
 };
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::usage::{DownlinkCount, ServedBefore};
@@ -17,7 +18,8 @@ use mooring_model::{BillDay, CalendarDate, CycleRule, NodeId, UnixTime, UserId};
 use serde_json::{Value, json};
 
 use super::super::support::NOW;
-use super::{FIRST, grant, pack, page, refund_in_full};
+use super::super::user::fixture;
+use super::{FIRST, SECOND, grant, pack, page, refund_in_full};
 use crate::payments::listing::{json_line, text};
 use crate::payments::notes::{describe, stamp};
 
@@ -250,6 +252,7 @@ fn the_json_line_is_the_two_files() {
 /// refund's by order only, with what it took back.
 #[test]
 fn every_event_has_its_line() {
+    let make_up = |number| MakeUpNumber::new(NonZeroU64::new(number).unwrap());
     let order = OrderId::parse("aaaaaaaaaaaaaaaaaaaa").unwrap();
     let user = UserId::parse(FIRST).unwrap();
     let at = UnixTime::from_secs(NOW);
@@ -360,8 +363,8 @@ fn every_event_has_its_line() {
                 from: at,
                 until: UnixTime::from_secs(NOW + 86_400),
                 moved: vec![
-                    OrderId::parse("bbbbbbbbbbbbbbbbbbbb").unwrap(),
-                    OrderId::parse("cccccccccccccccccccc").unwrap(),
+                    Granted::Order(OrderId::parse("bbbbbbbbbbbbbbbbbbbb").unwrap()),
+                    Granted::Order(OrderId::parse("cccccccccccccccccccc").unwrap()),
                 ],
             })),
             format!(
@@ -374,10 +377,56 @@ fn every_event_has_its_line() {
             refunded(RefundEffect::Time(TimeTakenBack {
                 from: at,
                 until: UnixTime::from_secs(NOW + 86_400),
-                moved: vec![OrderId::parse("bbbbbbbbbbbbbbbbbbbb").unwrap()],
+                moved: vec![Granted::Order(
+                    OrderId::parse("bbbbbbbbbbbbbbbbbbbb").unwrap(),
+                )],
             })),
             format!(
                 "payment: order {order} refunded 800 so far, in full; its service from {} until {} is taken back, and the period of order bbbbbbbbbbbbbbbbbbbb that followed it moves as much earlier",
+                stamp(at),
+                stamp(UnixTime::from_secs(NOW + 86_400))
+            ),
+        ),
+        (
+            refunded(RefundEffect::Time(TimeTakenBack {
+                from: at,
+                until: UnixTime::from_secs(NOW + 86_400),
+                moved: vec![Granted::MakeUp(make_up(3))],
+            })),
+            format!(
+                "payment: order {order} refunded 800 so far, in full; its service from {} until {} is taken back, and the period of make-up 3 that followed it moves as much earlier",
+                stamp(at),
+                stamp(UnixTime::from_secs(NOW + 86_400))
+            ),
+        ),
+        (
+            refunded(RefundEffect::Time(TimeTakenBack {
+                from: at,
+                until: UnixTime::from_secs(NOW + 86_400),
+                moved: vec![
+                    Granted::Order(OrderId::parse("bbbbbbbbbbbbbbbbbbbb").unwrap()),
+                    Granted::MakeUp(make_up(1)),
+                    Granted::MakeUp(make_up(2)),
+                ],
+            })),
+            format!(
+                "payment: order {order} refunded 800 so far, in full; its service from {} until {} is taken back, and the periods of order bbbbbbbbbbbbbbbbbbbb and make-ups 1, 2 that followed it move as much earlier",
+                stamp(at),
+                stamp(UnixTime::from_secs(NOW + 86_400))
+            ),
+        ),
+        (
+            refunded(RefundEffect::Time(TimeTakenBack {
+                from: at,
+                until: UnixTime::from_secs(NOW + 86_400),
+                moved: vec![
+                    Granted::Order(OrderId::parse("bbbbbbbbbbbbbbbbbbbb").unwrap()),
+                    Granted::Order(OrderId::parse("cccccccccccccccccccc").unwrap()),
+                    Granted::MakeUp(make_up(4)),
+                ],
+            })),
+            format!(
+                "payment: order {order} refunded 800 so far, in full; its service from {} until {} is taken back, and the periods of orders bbbbbbbbbbbbbbbbbbbb, cccccccccccccccccccc and make-up 4 that followed it move as much earlier",
                 stamp(at),
                 stamp(UnixTime::from_secs(NOW + 86_400))
             ),
@@ -655,4 +704,97 @@ fn what_refunds_in_full_took_back_is_listed() {
     ] {
         assert!(listed.contains(&format!("{line}\n")), "{line}\n{listed}");
     }
+}
+
+/// Every make-up is listed after the orders, by number, with its user,
+/// when it was recorded and after which entry, why, and what it gave; a
+/// period that a refund in full moved says where it counts now. A ledger
+/// whose make-ups all went with their users still says the number of the
+/// last; one that never had a make-up says nothing of them. `--json`
+/// carries them as the ledger does.
+#[test]
+fn every_make_up_is_listed() {
+    let day = 86_400;
+    let now = UnixTime::from_secs(NOW);
+    let stamped = |secs| stamp(UnixTime::from_secs(secs));
+    let users = users();
+    let month = grant(1, "aaaaaaaaaaaaaaaaaaaa", FIRST);
+    let page_of =
+        |entries, after| FeedPage::decode(&page(true, after, entries, false), after).unwrap();
+    let ledger = PaymentLedger::new()
+        .apply(&page_of(vec![month.clone()], 0), &users, now, false)
+        .unwrap()
+        .ledger;
+    assert!(!text(None, Some(&ledger)).contains("make-up"));
+    let ledger = ledger
+        .make_up(
+            &users[&UserId::parse(FIRST).unwrap()],
+            MakeUpAsk::Days(NonZeroU32::new(7).unwrap()),
+            MakeUpReason::Outage,
+            now,
+        )
+        .unwrap()
+        .ledger;
+    let ledger = ledger
+        .make_up(
+            &users[&UserId::parse(SECOND).unwrap()],
+            MakeUpAsk::TrafficBytes(NonZeroU64::new(5_000_000_000).unwrap()),
+            MakeUpReason::Unrefundable,
+            now,
+        )
+        .unwrap()
+        .ledger;
+    let heading =
+        "make-ups: 2 (the last numbered 2; one gone with its user's records keeps its number)\n";
+    let week = format!(
+        "  make-up 1 for user fxuseraaab, recorded {} after entry 1, for an outage: service from {} until {}, with a quota of 100000000000 bytes a billing cycle",
+        stamped(NOW),
+        stamped(NOW + 30 * day),
+        stamped(NOW + 37 * day)
+    );
+    let traffic = format!(
+        "  make-up 2 for user fxuseraaac, recorded {} after entry 1, in place of a refund the card can no longer take: 5000000000 bytes of traffic for the billing cycle it was given in\n",
+        stamped(NOW)
+    );
+    let listed = text(None, Some(&ledger));
+    assert!(
+        listed.ends_with(&format!("{heading}{week}\n{traffic}")),
+        "{listed}"
+    );
+    // The month is refunded in full ten days in: the week follows it.
+    let ledger = ledger
+        .apply(
+            &page_of(vec![refund_in_full(&month, 2, NOW + 10 * day)], 1),
+            &users,
+            now,
+            false,
+        )
+        .unwrap()
+        .ledger;
+    let listed = text(None, Some(&ledger));
+    assert!(
+        listed.ends_with(&format!(
+            "{heading}{week}; after refunds in full it counts from {} until {}\n{traffic}",
+            stamped(NOW + 10 * day),
+            stamped(NOW + 17 * day)
+        )),
+        "{listed}"
+    );
+    let value: Value = serde_json::from_str(&json_line(None, Some(&ledger)).unwrap()).unwrap();
+    assert_eq!(value["ledger"]["make_ups"].as_array().unwrap().len(), 2);
+    assert_eq!(value["ledger"]["last_make_up"], json!(2));
+    // Both users go, with their records.
+    let without = fixture(|parts| {
+        parts
+            .users
+            .retain(|user| ![FIRST, SECOND].contains(&user.id.as_str()));
+    });
+    let (gone, _) = ledger.without_removed_users(&without).unwrap();
+    assert!(
+        text(None, Some(&gone)).ends_with(
+            "orders: 0 (0 held, 0 refunded, 0 disputed)\nmake-ups: 0 (the last numbered 2; one gone with its user's records keeps its number)\n"
+        ),
+        "{}",
+        text(None, Some(&gone))
+    );
 }

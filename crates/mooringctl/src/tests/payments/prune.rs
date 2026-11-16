@@ -6,9 +6,11 @@
 //! that succeeds is in `tests::payments::daemon`.)
 
 use std::fs;
+use std::num::NonZeroU64;
 
+use mooring_daemon_core::payments::{FeedPage, MakeUpAsk, MakeUpReason, PaymentLedger};
 use mooring_model::{Bookkeeping, Deployment, UnixTime, UserId, UserStatus};
-use mooring_store::{PAYMENT_LEDGER_FILE, PAYMENTS_DIRECTORY};
+use mooring_store::{PAYMENT_LEDGER_FILE, PAYMENTS_DIRECTORY, write_payment_ledger};
 
 use super::super::support::NOW;
 use super::super::user::fixture;
@@ -99,4 +101,60 @@ fn a_prune_that_cannot_be_written_is_said_and_tried_again_later() {
     fs::rename(&aside, &dir).unwrap();
     assert!(puller.prune(&second_removed()).is_empty());
     assert_eq!(ledger_on_disk(&harness).unwrap().orders().len(), 2);
+}
+
+/// A prune that takes make-ups too counts them, in the line that says
+/// what could not be deleted and in the one that says what was.
+#[test]
+fn a_prune_counts_the_make_ups_it_deletes() {
+    let harness = harness();
+    let users = fixture(|_| {}).users().clone();
+    let now = UnixTime::from_secs(NOW);
+    let page = FeedPage::decode(
+        &page(
+            true,
+            0,
+            vec![grant(1, "bbbbbbbbbbbbbbbbbbbb", SECOND)],
+            false,
+        ),
+        0,
+    )
+    .unwrap();
+    let ledger = PaymentLedger::new()
+        .apply(&page, &users, now, false)
+        .unwrap()
+        .ledger
+        .make_up(
+            &users[&UserId::parse(SECOND).unwrap()],
+            MakeUpAsk::TrafficBytes(NonZeroU64::MIN),
+            MakeUpReason::Outage,
+            now,
+        )
+        .unwrap()
+        .ledger;
+    write_payment_ledger(&harness.support_dir(), &ledger.encode().unwrap()).unwrap();
+    let mut puller = Puller::open(&harness.support_dir());
+    let dir = harness.support_dir().join(PAYMENTS_DIRECTORY);
+    let aside = harness.support_dir().join("payments-aside");
+    fs::rename(&dir, &aside).unwrap();
+    fs::write(&dir, b"not a directory").unwrap();
+    let said = puller.prune(&second_removed());
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with(
+            "payment ledger: the orders and make-ups of 1 removed user(s) could not be deleted ("
+        ),
+        "{said:?}"
+    );
+    fs::remove_file(&dir).unwrap();
+    fs::rename(&aside, &dir).unwrap();
+    let mut puller = Puller::open(&harness.support_dir());
+    assert_eq!(
+        puller.prune(&second_removed()),
+        ["payment ledger: deleted 1 order(s) and 1 make-up(s) of 1 removed user(s)"]
+    );
+    let left = ledger_on_disk(&harness).unwrap();
+    assert!(left.orders().is_empty());
+    assert!(left.make_ups().is_empty());
+    assert_eq!(left.last_make_up(), 1);
 }

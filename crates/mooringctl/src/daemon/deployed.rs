@@ -52,8 +52,8 @@ use super::capacity::{Capacity, Probed};
 use super::events::Journals;
 use super::node_events::NodeEvents;
 use super::{
-    AcceptRequest, Asked, Control, Intervals, LoopState, RunPaths, Waited, chain, pending::Pending,
-    poll_router_on, publish, radio::RadioHistoryWriter, router_after_poll, say,
+    AcceptRequest, Asked, Control, Intervals, LoopState, MakeUpRequest, RunPaths, Waited, chain,
+    pending::Pending, poll_router_on, publish, radio::RadioHistoryWriter, router_after_poll, say,
     sim_network::NetworkWatch, unavailable_reason, wait_for_next_poll,
 };
 use crate::app::Env;
@@ -667,6 +667,31 @@ impl<'e, 'a> Deployed<'e, 'a> {
         Ok(())
     }
 
+    /// Answers each request to give a user a make-up (`user make-up`,
+    /// design §9.6). It runs right after a tick, against the state as it is
+    /// read then: the payment pull decides the make-up on the ledger in
+    /// memory, writes the ledger with it only once the connection that
+    /// asked has heard that it is taken, and keeps it once written. It
+    /// changes the payment ledger and nothing else: the state is only
+    /// read, and the users' policies follow at the next tick.
+    pub(crate) fn make_ups(
+        &mut self,
+        log: &mut dyn Write,
+        asked: &mpsc::Receiver<MakeUpRequest>,
+    ) -> Result<(), CommandError> {
+        for request in asked.try_iter() {
+            let state = self
+                .store
+                .load()
+                .map_err(|error| LocalError::StateRead(Box::new(error)))?;
+            let now = (self.env.clock)()?;
+            for note in self.payments.make_up(&state.deployment, &request, now) {
+                say(log, now, &note)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Takes the power helper's events: the source, the assertions it
     /// holds, a sleep, which is drained at once, and a wake. When the
     /// helper has ended it is started again [`HELPER_RESTART_EVERY`] later.
@@ -1159,7 +1184,8 @@ pub(crate) fn poll_m7(
 /// Serves the opened exit until the acceptor ends or the daemon fails: a
 /// tick every `intervals.tick`, with a retry when the operator asked for
 /// one since the last, and after each tick an answer to every request to
-/// take a network as the SIM's network on record.
+/// take a network as the SIM's network on record, and then to every
+/// request to give a user a make-up.
 pub(crate) fn serve(
     exit: &mut Deployed<'_, '_>,
     log: &mut dyn Write,
@@ -1174,6 +1200,7 @@ pub(crate) fn serve(
         let retry = asked.retries.try_iter().count() > 0;
         exit.tick(control, log, retry)?;
         exit.accept_networks(log, &asked.acceptances)?;
+        exit.make_ups(log, &asked.make_ups)?;
         if wait_for_next_poll(next, acceptor_ended) == Waited::AcceptorEnded {
             return Ok(Stopped::AcceptorEnded);
         }

@@ -4,11 +4,11 @@
 //! admin password is read from the terminal or stdin only.
 
 use std::net::Ipv4Addr;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use mooring_daemon_core::payments::PortalOrigin;
+use mooring_daemon_core::payments::{MakeUpReason, PortalOrigin};
 use mooring_export::ExportFormat;
 use mooring_model::dns::DnsName;
 use mooring_model::exit::{FlowCap, Pairing};
@@ -236,8 +236,9 @@ pub(crate) enum UserCommand {
     /// credentials included) or why it is withheld, to a new file with mode
     /// 0600 (never overwritten). Name every user bound to a portal account:
     /// the portal refuses a bundle that leaves one out, and `mooring-portal
-    /// bound-users` on its host prints them as --user arguments. Refused
-    /// until the user agreement covers the portal.
+    /// bound-users` on its host prints them as --user arguments. A user who
+    /// has not accepted revision 2 of the agreement, the first that covers
+    /// the portal, or a later one, is withheld.
     ExportProfiles {
         /// A user bound to a portal account; give one --user per user. Only
         /// the users named are in the bundle.
@@ -247,6 +248,34 @@ pub(crate) enum UserCommand {
         /// iCloud Drive, the Desktop and Documents.
         #[arg(long, value_name = "PATH")]
         out: PathBuf,
+    },
+    /// Give the user service time or traffic without a payment, to make up
+    /// an outage on the operator's side, a mistaken cut or ban, or a refund
+    /// the card can no longer take (the agreement's clauses 1 and 3). The
+    /// daemon records it in the payment ledger: days of service from the
+    /// end of the user's paid time, or from now once that has passed, with
+    /// the quota of their last paid period; or traffic for this billing
+    /// cycle. Only a user who accepted agreement revision 2 or a later one,
+    /// the revisions that provide for make-ups, is given one. It cannot be
+    /// undone, so it asks first; it needs no node apply.
+    #[command(group(clap::ArgGroup::new("gift").required(true).args(["days", "gb"])))]
+    MakeUp {
+        /// The user's id.
+        #[arg(value_name = "USER_ID")]
+        user: UserId,
+        /// Days of service to add.
+        #[arg(long, value_name = "DAYS")]
+        days: Option<NonZeroU32>,
+        /// Traffic to add for this billing cycle, in decimal gigabytes (a
+        /// gigabyte is 10^9 bytes).
+        #[arg(long, value_name = "GB")]
+        gb: Option<NonZeroU32>,
+        /// Why it is given.
+        #[arg(long, value_enum)]
+        reason: ReasonArg,
+        /// Do not ask before recording it.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -291,8 +320,9 @@ pub(crate) enum PortalCommand {
     /// Write the portal snapshot of the users named, for `mooring-portal
     /// import`: their status, usage this billing cycle, quota and expiry,
     /// by user id and without credentials, to a new file with mode 0600
-    /// (never overwritten). Refused until the user agreement covers the
-    /// portal.
+    /// (never overwritten). Refused if a user named has not accepted
+    /// revision 2 of the agreement, the first that covers the portal, or a
+    /// later one.
     Export {
         /// A user to include; give one --user per user. Only the users
         /// named are exported.
@@ -361,6 +391,32 @@ impl From<FormatArg> for ExportFormat {
         match format {
             FormatArg::Singbox => Self::SingBoxJson,
             FormatArg::Clash => Self::ClashYaml,
+        }
+    }
+}
+
+/// Why a make-up is given, as typed on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ReasonArg {
+    /// An outage on the operator's side of 8 hours or more (clause 1).
+    Outage,
+    /// A cut that the review found mistaken, however short (clauses 1 and
+    /// 3).
+    MistakenCut,
+    /// In place of a refund that the card that paid can no longer take
+    /// (clause 1).
+    Unrefundable,
+    /// A ban found to be a mistake: the days unused at the ban.
+    MistakenBan,
+}
+
+impl From<ReasonArg> for MakeUpReason {
+    fn from(reason: ReasonArg) -> Self {
+        match reason {
+            ReasonArg::Outage => Self::Outage,
+            ReasonArg::MistakenCut => Self::MistakenCut,
+            ReasonArg::Unrefundable => Self::Unrefundable,
+            ReasonArg::MistakenBan => Self::MistakenBan,
         }
     }
 }

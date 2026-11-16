@@ -999,7 +999,7 @@ pub(crate) struct Harness {
     /// sets them.
     pub(crate) clock_step: Cell<u64>,
     /// Which users the apply job may revoke at expiry: the binary's gate,
-    /// closed, unless a test opens it.
+    /// open from revision 2, unless a test sets another.
     pub(crate) expiry_revocation: ExpiryRevocation,
 }
 

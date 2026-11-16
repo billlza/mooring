@@ -110,7 +110,8 @@ fn a_forgotten_users_every_order_goes() {
         counts,
         Pruned {
             users: 1,
-            orders: 2
+            orders: 2,
+            make_ups: 0,
         }
     );
     assert_eq!(pruned.cursor(), refunded.cursor());
@@ -167,7 +168,8 @@ fn a_removed_users_granted_and_held_orders_go_and_strangers_orders_stay() {
         counts,
         Pruned {
             users: 1,
-            orders: 1
+            orders: 1,
+            make_ups: 0,
         }
     );
     assert!(pruned.orders().contains_key(&order("eeeeeeeeeeeeeeeeeeee")));

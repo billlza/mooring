@@ -131,9 +131,9 @@ fn export_profiles_holds_only_the_users_named() {
 
 /// A bundle that withholds every user named is written, reading no secret
 /// (the keychain is empty here): the portal stops serving them on import.
-/// A missing acceptance pauses the link, as a suspension does; a
-/// revocation ends it. Nothing is warned about: a paused link comes back
-/// once a bundle delivers the user again.
+/// A user without the acceptance is offered nothing at the portal until
+/// they accept it, and a revocation ends the link. Nothing is warned
+/// about: neither is a fault of the bundle.
 #[test]
 fn a_bundle_withholding_everyone_is_written_without_reading_a_secret() {
     let deployment = fixture(|parts| {
@@ -155,7 +155,7 @@ fn a_bundle_withholding_everyone_is_written_without_reading_a_secret() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "wrote {}: CFM profiles of 0 user(s) and 2 withheld, sing-box-json, mode 0600\nwithheld: user {} (has not accepted agreement revision {}: no acceptance is recorded); importing it pauses their subscription link until a bundle delivers them again\nwithheld: user {} (revoked); importing it ends their subscription link for good\nimport it with `mooring-portal import-profiles` on the portal host, then delete it\n",
+            "wrote {}: CFM profiles of 0 user(s) and 2 withheld, sing-box-json, mode 0600\nwithheld: user {} (has not accepted agreement revision {} or a later one: no acceptance is recorded); importing it offers them nothing at the portal until they accept that revision and a bundle delivers them\nwithheld: user {} (revoked); importing it ends their subscription link for good\nimport it with `mooring-portal import-profiles` on the portal host, then delete it\n",
             out.display(),
             users[0],
             AgreementVersion::CURRENT,

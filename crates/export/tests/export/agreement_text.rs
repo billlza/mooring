@@ -2,17 +2,18 @@
 
 //! The user agreement's text is bound to its revision (decision F9): users
 //! accept a revision, so any change to the text they read must come with a
-//! new `AgreementVersion::CURRENT`, which every user then accepts again
-//! before their next file. A Level 1 drift check: it detects an accidental
-//! edit, not a malicious one.
+//! new `AgreementVersion::CURRENT`, which new users accept and earlier ones
+//! may, keeping the service under theirs until they do (F9 as the operator
+//! amended it on 2026-11-15). A Level 1 drift check: it detects an
+//! accidental edit, not a malicious one.
 
 use mooring_model::{AgreementVersion, EXPIRY_REVOCATION_SINCE, PortalAgreement};
 use sha2::{Digest as _, Sha256};
 
 const AGREEMENT: &str = include_str!("../../../../docs/runbooks/user-agreement.md");
 
-/// SHA-256 of the user-visible text of revision 1.
-const REVISION_1_SHA256: &str = "feccdff92e09d6ed299ea4ac31b0dcd31c104e7025ef2d3cc68c3a19811aaacf";
+/// SHA-256 of the user-visible text of revision 2.
+const REVISION_2_SHA256: &str = "108d7489a30e2f41b92ed527a964dfe0da430381b876bd85bc785145305b5154";
 
 /// The text the user reads: everything after the operator notes, a comment
 /// whose closing `-->` stands on its own line (the licence comment before it
@@ -42,7 +43,7 @@ fn sha256_hex(text: &str) -> String {
 #[test]
 fn the_agreement_text_is_bound_to_its_revision() {
     let expected = match AgreementVersion::CURRENT.get() {
-        1 => REVISION_1_SHA256,
+        2 => REVISION_2_SHA256,
         revision => panic!("record the digest of agreement revision {revision} here"),
     };
     assert_eq!(

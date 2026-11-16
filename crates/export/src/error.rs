@@ -86,11 +86,11 @@ pub enum ExportError {
         /// The user.
         user: UserId,
     },
-    /// The user has not accepted the agreement revision this build ships
-    /// (decision F9): no record, or a record of another revision. Checked
+    /// The user has accepted no revision of the agreement (decision F9, as
+    /// the operator amended it on 2026-11-15): there is no record. Checked
     /// after the status and before anything about the file.
     #[error(
-        "user {user} has not accepted agreement revision {required}: {}",
+        "user {user} has not accepted agreement revision {required} or a later one: {}",
         RecordedAgreement(*.recorded)
     )]
     AgreementNotAccepted {
@@ -98,7 +98,8 @@ pub enum ExportError {
         user: UserId,
         /// The revision the user accepted, if a record exists.
         recorded: Option<AgreementVersion>,
-        /// The revision exports require, [`AgreementVersion::CURRENT`].
+        /// The revision exports require, it or a later one:
+        /// [`AgreementVersion::FIRST`], so any acceptance.
         required: AgreementVersion,
     },
     /// The user is active but holds credentials on no node, so the file

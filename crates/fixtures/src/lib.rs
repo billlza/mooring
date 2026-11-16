@@ -473,7 +473,9 @@ fn user(number: u8, nodes: &[&NodeMaterial]) -> Result<User, ModelError> {
         per_node,
         policy: UserPolicy::NONE,
         alias: None,
-        // Decision F9: exports require the current agreement revision.
+        // Decision F9: exports require an acceptance, and the portal one
+        // of revision 2 or a later one; every fixture user holds one of the
+        // current revision.
         agreement: Some(AgreementRecord {
             version: AgreementVersion::CURRENT,
             accepted_on: CalendarDate::utc_of(FIXTURE_NOW)?,

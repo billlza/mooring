@@ -81,15 +81,16 @@ pub(crate) struct Env<'a> {
     /// (`mooring_macsys::redirect_stderr` in the binary).
     pub(crate) redirect_stderr: &'a crate::daemon::log::RedirectStderr<'a>,
     /// Whether the agreement this build ships covers the portal
-    /// (`PortalAgreement::SHIPPED` in the binary): the portal's exports are
-    /// refused until it does.
+    /// (`PortalAgreement::SHIPPED` in the binary, open since revision 2):
+    /// while it does not, the portal's exports are refused.
     pub(crate) portal_agreement: mooring_model::PortalAgreement,
     /// How the payment pull reaches the portal (`/usr/bin/curl` in the
     /// binary).
     pub(crate) portal: &'a dyn crate::payments::PortalLink,
     /// Which users the agreement lets the apply job revoke three months
     /// after their service expired (`ExpiryRevocation::SHIPPED` in the
-    /// binary): none until a revision this build ships provides for it.
+    /// binary, open since revision 2): those who accepted revision 2 or a
+    /// later one.
     pub(crate) expiry_revocation: mooring_model::ExpiryRevocation,
 }
 
@@ -149,6 +150,13 @@ pub(crate) fn run(
         Command::User(UserCommand::ExportProfiles { users, out: path }) => {
             crate::user::export_profiles(env, out, err, &users, &path)
         }
+        Command::User(UserCommand::MakeUp {
+            user,
+            days,
+            gb,
+            reason,
+            yes,
+        }) => crate::user_make_up::make_up(env, out, &user, days, gb, reason.into(), yes),
         Command::User(UserCommand::Usage {
             user,
             json,

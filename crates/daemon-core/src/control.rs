@@ -18,14 +18,20 @@
 //! [`DaemonReply::RetryQueued`]. [`DaemonRequest::AcceptSimNetwork`] (`sim
 //! accept-network`, design §10.2) waits for the daemon's loop, which
 //! takes the network named as the SIM's network on record and answers
-//! [`DaemonReply::SimNetworkAccepted`], or refuses and changes nothing. A
+//! [`DaemonReply::SimNetworkAccepted`], or refuses and changes nothing.
+//! [`DaemonRequest::MakeUp`] (`user make-up`, design §9.6) waits for the
+//! loop too, which records the make-up in the payment ledger and answers
+//! [`DaemonReply::MadeUp`] with it, or refuses and records nothing. A
 //! request the daemon will not serve is answered with
 //! [`DaemonReply::Refused`], after which it closes the connection.
 
+use mooring_model::UserId;
+use mooring_model::user::SuspendReason;
 use serde::{Deserialize, Serialize};
 
 use crate::console::ConsoleStatus;
 use crate::error::ControlError;
+use crate::payments::{MakeUpAsk, MakeUpReason, MakeUpRecord, MakeUpRefusal};
 use crate::sim_network::{NotAccepted, SimNetwork};
 
 /// The daemon's runtime directory, in the support directory (design §5.1:
@@ -50,9 +56,11 @@ pub const MAX_REPLY_LINE_BYTES: usize = 1 << 20;
 /// on the first line of every connection. From the first release on, any
 /// change to a request, a reply or this line's own shape raises it:
 /// protocol 3 (2026-11-12) carries the status of version 3 in its `status`
-/// reply, and protocol 4 (2026-11-12) the status of version 4, and adds
-/// the `accept_sim_network` request with its reply and its refusals.
-pub const CONTROL_PROTOCOL: u32 = 4;
+/// reply, protocol 4 (2026-11-12) the status of version 4, and adds the
+/// `accept_sim_network` request with its reply and its refusals, and
+/// protocol 5 (2026-11-15) adds the `make_up` request with its reply and
+/// its refusals.
+pub const CONTROL_PROTOCOL: u32 = 5;
 
 /// The first line of every connection: the protocol the daemon speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -88,6 +96,16 @@ pub enum DaemonRequest {
         /// The network to take.
         network: SimNetwork,
     },
+    /// Give `user` the make-up `ask` for `reason` (`user make-up`, design
+    /// §9.6): the daemon records it in the payment ledger, or refuses.
+    MakeUp {
+        /// The user.
+        user: UserId,
+        /// What to give.
+        ask: MakeUpAsk,
+        /// Why.
+        reason: MakeUpReason,
+    },
 }
 
 /// Why the daemon refused a request. It closes the connection after
@@ -118,6 +136,34 @@ pub enum Refusal {
     /// The daemon's loop did not come to the request in the time the
     /// connection waits for it. Nothing was changed.
     LoopBusy,
+    /// `make_up`: the deployment holds no user of that id.
+    UnknownUser,
+    /// `make_up`: the user is being revoked or is revoked.
+    UserRevoked,
+    /// `make_up`: the user accepted no revision of the agreement that
+    /// provides for make-ups, revision 2 or a later one
+    /// ([`MAKE_UP_AGREEMENT_SINCE`](crate::payments::MAKE_UP_AGREEMENT_SINCE)).
+    AgreementNotAccepted,
+    /// `make_up`: service time for a user without a live service period:
+    /// there is no paid time to extend.
+    NoPaidPeriod,
+    /// `make_up`: traffic for a user without a quota now: there is nothing
+    /// to add it to.
+    NoQuota,
+    /// `make_up`: the user's quota cannot be computed now.
+    QuotaUnknown,
+    /// `make_up`: the service period would end after 9999-12-31.
+    BeyondCalendar,
+    /// `make_up`: the ledger has numbered as many make-ups as a number
+    /// holds.
+    MakeUpNumbersSpent,
+    /// `make_up`: the payment ledger could not be read when the daemon
+    /// started, so nothing is recorded in it until the daemon starts
+    /// again.
+    LedgerUnreadable,
+    /// `make_up`: the ledger with the make-up could not be written, so the
+    /// daemon did not keep it.
+    LedgerNotWritten,
 }
 
 impl From<NotAccepted> for Refusal {
@@ -126,6 +172,21 @@ impl From<NotAccepted> for Refusal {
             NotAccepted::NoOtherNetwork => Self::NoOtherSimNetwork,
             NotAccepted::NotAttached => Self::M7NotAttached,
             NotAccepted::ReportChanged => Self::SimNetworkReportChanged,
+        }
+    }
+}
+
+impl From<MakeUpRefusal> for Refusal {
+    fn from(reason: MakeUpRefusal) -> Self {
+        match reason {
+            MakeUpRefusal::UnknownUser => Self::UnknownUser,
+            MakeUpRefusal::UserRevoked => Self::UserRevoked,
+            MakeUpRefusal::AgreementNotAccepted => Self::AgreementNotAccepted,
+            MakeUpRefusal::NoPaidPeriod => Self::NoPaidPeriod,
+            MakeUpRefusal::NoQuota => Self::NoQuota,
+            MakeUpRefusal::QuotaUnknown => Self::QuotaUnknown,
+            MakeUpRefusal::BeyondCalendar => Self::BeyondCalendar,
+            MakeUpRefusal::NumbersSpent => Self::MakeUpNumbersSpent,
         }
     }
 }
@@ -145,6 +206,15 @@ pub enum DaemonReply {
     RetryQueued,
     /// The network the request named is the SIM's network on record now.
     SimNetworkAccepted,
+    /// The make-up the request asked for is recorded in the payment
+    /// ledger, as `record` says.
+    MadeUp {
+        /// The make-up.
+        record: MakeUpRecord,
+        /// Why the user is suspended, if they are
+        /// ([`MadeUp::suspended`](crate::payments::MadeUp::suspended)).
+        suspended: Option<SuspendReason>,
+    },
 }
 
 /// `value` as one line: its compact JSON and a newline, refused when the
