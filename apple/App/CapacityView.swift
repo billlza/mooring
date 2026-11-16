@@ -39,7 +39,9 @@ struct CapacityView: View {
             ContentUnavailableView(
                 "No capacity sample yet",
                 systemImage: "speedometer",
-                description: Text("The daemon samples the egress once the exit runs.")
+                description: Text(
+                    "The daemon samples the egress while the exit probes, once it has read the egress's counters for a minute."
+                )
             )
         }
     }

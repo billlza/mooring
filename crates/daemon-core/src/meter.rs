@@ -78,6 +78,25 @@ impl CounterReading {
     }
 }
 
+/// What one reading counted against the reading before it: the bytes
+/// between the two, which went into the UTC day of the later one. The
+/// capacity monitor's rates are made of these ([`crate::capacity::rates`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Counted {
+    /// When the reading before it was taken.
+    pub since: UnixTime,
+    /// When the reading was taken.
+    pub at: UnixTime,
+    /// Bytes received in between.
+    pub rx: u64,
+    /// Bytes sent in between.
+    pub tx: u64,
+    /// Whether the bytes may miss some, or count restarted counters whole
+    /// (see the module documentation): they made their day short, and
+    /// they say nothing of a rate.
+    pub short: bool,
+}
+
 /// The bytes of one UTC day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -182,8 +201,9 @@ impl SimMeter {
     }
 
     /// Counts `reading` against the one before it, into the UTC day it was
-    /// taken.
-    pub fn observe(&mut self, reading: CounterReading) -> Result<(), MeterError> {
+    /// taken, and returns what it counted: none for a first reading, which
+    /// only sets the counters.
+    pub fn observe(&mut self, reading: CounterReading) -> Result<Option<Counted>, MeterError> {
         for value in [reading.rx, reading.tx] {
             if value >= COUNTER_MODULUS {
                 return Err(MeterError::CounterOutOfRange { value });
@@ -191,7 +211,7 @@ impl SimMeter {
         }
         let Some(last) = self.last else {
             self.last = Some(reading);
-            return Ok(());
+            return Ok(None);
         };
         let date = CalendarDate::utc_of(reading.at)?;
         let (rx, tx, short) = if last.same_counters(&reading) {
@@ -209,7 +229,13 @@ impl SimMeter {
         day.tx = day.tx.checked_add(tx).ok_or(overflow)?;
         day.short |= short;
         self.last = Some(reading);
-        Ok(())
+        Ok(Some(Counted {
+            since: last.at,
+            at: reading.at,
+            rx,
+            tx,
+            short,
+        }))
     }
 
     /// The bytes of `cycle`'s days.

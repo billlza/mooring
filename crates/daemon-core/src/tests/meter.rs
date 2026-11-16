@@ -13,8 +13,8 @@ use mooring_model::{BillDay, UnixTime};
 use proptest::prelude::*;
 
 use crate::meter::{
-    COUNTER_MODULUS, CounterReading, CycleBytes, MAX_LINE_BYTES_PER_SEC, MAX_SIM_METER_BYTES,
-    MeterError, SimMeter,
+    COUNTER_MODULUS, Counted, CounterReading, CycleBytes, MAX_LINE_BYTES_PER_SEC,
+    MAX_SIM_METER_BYTES, MeterError, SimMeter,
 };
 use crate::period::BillingCycle;
 
@@ -75,6 +75,66 @@ fn the_first_reading_only_sets_the_counters_and_deltas_follow() {
         .unwrap();
     assert_eq!(day(&meter, one_day("2026-10-25")).rx, 1_000);
     assert_eq!(day(&meter, one_day("2026-10-24")).rx, 4_024);
+}
+
+/// What `observe` counted from `since` to `at`.
+fn counted(since: u64, at: u64, rx: u64, tx: u64, short: bool) -> Option<Counted> {
+    Some(Counted {
+        since: UnixTime::from_secs(since),
+        at: UnixTime::from_secs(at),
+        rx,
+        tx,
+        short,
+    })
+}
+
+/// Each reading says what it counted, for the capacity monitor's rates:
+/// nothing for the first, the bytes since the reading before for a delta
+/// and for a wrap, and, marked short, restarted counters counted whole, a
+/// reading of another boot, a gap a wrap could hide in and a clock that
+/// stepped back.
+#[test]
+fn each_reading_says_what_it_counted() {
+    let mut meter = SimMeter::new();
+    assert_eq!(meter.observe(reading(MIDNIGHT, 1_000, 2_000)), Ok(None));
+    assert_eq!(
+        meter.observe(reading(MIDNIGHT + 2, 4_072, 3_024)),
+        Ok(counted(MIDNIGHT, MIDNIGHT + 2, 3_072, 1_024, false))
+    );
+    let mut wrapped = SimMeter::new();
+    let near = COUNTER_MODULUS - 1_024;
+    wrapped.observe(reading(MIDNIGHT, near, 0)).unwrap();
+    assert_eq!(
+        wrapped.observe(reading(MIDNIGHT + 2, 2_048, 0)),
+        Ok(counted(MIDNIGHT, MIDNIGHT + 2, 3_072, 0, false))
+    );
+    let mut restarted = SimMeter::new();
+    restarted
+        .observe(reading(MIDNIGHT, 3_000_000_000, 1_000))
+        .unwrap();
+    assert_eq!(
+        restarted.observe(reading(MIDNIGHT + 2, 4_096, 2_048)),
+        Ok(counted(MIDNIGHT, MIDNIGHT + 2, 4_096, 1_048, true))
+    );
+    let rebooted = CounterReading {
+        boot: UnixTime::from_secs(BOOT + 600),
+        ..reading(MIDNIGHT + 4, 9_000, 8_000)
+    };
+    assert_eq!(
+        restarted.observe(rebooted),
+        Ok(counted(MIDNIGHT + 2, MIDNIGHT + 4, 9_000, 8_000, true))
+    );
+    let long = COUNTER_MODULUS.div_ceil(MAX_LINE_BYTES_PER_SEC);
+    let mut gap = SimMeter::new();
+    gap.observe(reading(MIDNIGHT, 1_000, 1_000)).unwrap();
+    assert_eq!(
+        gap.observe(reading(MIDNIGHT + long, 5_000, 1_500)),
+        Ok(counted(MIDNIGHT, MIDNIGHT + long, 4_000, 500, true))
+    );
+    assert_eq!(
+        gap.observe(reading(MIDNIGHT + 10, 6_000, 2_000)),
+        Ok(counted(MIDNIGHT + long, MIDNIGHT + 10, 1_000, 500, true))
+    );
 }
 
 #[test]

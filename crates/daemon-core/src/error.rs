@@ -14,6 +14,7 @@ use mooring_model::{CalendarDate, ModelError, NodeId, UnixTime, UserId, kinds};
 use serde::{Deserialize, Serialize};
 
 use crate::alert::AlertKey;
+use crate::events::{EVENTS_DOCUMENT_VERSION, MAX_DOCUMENT_ENTRIES, MAX_EVENT_LINE_BYTES};
 use crate::radio_history::{MAX_RADIO_LINE_BYTES, RADIO_HISTORY_VERSION, RADIO_SAMPLE_VERSION};
 use crate::router::netgear::{LeafPath, NetgearLeaf, carrier_list_path};
 use crate::router::{LteCarriers, RouterTextField, RouterUnavailableReason, SignalMetric};
@@ -1036,6 +1037,126 @@ impl RadioHistoryError {
             }
             Self::EventsMismatch => RadioHistoryErrorKind::EventsMismatch,
             Self::Unencodable => RadioHistoryErrorKind::Unencodable,
+        }
+    }
+}
+
+/// An event journal's line or document cannot be read or written, or a
+/// node's page of its journal does not follow from the number the Mac
+/// asked from ([`crate::events`]). Every variant is `Copy`: none holds a
+/// byte of a line, so no file content can reach a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum EventsError {
+    /// A line is longer than its bound.
+    #[error(
+        "an event journal line of {bytes} bytes is longer than {}",
+        MAX_EVENT_LINE_BYTES
+    )]
+    LineTooLong {
+        /// The line's length, its newline included.
+        bytes: usize,
+    },
+    /// A line is not a whole entry of its journal.
+    #[error("an event journal line is not an entry of its journal")]
+    Undecodable,
+    /// A line names a version this build does not read.
+    #[error("an event journal line names version {version}, which this build does not read")]
+    UnsupportedVersion {
+        /// The version found.
+        version: u32,
+    },
+    /// A document names another version.
+    #[error(
+        "an event journal document names version {found}; this build reads version {}",
+        EVENTS_DOCUMENT_VERSION
+    )]
+    UnsupportedDocumentVersion {
+        /// The version found.
+        found: u32,
+    },
+    /// A document's entries are not in the order of their times.
+    #[error("an event journal document's entries are not in the order of their times")]
+    EntriesNotOrdered,
+    /// A document holds more entries than its bound.
+    #[error(
+        "an event journal document holds {count} entries, more than {}",
+        MAX_DOCUMENT_ENTRIES
+    )]
+    TooManyEntries {
+        /// How many it holds.
+        count: usize,
+    },
+    /// The value could not be written as JSON.
+    #[error("an event journal line or document could not be written as JSON")]
+    Unencodable,
+    /// A node's page of its journal starts before the number the Mac asked
+    /// from: the agent served events it was not asked for.
+    #[error("the node's page starts at event {first}, before event {since} that was asked for")]
+    PageBeforeSince {
+        /// The number asked from.
+        since: u64,
+        /// The page's first event's number.
+        first: u64,
+    },
+    /// A node's page holds no event although its journal ends after the
+    /// number the Mac asked from: the agent always keeps its newest event,
+    /// so the events asked for were left out.
+    #[error(
+        "the node's page holds no event, although its journal ends at {end}, after event {since} that was asked for"
+    )]
+    PageWithoutEvents {
+        /// The number asked from.
+        since: u64,
+        /// The number the node's next event will get.
+        end: u64,
+    },
+    /// The newest line of a node's copy is an event with the last number
+    /// there is, so no number follows it to ask from.
+    #[error("the newest event of a node's copy has the last number there is")]
+    NumbersExhausted,
+}
+
+kinds! {
+    /// The kind of an [`EventsError`].
+    pub enum EventsErrorKind {
+        /// See [`EventsError::LineTooLong`].
+        LineTooLong,
+        /// See [`EventsError::Undecodable`].
+        Undecodable,
+        /// See [`EventsError::UnsupportedVersion`].
+        UnsupportedVersion,
+        /// See [`EventsError::UnsupportedDocumentVersion`].
+        UnsupportedDocumentVersion,
+        /// See [`EventsError::EntriesNotOrdered`].
+        EntriesNotOrdered,
+        /// See [`EventsError::TooManyEntries`].
+        TooManyEntries,
+        /// See [`EventsError::Unencodable`].
+        Unencodable,
+        /// See [`EventsError::PageBeforeSince`].
+        PageBeforeSince,
+        /// See [`EventsError::PageWithoutEvents`].
+        PageWithoutEvents,
+        /// See [`EventsError::NumbersExhausted`].
+        NumbersExhausted,
+    }
+}
+
+impl EventsError {
+    /// The kind of this error.
+    #[must_use]
+    pub const fn kind(&self) -> EventsErrorKind {
+        match self {
+            Self::LineTooLong { .. } => EventsErrorKind::LineTooLong,
+            Self::Undecodable => EventsErrorKind::Undecodable,
+            Self::UnsupportedVersion { .. } => EventsErrorKind::UnsupportedVersion,
+            Self::UnsupportedDocumentVersion { .. } => EventsErrorKind::UnsupportedDocumentVersion,
+            Self::EntriesNotOrdered => EventsErrorKind::EntriesNotOrdered,
+            Self::TooManyEntries { .. } => EventsErrorKind::TooManyEntries,
+            Self::Unencodable => EventsErrorKind::Unencodable,
+            Self::PageBeforeSince { .. } => EventsErrorKind::PageBeforeSince,
+            Self::PageWithoutEvents { .. } => EventsErrorKind::PageWithoutEvents,
+            Self::NumbersExhausted => EventsErrorKind::NumbersExhausted,
         }
     }
 }
