@@ -157,6 +157,8 @@ mod user_forget;
 #[cfg(target_os = "macos")]
 mod user_history;
 #[cfg(target_os = "macos")]
+mod user_make_up;
+#[cfg(target_os = "macos")]
 mod user_quota;
 
 use std::io;

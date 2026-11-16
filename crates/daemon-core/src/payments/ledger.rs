@@ -36,6 +36,11 @@
 //! - **Test mode** (contract §5.3): a page of Stripe's test mode is applied
 //!   only while the operator rehearses ([`ApplyRefusal::TestMode`]), and its
 //!   grants count only while the rehearsal lasts ([`Entitlements`]).
+//! - **Make-ups** ([`PaymentLedger::make_up`]): the service time or traffic
+//!   the operator gives a user without a payment is recorded beside the
+//!   orders, numbered, and counts as a live order's does; a grant after one
+//!   builds on it, and a refund in full moves its period earlier as it
+//!   moves any period that follows the time it takes back.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -54,15 +59,22 @@ use super::refund::{
 use crate::period::BillingCycle;
 use crate::usage::boundary_after;
 
+mod make_up;
 mod v1;
 mod v2;
+mod v3;
 
-/// The ledger's version: 3 since a refunded pack waits for the usage
-/// (2026-11-12): a pack's use carries when Mooring learned it and the
-/// nodes that may still count a download that was open at the refund, and
-/// one not learned yet is recorded as waited for. Versions 1 and 2 are
-/// read and lifted.
-pub const LEDGER_VERSION: u32 = 3;
+pub use make_up::{
+    Granted, MAKE_UP_AGREEMENT_SINCE, MadeUp, MakeUpAsk, MakeUpGift, MakeUpNumber, MakeUpReason,
+    MakeUpRecord, MakeUpRefusal,
+};
+
+/// The ledger's version: 4 since it records make-ups (2026-11-15): the
+/// make-ups, and the number of the last one. Version 3 (2026-11-12) has
+/// a pack's use carry when Mooring learned it and the nodes that may
+/// still count a download that was open at the refund, and records one
+/// not learned yet as waited for. Versions 1 to 3 are read and lifted.
+pub const LEDGER_VERSION: u32 = 4;
 
 /// The largest ledger written or read, in bytes. An order takes about
 /// 700 bytes, so this holds thousands of orders.
@@ -278,6 +290,8 @@ struct LedgerFile {
     #[serde(deserialize_with = "Option::deserialize")]
     stopped: Option<Stop>,
     orders: Vec<OrderRecord>,
+    make_ups: Vec<MakeUpRecord>,
+    last_make_up: u64,
 }
 
 /// The document on disk, as written: [`LedgerFile`]'s keys in its order.
@@ -288,6 +302,8 @@ struct LedgerFileRef<'a> {
     pulled_at: Option<UnixTime>,
     stopped: Option<Stop>,
     orders: Vec<&'a OrderRecord>,
+    make_ups: Vec<&'a MakeUpRecord>,
+    last_make_up: u64,
 }
 
 /// The ledger as its file holds it.
@@ -299,6 +315,8 @@ impl Serialize for PaymentLedger {
             pulled_at: self.pulled_at,
             stopped: self.stopped,
             orders: self.orders.values().collect(),
+            make_ups: self.make_ups.values().collect(),
+            last_make_up: self.last_make_up,
         }
         .serialize(serializer)
     }
@@ -428,10 +446,12 @@ pub struct Settlement {
 /// daemon's log names no removed user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pruned {
-    /// The removed users whose orders went.
+    /// The removed users whose orders or make-ups went.
     pub users: usize,
     /// The orders that went.
     pub orders: usize,
+    /// The make-ups that went.
+    pub make_ups: usize,
 }
 
 /// The payment ledger.
@@ -441,10 +461,13 @@ pub struct PaymentLedger {
     pulled_at: Option<UnixTime>,
     stopped: Option<Stop>,
     orders: BTreeMap<OrderId, OrderRecord>,
+    make_ups: BTreeMap<MakeUpNumber, MakeUpRecord>,
+    /// The number of the last make-up recorded, 0 before the first.
+    last_make_up: u64,
 }
 
 impl PaymentLedger {
-    /// The ledger before the first pull: cursor 0, no order.
+    /// The ledger before the first pull: cursor 0, no order, no make-up.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -453,15 +476,19 @@ impl PaymentLedger {
     /// Reads a ledger the daemon wrote, of this version or an earlier one,
     /// which is lifted: a refund that takes a pack back and whose use was
     /// not recorded (version 1) or not known (version 2) waits for the
-    /// usage ([`PackUse::Awaiting`]), and a use version 2 recorded was
-    /// learned when its refund was applied. Besides its shape and version,
-    /// orders are in id order and each once, every recorded entry is at or
-    /// below the cursor, a grant's number is below its refunds' and
-    /// dispute's, a period ends after it starts and within the calendar, a
-    /// period or pack is of an order of its kind, each refund's amount and
-    /// flag are recorded once, a pack's use is recorded on the refund that
-    /// takes a granted pack back and on no other, and it was learned no
-    /// earlier than that refund was applied.
+    /// usage ([`PackUse::Awaiting`]), a use version 2 recorded was learned
+    /// when its refund was applied, and a ledger before version 4 has no
+    /// make-up. Besides its shape and version, orders are in id order and
+    /// each once, every recorded entry is at or below the cursor, a grant's
+    /// number is below its refunds' and dispute's, a period ends after it
+    /// starts and within the calendar, a period or pack is of an order of
+    /// its kind, each refund's amount and flag are recorded once, a pack's
+    /// use is recorded on the refund that takes a granted pack back and on
+    /// no other, and it was learned no earlier than that refund was
+    /// applied; make-ups are in number order and each once, none numbered
+    /// after the last make-up's number or recorded after an entry beyond
+    /// the cursor, and a make-up's period ends after it starts and within
+    /// the calendar.
     pub fn decode(bytes: &[u8]) -> Result<Self, LedgerError> {
         if bytes.len() > MAX_LEDGER_BYTES {
             return Err(LedgerError::TooLarge);
@@ -471,11 +498,16 @@ impl PaymentLedger {
             LEDGER_VERSION => {
                 serde_json::from_slice::<LedgerFile>(bytes).map_err(LedgerError::Decode)?
             }
+            v3::VERSION => serde_json::from_slice::<v3::LedgerFile>(bytes)
+                .map_err(LedgerError::Decode)?
+                .lift(),
             v2::VERSION => serde_json::from_slice::<v2::LedgerFile>(bytes)
                 .map_err(LedgerError::Decode)?
+                .lift()
                 .lift(),
             v1::VERSION => serde_json::from_slice::<v1::LedgerFile>(bytes)
                 .map_err(LedgerError::Decode)?
+                .lift()
                 .lift()
                 .lift(),
             found => return Err(LedgerError::UnknownVersion { found }),
@@ -491,11 +523,24 @@ impl PaymentLedger {
             check_record(&record, file.cursor)?;
             orders.insert(record.order.clone(), record);
         }
+        let mut make_ups = BTreeMap::new();
+        for record in file.make_ups {
+            if make_ups
+                .last_key_value()
+                .is_some_and(|(last, _): (&MakeUpNumber, _)| *last >= record.number)
+            {
+                return Err(inconsistent("make-ups are not in number order, each once"));
+            }
+            make_up::check_make_up(&record, file.cursor, file.last_make_up)?;
+            make_ups.insert(record.number, record);
+        }
         Ok(Self {
             cursor: file.cursor,
             pulled_at: file.pulled_at,
             stopped: file.stopped,
             orders,
+            make_ups,
+            last_make_up: file.last_make_up,
         })
     }
 
@@ -546,10 +591,12 @@ impl PaymentLedger {
     /// an id the deployment never held (`unknown_user`), or known only from
     /// a refund or dispute, stays unless the id is kept: nothing tells it
     /// apart from an order the portal sent for a user Mooring never had,
-    /// which the operator settles at Stripe. The cursor, the last pull and
-    /// the stop stay. Dropping an order forgets that it was granted, which
-    /// matters only if the portal sent it again, which it does only after
-    /// its journal was rewound (contract §5.1).
+    /// which the operator settles at Stripe. A make-up goes when the
+    /// deployment no longer holds its user: one is recorded only for a user
+    /// the deployment held. The cursor, the last pull, the stop and the
+    /// last make-up's number stay. Dropping an order forgets that it was
+    /// granted, which matters only if the portal sent it again, which it
+    /// does only after its journal was rewound (contract §5.1).
     #[must_use]
     pub fn without_removed_users(&self, deployment: &Deployment) -> Option<(Self, Pruned)> {
         let removed = |record: &OrderRecord| {
@@ -563,21 +610,34 @@ impl PaymentLedger {
                             })
                     }))
         };
+        let made_up_removed =
+            |record: &MakeUpRecord| !deployment.users().contains_key(&record.user);
         let gone: Vec<&OrderRecord> = self
             .orders
             .values()
             .filter(|record| removed(record))
             .collect();
-        if gone.is_empty() {
+        let made_up_gone: Vec<&MakeUpRecord> = self
+            .make_ups
+            .values()
+            .filter(|record| made_up_removed(record))
+            .collect();
+        if gone.is_empty() && made_up_gone.is_empty() {
             return None;
         }
-        let users: BTreeSet<&UserId> = gone.iter().map(|record| &record.terms.user).collect();
+        let users: BTreeSet<&UserId> = gone
+            .iter()
+            .map(|record| &record.terms.user)
+            .chain(made_up_gone.iter().map(|record| &record.user))
+            .collect();
         let pruned = Pruned {
             users: users.len(),
             orders: gone.len(),
+            make_ups: made_up_gone.len(),
         };
         let mut next = self.clone();
         next.orders.retain(|_, record| !removed(record));
+        next.make_ups.retain(|_, record| !made_up_removed(record));
         Some((next, pruned))
     }
 
@@ -632,9 +692,10 @@ impl PaymentLedger {
         })
     }
 
-    /// What the orders that count give each user: every order paid in live
-    /// mode, and while the operator rehearses (`rehearsal`) those paid in
-    /// test mode too. A period counts as the refunds in full leave it
+    /// What the orders that count and the make-ups give each user: every
+    /// order paid in live mode, and while the operator rehearses
+    /// (`rehearsal`) those paid in test mode too; every make-up, as a live
+    /// order. A period counts as the refunds in full leave it
     /// ([`Self::take_backs`]), and a pack refunded in full carries its
     /// refund.
     #[must_use]
@@ -655,7 +716,7 @@ impl PaymentLedger {
                         entitlements.add_period(
                             user,
                             PaidPeriod {
-                                order: record.order.clone(),
+                                granted: Granted::Order(record.order.clone()),
                                 from,
                                 until,
                                 quota_bytes: record.terms.traffic_bytes,
@@ -667,7 +728,7 @@ impl PaymentLedger {
                 GrantOutcome::Pack => entitlements.add_pack(
                     user,
                     PaidPack {
-                        order: record.order.clone(),
+                        granted: Granted::Order(record.order.clone()),
                         granted_at: grant.applied_at,
                         bytes: record.terms.traffic_bytes,
                         livemode: record.livemode,
@@ -680,6 +741,39 @@ impl PaymentLedger {
                     },
                 ),
                 GrantOutcome::Held { .. } => {}
+            }
+        }
+        for record in self.make_ups.values() {
+            let user = record.user.clone();
+            let granted = Granted::MakeUp(record.number);
+            match record.gift {
+                MakeUpGift::Period {
+                    from,
+                    until,
+                    quota_bytes,
+                } => {
+                    let (from, until) = take_backs.make_up_span(record.number, from, until);
+                    entitlements.add_period(
+                        user,
+                        PaidPeriod {
+                            granted,
+                            from,
+                            until,
+                            quota_bytes,
+                            livemode: true,
+                        },
+                    );
+                }
+                MakeUpGift::Traffic { bytes } => entitlements.add_pack(
+                    user,
+                    PaidPack {
+                        granted,
+                        granted_at: record.granted_at,
+                        bytes,
+                        livemode: true,
+                        refund: None,
+                    },
+                ),
             }
         }
         entitlements
@@ -818,20 +912,22 @@ impl PaymentLedger {
         })
     }
 
-    /// What the refunds in full took back: each period as it counts, and
-    /// what each refund did (design §9.6).
+    /// What the refunds in full took back: each period as it counts, an
+    /// order's or a make-up's, and what each refund did (design §9.6).
     #[must_use]
     pub fn take_backs(&self) -> TakeBacks {
-        TakeBacks::of(self.orders.values())
+        TakeBacks::of(self.orders.values(), self.make_ups.values())
     }
 
-    /// [`Self::take_backs`] for `user`'s orders alone, which is all a
-    /// refund of theirs reaches: a period follows only its own user's.
+    /// [`Self::take_backs`] for `user`'s orders and make-ups alone, which
+    /// is all a refund of theirs reaches: a period follows only its own
+    /// user's.
     fn take_backs_of(&self, user: &UserId) -> TakeBacks {
         TakeBacks::of(
             self.orders
                 .values()
                 .filter(|record| record.terms.user == *user),
+            self.make_ups.values().filter(|record| record.user == *user),
         )
     }
 
@@ -1028,16 +1124,20 @@ impl PaymentLedger {
     /// (`UserPolicy::expires_at`); with one, the later of its end, as the
     /// refunds in full leave it, and the record. A live grant builds on
     /// live periods only, so a rehearsal never moves real time; a test-mode
-    /// grant builds on every period.
+    /// grant builds on every period. A make-up's period is live.
     fn paid_expiry(&self, user: &User, livemode: bool) -> Option<UnixTime> {
         let take_backs = self.take_backs_of(&user.id);
-        let last_end = self
+        let orders = self
             .orders
             .values()
             .filter(|record| record.terms.user == user.id && (record.livemode || !livemode))
-            .filter_map(|record| take_backs.period(record))
-            .map(|(_, until)| until)
-            .max();
+            .filter_map(|record| take_backs.period(record));
+        let make_ups = self
+            .make_ups
+            .values()
+            .filter(|record| record.user == user.id)
+            .filter_map(|record| take_backs.make_up_period(record));
+        let last_end = orders.chain(make_ups).map(|(_, until)| until).max();
         match (last_end, user.policy.expires_at) {
             (None, record) => record,
             (Some(end), Some(record)) => Some(end.max(record)),

@@ -54,6 +54,8 @@ use super::notes::{describe, stamp};
 use crate::app::Env;
 use crate::collected_usage::Told;
 
+mod make_up;
+
 pub(crate) use super::judge::PULL_EVERY;
 
 /// The first wait after a failure that may pass.
@@ -218,9 +220,9 @@ impl Puller {
         })
     }
 
-    /// What the users' paid orders give, by the ledger in memory and the
-    /// rehearsal the settings last read say; none while the ledger cannot
-    /// be read.
+    /// What the users' paid orders and make-ups give, by the ledger in
+    /// memory and the rehearsal the settings last read say; none while the
+    /// ledger cannot be read.
     pub(crate) fn entitlements(&self) -> Entitlements {
         if self.fault.is_some() {
             return Entitlements::none();
@@ -229,12 +231,13 @@ impl Puller {
         self.ledger.entitlements(rehearsal)
     }
 
-    /// Deletes the orders of users removed from `deployment` (design §9.6;
-    /// the agreement's clause 4): the pruned ledger is written before it is
-    /// kept; a write that fails is said and tried again [`RETRY_FIRST`]
-    /// later. A ledger that could not be read is held as an empty one, so
-    /// nothing is pruned, and its file is left as it is. Returns the lines
-    /// to log, which count users and orders and name none.
+    /// Deletes the orders and make-ups of users removed from `deployment`
+    /// (design §9.6; the agreement's clause 4): the pruned ledger is
+    /// written before it is kept; a write that fails is said and tried
+    /// again [`RETRY_FIRST`] later. A ledger that could not be read is held
+    /// as an empty one, so nothing is pruned, and its file is left as it
+    /// is. Returns the lines to log, which count users, orders and make-ups
+    /// and name none.
     pub(crate) fn prune(&mut self, deployment: &Deployment) -> Vec<String> {
         if self.prune_retry.is_some_and(|at| Instant::now() < at) {
             return Vec::new();
@@ -246,15 +249,28 @@ impl Puller {
             Ok(()) => {
                 self.ledger = pruned;
                 self.prune_retry = None;
+                let deleted = if counts.make_ups == 0 {
+                    format!("{} order(s)", counts.orders)
+                } else {
+                    format!(
+                        "{} order(s) and {} make-up(s)",
+                        counts.orders, counts.make_ups
+                    )
+                };
                 vec![format!(
-                    "payment ledger: deleted {} order(s) of {} removed user(s)",
-                    counts.orders, counts.users
+                    "payment ledger: deleted {deleted} of {} removed user(s)",
+                    counts.users
                 )]
             }
             Err(error) => {
                 self.prune_retry = Some(Instant::now() + RETRY_FIRST);
+                let records = if counts.make_ups == 0 {
+                    "orders"
+                } else {
+                    "orders and make-ups"
+                };
                 vec![format!(
-                    "payment ledger: the orders of {} removed user(s) could not be deleted ({error}); trying again in {} s",
+                    "payment ledger: the {records} of {} removed user(s) could not be deleted ({error}); trying again in {} s",
                     counts.users,
                     RETRY_FIRST.as_secs()
                 )]

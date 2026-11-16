@@ -20,7 +20,12 @@ use crate::error::EXIT_LOCAL;
 /// A harness whose support directory holds `deployment` as `state.json`,
 /// encoded as the store writes it, with the exit disabled.
 pub(crate) fn harness_with(deployment: Deployment) -> Harness {
-    let harness = Harness::new(0);
+    holding(Harness::new(0), deployment)
+}
+
+/// `harness`, its support directory made, holding `deployment` as
+/// [`harness_with`] does.
+pub(crate) fn holding(harness: Harness, deployment: Deployment) -> Harness {
     let dir = harness.support_dir();
     fs::DirBuilder::new()
         .recursive(true)
@@ -217,6 +222,15 @@ fn a_link_where_the_state_belongs_is_not_no_deployment() {
         &["user", "add"][..],
         &["user", "set-quota", "abcdefghij", "--gb", "100"][..],
         &["user", "set-quota", "abcdefghij", "--none"][..],
+        &[
+            "user",
+            "make-up",
+            "abcdefghij",
+            "--days",
+            "1",
+            "--reason",
+            "outage",
+        ][..],
     ] {
         let outcome = harness.run(args);
         assert_eq!(outcome.code, EXIT_LOCAL, "{args:?}");
@@ -246,6 +260,15 @@ fn every_user_command_without_a_state_says_there_is_no_deployment() {
             &["user", "add"][..],
             &["user", "set-quota", "abcdefghij", "--gb", "100"][..],
             &["user", "set-quota", "abcdefghij", "--none"][..],
+            &[
+                "user",
+                "make-up",
+                "abcdefghij",
+                "--days",
+                "1",
+                "--reason",
+                "outage",
+            ][..],
             &[
                 "user",
                 "export",

@@ -2,16 +2,17 @@
 
 //! What `portal payments` prints: the pull's settings, the ledger's cursor,
 //! last pull and stop, how many refunds wait for the usage or still take in
-//! downloads, and every order with what Mooring did about it. It names
-//! users by id only, as the ledger does.
+//! downloads, every order with what Mooring did about it, and every
+//! make-up. It names users by id only, as the ledger does.
 
 use mooring_daemon_core::payments::{
-    GrantOutcome, LedgerError, OrderRecord, PaymentLedger, PullSettings, StopReason, TakeBacks,
+    GrantOutcome, LedgerError, MakeUpGift, MakeUpRecord, OrderRecord, PaymentLedger, PullSettings,
+    StopReason, TakeBacks,
 };
 use serde::Serialize;
 
 use super::error::PaymentFileError;
-use super::notes::{stamp, taken_back};
+use super::notes::{gift, reason, stamp, taken_back};
 
 /// The text summary.
 pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedger>) -> String {
@@ -105,7 +106,44 @@ pub(crate) fn text(settings: Option<&PullSettings>, ledger: Option<&PaymentLedge
     for record in orders.values() {
         order_lines(record, &take_backs, &mut lines);
     }
+    let make_ups = ledger.make_ups();
+    if !make_ups.is_empty() || ledger.last_make_up() > 0 {
+        lines.push(format!(
+            "make-ups: {} (the last numbered {}; one gone with its user's records keeps its number)",
+            make_ups.len(),
+            ledger.last_make_up()
+        ));
+    }
+    for record in make_ups.values() {
+        lines.push(make_up_line(record, &take_backs));
+    }
     finish(lines)
+}
+
+/// The line of one make-up, with where the refunds in full moved its
+/// period.
+fn make_up_line(record: &MakeUpRecord, take_backs: &TakeBacks) -> String {
+    let moved = match (record.gift, take_backs.make_up_period(record)) {
+        (MakeUpGift::Period { from, until, .. }, Some((now_from, now_until)))
+            if (now_from, now_until) != (from, until) =>
+        {
+            format!(
+                "; after refunds in full it counts from {} until {}",
+                stamp(now_from),
+                stamp(now_until)
+            )
+        }
+        _ => String::new(),
+    };
+    format!(
+        "  make-up {} for user {}, recorded {} after entry {}, {}: {}{moved}",
+        record.number,
+        record.user,
+        stamp(record.granted_at),
+        record.after,
+        reason(record.reason),
+        gift(&record.gift)
+    )
 }
 
 fn finish(lines: Vec<String>) -> String {

@@ -6,7 +6,9 @@
 //! told the daemon is busy. A `retry` is handed to the daemon's loop for
 //! its next tick, and refused while there is no deployment. So is a
 //! network to take as the SIM's network on record, whose connection then
-//! waits for the loop's answer, for a bounded while. The request line and
+//! waits for the loop's answer, for a bounded while, and so is a make-up,
+//! whose connection waits for the loop's decision and then for what came
+//! of the ledger's write, each for a bounded while. The request line and
 //! each line written have a deadline, however slowly their bytes go, so a
 //! stalled or dripping client holds a thread for a bounded while only.
 
@@ -21,10 +23,12 @@ use mooring_daemon_core::control::{
     DaemonReply, DaemonRequest, MAX_REPLY_LINE_BYTES, MAX_REQUEST_LINE_BYTES, ProtocolLine,
     Refusal, decode_request, encode_line,
 };
-use mooring_daemon_core::sim_network::{NotAccepted, SimNetwork};
+use mooring_daemon_core::payments::{MakeUpAsk, MakeUpReason};
+use mooring_daemon_core::sim_network::SimNetwork;
+use mooring_model::UserId;
 
 use super::hub::{Hub, HubPoisoned};
-use super::{AcceptRequest, Control, peer};
+use super::{AcceptRequest, Control, Handover, MakeUpRequest, peer};
 
 /// The most clients served at once: the app's one subscription, a few CLI
 /// calls, and room for a stale connection that has not been noticed yet.
@@ -42,20 +46,30 @@ pub(crate) struct Limits {
     pub(crate) idle_check: Duration,
     /// How long a request that the daemon's loop answers waits for it.
     pub(crate) answer: Duration,
+    /// How long a make-up the loop took waits for what came of the
+    /// ledger's write.
+    pub(crate) recorded: Duration,
 }
 
 /// The daemon's limits. The loop's answer is waited for less long than
 /// the CLI waits for a reply (`ANSWER_TIMEOUT`, 10 s), so that a loop held
-/// up in a slow poll is heard of as `LoopBusy`, not as silence; the build
-/// fails if the two are ever the other way round.
+/// up in a slow poll is heard of as `LoopBusy`, not as silence; and a
+/// make-up's two waits less long than the CLI waits for its reply
+/// (`MAKE_UP_TIMEOUT`, 20 s). The build fails if either is ever the other
+/// way round.
 pub(crate) const LIMITS: Limits = Limits {
     request: Duration::from_secs(5),
     write: Duration::from_secs(10),
     idle_check: Duration::from_secs(5),
     answer: Duration::from_secs(8),
+    recorded: Duration::from_secs(8),
 };
 
 const _: () = assert!(LIMITS.answer.as_millis() < crate::status::ANSWER_TIMEOUT.as_millis());
+const _: () = assert!(
+    LIMITS.answer.as_millis() + LIMITS.recorded.as_millis()
+        < crate::user_make_up::MAKE_UP_TIMEOUT.as_millis()
+);
 
 /// Why the acceptor stopped: the listener failed (anything but a client
 /// that reset before it was accepted).
@@ -137,6 +151,10 @@ pub(crate) enum End {
     /// The daemon's loop has ended, so a request cannot be handed to it,
     /// or will not be answered by it.
     Stopping,
+    /// The loop took a make-up and did not say within `limits.recorded`
+    /// what came of the ledger's write: the connection ends without a
+    /// reply, and whoever asked cannot tell whether it was recorded.
+    RecordUnknown,
 }
 
 impl From<HubPoisoned> for End {
@@ -167,6 +185,9 @@ pub(crate) fn serve(mut stream: UnixStream, control: &Control, limits: Limits) -
         DaemonRequest::Retry => queue_retry(&mut stream, control, limits),
         DaemonRequest::AcceptSimNetwork { network } => {
             accept_sim_network(&mut stream, control, limits, network)
+        }
+        DaemonRequest::MakeUp { user, ask, reason } => {
+            make_up(&mut stream, control, limits, user, ask, reason)
         }
     };
     result.unwrap_or_else(|end| end)
@@ -202,7 +223,7 @@ fn accept_sim_network(
     if !control.deployed.load(Ordering::SeqCst) {
         return Err(refused(stream, Refusal::NotDeployed));
     }
-    let (answer, answered) = mpsc::sync_channel(0);
+    let (answer, answered) = Handover::pair();
     match control.accept.try_send(AcceptRequest { network, answer }) {
         Ok(()) => {}
         Err(mpsc::TrySendError::Full(_)) => return Err(refused(stream, Refusal::LoopBusy)),
@@ -221,13 +242,71 @@ fn accept_sim_network(
     }
 }
 
+/// `MakeUp`: handed to the loop, which answers it after its next tick, and
+/// refused as `NotDeployed` without a deployment. The loop first says what
+/// it decided: a refusal, which is the reply, or that it takes the
+/// make-up. A loop that has not decided within `limits.answer` is
+/// `LoopBusy`, and records nothing: like a network to take, it hands its
+/// decision to a waiting connection only, and writes the ledger only once
+/// one has heard it. So is a loop that already has as many requests
+/// waiting as it holds. Once the loop took it, the reply is `MadeUp` or
+/// `LedgerNotWritten`, as the ledger's write went; a loop that does not
+/// say within `limits.recorded` ends the connection without a reply
+/// (`RecordUnknown`).
+fn make_up(
+    stream: &mut UnixStream,
+    control: &Control,
+    limits: Limits,
+    user: UserId,
+    ask: MakeUpAsk,
+    reason: MakeUpReason,
+) -> Result<End, End> {
+    if !control.deployed.load(Ordering::SeqCst) {
+        return Err(refused(stream, Refusal::NotDeployed));
+    }
+    let (decided, decision) = Handover::pair();
+    let (recorded, outcome) = mpsc::sync_channel(1);
+    let request = MakeUpRequest {
+        user,
+        ask,
+        reason,
+        decided,
+        recorded,
+    };
+    match control.make_up.try_send(request) {
+        Ok(()) => {}
+        Err(mpsc::TrySendError::Full(_)) => return Err(refused(stream, Refusal::LoopBusy)),
+        Err(mpsc::TrySendError::Disconnected(_)) => return Err(End::Stopping),
+    }
+    match loops_answer(decision, limits.answer) {
+        Ok(Ok(())) => {}
+        Ok(Err(reason)) => return Err(refused(stream, reason)),
+        Err(mpsc::RecvTimeoutError::Timeout) => return Err(refused(stream, Refusal::LoopBusy)),
+        Err(mpsc::RecvTimeoutError::Disconnected) => return Err(End::Stopping),
+    }
+    match loops_answer(outcome, limits.recorded) {
+        Ok(Ok((record, suspended))) => {
+            let line = encode_line(
+                &DaemonReply::MadeUp { record, suspended },
+                MAX_REPLY_LINE_BYTES,
+            )
+            .map_err(|_| End::Io(ErrorKind::InvalidData))?;
+            write_line(stream, &line, limits)?;
+            Ok(End::Answered)
+        }
+        Ok(Err(reason)) => Err(refused(stream, reason)),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(End::RecordUnknown),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(End::Stopping),
+    }
+}
+
 /// The loop's answer on `answered`, waited for at most `wait`. The
 /// receiving end is given up before this returns, so a loop that comes to
 /// the request after the wait finds no one to hand its answer to.
-fn loops_answer(
-    answered: mpsc::Receiver<Result<(), NotAccepted>>,
+fn loops_answer<T>(
+    answered: mpsc::Receiver<T>,
     wait: Duration,
-) -> Result<Result<(), NotAccepted>, mpsc::RecvTimeoutError> {
+) -> Result<T, mpsc::RecvTimeoutError> {
     answered.recv_timeout(wait)
 }
 
