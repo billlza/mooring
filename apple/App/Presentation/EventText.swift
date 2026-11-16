@@ -83,6 +83,9 @@ extension WatchErrorKind {
         case .clockUnsynced: String(localized: "The clock is synchronised by NTP again")
         case .rebootPending: String(localized: "No reboot is required any more")
         case .accountingCanaryMissing: String(localized: "The probe's traffic is counted again")
+        case .abuseCut: String(localized: "No user is cut off for abuse any more")
+        case .abuseSuspected: String(localized: "No user has abuse findings below the cut level any more")
+        case .abuseGuardUnavailable: String(localized: "The abuse guard works again")
         }
     }
 }

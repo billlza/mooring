@@ -344,6 +344,9 @@
     the branch lza/abuse-guard (at 17017bf, which records the decision),
     which was not merged when these notes were written. If what it builds
     comes to differ from what the text says, the text changes with it.
+    Since the operator's 「按用户加闸门」 of 2026-11-15 the guard covers only
+    the users who accepted revision 2 or a later one (design §11.8), so a
+    user still under revision 1 is neither limited, measured nor cut.
     - Clause 3 forbids the uses the guard detects: scanning networks or
       ports, intrusion, an attack after a penetration test, a penetration
       test without the target's written consent, guessing passwords,

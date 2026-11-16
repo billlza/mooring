@@ -2336,6 +2336,26 @@
         }
       }
     },
+    "No user has abuse findings below the cut level any more": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不再有未达切断标准的滥用迹象"
+          }
+        }
+      }
+    },
+    "No user is cut off for abuse any more": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不再有因滥用被切断的用户"
+          }
+        }
+      }
+    },
     "No users": {
       "localizations": {
         "zh-Hans": {
@@ -3832,6 +3852,36 @@
         }
       }
     },
+    "The abuse guard cannot read its counters; its limits and cuts stay in force": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滥用防护无法读取计数；限速和切断仍然生效"
+          }
+        }
+      }
+    },
+    "The abuse guard is not installed; apply the current configuration": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滥用防护尚未安装；请应用当前配置"
+          }
+        }
+      }
+    },
+    "The abuse guard works again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滥用防护恢复正常"
+          }
+        }
+      }
+    },
     "The agent on %@ is not enabled.": {
       "localizations": {
         "zh-Hans": {
@@ -4562,6 +4612,16 @@
         }
       }
     },
+    "Users cut off for abuse: %lld": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "因滥用被切断的用户：%lld"
+          }
+        }
+      }
+    },
     "Users expired: %llu": {
       "localizations": {
         "zh-Hans": {
@@ -4608,6 +4668,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "已暂停的用户：%llu"
+          }
+        }
+      }
+    },
+    "Users with abuse findings below the cut level: %lld": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有滥用迹象但未达切断标准的用户：%lld"
           }
         }
       }

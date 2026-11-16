@@ -104,6 +104,8 @@
 //! lane (design §16).
 
 #[cfg(target_os = "macos")]
+mod abuse;
+#[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
 mod apply;
@@ -206,6 +208,7 @@ fn main() -> ExitCode {
         probe: &runtime::probe::direct,
         redirect_stderr: &mooring_macsys::redirect_stderr,
         portal_agreement: mooring_model::PortalAgreement::SHIPPED,
+        abuse_guard: mooring_model::AbuseGuardAgreement::SHIPPED,
         portal: &curl,
     };
     let code = run(

@@ -16,7 +16,7 @@ use mooring_agent_proto::{
     TlsVersion, TxnStage, TxnState,
 };
 use mooring_model::secret::SecretEntry;
-use mooring_model::{Deployment, NodeId, Sha256Digest};
+use mooring_model::{AbuseGuardAgreement, AgreementVersion, Deployment, NodeId, Sha256Digest};
 use mooring_store::{InMemorySecretStore, SecretStore};
 
 use super::support::{Answered, Expected, ExpectedRemote, Harness, PINNED, Sent};
@@ -389,9 +389,29 @@ fn apply_refuses_an_acknowledgement_of_another_blob() {
 /// applied at the deployment's generation with the bundle's digest.
 #[test]
 fn apply_confirms_the_transaction_and_records_the_bundle() {
+    apply_confirms_under(AbuseGuardAgreement::SHIPPED);
+}
+
+/// The bundle `node apply` renders covers whom the build's abuse guard
+/// gate covers (design §11.8): with the gate open, every fixture user, so
+/// the node is sent another bundle than with it closed.
+#[test]
+fn apply_renders_the_bundle_with_the_builds_abuse_guard_gate() {
+    let open = AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT));
+    let closed = AbuseGuardAgreement::since(None);
+    assert_ne!(
+        apply_confirms_under(open).digest(),
+        apply_confirms_under(closed).digest()
+    );
+}
+
+/// [`apply_confirms_the_transaction_and_records_the_bundle`] with the
+/// build's abuse guard gate `guard`; returns the bundle applied.
+fn apply_confirms_under(guard: AbuseGuardAgreement) -> mooring_render::VpsBundle {
     let deployment = fixture(|_| {});
     let generation = deployment.config_generation();
     let (mut harness, engines) = ready(deployment.clone());
+    harness.abuse_guard = guard;
     let fixture_secrets = mooring_fixtures::two_nodes_three_users().unwrap().secrets;
     let catalog = crate::node::engines::Engines::open(
         &engines,
@@ -404,9 +424,14 @@ fn apply_confirms_the_transaction_and_records_the_bundle() {
     .unwrap()
     .catalog()
     .clone();
-    let bundle =
-        mooring_render::vps::bundle(&deployment, &node_id("lon1"), &fixture_secrets, &catalog)
-            .unwrap();
+    let bundle = mooring_render::vps::bundle(
+        &deployment,
+        &node_id("lon1"),
+        &fixture_secrets,
+        &catalog,
+        harness.abuse_guard,
+    )
+    .unwrap();
     let header = bundle
         .header(
             &match super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) {
@@ -506,6 +531,7 @@ fn apply_confirms_the_transaction_and_records_the_bundle() {
     assert_eq!(applied.config_generation, generation);
     assert_eq!(applied.digest, bundle.digest());
     assert_eq!(after.config_generation(), generation);
+    bundle
 }
 
 /// The bundle of `deployment`'s lon1 with the harness's engine pins, and
@@ -525,8 +551,14 @@ pub(crate) fn bundle_and_header(
         .catalog()
         .clone();
     let secrets = mooring_fixtures::two_nodes_three_users().unwrap().secrets;
-    let bundle =
-        mooring_render::vps::bundle(deployment, &node_id("lon1"), &secrets, &catalog).unwrap();
+    let bundle = mooring_render::vps::bundle(
+        deployment,
+        &node_id("lon1"),
+        &secrets,
+        &catalog,
+        harness.abuse_guard,
+    )
+    .unwrap();
     let Response::Hello(hello) = super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) else {
         unreachable!()
     };
@@ -686,4 +718,59 @@ fn replies_about_another_generation_are_refused() {
         assert!(harness.nodes.script.borrow().is_empty());
         assert_eq!(state_bytes(&harness), before);
     }
+}
+
+/// A node whose agent speaks an older protocol than this build's is
+/// refused right after its `Hello`: nothing is uploaded, nothing applied
+/// and nothing recorded. A bundle this build renders can hold what only an
+/// agent of its protocol reads, such as the abuse guard's `watch.json`
+/// (design §11.8), which an older watch refuses. The nightly apply job
+/// applies through the same path.
+#[test]
+fn an_agent_older_than_this_build_is_refused_before_anything_is_uploaded() {
+    let (mut harness, engines) = ready(fixture(|_| {}));
+    let before = state_bytes(&harness);
+    let older = mooring_agent_proto::PROTOCOL - 1;
+    let Response::Hello(mut hello) = super::node::hello_at(Ipv4Addr::new(45, 67, 89, 10)) else {
+        panic!("hello_at answers a Hello");
+    };
+    hello.protocol = older;
+    harness.nodes.expect(
+        Expected::Request {
+            identity: "ops_ed25519",
+            remote: ExpectedRemote::Forced,
+            kind: RequestKind::Hello,
+        },
+        Answered::Replied(Ok(Response::Hello(hello))),
+    );
+    let outcome = run(&mut harness, &apply_args(&engines));
+    assert_eq!(outcome.code, EXIT_LOCAL);
+    assert_eq!(
+        outcome.stderr,
+        format!(
+            "mooringctl: lon1's agent speaks protocol {older}, older than this build's {}: upgrade it first (`mooringctl node upgrade-agent lon1`)\n",
+            mooring_agent_proto::PROTOCOL
+        )
+    );
+    assert_eq!(harness.nodes.seen.borrow().len(), 1);
+    assert_eq!(state_bytes(&harness), before);
+}
+
+/// Only an older agent is refused: one of this build's protocol, or a
+/// newer one, which reads every older bundle, is applied to.
+#[test]
+fn only_an_older_agent_protocol_is_refused() {
+    let node = node_id("lon1");
+    let ours = mooring_agent_proto::PROTOCOL;
+    assert_eq!(
+        crate::node::apply::check_agent_protocol(&node, ours - 1)
+            .unwrap_err()
+            .to_string(),
+        format!(
+            "lon1's agent speaks protocol {}, older than this build's {ours}: upgrade it first (`mooringctl node upgrade-agent lon1`)",
+            ours - 1
+        )
+    );
+    assert!(crate::node::apply::check_agent_protocol(&node, ours).is_ok());
+    assert!(crate::node::apply::check_agent_protocol(&node, ours + 1).is_ok());
 }

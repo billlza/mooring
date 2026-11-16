@@ -159,6 +159,26 @@ pub enum LineRequest {
     /// Report the stored Mac report ([`crate::StoredMacReport`]); with none
     /// stored the agent answers [`AgentError::MacReportMissing`].
     MacReport,
+    /// Report the users cut on the node and its abuse records from record
+    /// `since` on ([`crate::AbuseRecordsV1`], design §11.8).
+    AbuseRecords {
+        /// The first record number wanted: the last one read plus one, or
+        /// [`crate::AbuseSeq::FIRST`].
+        since: crate::AbuseSeq,
+    },
+    /// Cut a user on the node at once, as the guard's own cut does, and
+    /// record it as the operator's (design §11.8). A user already cut stays
+    /// cut and nothing new is recorded.
+    AbuseCut {
+        /// The user, by the id the node knows.
+        user: crate::OpaqueUserId,
+    },
+    /// Lift a user's cut and record it. A user who is not cut is answered
+    /// with nothing recorded.
+    AbuseClear {
+        /// The user.
+        user: crate::OpaqueUserId,
+    },
 }
 
 closed_enum! {
@@ -211,6 +231,12 @@ closed_enum! {
         PutMacReport,
         /// [`LineRequest::MacReport`].
         MacReport,
+        /// [`LineRequest::AbuseRecords`].
+        AbuseRecords,
+        /// [`LineRequest::AbuseCut`].
+        AbuseCut,
+        /// [`LineRequest::AbuseClear`].
+        AbuseClear,
     }
 }
 
@@ -281,6 +307,9 @@ impl LineRequest {
             Self::Resume { .. } => RequestKind::Resume,
             Self::PutMacReport(_) => RequestKind::PutMacReport,
             Self::MacReport => RequestKind::MacReport,
+            Self::AbuseRecords { .. } => RequestKind::AbuseRecords,
+            Self::AbuseCut { .. } => RequestKind::AbuseCut,
+            Self::AbuseClear { .. } => RequestKind::AbuseClear,
         }
     }
 }

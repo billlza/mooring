@@ -525,7 +525,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 2,
@@ -544,7 +544,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 3,
@@ -563,7 +563,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 4,
@@ -582,7 +582,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 5,
@@ -601,7 +601,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 6,
@@ -624,7 +624,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 7,
@@ -647,7 +647,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 8,
@@ -670,7 +670,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 9,
@@ -693,7 +693,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 10,
@@ -716,7 +716,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 11,
@@ -735,7 +735,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 12,
@@ -758,7 +758,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 13,
@@ -784,11 +784,80 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 14,
               "at": 1794704100,
+              "kind": {
+                "ConditionRaised": {
+                  "condition": {
+                    "AbuseCut": {
+                      "users": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 15,
+              "at": 1794704160,
+              "kind": {
+                "ConditionRaised": {
+                  "condition": {
+                    "AbuseSuspected": {
+                      "users": 2
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 16,
+              "at": 1794704220,
+              "kind": {
+                "ConditionRaised": {
+                  "condition": {
+                    "AbuseGuardUnavailable": {
+                      "cause": "ReadFailed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 17,
+              "at": 1794704280,
               "kind": {
                 "ConditionCleared": {
                   "condition": "WgReadFailed"
@@ -803,11 +872,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 15,
-              "at": 1794704160,
+              "seq": 18,
+              "at": 1794704340,
               "kind": {
                 "ConditionCleared": {
                   "condition": "NftFailed"
@@ -822,11 +891,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 16,
-              "at": 1794704220,
+              "seq": 19,
+              "at": 1794704400,
               "kind": {
                 "ConditionCleared": {
                   "condition": "StatsQueryFailed"
@@ -841,11 +910,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 17,
-              "at": 1794704280,
+              "seq": 20,
+              "at": 1794704460,
               "kind": {
                 "ConditionCleared": {
                   "condition": "TargetDegraded"
@@ -860,11 +929,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 18,
-              "at": 1794704340,
+              "seq": 21,
+              "at": 1794704520,
               "kind": {
                 "ConditionCleared": {
                   "condition": "TargetReadFailed"
@@ -879,11 +948,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 19,
-              "at": 1794704400,
+              "seq": 22,
+              "at": 1794704580,
               "kind": {
                 "ConditionCleared": {
                   "condition": "ExitFlowCapHit"
@@ -898,11 +967,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 20,
-              "at": 1794704460,
+              "seq": 23,
+              "at": 1794704640,
               "kind": {
                 "ConditionCleared": {
                   "condition": "StateWrite"
@@ -917,11 +986,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 21,
-              "at": 1794704520,
+              "seq": 24,
+              "at": 1794704700,
               "kind": {
                 "ConditionCleared": {
                   "condition": "MacSilent"
@@ -936,11 +1005,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 22,
-              "at": 1794704580,
+              "seq": 25,
+              "at": 1794704760,
               "kind": {
                 "ConditionCleared": {
                   "condition": "DiskLow"
@@ -955,11 +1024,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 23,
-              "at": 1794704640,
+              "seq": 26,
+              "at": 1794704820,
               "kind": {
                 "ConditionCleared": {
                   "condition": "ClockUnsynced"
@@ -974,11 +1043,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 24,
-              "at": 1794704700,
+              "seq": 27,
+              "at": 1794704880,
               "kind": {
                 "ConditionCleared": {
                   "condition": "RebootPending"
@@ -993,11 +1062,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 25,
-              "at": 1794704760,
+              "seq": 28,
+              "at": 1794704940,
               "kind": {
                 "ConditionCleared": {
                   "condition": "AccountingCanaryMissing"
@@ -1012,11 +1081,68 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 26,
-              "at": 1794704820,
+              "seq": 29,
+              "at": 1794705000,
+              "kind": {
+                "ConditionCleared": {
+                  "condition": "AbuseCut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 30,
+              "at": 1794705060,
+              "kind": {
+                "ConditionCleared": {
+                  "condition": "AbuseSuspected"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 31,
+              "at": 1794705120,
+              "kind": {
+                "ConditionCleared": {
+                  "condition": "AbuseGuardUnavailable"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 32,
+              "at": 1794705180,
               "kind": "GateOpened"
             }
           }
@@ -1027,11 +1153,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 27,
-              "at": 1794704880,
+              "seq": 33,
+              "at": 1794705240,
               "kind": "GateClosed"
             }
           }
@@ -1042,125 +1168,125 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
-          "entry": {
-            "event": {
-              "seq": 28,
-              "at": 1794704940,
-              "kind": {
-                "HoldRecorded": {
-                  "hold": "MacDrain"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "node": {
-        "node": "lon1",
-        "line": {
-          "read_at": 1794705780,
-          "entry": {
-            "event": {
-              "seq": 29,
-              "at": 1794705000,
-              "kind": {
-                "HoldRecorded": {
-                  "hold": "EgressViolation"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "node": {
-        "node": "lon1",
-        "line": {
-          "read_at": 1794705780,
-          "entry": {
-            "event": {
-              "seq": 30,
-              "at": 1794705060,
-              "kind": {
-                "HoldRecorded": {
-                  "hold": "Operator"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "node": {
-        "node": "lon1",
-        "line": {
-          "read_at": 1794705780,
-          "entry": {
-            "event": {
-              "seq": 31,
-              "at": 1794705120,
-              "kind": {
-                "HoldCleared": {
-                  "hold": "MacDrain"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "node": {
-        "node": "lon1",
-        "line": {
-          "read_at": 1794705780,
-          "entry": {
-            "event": {
-              "seq": 32,
-              "at": 1794705180,
-              "kind": {
-                "HoldCleared": {
-                  "hold": "EgressViolation"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "node": {
-        "node": "lon1",
-        "line": {
-          "read_at": 1794705780,
-          "entry": {
-            "event": {
-              "seq": 33,
-              "at": 1794705240,
-              "kind": {
-                "HoldCleared": {
-                  "hold": "Operator"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "node": {
-        "node": "lon1",
-        "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
               "seq": 34,
               "at": 1794705300,
+              "kind": {
+                "HoldRecorded": {
+                  "hold": "MacDrain"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 35,
+              "at": 1794705360,
+              "kind": {
+                "HoldRecorded": {
+                  "hold": "EgressViolation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 36,
+              "at": 1794705420,
+              "kind": {
+                "HoldRecorded": {
+                  "hold": "Operator"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 37,
+              "at": 1794705480,
+              "kind": {
+                "HoldCleared": {
+                  "hold": "MacDrain"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 38,
+              "at": 1794705540,
+              "kind": {
+                "HoldCleared": {
+                  "hold": "EgressViolation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 39,
+              "at": 1794705600,
+              "kind": {
+                "HoldCleared": {
+                  "hold": "Operator"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "node": {
+        "node": "lon1",
+        "line": {
+          "read_at": 1794706140,
+          "entry": {
+            "event": {
+              "seq": 40,
+              "at": 1794705660,
               "kind": {
                 "Halted": {
                   "reason": "EgressIsNodeAddress"
@@ -1175,11 +1301,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 35,
-              "at": 1794705360,
+              "seq": 41,
+              "at": 1794705720,
               "kind": {
                 "Halted": {
                   "reason": "Operator"
@@ -1194,11 +1320,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 36,
-              "at": 1794705420,
+              "seq": 42,
+              "at": 1794705780,
               "kind": {
                 "Halted": {
                   "reason": "Retire"
@@ -1213,11 +1339,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 37,
-              "at": 1794705480,
+              "seq": 43,
+              "at": 1794705840,
               "kind": {
                 "Resumed": {
                   "generation": 7
@@ -1232,11 +1358,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 38,
-              "at": 1794705540,
+              "seq": 44,
+              "at": 1794705900,
               "kind": {
                 "Committed": {
                   "generation": 8
@@ -1251,11 +1377,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 39,
-              "at": 1794705600,
+              "seq": 45,
+              "at": 1794705960,
               "kind": {
                 "EngineRestarted": {
                   "engine": "Xray"
@@ -1270,11 +1396,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 40,
-              "at": 1794705660,
+              "seq": 46,
+              "at": 1794706020,
               "kind": {
                 "EngineRestarted": {
                   "engine": "Hy2"
@@ -1289,11 +1415,11 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "event": {
-              "seq": 41,
-              "at": 1794705720,
+              "seq": 47,
+              "at": 1794706080,
               "kind": "HostBooted"
             }
           }
@@ -1304,7 +1430,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "gap": {
               "from": 0,
@@ -1318,7 +1444,7 @@
       "node": {
         "node": "lon1",
         "line": {
-          "read_at": 1794705780,
+          "read_at": 1794706140,
           "entry": {
             "reset": {
               "end": 42

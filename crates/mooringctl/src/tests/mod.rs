@@ -6,6 +6,7 @@
 //! terminal and the clock are fakes. Nothing here contacts the M7 or any
 //! other host, and the live keychain is never touched.
 
+mod abuse;
 mod add;
 mod adopt;
 mod answered;

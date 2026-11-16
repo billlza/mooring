@@ -9,8 +9,8 @@ use std::num::NonZeroU16;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 
 use mooring_model::{
-    AgreementRecord, AgreementVersion, CalendarDate, Deployment, DeploymentParts, RuntimeIntent,
-    StateV3, UnixTime, UserId, UserStatus,
+    AbuseGuardAgreement, AgreementRecord, AgreementVersion, CalendarDate, Deployment,
+    DeploymentParts, RuntimeIntent, StateV3, UnixTime, UserId, UserStatus,
 };
 use mooring_store::Store;
 
@@ -81,7 +81,11 @@ fn today() -> CalendarDate {
 
 /// From no record, and from a record of revision 1, the revision every
 /// pilot user accepted before revision 2 (2026-11-06), `user agree` records
-/// the current revision on today's UTC day.
+/// the current revision on today's UTC day. With a gate the acceptance does
+/// not cross, here a closed one, as a build whose agreement does not state
+/// the abuse guard has it, the record is bookkeeping; under the shipped
+/// gate the same acceptance is a configuration change
+/// ([`agree_that_starts_the_abuse_guard_bumps_the_generation`]).
 #[test]
 fn agree_records_the_current_revision_on_the_utc_day_and_keeps_every_confirmation() {
     let first = AgreementRecord {
@@ -93,6 +97,7 @@ fn agree_records_the_current_revision_on_the_utc_day_and_keeps_every_confirmatio
         let deployment = fixture(|parts| parts.users[0].agreement = recorded);
         let user = first_user(&deployment);
         let mut harness = harness_with(deployment.clone());
+        harness.abuse_guard = AbuseGuardAgreement::since(None);
         let outcome = harness.run(&["user", "agree", user.as_str()]);
         assert_eq!(outcome.code, 0, "{}", outcome.stderr);
         assert_eq!(outcome.stderr, "");
@@ -145,10 +150,17 @@ fn agree_keeps_an_existing_record_of_the_current_revision() {
 }
 
 /// Every refusal exits 1, names its cause, and leaves `state.json` byte
-/// for byte as it was.
+/// for byte as it was. Under the shipped gate a revoking user without a
+/// record would come under the abuse guard, so the configuration change
+/// refuses them, in the same words as the bookkeeping record does a
+/// revoking user who is covered already.
 #[test]
 fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_user() {
     let revoking = fixture(|parts| parts.users[0].status = UserStatus::RevokePending);
+    let revoking_unrecorded = fixture(|parts| {
+        parts.users[0].status = UserStatus::RevokePending;
+        parts.users[0].agreement = None;
+    });
     let revoked = fixture(|parts| {
         parts.users[0].status = UserStatus::Revoked {
             since: UnixTime::from_secs(NOW),
@@ -168,6 +180,11 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
     for (deployment, target, cause) in [
         (
             revoking,
+            &user,
+            format!("user {user} is already pending revocation or revoked"),
+        ),
+        (
+            revoking_unrecorded,
             &user,
             format!("user {user} is already pending revocation or revoked"),
         ),
@@ -197,6 +214,52 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
             )
         );
         assert_eq!(state_bytes(&harness), before);
+    }
+}
+
+/// Under the shipped gate, open from revision 2, the revision this build
+/// ships, an acceptance from no record or from revision 1 brings the user
+/// under the abuse guard, so it is a configuration change (design §11.8):
+/// the generation is bumped, every node's confirmation stays as it was, so
+/// each node the user holds is behind until its next apply, and the
+/// command says so.
+#[test]
+fn agree_that_starts_the_abuse_guard_bumps_the_generation() {
+    let first = AgreementRecord {
+        version: AgreementVersion::FIRST,
+        accepted_on: CalendarDate::parse("2026-10-18").unwrap(),
+    };
+    assert!(AbuseGuardAgreement::SHIPPED.covers_revision(AgreementVersion::CURRENT));
+    assert!(!AbuseGuardAgreement::SHIPPED.covers_revision(first.version));
+    for recorded in [None, Some(first)] {
+        let deployment = fixture(|parts| parts.users[0].agreement = recorded);
+        let user = first_user(&deployment);
+        let mut harness = harness_with(deployment.clone());
+        assert_eq!(harness.abuse_guard, AbuseGuardAgreement::SHIPPED);
+        let outcome = harness.run(&["user", "agree", user.as_str()]);
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert_eq!(outcome.stderr, "");
+        assert_eq!(
+            outcome.stdout,
+            format!(
+                "recorded: user {user} accepted agreement revision {} on {} (UTC), which states the abuse guard; every node it holds needs `node apply` before the guard covers it\n",
+                AgreementVersion::CURRENT,
+                today()
+            )
+        );
+        let after = store(&harness).load().unwrap().deployment;
+        assert_eq!(
+            after.config_generation(),
+            deployment.config_generation().next().unwrap()
+        );
+        assert_eq!(after.nodes(), deployment.nodes());
+        let mut expected = deployment.into_parts();
+        expected.users[0].agreement = Some(AgreementRecord {
+            version: AgreementVersion::CURRENT,
+            accepted_on: today(),
+        });
+        expected.config_generation = after.config_generation();
+        assert_eq!(after, Deployment::try_from(expected).unwrap());
     }
 }
 

@@ -126,6 +126,11 @@ io_ops! {
     ReadPendingApplies => "read the record of pending applies",
     /// Opening or reading the daemon's record of direct-probe round trips.
     ReadRoundTrips => "read the record of direct-probe round trips",
+    /// Opening or reading the Mac's copy of the nodes' abuse records, or
+    /// inspecting the abuse directory to read it.
+    ReadAbuseRecords => "read the abuse records",
+    /// Creating or inspecting the abuse directory, to update the records.
+    CreateAbuseDir => "create the abuse directory",
 }
 
 /// What is wrong with a radio history day file. `Copy`: no fault holds a

@@ -52,6 +52,7 @@
 
 mod macros;
 
+mod abuse;
 mod deadman;
 mod digest;
 mod error;
@@ -78,6 +79,16 @@ mod usage;
 mod vps;
 mod watch;
 
+pub use abuse::{
+    ABUSE_READ_EVERY_TICKS, ABUSE_RECORD_KEEP_SECS, ABUSE_SUSPECTED_SECS, AbuseAction,
+    AbuseCutEntry, AbuseCuts, AbuseFigures, AbuseFinding, AbuseFindings, AbuseGuardFault,
+    AbuseGuardVersion, AbuseRecord, AbuseRecordsV1, AbuseSeq, AbuseSet, CONCURRENT_FLOWS,
+    DATAGRAM_BURST, DATAGRAMS_PER_SEC, DESTINATION_BUCKETS, DESTINATION_HASH_SEED, LOGIN_PORTS,
+    MAX_ABUSE_CUTS, MAX_ABUSE_RECORDS, MAX_ABUSE_RECORDS_KEPT, METER_MIN_AGE_SECS,
+    METER_SETTLED_SECS, NEW_FLOW_BURST, NEW_FLOWS_PER_SEC, PORT_BUCKET_MASK, PORT_BUCKETS,
+    SUBMISSION_PORTS, USER_SOURCE_BASE, USER_SOURCE_NET, USER_SOURCE_PREFIX, USER_SOURCES,
+    estimate_distinct, is_user_source, user_source,
+};
 pub use deadman::{DeadManCheck, dead_man_pings};
 pub use digest::{BlobLen, MAX_BLOB_BYTES, Sha256Hex};
 pub use error::{
@@ -141,14 +152,15 @@ pub use vps::{
 };
 pub use watch::{
     ACCOUNTING_INTERVAL_SECS, DISK_LOW_FREE_BYTES, DISK_LOW_FREE_PERCENT, GATE_SET_REREAD_SECS,
-    HANDSHAKE_MAX_AGE_SECS, HOST_READING_SECS, MAC_SILENT_SECS, MAX_POLL_GAP_SECS,
-    RX_GROWTH_KEEPALIVES, TARGET_CHECK_INTERVAL_SECS, VIEWER_STOP_WAIT_SECS, WATCH_STALE_SECS,
-    WATCH_TICK_SECS, WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
+    HANDSHAKE_MAX_AGE_SECS, HOST_READING_SECS, InstalledWatchConfig, MAC_SILENT_SECS,
+    MAX_POLL_GAP_SECS, RX_GROWTH_KEEPALIVES, TARGET_CHECK_INTERVAL_SECS, VIEWER_STOP_WAIT_SECS,
+    WATCH_STALE_SECS, WATCH_TICK_SECS, WatchConditions, WatchConfig, WatchConfigBeforeGuard,
+    WatchError, WatchErrorKind, WatchTarget,
 };
 
 /// The protocol version this crate speaks, reported in
 /// [`HelloInfo::protocol`].
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 /// The frozen self-test success marker used by the upgrade core. This
 /// remains version 1 so an already deployed protocol-1 agent can validate

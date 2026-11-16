@@ -3,6 +3,7 @@
 //! Tests of the renderers against the fixture deployments.
 
 mod bookkeeping;
+mod coverage;
 mod credentials;
 mod goldens;
 mod invariants;
@@ -10,6 +11,7 @@ mod properties;
 mod refusals;
 mod roundtrip;
 mod secrets;
+mod sources;
 mod support;
 mod viewers;
 mod wire_rules;

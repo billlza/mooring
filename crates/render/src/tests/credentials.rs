@@ -16,7 +16,7 @@ use mooring_model::secret::{
 use mooring_model::user::{SuspendReason, UserStatus};
 
 use crate::error::{CredentialHolder, CredentialKind, RenderError, RenderErrorKind};
-use crate::tests::support::{edit, engines, node, secrets_without};
+use crate::tests::support::{GUARD_OPEN, edit, engines, node, secrets_without};
 use crate::vps::{VpsBundle, bundle};
 
 /// An identity holding credentials on a node, in the order rendering
@@ -106,7 +106,13 @@ fn copied(secrets: &SecretSnapshot, source: &SecretRef, target: &SecretRef) -> S
 }
 
 fn render(fixture: &Fixture, secrets: &SecretSnapshot, id: &str) -> Result<VpsBundle, RenderError> {
-    bundle(&fixture.deployment, &node(id), secrets, &engines())
+    bundle(
+        &fixture.deployment,
+        &node(id),
+        secrets,
+        &engines(),
+        GUARD_OPEN,
+    )
 }
 
 /// The refusal names lon1, the kind, and the two holders that share the
