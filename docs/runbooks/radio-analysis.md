@@ -42,7 +42,7 @@ set -o pipefail
 - **Never to a machine on a university network.** The session is operator traffic, and it would cross Janet (design F15, P0-2, §10.2). A machine at home, or one of your own elsewhere.
 - Not to a Mooring node either: a node holds what the design sends it and no more (§15.5, §15.9).
 - With `set -o pipefail` a line that ends with a status other than 0 did not send a whole table: `mooringctl` failed (the file on the other machine is then empty) or the connection broke (the file may be cut short). Send it again. MATLAB's reader refuses an empty file and a file that does not end with a line end, but it cannot tell a file cut exactly between two rows from a whole one, so look at the status.
-- The other way is to carry the two files: AirDrop to your own Mac, or a USB stick.
+- The other way is to carry the two files on a USB stick. Not by AirDrop from the exit Mac: it needs the Mac's Wi-Fi on, and Wi-Fi joins a network it remembers by itself. One you did not declare as your own then takes the exit down (`ForeignNetworkAttached`, design §10.2).
 - Nothing sends on a schedule. The history keeps 90 days, so an export every few weeks loses nothing.
 
 ## 3. Read the tables in MATLAB
@@ -72,6 +72,10 @@ mooring.plotRadio(samples, Events=events);
 ```
 
 Six panels over one time axis, which zoom and pan together: the signal (LTE RSRP, NR RSRP, LTE RSSI, in dBm), the quality (LTE and NR RSRQ and SINR, in dB), the band of the primary carrier, the number of secondary carriers, the service of each poll (failed, without service, on LTE, on 5G), and the events.
+
+- The times are named once, under the last panel. The panels above it have the same ticks without labels.
+- A panel of names (the bands, the services, the events) takes the height its names need: the more bands the M7 was on, the taller that panel, and the lower the others. Where names still lie over one another the window is too low for them: make it taller.
+- A name is spelled as the table spells it (`band_changed`).
 
 ```matlab
 hourly = mooring.radioHourly(samples);
@@ -174,4 +178,6 @@ An argument that cannot be meant has its own identifier: `mooring:radio:BadDay`,
 - The package: its tests run on a hosted runner (`.github/workflows/matlab.yml`), on the two golden tables of `contract/history-fixtures`, which are what the command prints for the fixture's samples, and on made-up polls. A warning fails a test, and the package's files are held to 95 % line coverage.
 - The real history, without MATLAB (2026-11-14): a script matched every row of both tables of the 16 days the Mac held (19,937 samples, 578 events) against the reader's patterns, and Python ports of `radioDegradation` and `radioForecast` ran over the samples, printing counts and ratios only. On 2026-11-15 the ports ran again, with the rules by network, over the 21,346 samples the Mac then held. Sections 4, 5 and 6 give what they showed.
 - The installed command, on the day it was deployed (2026-11-14): `router history --csv samples` and `--csv events` ended with exit code 0 on the real history, each with the header this package reads; only the row counts were looked at.
-- Not checked: the MATLAB code on the real history; the figure, by eye; `radioHistory` with the real `mooringctl` (its tests use a stand-in); MATLAB on macOS (the runner is Linux). Sixteen days of one link are a look at the thresholds and the forecast, not a calibration.
+- The real history, in MATLAB (2026-11-15): MATLAB R2026b on another Mac read both tables of the history the exit Mac then held (21,419 samples, 578 events) and ran `plotRadio`, `radioNetworks` and `radioDegradation` over them, without an error or a warning. Every count they gave was the count the Python ports gave for the same two tables: the samples and the events, each network's days and its polls (failed, without service, attached), and each of the eleven indicators' polls, days and state.
+- The figure, by eye, that once (docked, at the size MATLAB gave it): the lines, the legends and the time axis read well; the names beside the band panel (six bands) and beside the events panel lay over one another, the letter after an underscore in an event's name was set as a subscript, the signal panel's ticks stood close, and the times were named under every panel. `plotRadio` was changed for it on that day (section 4), and its tests hold the new layout's rows and labels.
+- Not checked: the figure since that change, by eye; `radioHourly` by itself and `radioForecast`, in MATLAB on the real history; `radioHistory` with the real `mooringctl` (its tests use a stand-in); the tests on macOS (the runner is Linux). Sixteen days of one link are a look at the thresholds and the forecast, not a calibration.

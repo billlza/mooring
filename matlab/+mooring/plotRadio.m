@@ -17,6 +17,12 @@ function fig = plotRadio(samples, options)
 %   changes between polls, from the timetable mooring.readRadioEvents
 %   returns.
 %
+%   A panel of names (the bands, the services, the changes) is as tall as
+%   its names need, a name being spelled as the table spells it. The
+%   panels share the time axis, and the last one alone names its times.
+%   Where names still lie over one another, the window is too low for
+%   them: make it taller.
+%
 %   FIG = mooring.plotRadio(..., Visible="off") draws without showing the
 %   figure, for a script that saves it (exportgraphics).
 %
@@ -41,32 +47,6 @@ function fig = plotRadio(samples, options)
 
     at = samples.Properties.RowTimes;
     span = [min(at), max(at)];
-    fig = figure("Visible", options.Visible, "Name", "Mooring radio history");
-    tiles = tiledlayout(fig, 5 + withEvents, 1, "TileSpacing", "compact");
-    title(tiles, "Radio history, " + string(span(1), "yyyy-MM-dd HH:mm") + " to " ...
-        + string(span(2), "yyyy-MM-dd HH:mm") + " UTC");
-
-    signal = nexttile(tiles);
-    plot(signal, at, samples.lte_rsrp_dbm, at, samples.nr_rsrp_dbm, at, samples.lte_rssi_dbm);
-    ylabel(signal, "dBm");
-    legend(signal, "LTE RSRP", "NR RSRP", "LTE RSSI", "Location", "eastoutside");
-    title(signal, "Signal");
-
-    quality = nexttile(tiles);
-    plot(quality, at, samples.lte_rsrq_db, at, samples.nr_rsrq_db, ...
-        at, samples.lte_sinr_db, at, samples.nr_sinr_db);
-    ylabel(quality, "dB");
-    legend(quality, "LTE RSRQ", "NR RSRQ", "LTE SINR", "NR SINR", "Location", "eastoutside");
-    title(quality, "Quality");
-
-    band = nexttile(tiles);
-    marks(band, at, samples.band, span);
-    title(band, "Band of the primary carrier");
-
-    carriers = nexttile(tiles);
-    stairs(carriers, at, samples.ca_secondary_count);
-    title(carriers, "Secondary carriers");
-
     % Each poll's service: failed, without service, or the network
     % service type it was attached with.
     state = strings(height(samples), 1);
@@ -74,18 +54,69 @@ function fig = plotRadio(samples, options)
     state(samples.service == "no_service") = "no service";
     attached = samples.service == "attached";
     state(attached) = string(samples.network_service(attached));
-    service = nexttile(tiles);
-    marks(service, at, categorical(state), span);
+    states = categorical(state);
+
+    % The rows of the layout each panel takes: three for lines, two for
+    % the carriers' steps, what its names need for a panel of names, and
+    % two more for the last panel, under which the times are named.
+    rows = [3, 3, nameRows(samples.band), 2, nameRows(states)];
+    if withEvents
+        rows(end + 1) = nameRows(options.Events.event);
+    end
+    rows(end) = rows(end) + 2;
+
+    fig = figure("Visible", options.Visible, "Name", "Mooring radio history");
+    tiles = tiledlayout(fig, sum(rows), 1, "TileSpacing", "compact");
+    title(tiles, "Radio history, " + string(span(1), "yyyy-MM-dd HH:mm") + " to " ...
+        + string(span(2), "yyyy-MM-dd HH:mm") + " UTC");
+
+    signal = nexttile(tiles, [rows(1), 1]);
+    plot(signal, at, samples.lte_rsrp_dbm, at, samples.nr_rsrp_dbm, at, samples.lte_rssi_dbm);
+    ylabel(signal, "dBm");
+    legend(signal, "LTE RSRP", "NR RSRP", "LTE RSSI", "Location", "eastoutside");
+    title(signal, "Signal");
+
+    quality = nexttile(tiles, [rows(2), 1]);
+    plot(quality, at, samples.lte_rsrq_db, at, samples.nr_rsrq_db, ...
+        at, samples.lte_sinr_db, at, samples.nr_sinr_db);
+    ylabel(quality, "dB");
+    legend(quality, "LTE RSRQ", "NR RSRQ", "LTE SINR", "NR SINR", "Location", "eastoutside");
+    title(quality, "Quality");
+
+    band = nexttile(tiles, [rows(3), 1]);
+    marks(band, at, samples.band, span);
+    title(band, "Band of the primary carrier");
+
+    carriers = nexttile(tiles, [rows(4), 1]);
+    stairs(carriers, at, samples.ca_secondary_count);
+    title(carriers, "Secondary carriers");
+
+    service = nexttile(tiles, [rows(5), 1]);
+    marks(service, at, states, span);
     title(service, "Service");
 
     panels = [signal, quality, band, carriers, service];
     if withEvents
-        changes = nexttile(tiles);
+        changes = nexttile(tiles, [rows(6), 1]);
         marks(changes, options.Events.Properties.RowTimes, options.Events.event, span);
         title(changes, "Changes between polls");
         panels = [panels, changes];
     end
     linkaxes(panels, "x");
+    % One time axis: the times are named once, under the last panel. The
+    % panels above it keep their ticks and lose the ticks' labels and the
+    % label of the year beside them.
+    for upper = panels(1:end - 1)
+        xticklabels(upper, {});
+        upper.XAxis.SecondaryLabelFormat = "";
+    end
+end
+
+function rows = nameRows(names)
+% The rows of the layout a panel of names takes: one, and one more for
+% every two names it shows; two at least.
+    shown = numel(unique(names(~isundefined(names))));
+    rows = max(2, 1 + ceil(shown / 2));
 end
 
 function marks(target, times, names, span)
@@ -99,4 +130,6 @@ function marks(target, times, names, span)
         % it has the others' time axis.
         plot(target, span, [NaN, NaN]);
     end
+    % A name is shown as it is spelled: its underscore lowers no letter.
+    target.TickLabelInterpreter = "none";
 end
