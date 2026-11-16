@@ -241,7 +241,9 @@ pub(crate) enum UserCommand {
     /// daemon records it in the payment ledger: days of service from the
     /// end of the user's paid time, or from now once that has passed, with
     /// the quota of their last paid period; or traffic for this billing
-    /// cycle. It cannot be undone, so it asks first; it needs no node apply.
+    /// cycle. Only a user who accepted agreement revision 2 or a later one,
+    /// the revisions that provide for make-ups, is given one. It cannot be
+    /// undone, so it asks first; it needs no node apply.
     #[command(group(clap::ArgGroup::new("gift").required(true).args(["days", "gb"])))]
     MakeUp {
         /// The user's id.

@@ -108,6 +108,7 @@ fn replies_have_fixed_lines() {
         (Refusal::LoopBusy, "loop_busy"),
         (Refusal::UnknownUser, "unknown_user"),
         (Refusal::UserRevoked, "user_revoked"),
+        (Refusal::AgreementNotAccepted, "agreement_not_accepted"),
         (Refusal::NoPaidPeriod, "no_paid_period"),
         (Refusal::NoQuota, "no_quota"),
         (Refusal::QuotaUnknown, "quota_unknown"),
@@ -187,6 +188,7 @@ fn each_reason_a_make_up_is_refused_is_its_own_refusal() {
         [
             MakeUpRefusal::UnknownUser,
             MakeUpRefusal::UserRevoked,
+            MakeUpRefusal::AgreementNotAccepted,
             MakeUpRefusal::NoPaidPeriod,
             MakeUpRefusal::NoQuota,
             MakeUpRefusal::QuotaUnknown,
@@ -197,6 +199,7 @@ fn each_reason_a_make_up_is_refused_is_its_own_refusal() {
         [
             Refusal::UnknownUser,
             Refusal::UserRevoked,
+            Refusal::AgreementNotAccepted,
             Refusal::NoPaidPeriod,
             Refusal::NoQuota,
             Refusal::QuotaUnknown,

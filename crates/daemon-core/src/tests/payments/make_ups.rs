@@ -12,16 +12,19 @@
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 
 use mooring_model::quota::AutoQuotaPolicy;
-use mooring_model::{CalendarDate, Deployment, SuspendReason, UnixTime, User, UserStatus};
+use mooring_model::{
+    AgreementRecord, AgreementVersion, CalendarDate, Deployment, SuspendReason, UnixTime, User,
+    UserStatus,
+};
 use serde_json::{Value, json};
 
 use super::refunds::{A, B, GB, HOUR, cycle, quota, recorded, step, users};
 use super::{DAY, NOW, Terms, id, order, secs, user};
 use crate::make_up::decide;
 use crate::payments::{
-    Granted, LedgerError, LedgerEvent, MadeUp, MakeUpAsk, MakeUpGift, MakeUpNumber, MakeUpReason,
-    MakeUpRecord, MakeUpRefusal, PaidPack, PaidPeriod, PaymentLedger, Pruned, RefundEffect,
-    TimeTakenBack,
+    Granted, LedgerError, LedgerEvent, MAKE_UP_AGREEMENT_SINCE, MadeUp, MakeUpAsk, MakeUpGift,
+    MakeUpNumber, MakeUpReason, MakeUpRecord, MakeUpRefusal, PaidPack, PaidPeriod, PaymentLedger,
+    Pruned, RefundEffect, TimeTakenBack,
 };
 use crate::policy::effective_policy;
 
@@ -334,6 +337,57 @@ fn a_revoked_user_is_refused_and_a_suspended_ones_suspension_is_told() {
         );
         let made = make_up(&ledger, &suspended, days(7), now + HOUR).unwrap();
         assert_eq!(made.suspended, Some(reason));
+        assert_eq!(
+            made.record.gift,
+            period(now + 30 * DAY, now + 37 * DAY, 100)
+        );
+    }
+}
+
+/// `user` in `status`, whose recorded acceptance is of `version`, if any.
+fn accepting(status: UserStatus, version: Option<AgreementVersion>) -> User {
+    let mut who = user("pilotusera", status, None);
+    who.agreement = version.map(|version| AgreementRecord {
+        version,
+        accepted_on: CalendarDate::parse("2026-10-08").unwrap(),
+    });
+    who
+}
+
+/// Only a user who accepted a revision of the agreement that provides for
+/// make-ups, revision 2 or a later one, is given one (the operator's
+/// decision of 2026-11-16). One who accepted only revision 1, which names
+/// none, or no revision is refused, for days and traffic alike, before the
+/// ledger's own refusals, which would point to the other kind of make-up;
+/// one being revoked is told that first.
+#[test]
+fn only_a_user_who_accepted_revision_2_or_a_later_one_is_given_one() {
+    let now = NOW.as_secs();
+    let none = PaymentLedger::new();
+    let (ledger, _) = step(&none, Terms::month(A, "pilotusera").grant(1), now);
+    let revision = |number| AgreementVersion::new(NonZeroU16::new(number).unwrap());
+    assert_eq!(MAKE_UP_AGREEMENT_SINCE, revision(2));
+    assert!(MAKE_UP_AGREEMENT_SINCE <= AgreementVersion::CURRENT);
+    for version in [None, Some(AgreementVersion::FIRST)] {
+        let who = accepting(UserStatus::Active, version);
+        // Without a paid period, days would be refused as `NoPaidPeriod`,
+        // which points to traffic.
+        for (on, ask) in [(&ledger, days(7)), (&ledger, traffic(5)), (&none, days(7))] {
+            assert_eq!(
+                make_up(on, &who, ask, now),
+                Err(MakeUpRefusal::AgreementNotAccepted),
+                "{version:?} {ask:?}"
+            );
+        }
+        let revoked = accepting(UserStatus::RevokePending, version);
+        assert_eq!(
+            make_up(&ledger, &revoked, days(7), now),
+            Err(MakeUpRefusal::UserRevoked)
+        );
+    }
+    for version in [MAKE_UP_AGREEMENT_SINCE, revision(3)] {
+        let who = accepting(UserStatus::Active, Some(version));
+        let made = make_up(&ledger, &who, days(7), now).unwrap();
         assert_eq!(
             made.record.gift,
             period(now + 30 * DAY, now + 37 * DAY, 100)
@@ -881,6 +935,14 @@ fn the_daemon_decides_a_make_up_against_the_deployment() {
     assert_eq!(
         decided(&none, &revoked, false, traffic(5), now),
         Err(MakeUpRefusal::UserRevoked)
+    );
+    let first_only = holding(vec![accepting(
+        UserStatus::Active,
+        Some(AgreementVersion::FIRST),
+    )]);
+    assert_eq!(
+        decided(&none, &first_only, false, traffic(5), now),
+        Err(MakeUpRefusal::AgreementNotAccepted)
     );
     assert_eq!(
         decided(&none, &plain, false, days(7), now),

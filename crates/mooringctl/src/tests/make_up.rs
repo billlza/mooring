@@ -29,7 +29,9 @@ use mooring_daemon_core::payments::{
 };
 use mooring_model::ids::PublicAlias;
 use mooring_model::user::SuspendReason;
-use mooring_model::{Deployment, UnixTime, UserId, UserStatus};
+use mooring_model::{
+    AgreementRecord, AgreementVersion, CalendarDate, Deployment, UnixTime, UserId, UserStatus,
+};
 use mooring_store::{PAYMENT_LEDGER_FILE, PAYMENTS_DIRECTORY, STATE_FILE, write_payment_ledger};
 
 use super::daemon::Running;
@@ -187,6 +189,16 @@ fn the_pull_records_a_make_up_for_one_who_waits() {
         assert!(puller.make_up(&deployment, &request, at(NOW)).is_empty());
         assert_eq!(heard.unwrap().result(), (Ok(Err(refusal)), None), "{user}");
     }
+    // The state as the daemon reads it decides, whatever the command read
+    // before: traffic for a user who accepted only revision 1 is refused
+    // for that, and not for want of a quota.
+    let (request, heard) = asking(SECOND, traffic(5), Asker::Waits);
+    let first_only = second_accepting(Some(AgreementVersion::FIRST));
+    assert!(puller.make_up(&first_only, &request, at(NOW)).is_empty());
+    assert_eq!(
+        heard.unwrap().result(),
+        (Ok(Err(Refusal::AgreementNotAccepted)), None)
+    );
     for user in [FIRST, "nobodyhere"] {
         let (request, heard) = asking(user, days(7), Asker::Gone);
         assert!(heard.is_none());
@@ -366,7 +378,7 @@ fn the_daemons_line_names_the_make_up_and_the_users_suspension() {
         assert_eq!(made_up(&record, None), format!("{given}, {why}"));
     }
     let quota = SuspendReason::QuotaExceeded {
-        cycle_start: mooring_model::CalendarDate::parse("2026-10-01").unwrap(),
+        cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
     };
     for (suspended, said) in [
         (
@@ -1020,6 +1032,50 @@ fn a_user_unknown_or_revoked_is_refused_at_once() {
     }
 }
 
+/// The fixture with [`SECOND`]'s recorded acceptance of `version`, or
+/// none.
+fn second_accepting(version: Option<AgreementVersion>) -> Deployment {
+    fixture(|parts| {
+        let user = &mut parts.users[1];
+        assert_eq!(user.id.as_str(), SECOND);
+        user.agreement = version.map(|version| AgreementRecord {
+            version,
+            accepted_on: CalendarDate::parse("2026-10-08").unwrap(),
+        });
+    })
+}
+
+/// A user who accepted only revision 1 of the agreement, which names no
+/// make-up, or no revision, is refused before anything is asked or sent
+/// (the operator's decision of 2026-11-16), and the refusal says what is
+/// recorded.
+#[test]
+fn a_user_without_an_acceptance_of_revision_2_is_refused_at_once() {
+    for (version, recorded) in [
+        (None, "no acceptance is recorded"),
+        (
+            Some(AgreementVersion::FIRST),
+            "the recorded acceptance is of revision 1",
+        ),
+    ] {
+        for gift in [["--days", "7"], ["--gb", "5"]] {
+            let mut harness = command_harness(second_accepting(version));
+            let outcome = harness.run(&[
+                "user", "make-up", SECOND, gift[0], gift[1], "--reason", "outage",
+            ]);
+            assert_eq!(outcome.code, EXIT_LOCAL, "{recorded}");
+            assert_eq!(outcome.stdout, "");
+            assert_eq!(
+                outcome.stderr,
+                format!(
+                    "mooringctl: user {SECOND} has not accepted agreement revision 2 or a later one, the revisions that provide for make-ups: {recorded}; nothing was recorded\n"
+                )
+            );
+            assert!(harness.console.asked.is_empty());
+        }
+    }
+}
+
 /// Each refusal of the daemon is reported in its own sentence, and a
 /// reply to another request is refused.
 #[test]
@@ -1029,6 +1085,7 @@ fn each_refusal_of_the_daemon_is_reported_in_its_sentence() {
     for (answer, said) in [
         (Refusal::UnknownUser, refused("the deployment holds no user of that id; nothing was recorded")),
         (Refusal::UserRevoked, refused("the user is being revoked or is revoked; nothing was recorded")),
+        (Refusal::AgreementNotAccepted, refused("the user accepted no revision of the agreement that provides for make-ups; nothing was recorded")),
         (Refusal::NoPaidPeriod, refused("the user has no paid service period to extend, so days of service give them nothing; nothing was recorded (give traffic instead)")),
         (Refusal::NoQuota, refused("the user has no quota this billing cycle, so traffic adds nothing; nothing was recorded (give days instead)")),
         (Refusal::QuotaUnknown, refused("the user's quota cannot be computed now, as the console says; nothing was recorded")),

@@ -7,9 +7,11 @@
 //!
 //! The command reads the state to name the user, by id and alias and never
 //! by label, and refuses at once a user the deployment does not hold or is
-//! revoking. It asks, then names the make-up to the daemon, which decides
-//! it again against the state as it is then, records it or says why not,
-//! and prints the make-up as recorded.
+//! revoking, and one who accepted no revision of the agreement that
+//! provides for make-ups, revision 2 or a later one
+//! ([`MAKE_UP_AGREEMENT_SINCE`]). It asks, then names the make-up to the
+//! daemon, which decides it again against the state as it is then,
+//! records it or says why not, and prints the make-up as recorded.
 //!
 //! A make-up cannot be undone. When the request was sent and no answer
 //! came, whether it was recorded is not known, and the command says so
@@ -24,8 +26,8 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
 use mooring_daemon_core::control::{DaemonReply, DaemonRequest};
-use mooring_daemon_core::payments::{MakeUpAsk, MakeUpReason};
-use mooring_model::{UserId, UserStatus};
+use mooring_daemon_core::payments::{MAKE_UP_AGREEMENT_SINCE, MakeUpAsk, MakeUpReason};
+use mooring_model::{RecordedAgreement, UserId, UserStatus};
 use mooring_store::Store;
 
 use crate::app::{Env, support_dir};
@@ -68,6 +70,15 @@ pub(crate) fn make_up(
     ) {
         return Err(LocalError::MakeUpUserRevoked { user: user.clone() }.into());
     }
+    record
+        .accepted(MAKE_UP_AGREEMENT_SINCE)
+        .map_err(
+            |RecordedAgreement(recorded)| LocalError::MakeUpAgreementNotAccepted {
+                user: user.clone(),
+                recorded,
+                required: MAKE_UP_AGREEMENT_SINCE,
+            },
+        )?;
     let named = match &record.alias {
         Some(alias) => format!("user {user} ({alias})"),
         None => format!("user {user}"),

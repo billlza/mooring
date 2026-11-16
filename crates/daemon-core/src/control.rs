@@ -140,6 +140,10 @@ pub enum Refusal {
     UnknownUser,
     /// `make_up`: the user is being revoked or is revoked.
     UserRevoked,
+    /// `make_up`: the user accepted no revision of the agreement that
+    /// provides for make-ups, revision 2 or a later one
+    /// ([`MAKE_UP_AGREEMENT_SINCE`](crate::payments::MAKE_UP_AGREEMENT_SINCE)).
+    AgreementNotAccepted,
     /// `make_up`: service time for a user without a live service period:
     /// there is no paid time to extend.
     NoPaidPeriod,
@@ -177,6 +181,7 @@ impl From<MakeUpRefusal> for Refusal {
         match reason {
             MakeUpRefusal::UnknownUser => Self::UnknownUser,
             MakeUpRefusal::UserRevoked => Self::UserRevoked,
+            MakeUpRefusal::AgreementNotAccepted => Self::AgreementNotAccepted,
             MakeUpRefusal::NoPaidPeriod => Self::NoPaidPeriod,
             MakeUpRefusal::NoQuota => Self::NoQuota,
             MakeUpRefusal::QuotaUnknown => Self::QuotaUnknown,

@@ -243,8 +243,11 @@
       its quota, or traffic), its reason and its time, deleted with the
       payments under the 13-month rule. The operator decided on 2026-11-15
       that the text names them, in their words: «要写明». The command that
-      gives and records them, `mooringctl user make-up`, is #71's. The
-      copies kept at a ban still name the payments alone.
+      gives and records them, `mooringctl user make-up`, is #71's. It
+      gives one only to a user who accepted revision 2 or a later one:
+      revision 1 names none, and asked on 2026-11-16 whether a user who
+      accepted only revision 1 may be given one, the operator answered
+      «不可以». The copies kept at a ban still name the payments alone.
     - The operator's phone and Mac keep the call history of the app the
       operator calls each user with, FaceTime, WhatsApp or Telegram (below,
       2026-11-15): the contact (FaceTime's number or Apple ID, WhatsApp's

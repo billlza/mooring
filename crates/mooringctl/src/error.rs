@@ -28,7 +28,10 @@ use mooring_model::ids::LocalLabel;
 use mooring_model::iface::{BsdName, MacAddr};
 use mooring_model::node::LifecycleStage;
 use mooring_model::secret::SecretKind;
-use mooring_model::{CalendarDate, NodeId, PortalNotCovered, PublicAlias, UserId};
+use mooring_model::{
+    AgreementVersion, CalendarDate, NodeId, PortalNotCovered, PublicAlias, RecordedAgreement,
+    UserId,
+};
 use mooring_render::RenderError;
 use mooring_store::{MAX_ALLOWED_NETWORKS_BYTES, SecretStoreError, SnapshotReadError, StoreError};
 
@@ -652,6 +655,20 @@ pub(crate) enum LocalError {
         /// The user.
         user: UserId,
     },
+    /// `user make-up` for a user who accepted no revision of the agreement
+    /// that provides for make-ups: none, or only an earlier one.
+    #[error(
+        "user {user} has not accepted agreement revision {required} or a later one, the revisions that provide for make-ups: {}; nothing was recorded",
+        RecordedAgreement(*.recorded)
+    )]
+    MakeUpAgreementNotAccepted {
+        /// The user.
+        user: UserId,
+        /// The revision the user accepted, if a record exists.
+        recorded: Option<AgreementVersion>,
+        /// The first revision that provides for make-ups.
+        required: AgreementVersion,
+    },
     /// The daemon was asked for a make-up and gave no answer: whether it
     /// recorded the make-up is not known.
     #[error(
@@ -1246,6 +1263,9 @@ pub(crate) const fn refusal_text(reason: Refusal) -> &'static str {
         }
         Refusal::UnknownUser => "the deployment holds no user of that id; nothing was recorded",
         Refusal::UserRevoked => "the user is being revoked or is revoked; nothing was recorded",
+        Refusal::AgreementNotAccepted => {
+            "the user accepted no revision of the agreement that provides for make-ups; nothing was recorded"
+        }
         Refusal::NoPaidPeriod => {
             "the user has no paid service period to extend, so days of service give them nothing; nothing was recorded (give traffic instead)"
         }

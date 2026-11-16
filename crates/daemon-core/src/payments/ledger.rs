@@ -65,7 +65,8 @@ mod v2;
 mod v3;
 
 pub use make_up::{
-    Granted, MadeUp, MakeUpAsk, MakeUpGift, MakeUpNumber, MakeUpReason, MakeUpRecord, MakeUpRefusal,
+    Granted, MAKE_UP_AGREEMENT_SINCE, MadeUp, MakeUpAsk, MakeUpGift, MakeUpNumber, MakeUpReason,
+    MakeUpRecord, MakeUpRefusal,
 };
 
 /// The ledger's version: 4 since it records make-ups (2026-11-15): the

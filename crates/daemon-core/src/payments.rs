@@ -51,9 +51,9 @@ pub use feed::{
 pub use ids::{Currency, IdError, MAX_PLAN_ID_CHARS, ORDER_ID_CHARS, OrderId, PlanId};
 pub use ledger::{
     Applied, Closed, DisputeRecord, GrantOutcome, GrantRecord, Granted, HeldReason, LEDGER_VERSION,
-    LedgerEvent, MAX_LEDGER_BYTES, MadeUp, MakeUpAsk, MakeUpGift, MakeUpNumber, MakeUpReason,
-    MakeUpRecord, MakeUpRefusal, OrderRecord, PaymentLedger, Pruned, RefundRecord, Settlement,
-    Stop, StopReason,
+    LedgerEvent, MAKE_UP_AGREEMENT_SINCE, MAX_LEDGER_BYTES, MadeUp, MakeUpAsk, MakeUpGift,
+    MakeUpNumber, MakeUpReason, MakeUpRecord, MakeUpRefusal, OrderRecord, PaymentLedger, Pruned,
+    RefundRecord, Settlement, Stop, StopReason,
 };
 pub use refund::{PackUse, RefundEffect, RefundUsage, RunBegan, TakeBacks, TimeTakenBack};
 pub use settings::{

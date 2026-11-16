@@ -8,6 +8,11 @@
 //! so that it counts wherever paid time and traffic count, and the grants
 //! after it build on it.
 //!
+//! - **Who is given one:** a user who is not being revoked, and who
+//!   accepted a revision of the agreement that provides for make-ups,
+//!   revision 2 or a later one ([`MAKE_UP_AGREEMENT_SINCE`]). One who
+//!   accepted only revision 1, which names none, keeps the service it gave
+//!   them and is given no make-up, as the operator decided on 2026-11-16.
 //! - **Time** is a service period from the later of the make-up's time and
 //!   the user's paid expiry, where a live grant would start
 //!   ([`PaymentLedger::paid_expiry`]), for the days asked, with the quota of
@@ -26,11 +31,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 
 use mooring_model::date::SECS_PER_DAY;
 use mooring_model::user::SuspendReason;
-use mooring_model::{CalendarDate, UnixTime, User, UserId, UserStatus};
+use mooring_model::{
+    AgreementVersion, CalendarDate, RecordedAgreement, UnixTime, User, UserId, UserStatus,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{PaymentLedger, inconsistent};
@@ -160,6 +167,19 @@ pub struct MakeUpRecord {
     pub gift: MakeUpGift,
 }
 
+/// The first revision of the user agreement that provides for make-ups:
+/// revision 2, whose clauses 1 and 3 promise them and whose clause 4 names
+/// what the operator's Mac records of each. Only a user who accepted it or
+/// a later one is given a make-up ([`User::accepted`]); one who accepted
+/// only revision 1, which names none, or no revision is refused
+/// ([`MakeUpRefusal::AgreementNotAccepted`]), as the operator decided on
+/// 2026-11-16. It stays 2 when a later revision raises
+/// [`AgreementVersion::CURRENT`].
+pub const MAKE_UP_AGREEMENT_SINCE: AgreementVersion = match NonZeroU16::new(2) {
+    Some(revision) => AgreementVersion::new(revision),
+    None => panic!("agreement revisions count from 1"),
+};
+
 /// Why a make-up was refused. Nothing was recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,6 +188,10 @@ pub enum MakeUpRefusal {
     UnknownUser,
     /// The user is being revoked or is revoked.
     UserRevoked,
+    /// The user accepted no revision of the agreement that provides for
+    /// make-ups, [`MAKE_UP_AGREEMENT_SINCE`] or a later one: none, or only
+    /// an earlier one.
+    AgreementNotAccepted,
     /// Service time was asked for a user without a live service period:
     /// there is no paid time to extend.
     NoPaidPeriod,
@@ -203,11 +227,12 @@ impl PaymentLedger {
     /// `reason` (design §9.6): days from where a live grant would start,
     /// with the quota of the user's live period that ends last, or traffic
     /// for the billing cycle it is given in. Refused for a user being
-    /// revoked or revoked, for time without a live service period to
-    /// extend, for a period that would end beyond the calendar, and once
-    /// every number is spent. Whether `user` has a quota that traffic adds
-    /// to is the caller's to know ([`crate::make_up`]): the ledger does
-    /// not hold the user's quota.
+    /// revoked or revoked, then for one who accepted no revision of the
+    /// agreement that provides for make-ups ([`MAKE_UP_AGREEMENT_SINCE`]),
+    /// for time without a live service period to extend, for a period that
+    /// would end beyond the calendar, and once every number is spent.
+    /// Whether `user` has a quota that traffic adds to is the caller's to
+    /// know ([`crate::make_up`]): the ledger does not hold the user's quota.
     pub fn make_up(
         &self,
         user: &User,
@@ -222,6 +247,8 @@ impl PaymentLedger {
             UserStatus::Active => None,
             UserStatus::Suspended { reason, .. } => Some(reason),
         };
+        user.accepted(MAKE_UP_AGREEMENT_SINCE)
+            .map_err(|RecordedAgreement(_)| MakeUpRefusal::AgreementNotAccepted)?;
         let gift = match ask {
             MakeUpAsk::Days(days) => self.period_for(user, days, now)?,
             MakeUpAsk::TrafficBytes(bytes) => MakeUpGift::Traffic { bytes },
