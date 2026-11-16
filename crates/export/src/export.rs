@@ -92,10 +92,10 @@ impl fmt::Debug for ExportDocument {
 /// then one Hysteria2 outbound per listener. The shape is selected by the
 /// user's `ClientProfile`. Refused, in this order, when the user is not
 /// active (suspended, pending revocation or revoked: `UserNotActive`), has
-/// not accepted the agreement revision this build ships
-/// (`AgreementNotAccepted`, decision F9), has a capability its CFM line does
-/// not accept, holds no credentials, or when any of those nodes has not
-/// confirmed the current generation or fails a certificate check.
+/// accepted no revision of the agreement (`AgreementNotAccepted`, decision
+/// F9), has a capability its CFM line does not accept, holds no
+/// credentials, or when any of those nodes has not confirmed the current
+/// generation or fails a certificate check.
 ///
 /// Neither the day of the agreement record (a calendar day without a time
 /// zone) nor the user's policy is compared with `now`: an expired or
@@ -310,11 +310,15 @@ pub(crate) fn user_outbounds(
     Ok(outbounds)
 }
 
-/// Decision F9: a file goes only to a user who accepted the agreement
-/// revision this build ships. The record's day is not compared with `now`:
-/// it is a calendar day without a time zone, and `user agree` dates it.
+/// Decision F9, as the operator amended it on 2026-11-15: a file goes only
+/// to a user who accepted the agreement, any revision of it. A user who
+/// accepted an earlier revision than this build ships still gets files, so
+/// that nothing the operator changes (a node, a certificate) leaves a new
+/// acceptance as the only way to keep the service. The record's day is not
+/// compared with `now`: it is a calendar day without a time zone, and
+/// `user agree` dates it.
 fn require_agreement(user: &User) -> Result<(), ExportError> {
-    let required = AgreementVersion::CURRENT;
+    let required = AgreementVersion::FIRST;
     user.accepted(required)
         .map_err(
             |RecordedAgreement(recorded)| ExportError::AgreementNotAccepted {

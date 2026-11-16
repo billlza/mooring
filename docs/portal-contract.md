@@ -16,22 +16,22 @@ Design §9.5 places the exporters in Mooring.
 
 ## 1. The agreement comes first
 
-Revision 1 of the user agreement (`docs/runbooks/user-agreement.md`) does not cover the portal:
+Revision 1 of the user agreement did not cover the portal:
 
-- Clause 4 lists every place a user's data is kept, and the portal's host on the internet is not among them.
-- Clause 2 tells users never to paste a link.
-- Clause 5 says the service has no subscription link.
+- Its clause 4 listed every place a user's data is kept, and the portal's host on the internet was not among them.
+- Its clause 2 told users never to paste a link.
+- Its clause 5 said the service had no subscription link.
 
-So both commands refuse everything until a revision that covers the portal is written and accepted. The refusal is built into the exporters' types and checked on the built binary:
+Revision 2 (2026-11-06, `docs/runbooks/user-agreement.md`) covers it. Clause 4 says what the portal's host keeps, where and for how long. Clauses 2 and 5 say how a subscription link is used and kept, and what to do when one leaks. Nothing about a user goes to the portal before the user has accepted it or a later revision. The gate is built into the exporters' types and checked on the built binary:
 
-- `mooring_model::PORTAL_AGREEMENT_SINCE` names the first revision that covers the portal. It is `None`, so `PortalAgreement::SHIPPED`, which the binary passes to both exporters, is closed.
+- `mooring_model::PORTAL_AGREEMENT_SINCE` names the first revision that covers the portal, revision 2. `PortalAgreement::SHIPPED`, which the binary passes to both exporters, is open because `AgreementVersion::CURRENT` is that revision or a later one.
 - Both commands check the gate first, before they read the state. The pure exporters check it again (`mooring-daemon-core`'s `portal::snapshot` and `mooring-export`'s `profile_selection` and `export_profiles`).
-- `PortalAgreement::since` builds a gate from an explicit revision, which tests use to open it. No product code calls it; `crates/mooringctl/tests/shipped/portal_gate.rs` runs the built binary and requires both commands to refuse with the gate's message, so what `main` passes is checked, not only the types.
-- Once the gate opens, a user's data and file go to the portal only once the user has accepted that revision, `AgreementVersion::CURRENT`: the snapshot refuses a user named without that acceptance, and the bundle withholds them (§3.2). A user export requires the same (decision F9).
-- While the gate is closed, the bundle is refused whole. It is never written with every user withheld for want of an acceptance that cannot be had yet: such a bundle is valid, and its import would pause every bound user's subscription link.
+- `PortalAgreement::since` builds a gate from an explicit revision, which tests use to close or open it. No product code calls it. `crates/mooringctl/tests/shipped/portal_gate.rs` runs the built binary and requires both commands to pass the gate it ships, so what `main` passes is checked, not only the types.
+- A user's data and file go to the portal only once the user has accepted revision 2 or a later one (`PortalAgreement::required`, which is `PORTAL_AGREEMENT_SINCE`): the snapshot refuses a user named without that acceptance, and the bundle withholds them (§3.2). A later revision withholds no one who accepted revision 2, and a record is never lowered, so no new revision pauses a link. A user export requires an acceptance of any revision: a user who accepted only revision 1 keeps their service and their files, without the portal (decision F9, as the operator amended it on 2026-11-15: «老用户照旧服务»).
+- With the gate closed, as before revision 2 and in the tests that close it, the bundle is refused whole. It is never written with every user withheld for want of an acceptance that cannot be had yet: such a bundle is valid, and its import would pause every bound user's subscription link.
 - `crates/export/tests/export/agreement_text.rs` ties the gate to the text. The gate is open exactly when the user-visible text names the portal (门户). The text's SHA-256 is pinned in the same file, so a revised text needs a new revision.
 
-Writing the revision (see the operator notes of `user-agreement.md`) sets `PORTAL_AGREEMENT_SINCE`, raises `AgreementVersion::CURRENT` and records the new digest, all in one commit. Every user then accepts it again (`user agree`) before anything about them goes to the portal.
+Revision 2 set `PORTAL_AGREEMENT_SINCE`, raised `AgreementVersion::CURRENT` and recorded the text's digest, all in one commit. A user accepts it (`user agree`) before anything about them goes to the portal; no one is made to.
 
 ## 2. The snapshot
 
@@ -65,7 +65,7 @@ The status line (`daemon-core`'s `snapshot::assemble`) uses the same functions, 
 
 Mooring refuses to write a snapshot that breaks one; the portal refuses it on import.
 
-1. Only the users named, at least one, each known, each once (`mooring_model::named_users`, the rule both files follow), each with an acceptance of the required revision (§1). Not every user by default: the portal keeps records only for users bound to an account there, and the operator names those.
+1. Only the users named, at least one, each known, each once (`mooring_model::named_users`, the rule both files follow), each with an acceptance of the required revision or a later one (§1). Not every user by default: the portal keeps records only for users bound to an account there, and the operator names those.
 2. `cycle.start` is before `cycle.next_start`, and not after `generated_at`.
 3. `counted_through`, when not `null`, lies within the cycle (both ends included) and not after `generated_at`.
 4. Without a report every `cycle_served_bytes` is `null`.
@@ -110,7 +110,7 @@ A bundle holds exactly the users the operator names, each once, and those are th
 
 Each user named is on exactly one side. An exhaustive match on `UserStatus`, with no wildcard, decides which: a status added later has to be placed, after the contract says where.
 
-- **Delivered (`profiles`):** an `Active` user with an acceptance of the required revision (§1). Each passes every check of `user export` (design §9.2): its capabilities, its credentials, and each node's generation, certificate and address.
+- **Delivered (`profiles`):** an `Active` user with an acceptance of the required revision or a later one (§1). Each passes every check of `user export` (design §9.2): its capabilities, its credentials, and each node's generation, certificate and address.
 - **Withheld (`withheld`), and named in the output with the reason:** a suspended user, whatever the reason, as `suspended` (the snapshot carries the reason); a user being revoked or revoked as `revoked`, as in the snapshot; an active user without the acceptance as `agreement_not_accepted`.
 - **Refused:** a bundle in which a user to be delivered cannot have a file (a node not applied at the current generation, a certificate no longer current, no credentials). None of the contract's reasons to withhold a user is theirs, and leaving them out would make the portal refuse the bundle, so nothing is written.
 
@@ -118,7 +118,8 @@ A bundle that withholds every user named is still written, with `profiles` empty
 
 On import, a bound user who is withheld is no longer served a profile. What becomes of their subscription link depends on the reason (the operator's decision, 2026-11-06), and the command says it for each user withheld:
 
-- `suspended`, whatever the suspension's reason (quota, expiry, review or the operator's), and `agreement_not_accepted` pause the link. Once the user is resumed, or accepts the revision, and a bundle delivers them again, the same link serves their document again, and the user chooses Update in CFM. A suspension for quota pauses until the next billing cycle, or until a pack, a paid month or a raised quota covers what the user used: Mooring's nightly apply job lifts it at its next run (design §13.6; built 2026-11-12, deployed 2026-11-13), and the link serves again once a bundle delivers the user, as above.
+- `suspended`, whatever the suspension's reason (quota, expiry, review or the operator's), pauses the link. Once the user is resumed and a bundle delivers them again, the same link serves their document again, and the user chooses Update in CFM. A suspension for quota pauses until the next billing cycle, or until a pack, a paid month or a raised quota covers what the user used: Mooring's nightly apply job lifts it at its next run (design §13.6; built 2026-11-12, deployed 2026-11-13), and the link serves again once a bundle delivers the user, as above.
+- `agreement_not_accepted` is a user who has not accepted revision 2 or a later one. Mooring has sent nothing about them (§1), so they have no link to pause: the portal offers them nothing until they accept and a bundle delivers them.
 - `revoked` ends the link for good. A ban for illegal use is a revocation here and, at the portal, a separate step by the operator, which also bars the person from registering again. Mooring's revocation records no reason, and a user who leaves is revoked too, so the portal never takes a revocation for a ban.
 
 A paused link answers 404, as an unknown one does, and while it is paused the user cannot generate a new link at the portal. The portal's contract and import work this way since its commit `120ca8a`; the bundle's format did not change.
@@ -127,7 +128,7 @@ A user named but bound to no account is not stored, and the portal reports them;
 
 As for `user export`, every check runs before the file is looked at, and the file is checked before the keychain is read. Then exactly the delivered users' secrets are read (`ProfileSelection::secret_refs`), and none of a withheld or unnamed user's.
 
-The bundle is exported again whenever its set or a file in it changes: a user is bound or unbound at the portal, added (once every node is applied), suspended, resumed, revoked, or accepts a new revision, and after every change that changes a user's file (`delivery.md`, section 7). After a new revision of the agreement, a bound user who has not accepted it yet is withheld, and their link pauses until they accept and a bundle delivers them again, so the bundle need not wait until every bound user has accepted. The snapshot does not withhold: it refuses a user named without the acceptance (§2.2), so until a user accepts, the operator leaves them out of its list, and the portal keeps their last snapshot.
+The bundle is exported again whenever its set or a file in it changes: a user is bound or unbound at the portal, added (once every node is applied), suspended, resumed, revoked, or accepts revision 2 after revision 1, and after every change that changes a user's file (`delivery.md`, section 7). A new revision of the agreement changes no one's side: whoever accepted revision 2 stays delivered (§1). The snapshot does not withhold: it refuses a user named without an acceptance of revision 2 or a later one (§2.2), so until such a user accepts, the operator leaves them out of its list.
 
 ### 3.3 Goldens
 
@@ -195,7 +196,7 @@ Each entry:
 | `user` | the Mooring `UserId` the order's account was bound to when it was placed and when it was granted |
 | `plan` | the catalogue's id: 1 to 32 of `a-z`, `0-9` and `-`, not at either end |
 | `plan_kind` | `"month"`, `"month_auto"` or `"traffic"` |
-| `days` | 1 or more: days of service, or the days a pack is meant to last |
+| `days` | 1 or more: days of service, or the days a pack is meant to last, which Mooring records and does not apply: a pack counts in the billing cycle it is granted in (the operator's decision of 2026-11-12) |
 | `traffic_bytes` | 1 or more decimal bytes: the quota of each billing cycle of the service, or the pack's traffic |
 | `amount`, `currency` | the plan's price in the currency's hundredths, and three lower-case letters |
 | `paid_at` | Unix seconds: when Stripe told of the payment |

@@ -47,8 +47,9 @@ fn nothing_is_made_while_the_agreement_does_not_cover_the_portal() {
 }
 
 /// A user goes to the portal only with an acceptance of the revision it
-/// requires: none, or one of another revision, is refused by name; of
-/// several such users, the first in id order, whatever the order named.
+/// requires or of a later one: none, or one of an earlier revision, is
+/// refused by name; of several such users, the first in id order, whatever
+/// the order named. One of a later revision counts.
 #[test]
 fn a_user_without_the_required_acceptance_is_refused() {
     let deployment = pilots(|users| {
@@ -70,14 +71,17 @@ fn a_user_without_the_required_acceptance_is_refused() {
     );
     let current = AgreementVersion::CURRENT;
     let other = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
+    // Revision 1 is what every pilot user accepted before revision 2.
+    let first = AgreementVersion::new(NonZeroU16::MIN);
+    assert!(first < current);
     for (record, said) in [
         (None, "no acceptance is recorded".to_owned()),
         (
             Some(AgreementRecord {
-                version: other,
-                accepted_on: date("2026-10-20"),
+                version: first,
+                accepted_on: date("2026-10-18"),
             }),
-            format!("the recorded acceptance is of revision {other}"),
+            format!("the recorded acceptance is of revision {first}"),
         ),
     ] {
         let deployment = pilots(|users| users[1].agreement = record);
@@ -98,9 +102,28 @@ fn a_user_without_the_required_acceptance_is_refused() {
         );
         assert_eq!(
             error.to_string(),
-            format!("user pilotuserb has not accepted agreement revision {current}: {said}")
+            format!(
+                "user pilotuserb has not accepted agreement revision {current} or a later one: {said}"
+            )
         );
     }
+    let deployment = pilots(|users| {
+        users[1].agreement = Some(AgreementRecord {
+            version: other,
+            accepted_on: date("2026-10-20"),
+        });
+    });
+    assert!(
+        snapshot(
+            &deployment,
+            None,
+            &Entitlements::none(),
+            &ids(&["pilotusera", "pilotuserb"]),
+            GENERATED_AT,
+            open(),
+        )
+        .is_ok()
+    );
 }
 
 /// The operator names at least one user, each known and once, by the

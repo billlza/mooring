@@ -78,13 +78,14 @@ pub(crate) fn vps_under(
 
 /// The abuse guard's gate opened at the current agreement revision, which
 /// every fixture user accepted: the render of a build whose agreement
-/// states the guard (design §11.8), with every served user under it. The
-/// goldens are rendered with it.
+/// states the guard (design §11.8), with every served user under it, as
+/// the shipped gate, open from revision 2, has them. The goldens are
+/// rendered with it.
 pub(crate) const GUARD_OPEN: AbuseGuardAgreement =
     AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT));
 
-/// The abuse guard's gate while no agreement revision states the guard:
-/// it covers no user.
+/// The abuse guard's gate of a build whose agreement does not state the
+/// guard: it covers no user.
 pub(crate) const GUARD_CLOSED: AbuseGuardAgreement = AbuseGuardAgreement::since(None);
 
 /// The exit config of `fixture`.

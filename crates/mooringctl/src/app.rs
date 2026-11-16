@@ -81,11 +81,12 @@ pub(crate) struct Env<'a> {
     /// (`mooring_macsys::redirect_stderr` in the binary).
     pub(crate) redirect_stderr: &'a crate::daemon::log::RedirectStderr<'a>,
     /// Whether the agreement this build ships covers the portal
-    /// (`PortalAgreement::SHIPPED` in the binary): the portal's exports are
-    /// refused until it does.
+    /// (`PortalAgreement::SHIPPED` in the binary, open since revision 2):
+    /// while it does not, the portal's exports are refused.
     pub(crate) portal_agreement: mooring_model::PortalAgreement,
     /// Whom this build's abuse guard covers, by the agreement revision they
-    /// accepted (`AbuseGuardAgreement::SHIPPED` in the binary): the bundles
+    /// accepted (`AbuseGuardAgreement::SHIPPED` in the binary, open since
+    /// revision 2): the bundles
     /// `node apply` renders, and whether `user agree` changes the
     /// configuration (design §11.8).
     pub(crate) abuse_guard: mooring_model::AbuseGuardAgreement,

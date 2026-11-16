@@ -2079,8 +2079,8 @@ mod tests {
             agree(agreed, agreement(1, "2026-11-03")),
             Err(ModelError::AgreementRegressed {
                 user: user_id(1),
-                recorded: AgreementVersion::new(NonZeroU16::new(2).unwrap()),
-                offered: AgreementVersion::CURRENT,
+                recorded: agreement(2, "2026-11-02").version,
+                offered: agreement(1, "2026-11-03").version,
             })
         );
     }
@@ -2167,25 +2167,31 @@ mod tests {
         );
     }
 
-    /// The record's own refusals come before the guard's: a revoking user
-    /// and an older revision are refused as under a closed gate.
+    /// The record's own refusals come before the guard's: a revoking user,
+    /// whose acceptance would bring them under the guard, and an older
+    /// revision are refused as under a closed gate.
     #[test]
     fn an_open_gate_keeps_the_records_own_refusals() {
+        let current = AgreementVersion::CURRENT.get();
         let open = AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT));
+        let offered = agreement(current, "2026-11-15");
         let mut revoking = two_node_parts();
         revoking.users[0].status = UserStatus::RevokePending;
+        assert!(revoking.users[0].agreement.is_none());
+        assert!(open.covers_revision(offered.version));
         assert_eq!(
-            agree_under(build(revoking).unwrap(), agreement(1, "2026-11-15"), open),
+            agree_under(build(revoking).unwrap(), offered, open),
             Err(ModelError::RevocationAlreadyStarted { user: user_id(1) })
         );
         let mut newer = two_node_parts();
-        newer.users[0].agreement = Some(agreement(2, "2026-11-02"));
+        let later = agreement(current + 1, "2026-11-02");
+        newer.users[0].agreement = Some(later);
         assert_eq!(
-            agree_under(build(newer).unwrap(), agreement(1, "2026-11-15"), open),
+            agree_under(build(newer).unwrap(), offered, open),
             Err(ModelError::AgreementRegressed {
                 user: user_id(1),
-                recorded: AgreementVersion::new(NonZeroU16::new(2).unwrap()),
-                offered: AgreementVersion::CURRENT,
+                recorded: later.version,
+                offered: offered.version,
             })
         );
     }

@@ -74,36 +74,52 @@ fn today() -> CalendarDate {
     CalendarDate::utc_of(UnixTime::from_secs(NOW)).unwrap()
 }
 
+/// From no record, and from a record of revision 1, the revision every
+/// pilot user accepted before revision 2 (2026-11-06), `user agree` records
+/// the current revision on today's UTC day. With a gate the acceptance does
+/// not cross, here a closed one, as a build whose agreement does not state
+/// the abuse guard has it, the record is bookkeeping; under the shipped
+/// gate the same acceptance is a configuration change
+/// ([`agree_that_starts_the_abuse_guard_bumps_the_generation`]).
 #[test]
 fn agree_records_the_current_revision_on_the_utc_day_and_keeps_every_confirmation() {
-    let deployment = fixture(|parts| parts.users[0].agreement = None);
-    let user = first_user(&deployment);
-    let mut harness = harness_with(deployment.clone());
-    let outcome = harness.run(&["user", "agree", user.as_str()]);
-    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
-    assert_eq!(outcome.stderr, "");
-    assert_eq!(
-        outcome.stdout,
-        format!(
-            "recorded: user {user} accepted agreement revision 1 on {} (UTC); no node apply is needed\n",
-            today()
-        )
-    );
-    let after = store(&harness).load().unwrap().deployment;
-    assert_eq!(
-        after.users()[&user].agreement,
-        Some(AgreementRecord {
-            version: AgreementVersion::CURRENT,
-            accepted_on: today(),
-        })
-    );
-    // A bookkeeping record: the generation and every node's confirmation
-    // stay, so no node goes stale and the export needs no apply.
-    assert_eq!(after.config_generation(), deployment.config_generation());
-    assert_eq!(after.nodes(), deployment.nodes());
-    let mut expected = deployment.into_parts();
-    expected.users[0].agreement = after.users()[&user].agreement;
-    assert_eq!(after, Deployment::try_from(expected).unwrap());
+    let first = AgreementRecord {
+        version: AgreementVersion::new(NonZeroU16::MIN),
+        accepted_on: CalendarDate::parse("2026-10-18").unwrap(),
+    };
+    assert!(first.version < AgreementVersion::CURRENT);
+    for recorded in [None, Some(first)] {
+        let deployment = fixture(|parts| parts.users[0].agreement = recorded);
+        let user = first_user(&deployment);
+        let mut harness = harness_with(deployment.clone());
+        harness.abuse_guard = AbuseGuardAgreement::since(None);
+        let outcome = harness.run(&["user", "agree", user.as_str()]);
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert_eq!(outcome.stderr, "");
+        assert_eq!(
+            outcome.stdout,
+            format!(
+                "recorded: user {user} accepted agreement revision {} on {} (UTC); no node apply is needed\n",
+                AgreementVersion::CURRENT,
+                today()
+            )
+        );
+        let after = store(&harness).load().unwrap().deployment;
+        assert_eq!(
+            after.users()[&user].agreement,
+            Some(AgreementRecord {
+                version: AgreementVersion::CURRENT,
+                accepted_on: today(),
+            })
+        );
+        // A bookkeeping record: the generation and every node's confirmation
+        // stay, so no node goes stale and the export needs no apply.
+        assert_eq!(after.config_generation(), deployment.config_generation());
+        assert_eq!(after.nodes(), deployment.nodes());
+        let mut expected = deployment.into_parts();
+        expected.users[0].agreement = after.users()[&user].agreement;
+        assert_eq!(after, Deployment::try_from(expected).unwrap());
+    }
 }
 
 /// A record of the current revision is kept with its first day, and the
@@ -120,7 +136,8 @@ fn agree_keeps_an_existing_record_of_the_current_revision() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "kept: user {user} already accepted agreement revision 1 on {}\n",
+            "kept: user {user} already accepted agreement revision {} on {}\n",
+            AgreementVersion::CURRENT,
             recorded.accepted_on
         )
     );
@@ -128,19 +145,28 @@ fn agree_keeps_an_existing_record_of_the_current_revision() {
 }
 
 /// Every refusal exits 1, names its cause, and leaves `state.json` byte
-/// for byte as it was.
+/// for byte as it was. Under the shipped gate a revoking user without a
+/// record would come under the abuse guard, so the configuration change
+/// refuses them, in the same words as the bookkeeping record does a
+/// revoking user who is covered already.
 #[test]
 fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_user() {
     let revoking = fixture(|parts| parts.users[0].status = UserStatus::RevokePending);
+    let revoking_unrecorded = fixture(|parts| {
+        parts.users[0].status = UserStatus::RevokePending;
+        parts.users[0].agreement = None;
+    });
     let revoked = fixture(|parts| {
         parts.users[0].status = UserStatus::Revoked {
             since: UnixTime::from_secs(NOW),
         };
         parts.users[0].per_node.clear();
     });
+    let current = AgreementVersion::CURRENT;
+    let later = AgreementVersion::new(NonZeroU16::new(current.get() + 1).unwrap());
     let newer = fixture(|parts| {
         parts.users[0].agreement = Some(AgreementRecord {
-            version: AgreementVersion::new(NonZeroU16::new(2).unwrap()),
+            version: later,
             accepted_on: CalendarDate::parse("2026-11-02").unwrap(),
         });
     });
@@ -153,6 +179,11 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
             format!("user {user} is already pending revocation or revoked"),
         ),
         (
+            revoking_unrecorded,
+            &user,
+            format!("user {user} is already pending revocation or revoked"),
+        ),
+        (
             revoked,
             &user,
             format!("user {user} is already pending revocation or revoked"),
@@ -161,7 +192,7 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
             newer,
             &user,
             format!(
-                "user {user} accepted agreement revision 2; refusing to record the older revision 1"
+                "user {user} accepted agreement revision {later}; refusing to record the older revision {current}"
             ),
         ),
         (fixture(|_| {}), &unknown, format!("unknown user {unknown}")),
@@ -181,95 +212,49 @@ fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_use
     }
 }
 
-/// The abuse guard's gate opened at the current revision, as a build whose
-/// agreement states the guard ships it.
-fn guard_open() -> AbuseGuardAgreement {
-    AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT))
-}
-
-/// With the guard's gate open, an acceptance that brings the user under the
-/// guard is a configuration change (design §11.8): the generation is
-/// bumped, every node's confirmation stays as it was, so each node the user
-/// holds is behind until its next apply, and the command says so.
+/// Under the shipped gate, open from revision 2, the revision this build
+/// ships, an acceptance from no record or from revision 1 brings the user
+/// under the abuse guard, so it is a configuration change (design §11.8):
+/// the generation is bumped, every node's confirmation stays as it was, so
+/// each node the user holds is behind until its next apply, and the
+/// command says so.
 #[test]
 fn agree_that_starts_the_abuse_guard_bumps_the_generation() {
-    let deployment = fixture(|parts| parts.users[0].agreement = None);
-    let user = first_user(&deployment);
-    let mut harness = harness_with(deployment.clone());
-    harness.abuse_guard = guard_open();
-    let outcome = harness.run(&["user", "agree", user.as_str()]);
-    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
-    assert_eq!(outcome.stderr, "");
-    assert_eq!(
-        outcome.stdout,
-        format!(
-            "recorded: user {user} accepted agreement revision 1 on {} (UTC), which states the abuse guard; every node it holds needs `node apply` before the guard covers it\n",
-            today()
-        )
-    );
-    let after = store(&harness).load().unwrap().deployment;
-    assert_eq!(
-        after.config_generation(),
-        deployment.config_generation().next().unwrap()
-    );
-    assert_eq!(after.nodes(), deployment.nodes());
-    let mut expected = deployment.into_parts();
-    expected.users[0].agreement = Some(AgreementRecord {
-        version: AgreementVersion::CURRENT,
-        accepted_on: today(),
-    });
-    expected.config_generation = after.config_generation();
-    assert_eq!(after, Deployment::try_from(expected).unwrap());
-}
-
-/// With the gate open, a user the guard covers already keeps the record,
-/// and the generation, as with the gate closed; and the refusals are the
-/// same whichever way the acceptance would have been recorded.
-#[test]
-fn agree_with_the_gate_open_keeps_a_covered_record_and_its_refusals() {
-    let deployment = fixture(|_| {});
-    let user = first_user(&deployment);
-    let recorded = deployment.users()[&user].agreement.unwrap();
-    let mut harness = harness_with(deployment.clone());
-    harness.abuse_guard = guard_open();
-    let outcome = harness.run(&["user", "agree", user.as_str()]);
-    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
-    assert_eq!(
-        outcome.stdout,
-        format!(
-            "kept: user {user} already accepted agreement revision 1 on {}\n",
-            recorded.accepted_on
-        )
-    );
-    assert_eq!(store(&harness).load().unwrap().deployment, deployment);
-    // A revoking user without a record would start the guard, so its
-    // refusal comes from the configuration change: the same words.
-    let revoking = fixture(|parts| {
-        parts.users[0].status = UserStatus::RevokePending;
-        parts.users[0].agreement = None;
-    });
-    let unknown = UserId::parse("zzzzzzzzzz").unwrap();
-    for (deployment, target, cause) in [
-        (
-            revoking,
-            &user,
-            format!("user {user} is already pending revocation or revoked"),
-        ),
-        (fixture(|_| {}), &unknown, format!("unknown user {unknown}")),
-    ] {
-        let mut harness = harness_with(deployment);
-        harness.abuse_guard = guard_open();
-        let before = state_bytes(&harness);
-        let outcome = harness.run(&["user", "agree", target.as_str()]);
-        assert_eq!(outcome.code, EXIT_LOCAL);
-        assert_eq!(outcome.stdout, "");
+    let first = AgreementRecord {
+        version: AgreementVersion::FIRST,
+        accepted_on: CalendarDate::parse("2026-10-18").unwrap(),
+    };
+    assert!(AbuseGuardAgreement::SHIPPED.covers_revision(AgreementVersion::CURRENT));
+    assert!(!AbuseGuardAgreement::SHIPPED.covers_revision(first.version));
+    for recorded in [None, Some(first)] {
+        let deployment = fixture(|parts| parts.users[0].agreement = recorded);
+        let user = first_user(&deployment);
+        let mut harness = harness_with(deployment.clone());
+        assert_eq!(harness.abuse_guard, AbuseGuardAgreement::SHIPPED);
+        let outcome = harness.run(&["user", "agree", user.as_str()]);
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert_eq!(outcome.stderr, "");
         assert_eq!(
-            outcome.stderr,
+            outcome.stdout,
             format!(
-                "mooringctl: the state was not changed\n  caused by: the new or changed deployment is invalid\n  caused by: {cause}\n"
+                "recorded: user {user} accepted agreement revision {} on {} (UTC), which states the abuse guard; every node it holds needs `node apply` before the guard covers it\n",
+                AgreementVersion::CURRENT,
+                today()
             )
         );
-        assert_eq!(state_bytes(&harness), before);
+        let after = store(&harness).load().unwrap().deployment;
+        assert_eq!(
+            after.config_generation(),
+            deployment.config_generation().next().unwrap()
+        );
+        assert_eq!(after.nodes(), deployment.nodes());
+        let mut expected = deployment.into_parts();
+        expected.users[0].agreement = Some(AgreementRecord {
+            version: AgreementVersion::CURRENT,
+            accepted_on: today(),
+        });
+        expected.config_generation = after.config_generation();
+        assert_eq!(after, Deployment::try_from(expected).unwrap());
     }
 }
 

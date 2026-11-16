@@ -10,8 +10,8 @@
 //!
 //! The nodes' files are rendered with the abuse guard's gate open at the
 //! current agreement revision, which every fixture user accepted
-//! ([`GUARD_OPEN`]): the guard as it runs once the agreement states it,
-//! every served user under it (design §11.8). With the gate closed, only
+//! ([`GUARD_OPEN`]): the guard as the shipped gate, open from revision 2,
+//! runs it, every served user under it (design §11.8). With the gate closed, only
 //! `xray.json` and `watch.json` differ (`tests::coverage`).
 
 use std::collections::BTreeSet;

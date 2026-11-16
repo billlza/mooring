@@ -17,20 +17,25 @@
 //! covers is therefore part of every bundle that serves them, so an
 //! acceptance that brings a user under the guard is a configuration change,
 //! never bookkeeping (`ModelError::AgreementStartsGuard`). `mooringctl`
-//! passes [`AbuseGuardAgreement::SHIPPED`].
+//! passes [`AbuseGuardAgreement::SHIPPED`], which is open because
+//! [`ABUSE_GUARD_SINCE`] names a revision this build ships.
+
+use std::num::NonZeroU16;
 
 use crate::user::{AgreementVersion, User};
 
 /// The first revision of the user agreement whose text states the abuse
 /// guard: clause 3 says what it limits, detects and cuts, and clause 4
-/// which abuse records it keeps and for how long. `None` while no revision
-/// this build ships does.
-///
-/// Writing that revision sets it, in the commit that raises
-/// [`AgreementVersion::CURRENT`] and records the text's digest
-/// (`crates/export/tests/export/agreement_text.rs`, which also requires the
-/// text of a stating revision to name the abuse records, and only then).
-pub const ABUSE_GUARD_SINCE: Option<AgreementVersion> = None;
+/// which abuse records it keeps and for how long. Revision 2, set when the
+/// guard was merged with the build that raised [`AgreementVersion::CURRENT`]
+/// to it (`crates/export/tests/export/agreement_text.rs` requires the text
+/// of a stating revision to name the abuse records, and only then). It
+/// stays 2 when later revisions raise `CURRENT`, so a later revision never
+/// takes a user who accepted revision 2 out of the guard.
+pub const ABUSE_GUARD_SINCE: Option<AgreementVersion> = match NonZeroU16::new(2) {
+    Some(revision) => Some(AgreementVersion::new(revision)),
+    None => panic!("agreement revisions count from 1"),
+};
 
 /// Whether this build's abuse guard covers a user, by the agreement
 /// revision the user accepted.
@@ -45,8 +50,9 @@ impl AbuseGuardAgreement {
     pub const SHIPPED: Self = Self::since(ABUSE_GUARD_SINCE);
 
     /// The gate of this build if `since` were the first revision stating
-    /// the guard. The binary passes [`Self::SHIPPED`]; tests open the gate
-    /// with `since(Some(AgreementVersion::CURRENT))`.
+    /// the guard. The binary passes [`Self::SHIPPED`]; tests close the gate
+    /// with `since(None)`, as a build whose agreement does not state the
+    /// guard has it.
     #[must_use]
     pub const fn since(since: Option<AgreementVersion>) -> Self {
         Self { since }
@@ -72,8 +78,6 @@ impl AbuseGuardAgreement {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU16;
-
     use super::*;
     use crate::date::CalendarDate;
     use crate::testing::user;
@@ -95,6 +99,16 @@ mod tests {
             ABUSE_GUARD_SINCE.is_none_or(|since| since <= AgreementVersion::CURRENT),
             "{ABUSE_GUARD_SINCE:?}"
         );
+    }
+
+    /// Revision 2 is the first that states the guard, and stays so: a
+    /// later revision raises `CURRENT`, never the revision from which the
+    /// guard covers a user. Revision 1 never brings a user under it.
+    #[test]
+    fn the_guard_covers_from_revision_2() {
+        assert_eq!(ABUSE_GUARD_SINCE, Some(revision(2)));
+        assert!(AbuseGuardAgreement::SHIPPED.covers_revision(AgreementVersion::CURRENT));
+        assert!(!AbuseGuardAgreement::SHIPPED.covers_revision(AgreementVersion::FIRST));
     }
 
     /// An acceptance of the first stating revision or a later one covers a

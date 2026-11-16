@@ -508,12 +508,15 @@ fn profiles_summary(path: &Path, selection: &ProfileSelection) -> String {
 
 /// What the portal's import does to the subscription link of a user
 /// withheld for `why` (the operator's decision, 2026-11-06): a suspension,
-/// whatever its reason, or a missing acceptance only pauses it, until a
-/// bundle delivers the user again; a revocation ends it for good.
+/// whatever its reason, pauses it until a bundle delivers the user again; a
+/// user without an acceptance of a revision that covers the portal is
+/// offered nothing there until they accept one (the operator's decision of
+/// 2026-11-15); a revocation ends it for good.
 const fn link_at_import(why: &Withheld) -> &'static str {
     match why {
-        Withheld::Suspended | Withheld::AgreementNotAccepted { .. } => {
-            "pauses their subscription link until a bundle delivers them again"
+        Withheld::Suspended => "pauses their subscription link until a bundle delivers them again",
+        Withheld::AgreementNotAccepted { .. } => {
+            "offers them nothing at the portal until they accept that revision and a bundle delivers them"
         }
         Withheld::BeingRevoked | Withheld::Revoked => "ends their subscription link for good",
     }

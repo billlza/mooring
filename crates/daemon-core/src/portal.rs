@@ -29,7 +29,8 @@
 //!
 //! A snapshot is made only while the agreement revision the build ships
 //! covers the portal ([`PortalAgreement`]), and only of users who accepted
-//! that revision; anything else is refused before anything is encoded.
+//! the first revision that covers it or a later one; anything else is
+//! refused before anything is encoded.
 
 mod document;
 mod error;
@@ -106,11 +107,11 @@ impl PortalSnapshot {
 /// (`NotCovered`); when the users named are none, include an id no user
 /// has or name a user twice (`Named`, [`named_users`]); when
 /// `generated_at` is past 9999-12-31; when a user named, the first in id
-/// order, has not accepted the revision required; when the report runs
-/// past `generated_at` or ends outside its own cycle; when the automatic
-/// quota cannot be evaluated; and for a user suspended after
-/// `generated_at`, expiring past 9999-12-31 or missing from the report.
-/// The users appear in id order.
+/// order, has accepted neither the revision required nor a later one;
+/// when the report runs past `generated_at` or ends outside its own
+/// cycle; when the automatic quota cannot be evaluated; and for a user
+/// suspended after `generated_at`, expiring past 9999-12-31 or missing
+/// from the report. The users appear in id order.
 ///
 /// `report` is the deployment's usage report, `None` when Mooring has none
 /// (every figure is then `null`); `paid` is what the users' paid orders
@@ -242,7 +243,7 @@ fn bounded(
 }
 
 /// `AgreementNotAccepted` for the first of the `selected` users, in id
-/// order, without an acceptance of `required`.
+/// order, without an acceptance of `required` or of a later revision.
 fn all_accepted(
     selected: &BTreeMap<&UserId, &User>,
     required: AgreementVersion,

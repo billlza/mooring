@@ -175,7 +175,9 @@ pub(crate) enum UserCommand {
     },
     /// Record that the user accepted the agreement revision this build
     /// ships, dated today (UTC). It takes neither a revision nor a date, so
-    /// neither can be mistyped; it needs no node apply.
+    /// neither can be mistyped. It needs no node apply, unless it brings
+    /// the user under the abuse guard, which revision 2 states: then every
+    /// node the user holds needs `node apply` before the guard covers them.
     Agree {
         /// The user's id.
         #[arg(value_name = "USER_ID")]
@@ -245,8 +247,9 @@ pub(crate) enum UserCommand {
     /// credentials included) or why it is withheld, to a new file with mode
     /// 0600 (never overwritten). Name every user bound to a portal account:
     /// the portal refuses a bundle that leaves one out, and `mooring-portal
-    /// bound-users` on its host prints them as --user arguments. Refused
-    /// until the user agreement covers the portal.
+    /// bound-users` on its host prints them as --user arguments. A user who
+    /// has not accepted revision 2 of the agreement, the first that covers
+    /// the portal, or a later one, is withheld.
     ExportProfiles {
         /// A user bound to a portal account; give one --user per user. Only
         /// the users named are in the bundle.
@@ -354,8 +357,9 @@ pub(crate) enum PortalCommand {
     /// Write the portal snapshot of the users named, for `mooring-portal
     /// import`: their status, usage this billing cycle, quota and expiry,
     /// by user id and without credentials, to a new file with mode 0600
-    /// (never overwritten). Refused until the user agreement covers the
-    /// portal.
+    /// (never overwritten). Refused if a user named has not accepted
+    /// revision 2 of the agreement, the first that covers the portal, or a
+    /// later one.
     Export {
         /// A user to include; give one --user per user. Only the users
         /// named are exported.

@@ -14,13 +14,14 @@
 //! that leaves out a bound user, so the operator names them all; a list
 //! that names no one, an id no user has or a user twice is refused. A user
 //! named is delivered when active and with an acceptance of the agreement
-//! revision the portal requires ([`PortalAgreement`]). Every other user
-//! named is withheld, with the reason ([`Withheld`]); an exhaustive match
-//! puts each status on one side, so a status added later has to be placed
-//! there. A user to be delivered whose file cannot be made (a node not
-//! applied, a certificate no longer current, no credentials) refuses the
-//! whole bundle: none of the contract's reasons to withhold a user is
-//! theirs, and left out, they would make the portal refuse the bundle.
+//! revision the portal requires or of a later one ([`PortalAgreement`]).
+//! Every other user named is withheld, with the reason ([`Withheld`]); an
+//! exhaustive match puts each status on one side, so a status added later
+//! has to be placed there. A user to be delivered whose file cannot be
+//! made (a node not applied, a certificate no longer current, no
+//! credentials) refuses the whole bundle: none of the contract's reasons to
+//! withhold a user is theirs, and left out, they would make the portal
+//! refuse the bundle.
 //!
 //! # What it holds
 //!
@@ -76,12 +77,12 @@ pub enum Withheld {
     BeingRevoked,
     /// The user is revoked.
     Revoked,
-    /// The user is active but has not accepted the revision the portal
-    /// requires, so no file of theirs is exported.
+    /// The user is active but has accepted neither the revision the portal
+    /// requires nor a later one, so no file of theirs is exported.
     AgreementNotAccepted {
         /// The revision the user accepted, if a record exists.
         recorded: Option<AgreementVersion>,
-        /// The revision required.
+        /// The revision required, the first that covers the portal.
         required: AgreementVersion,
     },
 }
@@ -94,7 +95,7 @@ impl fmt::Display for Withheld {
             Self::Revoked => f.write_str("revoked"),
             Self::AgreementNotAccepted { recorded, required } => write!(
                 f,
-                "has not accepted agreement revision {required}: {}",
+                "has not accepted agreement revision {required} or a later one: {}",
                 RecordedAgreement(*recorded)
             ),
         }
