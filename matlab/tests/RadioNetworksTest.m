@@ -136,6 +136,37 @@ classdef RadioNetworksTest < matlab.unittest.TestCase
             testCase.verifyEqual(networks.attached, 1);
         end
 
+        function theLastRowAtTheLatestTimeSelectsTheNetwork(testCase)
+            at = testCase.Base + [60; 60; 0];
+            samples = testCase.attached(at, [3; 12; 2], ["234-20"; "234-30"; "234-20"]);
+            [indicators, ~, network] = mooring.radioDegradation(samples);
+            testCase.verifyEqual(network, "234-30");
+            row = indicators.indicator == "lte_sinr_db";
+            testCase.verifyEqual(indicators.recent_count(row), 1);
+            testCase.verifyEqual(indicators.recent(row), 12);
+        end
+
+        function anEveningFailureKeepsTheNetworkSeenInDaylight(testCase)
+            % 19:00 on A; 17:00 the next day on B; no answer at 19:00.
+            at = testCase.Base + [0; 22 * 3600; 24 * 3600];
+            kind = ["attached"; "attached"; "failed"];
+            plmn = ["234-20"; "234-30"; ""];
+            readings = repmat(testCase.Steady, 3, 1);
+            readings(3, :) = NaN;
+            service = repmat("lte", 3, 1);
+            samples = radioPolls(testCase.Folder, at, kind, readings, service, zeros(3, 1), plmn);
+            samples.Properties.RowTimes.TimeZone = 'Asia/Shanghai';
+            % Reproduce the documented pre-fix operation on the same UTC hours.
+            utc = samples.Properties.RowTimes;
+            utc.TimeZone = 'UTC';
+            networks = mooring.radioNetworks(samples(hour(utc) >= 18, :));
+            testCase.verifyEqual(networks.network, ["234-20"; "234-30"]);
+            testCase.verifyEqual(networks.polls, [1; 1]);
+            testCase.verifyEqual(networks.failed, [0; 1]);
+            testCase.verifyEqual(networks.attached, [1; 0]);
+            testCase.verifyEqual(networks.lte_sinr_db, [10; NaN]);
+        end
+
         function theSameHoursOfTheDayAreSetBesideEachOther(testCase)
             % At 19:00 and at midnight, a day on 234-20 and a day on
             % 234-30.
