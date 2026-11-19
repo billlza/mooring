@@ -156,10 +156,7 @@ classdef RadioNetworksTest < matlab.unittest.TestCase
             service = repmat("lte", 3, 1);
             samples = radioPolls(testCase.Folder, at, kind, readings, service, zeros(3, 1), plmn);
             samples.Properties.RowTimes.TimeZone = 'Asia/Shanghai';
-            % Reproduce the documented pre-fix operation on the same UTC hours.
-            utc = samples.Properties.RowTimes;
-            utc.TimeZone = 'UTC';
-            networks = mooring.radioNetworks(samples(hour(utc) >= 18, :));
+            networks = mooring.radioNetworks(samples, Hours=18:23);
             testCase.verifyEqual(networks.network, ["234-20"; "234-30"]);
             testCase.verifyEqual(networks.polls, [1; 1]);
             testCase.verifyEqual(networks.failed, [0; 1]);

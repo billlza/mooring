@@ -1,4 +1,4 @@
-function networks = radioNetworks(samples)
+function networks = radioNetworks(samples, options)
 %RADIONETWORKS Each network's polls and median readings, side by side.
 %   NETWORKS = mooring.radioNetworks(SAMPLES) takes the timetable
 %   mooring.readRadioSamples returns and gives a table with a row for each
@@ -30,11 +30,12 @@ function networks = radioNetworks(samples)
 %   network is missing. SAMPLES without rows give NETWORKS without rows. A
 %   share, a mean or a median of no poll is NaN.
 %
-%   Each network is taken over whatever hours it was polled in. To set the
-%   same hours of the day beside each other, pass those polls alone: the
-%   evenings from 18:00 UTC are
+%   Hours selects UTC hours of the day (0 to 23, default all). Each poll
+%   is attributed to its network using the full input before selecting
+%   hours: a daytime poll can identify the network of a failed evening
+%   poll. For the evenings from 18:00 UTC:
 %
-%       mooring.radioNetworks(SAMPLES(hour(SAMPLES.at) >= 18, :))
+%       mooring.radioNetworks(SAMPLES, Hours=18:23)
 %
 %   The medians say how the radio link read, not how fast it was: the
 %   samples hold no throughput.
@@ -46,10 +47,16 @@ function networks = radioNetworks(samples)
 
     arguments
         samples timetable {mooring.internal.mustBeSamples}
+        options.Hours (1,:) double {mustBeMember(options.Hours, 0:23)} = 0:23
     end
-    [times, order] = sort(samples.Properties.RowTimes);
-    samples = samples(order, :);
     each = mooring.internal.pollNetwork(samples);
+    [times, order] = sort(samples.Properties.RowTimes);
+    times.TimeZone = 'UTC';
+    kept = ismember(hour(times), options.Hours);
+    times = times(kept);
+    order = order(kept);
+    samples = samples(order, :);
+    each = each(order);
     % Samples without a network's codes are one network without a name.
     each(ismissing(each)) = "";
     [network, ~, group] = unique(each, "stable");

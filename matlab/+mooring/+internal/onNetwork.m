@@ -31,7 +31,10 @@ function [kept, code] = onNetwork(samples, network)
         if isempty(known)
             return
         end
-        [~, latest] = max(samples.Properties.RowTimes);
+        % Polls can share a second. Within that second keep their row
+        % order, as pollNetwork does when attributing a poll without codes.
+        times = samples.Properties.RowTimes;
+        latest = find(times == max(times), 1, "last");
         code = each(latest);
     elseif ismember(network, known)
         code = network;
