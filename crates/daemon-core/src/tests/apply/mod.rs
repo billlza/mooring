@@ -4,6 +4,7 @@
 //! step and its removals, against deployments of users in every status.
 
 mod evaluate;
+mod expiry_resumes;
 mod mid_cycle;
 mod plan;
 mod removals;
