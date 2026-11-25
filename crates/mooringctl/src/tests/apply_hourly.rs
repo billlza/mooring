@@ -247,7 +247,7 @@ fn outside_the_window_a_firing_that_cannot_tell_reports_why() {
     assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
     assert!(
         outcome.stdout.starts_with(&format!(
-            "policy step not carried out: a suspension for quota is dated after now: the clock stepped back, or a record is wrong: user {SECOND} was suspended for quota at @1792005600, after now (@1791922800)\n"
+            "policy step not carried out: a suspension is dated after now: the clock stepped back, or a record is wrong: user {SECOND} was suspended for quota at @1792005600, after now (@1791922800)\n"
         )),
         "{}",
         outcome.stdout

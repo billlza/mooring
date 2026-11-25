@@ -179,6 +179,37 @@ fn the_cap_and_a_quota_already_used_bound_an_hourly_resume() {
     );
 }
 
+/// An operator's extension may resume a user as soon as the clock
+/// reaches the recorded suspension, with no payment ledger entry.
+#[test]
+fn an_expiry_extension_waits_for_the_recorded_suspension_time() {
+    let mut extended = added_unpaid(UNPAID);
+    extended.policy.expires_at = Some(later());
+    let user = extended.id.clone();
+    let deployment = holding(vec![extended], None);
+    let paid = Entitlements::none();
+    let before = UnixTime::from_secs(added().as_secs() - 1);
+    assert_eq!(
+        expiry_resumes_due(&deployment, &paid, before),
+        Err(PolicyError::ExpirySuspensionAfterNow {
+            user: user.clone(),
+            since: added(),
+            now: before,
+        })
+    );
+    assert_eq!(
+        plan_expiry_resumes(&deployment, &paid, None, added())
+            .unwrap()
+            .resumes,
+        [Lapsed {
+            user,
+            reason: SuspendReason::Expired,
+            since: added(),
+            why: Lapse::NoLongerExpired,
+        }]
+    );
+}
+
 /// A suspension for quota dated after the firing refuses it, as it refuses
 /// the night's run: the clock stepped back, and nothing is tried.
 #[test]

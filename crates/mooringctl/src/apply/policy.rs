@@ -106,7 +106,8 @@ pub(super) fn step(
         Ok(plan) => PolicyOutcome::CarriedOut(Box::new(carry_out(store, &plan, behind))),
         Err(error) => {
             let kind = match error.kind() {
-                PolicyErrorKind::QuotaSuspensionAfterNow => RefusalKind::ClockSteppedBack,
+                PolicyErrorKind::QuotaSuspensionAfterNow
+                | PolicyErrorKind::ExpirySuspensionAfterNow => RefusalKind::ClockSteppedBack,
                 _ => RefusalKind::Policy,
             };
             refused(kind, &error)

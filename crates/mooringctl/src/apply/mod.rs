@@ -25,10 +25,10 @@
 //!    its resumes, one configuration change each. A payment ledger or pull
 //!    settings that cannot be read refuse the step, since a paid user
 //!    would be read as unpaid; so do collected usage that cannot be read
-//!    or is inconsistent, and a suspension for quota dated after `now` (a
-//!    clock that stepped back). Usage that is behind (the daemon stopped,
-//!    or a node it cannot reach) leaves the quotas unchecked, and the rest
-//!    of the step runs.
+//!    or is inconsistent, and an expiry or quota suspension dated after
+//!    `now` (a clock that stepped back). While usage is behind because the
+//!    daemon stopped or a node is unreachable, the rest of the step runs
+//!    with quotas unchecked.
 //! 2. **Removals** ([`policy::remove`]): each user revoked 13 months ago
 //!    (`RevokedUserRemoved`), then the kept ids whose records have expired
 //!    (`ForgottenExpired`); skipped when the clock stepped back. The daemon

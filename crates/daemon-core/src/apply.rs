@@ -196,8 +196,8 @@ pub fn plan_policy(
 /// The suspensions at expiry of `deployment` whose expiry (with what the
 /// users' paid orders gave, `paid`) is no longer past at `now`, earliest
 /// first and then by id: what an hourly firing outside the window tries to
-/// resume ([`plan_expiry_resumes`]). A suspension for quota after `now`
-/// refuses it, as it refuses the night's step.
+/// resume ([`plan_expiry_resumes`]). A suspension at expiry or for quota
+/// dated after `now` refuses it, as it refuses the night's step.
 pub fn expiry_resumes_due(
     deployment: &Deployment,
     paid: &Entitlements,
@@ -298,8 +298,8 @@ fn resume_within_cap(
 /// - one at expiry whose user's expiry (`effective_policy`, with what their
 ///   paid orders gave) is no longer past (`NoLongerExpired`).
 ///
-/// One by the operator or for an abuse review never lapses here. A
-/// suspension for quota after `now` is `QuotaSuspensionAfterNow`.
+/// One by the operator or for an abuse review never lapses here. An expiry
+/// or quota suspension recorded after `now` refuses the plan.
 fn lapsed_suspensions(
     deployment: &Deployment,
     paid: &Entitlements,
@@ -341,6 +341,13 @@ fn lapsed_suspensions(
                 }
             }
             SuspendReason::Expired => {
+                if since > now {
+                    return Err(PolicyError::ExpirySuspensionAfterNow {
+                        user: id.clone(),
+                        since,
+                        now,
+                    });
+                }
                 // The expiry reads no usage.
                 let policy = effective_policy(user, automatic, paid, cycle, now, None);
                 (!matches!(

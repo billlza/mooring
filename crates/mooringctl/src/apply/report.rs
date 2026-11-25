@@ -34,7 +34,7 @@ pub(crate) enum RefusalKind {
     PaymentFiles,
     /// The collected usage cannot be read or is inconsistent.
     Usage,
-    /// A suspension for quota is dated after the run's time.
+    /// An expiry or quota suspension is dated after the run's time.
     ClockSteppedBack,
     /// The policy could not be evaluated otherwise.
     Policy,
@@ -48,7 +48,7 @@ impl RefusalKind {
             }
             Self::Usage => "the usage the daemon collected cannot be read or is inconsistent",
             Self::ClockSteppedBack => {
-                "a suspension for quota is dated after now: the clock stepped back, or a record is wrong"
+                "a suspension is dated after now: the clock stepped back, or a record is wrong"
             }
             Self::Policy => "the users' policy could not be evaluated",
         }

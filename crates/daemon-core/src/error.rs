@@ -460,6 +460,17 @@ pub enum PolicyError {
         /// The evaluation time.
         now: UnixTime,
     },
+    /// The run predates an expiry suspension. An unpaid account's own
+    /// expiry is its creation time, so it looks unexpired at this clock.
+    #[error("the expiry suspension for user {user} was recorded at {since}, after now ({now})")]
+    ExpirySuspensionAfterNow {
+        /// The user.
+        user: UserId,
+        /// When the expiry suspension was recorded.
+        since: UnixTime,
+        /// The evaluation time.
+        now: UnixTime,
+    },
     /// The current cycle could not be placed on the calendar.
     #[error(transparent)]
     Model(#[from] ModelError),
@@ -478,6 +489,8 @@ kinds! {
         AutomaticQuotaZero,
         /// See [`PolicyError::QuotaSuspensionAfterNow`].
         QuotaSuspensionAfterNow,
+        /// See [`PolicyError::ExpirySuspensionAfterNow`].
+        ExpirySuspensionAfterNow,
         /// See [`PolicyError::Model`].
         Model,
     }
@@ -493,6 +506,7 @@ impl PolicyError {
             Self::UsageMissing { .. } => PolicyErrorKind::UsageMissing,
             Self::AutomaticQuotaZero { .. } => PolicyErrorKind::AutomaticQuotaZero,
             Self::QuotaSuspensionAfterNow { .. } => PolicyErrorKind::QuotaSuspensionAfterNow,
+            Self::ExpirySuspensionAfterNow { .. } => PolicyErrorKind::ExpirySuspensionAfterNow,
             Self::Model(_) => PolicyErrorKind::Model,
         }
     }

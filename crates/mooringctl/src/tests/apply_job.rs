@@ -324,7 +324,7 @@ fn a_clock_that_stepped_back_carries_out_nothing_but_node_applies() {
     assert_eq!(
         lines.next().unwrap(),
         format!(
-            "policy step not carried out: a suspension for quota is dated after now: the clock stepped back, or a record is wrong: user {SECOND} was suspended for quota at @1792005600, after now (@1791919200)"
+            "policy step not carried out: a suspension is dated after now: the clock stepped back, or a record is wrong: user {SECOND} was suspended for quota at @1792005600, after now (@1791919200)"
         )
     );
     assert_eq!(
@@ -336,10 +336,45 @@ fn a_clock_that_stepped_back_carries_out_nothing_but_node_applies() {
     assert_eq!(harness.nodes.seen.borrow().len(), 2);
     let log = log(&harness);
     assert!(
-        log.contains("mooringctl apply: policy step not carried out: a suspension for quota is dated after now"),
+        log.contains(
+            "mooringctl apply: policy step not carried out: a suspension is dated after now"
+        ),
         "{log}"
     );
     assert!(!log.contains("fxuser"), "{log}");
+}
+
+/// An unpaid account stays suspended when either scheduled run sees a
+/// clock earlier than the account's creation. Once the clock catches up,
+/// the hourly job may skip normally while the ledger is still empty.
+#[test]
+fn an_unpaid_account_stays_suspended_across_a_clock_correction() {
+    let added = NOW + 3601;
+    let mut harness = job(unapplied(|parts| {
+        added_unpaid(parts, FIRST, at(added));
+        revoke(parts, THIRD, at(NOW - 500 * 86_400));
+    }));
+    let before = state_bytes(&harness);
+    for (when, form, removals) in [
+        (NOW + 3600, "expiry_resumes", Value::Null),
+        (NOW, "full", Value::from("skipped")),
+    ] {
+        harness.now.set(when);
+        let outcome = harness.run(&["apply", "--pending", "--json"]);
+        assert_eq!(outcome.code, EXIT_LOCAL, "{}", outcome.stdout);
+        let report: Value = serde_json::from_str(&outcome.stdout).unwrap();
+        assert_eq!(report["form"], form);
+        assert_eq!(report["policy"]["refused"]["kind"], "clock_stepped_back");
+        assert_eq!(report["removals"], removals);
+        assert_eq!(state_bytes(&harness), before);
+        assert!(harness.nodes.seen.borrow().is_empty());
+    }
+    harness.now.set(added);
+    let outcome = harness.run(&["apply", "--pending", "--json"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let report: Value = serde_json::from_str(&outcome.stdout).unwrap();
+    assert_eq!(report["ran"], false);
+    assert_eq!(state_bytes(&harness), before);
 }
 
 /// A user revoked 13 calendar months ago to the second is removed, its id
