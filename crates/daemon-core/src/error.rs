@@ -405,8 +405,9 @@ impl AlertError {
     }
 }
 
-/// The quota and expiry evaluation refuses its inputs
-/// ([`crate::policy::evaluate`], [`crate::policy::automatic_quota`]).
+/// A quota or expiry calculation, including the apply job's resume plan,
+/// could not use its inputs ([`crate::policy::evaluate`],
+/// [`crate::policy::automatic_quota`], [`crate::apply::plan_expiry_resumes`]).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyError {
     /// The usage covers another billing cycle than the one `now` is in.

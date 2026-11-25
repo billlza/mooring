@@ -76,7 +76,8 @@ pub(crate) const APPLY_LOCK_FILE: &str = "apply.lock";
 /// Which form of the job runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum When {
-    /// launchd's hourly firing: it runs only within the window.
+    /// launchd's hourly firing runs the full job in the window and checks
+    /// for expiry resumes outside it.
     Pending,
     /// The operator's: it runs at once.
     Now,
