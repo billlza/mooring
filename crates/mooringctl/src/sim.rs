@@ -107,7 +107,7 @@ pub(crate) fn accept_network(
         DaemonReply::Refused { reason } => {
             return Err(LocalError::DaemonRefused { reason }.into());
         }
-        DaemonReply::RetryQueued | DaemonReply::SimNetworkAccepted => {
+        DaemonReply::RetryQueued | DaemonReply::SimNetworkAccepted | DaemonReply::MadeUp { .. } => {
             return Err(LocalError::DaemonUnexpectedReply.into());
         }
     };
@@ -139,7 +139,7 @@ pub(crate) fn accept_network(
             Ok(())
         }
         DaemonReply::Refused { reason } => Err(LocalError::DaemonRefused { reason }.into()),
-        DaemonReply::Status(_) | DaemonReply::RetryQueued => {
+        DaemonReply::Status(_) | DaemonReply::RetryQueued | DaemonReply::MadeUp { .. } => {
             Err(LocalError::DaemonUnexpectedReply.into())
         }
     }

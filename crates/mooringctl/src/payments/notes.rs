@@ -5,10 +5,12 @@
 //! opaque), never with the token or a label. A refund's line names the
 //! order only, with what it took back or that it waits for the usage; so
 //! do the line that ends such a wait and the lines that say which nodes
-//! no longer hold a download that was open at the refund.
+//! no longer hold a download that was open at the refund. A make-up's
+//! line names it by number, with its user, what it gave and why.
 
 use mooring_daemon_core::payments::{
-    Closed, GrantOutcome, LedgerEvent, OrderId, PackUse, RefundEffect, TimeTakenBack,
+    Closed, GrantOutcome, Granted, LedgerEvent, MakeUpGift, MakeUpReason, MakeUpRecord, PackUse,
+    RefundEffect, TimeTakenBack,
 };
 use mooring_model::user::SuspendReason;
 use mooring_model::{NodeId, UnixTime};
@@ -19,6 +21,64 @@ use crate::router::output::utc_stamp;
 /// calendar, which only a clock gone wrong gives.
 pub(crate) fn stamp(at: UnixTime) -> String {
     utc_stamp(at).unwrap_or_else(|_| at.to_string())
+}
+
+/// What a make-up gave, as the log, `user make-up` and `portal payments`
+/// say it.
+pub(crate) fn gift(gift: &MakeUpGift) -> String {
+    match gift {
+        MakeUpGift::Period {
+            from,
+            until,
+            quota_bytes,
+        } => format!(
+            "service from {} until {}, with a quota of {} bytes a billing cycle",
+            stamp(*from),
+            stamp(*until),
+            quota_bytes
+        ),
+        MakeUpGift::Traffic { bytes } => {
+            format!("{bytes} bytes of traffic for the billing cycle it was given in")
+        }
+    }
+}
+
+/// Why a make-up was given, as a phrase.
+pub(crate) const fn reason(reason: MakeUpReason) -> &'static str {
+    match reason {
+        MakeUpReason::Outage => "for an outage",
+        MakeUpReason::MistakenCut => "for a mistaken cut",
+        MakeUpReason::Unrefundable => "in place of a refund the card can no longer take",
+        MakeUpReason::MistakenBan => "for a mistaken ban",
+    }
+}
+
+/// The daemon's line for a make-up it recorded.
+pub(crate) fn made_up(record: &MakeUpRecord, suspended: Option<SuspendReason>) -> String {
+    format!(
+        "make-up {}: user {} is given {}, {}{}",
+        record.number,
+        record.user,
+        gift(&record.gift),
+        reason(record.reason),
+        suspension(suspended)
+    )
+}
+
+/// What a grant or a make-up says of a user it found suspended.
+pub(crate) const fn suspension(suspended: Option<SuspendReason>) -> &'static str {
+    match suspended {
+        None => "",
+        Some(SuspendReason::Expired) => {
+            "; the user is suspended at expiry, and the nightly apply job resumes them once their paid time covers it, while the cap on active users leaves room"
+        }
+        Some(SuspendReason::QuotaExceeded { .. }) => {
+            "; the user is suspended for quota, and the nightly apply job resumes them once their quota covers what they used this cycle, or in the next billing cycle"
+        }
+        Some(SuspendReason::Operator | SuspendReason::AbuseReview) => {
+            "; the user is suspended, and only the operator resumes them"
+        }
+    }
 }
 
 /// One event of an applied page, as the daemon logs it.
@@ -43,18 +103,7 @@ pub(crate) fn describe(event: &LedgerEvent) -> String {
             } else {
                 " (rehearsal, Stripe test mode)"
             };
-            let suspended = match suspended {
-                None => "",
-                Some(SuspendReason::Expired) => {
-                    "; the user is suspended at expiry, and the nightly apply job resumes them once their paid time covers it, while the cap on active users leaves room"
-                }
-                Some(SuspendReason::QuotaExceeded { .. }) => {
-                    "; the user is suspended for quota, and the nightly apply job resumes them once their quota covers what they used this cycle, or in the next billing cycle"
-                }
-                Some(SuspendReason::Operator | SuspendReason::AbuseReview) => {
-                    "; the user is suspended, and only the operator resumes them"
-                }
-            };
+            let suspended = suspension(*suspended);
             format!("payment: order {order} granted user {user} {what}{mode}{suspended}")
         }
         LedgerEvent::Held {
@@ -168,17 +217,37 @@ pub(crate) fn taken_back(effect: &RefundEffect) -> String {
     }
 }
 
-/// The periods a refund in full moved earlier, as a clause.
-fn followers(moved: &[OrderId]) -> String {
-    let orders = moved
+/// The periods a refund in full moved earlier, as a clause: the orders'
+/// and then the make-ups'.
+fn followers(moved: &[Granted]) -> String {
+    let orders: Vec<String> = moved
         .iter()
-        .map(OrderId::to_string)
+        .filter_map(|granted| match granted {
+            Granted::Order(order) => Some(order.to_string()),
+            Granted::MakeUp(_) => None,
+        })
+        .collect();
+    let make_ups: Vec<String> = moved
+        .iter()
+        .filter_map(|granted| match granted {
+            Granted::MakeUp(number) => Some(number.to_string()),
+            Granted::Order(_) => None,
+        })
+        .collect();
+    let named = |kind: &str, ids: &[String]| match ids {
+        [] => None,
+        [id] => Some(format!("{kind} {id}")),
+        _ => Some(format!("{kind}s {}", ids.join(", "))),
+    };
+    let names = [named("order", &orders), named("make-up", &make_ups)]
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(" and ");
     match moved.len() {
         0 => String::new(),
-        1 => format!(", and the period of order {orders} that followed it moves as much earlier"),
-        _ => format!(", and the periods of orders {orders} that followed it move as much earlier"),
+        1 => format!(", and the period of {names} that followed it moves as much earlier"),
+        _ => format!(", and the periods of {names} that followed it move as much earlier"),
     }
 }
 

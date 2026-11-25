@@ -1,50 +1,54 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! What the orders that count give each user (design §9.6): the service
-//! periods and traffic packs recorded in the payment ledger. Built by
+//! What the orders that count and the make-ups give each user (design
+//! §9.6): the service periods and traffic packs recorded in the payment
+//! ledger. Built by
 //! [`PaymentLedger::entitlements`](super::PaymentLedger::entitlements);
-//! `policy::effective_policy` combines it with each user's own record.
+//! `policy::effective_policy` combines it with each user's own record. A
+//! make-up counts as paid time and traffic: it makes up for service the
+//! user paid for.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use mooring_model::{NodeId, UnixTime, UserId};
 
-use super::ids::OrderId;
+use super::ledger::Granted;
 use super::refund::{PackUse, counted_since};
 use crate::period::BillingCycle;
 
-/// A service period a paid order gave: from `from` until `until`, with a
-/// quota of `quota_bytes` per billing cycle while it lasts. A refund in
-/// full shortens it or moves it earlier (design §9.6); one whose time was
-/// all taken back covers no instant (`from` equals `until`), and still
-/// ends the user's paid time there.
+/// A service period a paid order or a make-up gave: from `from` until
+/// `until`, with a quota of `quota_bytes` per billing cycle while it lasts.
+/// A refund in full shortens it or moves it earlier (design §9.6); one
+/// whose time was all taken back covers no instant (`from` equals
+/// `until`), and still ends the user's paid time there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaidPeriod {
-    /// The order.
-    pub order: OrderId,
+    /// The order or the make-up.
+    pub granted: Granted,
     /// The first instant of service.
     pub from: UnixTime,
     /// The instant after the last.
     pub until: UnixTime,
     /// The quota of each billing cycle while the period lasts.
     pub quota_bytes: NonZeroU64,
-    /// Whether it was paid in Stripe's live mode.
+    /// Whether it was paid in Stripe's live mode; a make-up's is.
     pub livemode: bool,
 }
 
-/// A traffic pack a paid order gave, granted at `granted_at`.
+/// A traffic pack a paid order gave, or the traffic of a make-up, granted
+/// at `granted_at`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaidPack {
-    /// The order.
-    pub order: OrderId,
+    /// The order or the make-up.
+    pub granted: Granted,
     /// When Mooring granted it.
     pub granted_at: UnixTime,
     /// Its bytes.
     pub bytes: NonZeroU64,
-    /// Whether it was paid in Stripe's live mode.
+    /// Whether it was paid in Stripe's live mode; a make-up's is.
     pub livemode: bool,
-    /// Its order's refund in full, if any.
+    /// Its order's refund in full, if any; a make-up's has none.
     pub refund: Option<PackRefund>,
 }
 
@@ -105,13 +109,15 @@ pub struct UserEntitlements {
 }
 
 impl UserEntitlements {
-    /// The periods, in the ledger's order of their orders.
+    /// The periods, in the ledger's order of their orders, then of the
+    /// make-ups.
     #[must_use]
     pub fn periods(&self) -> &[PaidPeriod] {
         &self.periods
     }
 
-    /// The packs, in the ledger's order of their orders.
+    /// The packs, in the ledger's order of their orders, then of the
+    /// make-ups.
     #[must_use]
     pub fn packs(&self) -> &[PaidPack] {
         &self.packs
@@ -174,7 +180,7 @@ impl UserEntitlements {
             })
             .collect();
         refunded.sort_by(|(_, left, earlier, _), (_, right, later, _)| {
-            (earlier, &left.order).cmp(&(later, &right.order))
+            (earlier, &left.granted).cmp(&(later, &right.granted))
         });
         for (index, pack, at, used) in refunded {
             let rest = packs

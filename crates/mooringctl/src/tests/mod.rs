@@ -34,6 +34,7 @@ mod history;
 mod http;
 mod journals;
 mod log;
+mod make_up;
 mod meter;
 mod node;
 mod node_events;
