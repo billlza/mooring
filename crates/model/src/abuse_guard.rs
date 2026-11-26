@@ -15,8 +15,10 @@
 //! The render takes an [`AbuseGuardAgreement`] and gives only the users it
 //! covers their own source address, the one the guard sees. Which users it
 //! covers is therefore part of every bundle that serves them, so an
-//! acceptance that brings a user under the guard is a configuration change,
-//! never bookkeeping (`ModelError::AgreementStartsGuard`). `mooringctl`
+//! acceptance that brings a served user under the guard is a configuration
+//! change, never bookkeeping (`ModelError::AgreementStartsGuard`); one by a
+//! user served nowhere changes no bundle
+//! ([`AbuseGuardAgreement::acceptance_changes_bundles`]). `mooringctl`
 //! passes [`AbuseGuardAgreement::SHIPPED`], which is open because
 //! [`ABUSE_GUARD_SINCE`] names a revision this build ships.
 
@@ -74,6 +76,18 @@ impl AbuseGuardAgreement {
         user.agreement
             .is_some_and(|record| self.covers_revision(record.version))
     }
+
+    /// Whether recording `user`'s acceptance of `revision` changes a
+    /// bundle: it brings under the guard a user whom some node serves, and
+    /// the render then gives them their own source address. A user served
+    /// nowhere, suspended (one added before their first payment included),
+    /// is in no bundle, so their acceptance changes none, and the change
+    /// that serves them again covers them. No acceptance takes a user out
+    /// from under the guard, since a recorded revision never goes back.
+    #[must_use]
+    pub fn acceptance_changes_bundles(self, user: &User, revision: AgreementVersion) -> bool {
+        user.is_served_anywhere() && !self.covers(user) && self.covers_revision(revision)
+    }
 }
 
 #[cfg(test)]
@@ -81,7 +95,8 @@ mod tests {
     use super::*;
     use crate::date::CalendarDate;
     use crate::testing::user;
-    use crate::user::AgreementRecord;
+    use crate::time::UnixTime;
+    use crate::user::{AgreementRecord, SuspendReason};
 
     fn revision(number: u16) -> AgreementVersion {
         AgreementVersion::new(NonZeroU16::new(number).unwrap())
@@ -136,5 +151,34 @@ mod tests {
             assert!(!closed.covers(&accepted(version)), "{version:?}");
         }
         assert!(!closed.covers_revision(revision(1)));
+    }
+
+    /// An acceptance changes a bundle only when it brings under the guard
+    /// a user some node serves: not for a user served nowhere, suspended or
+    /// holding no node, not for one covered already, not for a revision
+    /// that states nothing, and never with the gate closed.
+    #[test]
+    fn only_a_served_users_acceptance_into_the_guard_changes_a_bundle() {
+        let from_two = AbuseGuardAgreement::since(Some(revision(2)));
+        let mut served = user(1, &[("lon1", 1)]);
+        assert!(served.is_served_anywhere());
+        assert!(from_two.acceptance_changes_bundles(&served, revision(2)));
+        assert!(from_two.acceptance_changes_bundles(&served, revision(3)));
+        assert!(!from_two.acceptance_changes_bundles(&served, revision(1)));
+        assert!(!AbuseGuardAgreement::since(None).acceptance_changes_bundles(&served, revision(2)));
+        let mut suspended = served.clone();
+        suspended
+            .suspend(SuspendReason::Expired, UnixTime::from_secs(0))
+            .unwrap();
+        assert!(!suspended.is_served_anywhere());
+        assert!(!from_two.acceptance_changes_bundles(&suspended, revision(2)));
+        let nowhere = user(2, &[]);
+        assert!(!nowhere.is_served_anywhere());
+        assert!(!from_two.acceptance_changes_bundles(&nowhere, revision(2)));
+        served.agreement = Some(AgreementRecord {
+            version: revision(2),
+            accepted_on: CalendarDate::parse("2026-11-15").unwrap(),
+        });
+        assert!(!from_two.acceptance_changes_bundles(&served, revision(3)));
     }
 }

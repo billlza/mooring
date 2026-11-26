@@ -150,10 +150,9 @@ fn agree_keeps_an_existing_record_of_the_current_revision() {
 }
 
 /// Every refusal exits 1, names its cause, and leaves `state.json` byte
-/// for byte as it was. Under the shipped gate a revoking user without a
-/// record would come under the abuse guard, so the configuration change
-/// refuses them, in the same words as the bookkeeping record does a
-/// revoking user who is covered already.
+/// for byte as it was. A revoking user is served nowhere, so under the
+/// shipped gate the record refuses them, with or without an earlier
+/// acceptance, in the same words.
 #[test]
 fn agree_refuses_a_revoking_or_revoked_user_an_older_revision_and_an_unknown_user() {
     let revoking = fixture(|parts| parts.users[0].status = UserStatus::RevokePending);

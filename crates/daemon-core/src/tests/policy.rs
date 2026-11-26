@@ -442,6 +442,14 @@ fn every_policy_error_kind_is_named_once() {
             },
         ),
         (
+            PolicyErrorKind::ExpirySuspensionAfterNow,
+            PolicyError::ExpirySuspensionAfterNow {
+                user: ids[0].clone(),
+                since: at("2026-10-08", 1),
+                now: at("2026-10-08", 0),
+            },
+        ),
+        (
             PolicyErrorKind::Model,
             PolicyError::Model(ModelError::InvalidDate),
         ),

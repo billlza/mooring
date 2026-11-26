@@ -92,9 +92,11 @@ pub enum SuspendReason {
 pub enum UserStatus {
     /// The user is served.
     Active,
-    /// Served nowhere and exported nowhere, but still holding its per-node
-    /// credentials (their secrets stay referenced), so resuming restores
-    /// service without delivering a new file into China.
+    /// Served nowhere, but still holding its per-node credentials (their
+    /// secrets stay referenced), so resuming restores service without
+    /// delivering a new file into China. Exported only when suspended at
+    /// expiry: a user added before their first payment is given the file
+    /// that serves once they have paid (`mooring-export`'s `export_user`).
     Suspended {
         /// Why.
         reason: SuspendReason,
@@ -373,6 +375,14 @@ impl User {
     #[must_use]
     pub fn is_served_on(&self, node: &NodeId) -> bool {
         self.status == UserStatus::Active && self.per_node.contains_key(node)
+    }
+
+    /// Whether some node serves the user ([`Self::is_served_on`]): a user
+    /// suspended, being revoked or revoked, or holding no node, is in no
+    /// node's bundle.
+    #[must_use]
+    pub fn is_served_anywhere(&self) -> bool {
+        self.per_node.keys().any(|node| self.is_served_on(node))
     }
 
     /// Whether the user accepted agreement revision `required` or a later

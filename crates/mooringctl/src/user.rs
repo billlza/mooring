@@ -43,13 +43,25 @@ const fn line_name(line: ClientLine) -> &'static str {
     }
 }
 
-/// `user add [--client cfm05|cfm04] [--mlkem]` (design §9.4, §15.3): adds
-/// an active user on `line`, with fresh credentials (a short id, a VLESS
-/// UUID, a Hysteria2 password and a loopback UUID) on every node that is
-/// not retiring, so that the user holds every node it can be served by.
-/// The label is read at the terminal, never from an argument, which the
-/// shell history would keep, and is never printed. The user has no alias
-/// and no agreement record yet.
+/// How a user added starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Start {
+    /// Active: served once every node is applied.
+    Active,
+    /// Suspended at expiry, its expiry the time it is added (`--unpaid`):
+    /// served once a payment lifts the suspension and the apply job
+    /// resumes it (design §9.6, §13.6).
+    Unpaid,
+}
+
+/// `user add [--client cfm05|cfm04] [--mlkem] [--unpaid]` (design §9.4,
+/// §15.3): adds a user on `line`, active or, with `--unpaid`, suspended at
+/// expiry as of the time it is added, with fresh credentials (a short id,
+/// a VLESS UUID, a Hysteria2 password and a loopback UUID) on every node
+/// that is not retiring, so that the user holds every node it can be
+/// served by. The label is read at the terminal, never from an argument,
+/// which the shell history would keep, and is never printed. The user has
+/// no alias and no agreement record yet.
 ///
 /// A Mac with no deployment, or a state that cannot be read, is refused
 /// before the label is asked for. The label may wait as long as the
@@ -57,18 +69,26 @@ const fn line_name(line: ClientLine) -> &'static str {
 /// once it is there: a planned node cancelled meanwhile is gone with a
 /// record that keeps the generation (`node cancel`), and a user given
 /// credentials on it from an earlier read would be refused by the store
-/// (`UnknownNode`), after the label was typed.
+/// (`UnknownNode`), after the label was typed. An unpaid user's time is
+/// read then too.
 ///
 /// The credentials are written to the keychain before the state that
-/// references them (`update_config_with_secrets`); the model refuses a
-/// user over the cap, and then nothing is written. Adding a user is a
-/// configuration change, so every node needs `node apply` before the
-/// user's file can be exported.
+/// references them (`update_config_with_secrets`); the model refuses an
+/// active user over the cap, and then nothing is written. An unpaid user
+/// is not active, so the cap holds back its resume, not its addition.
+/// Adding a user is a configuration change, so every node needs `node
+/// apply` before the user's file can be exported; for an unpaid user that
+/// apply serves no one new, and nothing restarts. An active user's
+/// acceptance of a revision that states the abuse guard is a configuration
+/// change too ([`agree`]), so the next steps printed for an active user put
+/// `user agree` before the apply, which then covers both; an unpaid user's
+/// acceptance is bookkeeping, before or after the apply.
 pub(crate) fn add(
     env: &mut Env<'_>,
     out: &mut dyn Write,
     line: ClientLine,
     mlkem: bool,
+    start: Start,
 ) -> Result<(), CommandError> {
     let capabilities = if mlkem {
         if !line.accepts(Capability::RealityMlkemOptIn) {
@@ -118,13 +138,29 @@ pub(crate) fn add(
         .map(NodeId::as_str)
         .collect::<Vec<_>>()
         .join(", ");
+    let (status, policy) = match start {
+        Start::Active => (UserStatus::Active, UserPolicy::NONE),
+        Start::Unpaid => {
+            let now = (env.clock)()?;
+            (
+                UserStatus::Suspended {
+                    reason: SuspendReason::Expired,
+                    since: now,
+                },
+                UserPolicy {
+                    expires_at: Some(now),
+                    quota: None,
+                },
+            )
+        }
+    };
     let user = User {
         id: id.clone(),
         label,
         client: ClientProfile { line, capabilities },
-        status: UserStatus::Active,
+        status,
         per_node,
-        policy: UserPolicy::NONE,
+        policy,
         alias: None,
         agreement: None,
     };
@@ -144,9 +180,19 @@ pub(crate) fn add(
     } else {
         format!("credentials on {nodes}")
     };
+    let (unpaid, then) = match start {
+        Start::Active => (
+            "",
+            "`user agree`, then `node apply` each of those nodes, then `user export`",
+        ),
+        Start::Unpaid => (
+            "; suspended until paid (its expiry is the time it was added)",
+            "`node apply` each of those nodes (nothing restarts: no node serves the user yet), then `user agree` and `user export`; once the user's payment is granted, the apply job resumes them at its next hourly run",
+        ),
+    };
     out.write_all(
         format!(
-            "added user {id}: {}, {held}\nnext: `mooringctl user alias {id}`, then `node apply` each of those nodes, then `user agree` and `user export`\n",
+            "added user {id}: {}, {held}{unpaid}\nnext: `mooringctl user alias {id}`, then {then}\n",
             line_name(line)
         )
         .as_bytes(),
@@ -321,14 +367,17 @@ fn change_status(
 /// `user agree <uid>`: records that `user` accepted
 /// [`AgreementVersion::CURRENT`] on today's UTC date (design §7).
 ///
-/// An acceptance that leaves the abuse guard's coverage as it was is the
-/// bookkeeping record `AgreementRecorded`, which keeps the configuration
-/// generation: no node needs an apply. One that brings the user under the
-/// guard (`env.abuse_guard`, design §11.8) changes every bundle that
-/// serves the user, so it is a configuration change: the generation is
-/// bumped, and each node the user holds covers them from its next
-/// `node apply`. Either way the store refuses a revoking or revoked user,
-/// an older revision and an unknown user, and then changes nothing.
+/// An acceptance that changes no bundle is the bookkeeping record
+/// `AgreementRecorded`, which keeps the configuration generation: no node
+/// needs an apply. One that brings a served user under the abuse guard
+/// (`env.abuse_guard`, design §11.8) changes every bundle that serves the
+/// user, so it is a configuration change: the generation is bumped, and
+/// each node the user holds covers them from its next `node apply`. A
+/// user served nowhere, an unpaid one included, is in no bundle, so their
+/// acceptance is the record, and the change that serves them again covers
+/// them (`AbuseGuardAgreement::acceptance_changes_bundles`). Either way the
+/// store refuses a revoking or revoked user, an older revision and an
+/// unknown user, and then changes nothing.
 pub(crate) fn agree(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result<(), CommandError> {
     let store = Store::new(support_dir(env)?);
     let state = load(&store)?;
@@ -342,7 +391,7 @@ pub(crate) fn agree(env: &Env<'_>, out: &mut dyn Write, user: &UserId) -> Result
     let before = found.and_then(|record| record.agreement);
     // An unknown user takes the record's path, where the store refuses it.
     let starts_guard =
-        found.is_some_and(|found| !guard.covers(found) && guard.covers_revision(offered.version));
+        found.is_some_and(|found| guard.acceptance_changes_bundles(found, offered.version));
     if starts_guard {
         store
             .update_config(state.deployment.config_generation(), |mut parts| {

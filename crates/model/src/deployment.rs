@@ -657,10 +657,11 @@ impl Entities<'_> {
 ///   accepted. It is Mac-only and is never sent or exported; it decides
 ///   whether `user export` refuses the user (decision F9, design §9.2) and
 ///   whether the abuse guard covers them (design §11.8). The second is
-///   rendered, so an acceptance that brings the user under the guard is
-///   refused here (`AgreementStartsGuard`) and recorded as a configuration
-///   change instead ([`User::accept_agreement`]); any other needs no
-///   `node apply`.
+///   rendered for every user a node serves, so an acceptance that brings a
+///   served user under the guard is refused here (`AgreementStartsGuard`,
+///   [`AbuseGuardAgreement::acceptance_changes_bundles`]) and recorded as a
+///   configuration change instead ([`User::accept_agreement`]); any other,
+///   a suspended user's included, needs no `node apply`.
 /// - `QuotaRecorded` sets or removes a user's own quota. The quota is a
 ///   record on the Mac that the apply job reads (design §13.6): no bundle
 ///   and no export carries it, and it suspends and resumes nobody by
@@ -713,9 +714,11 @@ pub enum Bookkeeping {
     },
     /// `user` accepted the agreement revision in `record` (`user agree`,
     /// design §7), by the rule of [`User::accept_agreement`]. An acceptance
-    /// that brings the user under the abuse guard as `guard` gates it is
-    /// refused (`AgreementStartsGuard`): it changes every bundle that
-    /// serves the user, so it is a configuration change.
+    /// that brings a served user under the abuse guard as `guard` gates it
+    /// is refused (`AgreementStartsGuard`): it changes every bundle that
+    /// serves the user, so it is a configuration change. A user served
+    /// nowhere is in no bundle, so theirs is recorded
+    /// ([`AbuseGuardAgreement::acceptance_changes_bundles`]).
     AgreementRecorded {
         /// The user.
         user: UserId,
@@ -852,9 +855,9 @@ impl Deployment {
                 guard,
             } => {
                 let user = user_mut(&mut parts, user)?;
-                let guarded = guard.covers(user);
+                let changes_bundles = guard.acceptance_changes_bundles(user, record.version);
                 user.accept_agreement(record)?;
-                if guard.covers(user) != guarded {
+                if changes_bundles {
                     return Err(ModelError::AgreementStartsGuard {
                         user: user.id.clone(),
                         revision: record.version,
@@ -2130,7 +2133,7 @@ mod tests {
         }
     }
 
-    /// An acceptance that brings the user under the abuse guard is no
+    /// An acceptance that brings a served user under the abuse guard is no
     /// bookkeeping (design §11.8): the guard's coverage is rendered, so the
     /// record is refused and nothing changes. An acceptance that leaves the
     /// coverage as it was, below the gate or above it, is recorded.
@@ -2167,9 +2170,8 @@ mod tests {
         );
     }
 
-    /// The record's own refusals come before the guard's: a revoking user,
-    /// whose acceptance would bring them under the guard, and an older
-    /// revision are refused as under a closed gate.
+    /// Under an open gate the record keeps its own refusals: a revoking
+    /// user and an older revision are refused as under a closed gate.
     #[test]
     fn an_open_gate_keeps_the_records_own_refusals() {
         let current = AgreementVersion::CURRENT.get();
@@ -2194,6 +2196,27 @@ mod tests {
                 offered: offered.version,
             })
         );
+    }
+
+    /// A user served nowhere, suspended at expiry as a user added before
+    /// their first payment is, is in no bundle, so under an open gate their
+    /// acceptance of a stating revision is recorded as bookkeeping, keeping
+    /// the generation; the change that serves them again covers them.
+    #[test]
+    fn an_acceptance_by_a_user_served_nowhere_is_bookkeeping() {
+        let open = AbuseGuardAgreement::since(Some(AgreementVersion::CURRENT));
+        let offered = agreement(AgreementVersion::CURRENT.get(), "2026-11-25");
+        let mut unpaid = two_node_parts();
+        unpaid.users[0]
+            .suspend(SuspendReason::Expired, UnixTime::from_secs(0))
+            .unwrap();
+        assert!(unpaid.users[0].agreement.is_none());
+        assert!(!unpaid.users[0].is_served_anywhere());
+        let before = build(unpaid).unwrap();
+        let after = agree_under(before.clone(), offered, open).unwrap();
+        assert_eq!(after.config_generation(), before.config_generation());
+        assert_eq!(after.users()[&user_id(1)].agreement, Some(offered));
+        assert!(open.covers(&after.users()[&user_id(1)]));
     }
 
     fn set_quota(

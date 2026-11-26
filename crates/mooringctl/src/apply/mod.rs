@@ -3,14 +3,21 @@
 //! `mooringctl apply --pending | --now [--json]` (design §13.6, §15.3,
 //! §15.7): the nightly apply job. launchd runs `apply --pending` every
 //! hour at minute 20 of the Mac's local time
-//! (`com.bill.mooring.apply.plist`); it runs only between 19:15 and 19:45
-//! UTC (`daemon-core`'s `apply::in_window`), so one firing a day runs, in
-//! BST and GMT alike, and a firing outside that window, as launchd delivers
-//! one late after a sleep, does nothing. The operator's `apply --now` runs
-//! at once.
+//! (`com.bill.mooring.apply.plist`); the whole job runs only between 19:15
+//! and 19:45 UTC (`daemon-core`'s `apply::in_window`), so one firing a day
+//! runs it, in BST and GMT alike. Every other firing, one launchd delivers
+//! late after a sleep included, only resumes the users whose suspension at
+//! expiry a payment has lifted, and then applies the nodes behind, so that
+//! a user who pays is served within the hour (the operator's decision of
+//! 2026-11-14); one that finds no such user ([`policy::nothing_to_resume`])
+//! does nothing, and takes no lock and writes no log. The operator's
+//! `apply --now` runs the whole job at once.
 //!
 //! A run takes `run/apply.lock`, so two never overlap, and then, in this
-//! order, makes each change on its own, so that none blocks another:
+//! order, makes each change on its own, so that none blocks another (an
+//! hourly firing outside the window makes the first step as
+//! `plan_expiry_resumes` plans it, no removals, and the node applies only
+//! when it resumed a user):
 //! 1. **The policy step** ([`policy::step`]): `daemon-core`'s
 //!    `plan_policy` at the run's `now`, from the state, what the users'
 //!    paid orders gave (the payment ledger) and the cycle's usage the
@@ -18,10 +25,10 @@
 //!    its resumes, one configuration change each. A payment ledger or pull
 //!    settings that cannot be read refuse the step, since a paid user
 //!    would be read as unpaid; so do collected usage that cannot be read
-//!    or is inconsistent, and a suspension for quota dated after `now` (a
-//!    clock that stepped back). Usage that is behind (the daemon stopped,
-//!    or a node it cannot reach) leaves the quotas unchecked, and the rest
-//!    of the step runs.
+//!    or is inconsistent, and an expiry or quota suspension dated after
+//!    `now` (a clock that stepped back). While usage is behind because the
+//!    daemon stopped or a node is unreachable, the rest of the step runs
+//!    with quotas unchecked.
 //! 2. **Removals** ([`policy::remove`]): each user revoked 13 months ago
 //!    (`RevokedUserRemoved`), then the kept ids whose records have expired
 //!    (`ForgottenExpired`); skipped when the clock stepped back. The daemon
@@ -55,7 +62,8 @@ use mooring_daemon_core::apply::in_window;
 use mooring_macsys::MacsysError;
 use mooring_store::Store;
 
-use self::report::Outcome;
+use self::policy::Plan;
+use self::report::{Form, NodeOutcome, Outcome};
 use crate::app::{Env, support_dir};
 use crate::daemon::log::{APPLY_LOG, ROTATE_AT_BYTES, RedirectStderr, RotatingLog, log_dir};
 use crate::daemon::{prepare_run_dir, say_as};
@@ -68,7 +76,8 @@ pub(crate) const APPLY_LOCK_FILE: &str = "apply.lock";
 /// Which form of the job runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum When {
-    /// launchd's hourly firing: it runs only within the window.
+    /// launchd's hourly firing runs the full job in the window and checks
+    /// for expiry resumes outside it.
     Pending,
     /// The operator's: it runs at once.
     Now,
@@ -98,10 +107,16 @@ pub(crate) fn apply(
     json: bool,
 ) -> Result<(), CommandError> {
     let now = (env.clock)()?;
-    if when == When::Pending && !in_window(now) {
-        return report::outside_window(out, now, json);
-    }
     let support = support_dir(env)?;
+    let store = Store::new(&support);
+    let plan = match when {
+        When::Now => Plan::Full,
+        When::Pending if in_window(now) => Plan::Full,
+        When::Pending if policy::nothing_to_resume(&store, &support, now) => {
+            return report::outside_window(out, now, json);
+        }
+        When::Pending => Plan::ExpiryResumes,
+    };
     let run = prepare_run_dir(&support)?;
     let _lock = lock(&run.dir.join(APPLY_LOCK_FILE))?;
     let redirect: &RedirectStderr<'_> = match when {
@@ -114,26 +129,45 @@ pub(crate) fn apply(
         ROTATE_AT_BYTES,
         redirect,
     )?;
-    say_as(&mut log, now, "apply", &format!("run ({})", when.flag()))?;
-    let store = Store::new(&support);
+    let started = match plan {
+        Plan::Full => format!("run ({})", when.flag()),
+        Plan::ExpiryResumes => format!(
+            "run ({}, outside the window: resumes at expiry only)",
+            when.flag()
+        ),
+    };
+    say_as(&mut log, now, "apply", &started)?;
     let deployment = load(&store)?.deployment;
-    let policy = policy::step(&store, &support, &deployment, now);
+    let policy = policy::step(&store, &support, &deployment, now, plan);
     say_as(&mut log, (env.clock)()?, "apply", &policy.log_line())?;
-    let removals = policy::remove(&store, now, policy.clock_stepped_back());
-    say_as(&mut log, (env.clock)()?, "apply", &removals.log_line())?;
-    if !json {
-        report::write_lines(out, &policy.lines(), &removals.lines())?;
-    }
-    let mut progress = Vec::new();
-    let sink: &mut dyn Write = if json { &mut progress } else { out };
-    let nodes = nodes::apply_behind(env, sink, &store, &support, &mut |node, at| {
-        say_as(&mut log, at, "apply", &node.log_line())
-    })?;
+    let form = match plan {
+        Plan::Full => {
+            let removals = policy::remove(&store, now, policy.clock_stepped_back());
+            say_as(&mut log, (env.clock)()?, "apply", &removals.log_line())?;
+            if !json {
+                report::write_lines(out, &policy.lines(), &removals.lines())?;
+            }
+            let nodes = apply_nodes(env, out, json, &store, &support, &mut log)?;
+            Form::Full { removals, nodes }
+        }
+        Plan::ExpiryResumes => {
+            if !json {
+                report::write_lines(out, &policy.lines(), &[])?;
+            }
+            // A node's engines restart during the day only for a user just
+            // resumed: a node left behind otherwise waits for the night.
+            let nodes = if policy.resumed_any() {
+                Some(apply_nodes(env, out, json, &store, &support, &mut log)?)
+            } else {
+                None
+            };
+            Form::ExpiryResumes { nodes }
+        }
+    };
     let outcome = Outcome {
         at: now,
         policy,
-        removals,
-        nodes,
+        form,
     };
     let failures = outcome.failures();
     say_as(
@@ -148,6 +182,23 @@ pub(crate) fn apply(
     } else {
         Err(LocalError::ApplyFailed { failures }.into())
     }
+}
+
+/// Applies every node behind, logging each outcome; with `json` the
+/// applies' progress is not written, as the outcome is one JSON line.
+fn apply_nodes(
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    json: bool,
+    store: &Store,
+    support: &Path,
+    log: &mut RotatingLog,
+) -> Result<Vec<NodeOutcome>, CommandError> {
+    let mut progress = Vec::new();
+    let sink: &mut dyn Write = if json { &mut progress } else { out };
+    nodes::apply_behind(env, sink, store, support, &mut |node, at| {
+        say_as(log, at, "apply", &node.log_line())
+    })
 }
 
 /// Takes the job's lock at `path` (made with mode 0600): a run that holds

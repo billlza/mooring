@@ -125,9 +125,21 @@ pub(crate) fn run(
     );
     let result = match command {
         Command::Router(command) => execute(command, env, out),
-        Command::User(UserCommand::Add { client, mlkem }) => {
-            crate::user::add(env, out, client.into(), mlkem)
-        }
+        Command::User(UserCommand::Add {
+            client,
+            mlkem,
+            unpaid,
+        }) => crate::user::add(
+            env,
+            out,
+            client.into(),
+            mlkem,
+            if unpaid {
+                crate::user::Start::Unpaid
+            } else {
+                crate::user::Start::Active
+            },
+        ),
         Command::User(UserCommand::Alias { user }) => crate::user::alias(env, out, &user),
         Command::User(UserCommand::Suspend { user, reason }) => {
             crate::user::suspend(env, out, &user, reason)

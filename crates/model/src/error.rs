@@ -552,7 +552,7 @@ pub enum ModelError {
         /// The older revision offered.
         offered: AgreementVersion,
     },
-    /// An agreement record would bring the user under the abuse guard
+    /// An agreement record would bring a served user under the abuse guard
     /// (design §11.8): the guard's coverage is rendered into every bundle
     /// that serves the user, so the acceptance is a configuration change,
     /// not a bookkeeping record.

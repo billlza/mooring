@@ -247,8 +247,40 @@ fn recording_an_agreement_changes_no_bundle_and_no_export() {
     assert_eq!(exports, (4, 6));
 }
 
-/// An acceptance that brings a user under the abuse guard changes every
-/// bundle that serves the user (design §11.8), so it cannot keep the
+/// A user served nowhere, suspended at expiry as one added before their
+/// first payment is, is in no bundle, so their acceptance of the revision
+/// that states the abuse guard changes none, under the open gate too: the
+/// model records it as bookkeeping (design §11.8). Their export, refused
+/// before for want of an acceptance, can be made after.
+#[test]
+fn a_suspended_users_agreement_changes_no_bundle_under_the_open_gate() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let unpaid = edit(&fixture.deployment, |parts| {
+        parts.users[0].agreement = None;
+        parts.users[0].status = UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: FIXTURE_NOW,
+        };
+        parts.users[0].policy.expires_at = Some(FIXTURE_NOW);
+    });
+    let user = unpaid.users().keys().next().unwrap().clone();
+    let exports = assert_neutral(
+        &fixture,
+        &unpaid,
+        Bookkeeping::AgreementRecorded {
+            user,
+            record: AgreementRecord {
+                version: AgreementVersion::CURRENT,
+                accepted_on: CalendarDate::parse("2026-11-25").unwrap(),
+            },
+            guard: GUARD_OPEN,
+        },
+    );
+    assert_eq!(exports, (4, 6));
+}
+
+/// An acceptance that brings a served user under the abuse guard changes
+/// every bundle that serves the user (design §11.8), so it cannot keep the
 /// generation: the model refuses it as bookkeeping, and the same
 /// acceptance made as a configuration change renders other bundles.
 #[test]

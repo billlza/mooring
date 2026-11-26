@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use mooring_export::{ExportFormat, export_user};
 use mooring_model::{
     AbuseGuardAgreement, AgreementRecord, AgreementVersion, CalendarDate, Deployment, SecretEntry,
-    UnixTime, UserId,
+    SuspendReason, UnixTime, UserId, UserStatus,
 };
 use mooring_store::{InMemorySecretStore, SecretStore};
 
@@ -195,6 +195,48 @@ fn an_acceptance_that_starts_the_abuse_guard_waits_for_an_apply() {
         refused.stderr
     );
     assert!(!out.exists());
+}
+
+/// A user added before their first payment (`user add --unpaid`) is
+/// suspended at expiry and served nowhere, so their acceptance brings them
+/// under the abuse guard in no bundle: under the shipped gate it is the
+/// bookkeeping record, and their file is exported at once with no apply in
+/// between, as the unpaid flow has it (design §9.6, §11.8). The resume
+/// that serves them, a configuration change, covers them.
+#[test]
+fn an_unpaid_users_agreement_needs_no_apply_before_the_export() {
+    let now = UnixTime::from_secs(NOW);
+    let deployment = fixture(|parts| {
+        parts.users[0].agreement = None;
+        parts.users[0].status = UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: now,
+        };
+        parts.users[0].policy.expires_at = Some(now);
+    });
+    let user = first_user(&deployment);
+    let (mut harness, folder) = exporting(deployment.clone());
+    assert_eq!(harness.abuse_guard, AbuseGuardAgreement::SHIPPED);
+    let agreed = harness.run(&["user", "agree", user.as_str()]);
+    assert_eq!(agreed.code, 0, "{}", agreed.stderr);
+    assert_eq!(
+        agreed.stdout,
+        format!(
+            "recorded: user {user} accepted agreement revision {} on {} (UTC); no node apply is needed\n",
+            AgreementVersion::CURRENT,
+            CalendarDate::utc_of(now).unwrap()
+        )
+    );
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.config_generation(), deployment.config_generation());
+    assert_eq!(after.nodes(), deployment.nodes());
+    let out = folder.join("user.json");
+    let written = harness.run(&["user", "export", user.as_str(), "--out", arg(&out)]);
+    assert_eq!(written.code, 0, "{}", written.stderr);
+    assert_eq!(
+        fs::read(&out).unwrap(),
+        expected(&after, &user, ExportFormat::SingBoxJson)
+    );
 }
 
 /// A user who accepted revision 1, as every pilot user did before revision

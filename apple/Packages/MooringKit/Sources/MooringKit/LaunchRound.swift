@@ -19,12 +19,14 @@
 // in 87 s, a refused job was repaired in 51 s (design §5.1).
 //
 // A start by hand of the apply job whose record is good runs `mooringctl
-// apply --pending`: by its own rule it does nothing outside 19:15 to
-// 19:45 UTC, and inside that window it is the night's run. So the round
-// starts an idle job by hand only once, in the registration in which it has
-// just seen macOS refuse the daemon, which shows that the program changed
-// since the records were made; any other start by hand is of a job it has
-// seen refused, which cannot run.
+// apply --pending`: by its own rule, outside 19:15 to 19:45 UTC it only
+// resumes the users whose suspension at expiry a payment has lifted, and
+// then applies the nodes behind, and otherwise does nothing; inside that
+// window it is the night's run. So the round starts an idle job by hand
+// only once, in the registration in which it has just seen macOS refuse the
+// daemon, which shows that the program changed since the records were made;
+// any other start by hand is of a job it has seen refused, which cannot
+// run.
 //
 // Two readings are not taken at their word. A daemon shown as running
 // counts only once it has been shown so for `steady`, so that a program
