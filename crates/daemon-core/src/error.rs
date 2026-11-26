@@ -405,8 +405,9 @@ impl AlertError {
     }
 }
 
-/// The quota and expiry evaluation refuses its inputs
-/// ([`crate::policy::evaluate`], [`crate::policy::automatic_quota`]).
+/// A quota or expiry calculation, including the apply job's resume plan,
+/// could not use its inputs ([`crate::policy::evaluate`],
+/// [`crate::policy::automatic_quota`], [`crate::apply::plan_expiry_resumes`]).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyError {
     /// The usage covers another billing cycle than the one `now` is in.
@@ -460,6 +461,17 @@ pub enum PolicyError {
         /// The evaluation time.
         now: UnixTime,
     },
+    /// The run predates an expiry suspension. An unpaid account's own
+    /// expiry is its creation time, so it looks unexpired at this clock.
+    #[error("the expiry suspension for user {user} was recorded at {since}, after now ({now})")]
+    ExpirySuspensionAfterNow {
+        /// The user.
+        user: UserId,
+        /// When the expiry suspension was recorded.
+        since: UnixTime,
+        /// The evaluation time.
+        now: UnixTime,
+    },
     /// The current cycle could not be placed on the calendar.
     #[error(transparent)]
     Model(#[from] ModelError),
@@ -478,6 +490,8 @@ kinds! {
         AutomaticQuotaZero,
         /// See [`PolicyError::QuotaSuspensionAfterNow`].
         QuotaSuspensionAfterNow,
+        /// See [`PolicyError::ExpirySuspensionAfterNow`].
+        ExpirySuspensionAfterNow,
         /// See [`PolicyError::Model`].
         Model,
     }
@@ -493,6 +507,7 @@ impl PolicyError {
             Self::UsageMissing { .. } => PolicyErrorKind::UsageMissing,
             Self::AutomaticQuotaZero { .. } => PolicyErrorKind::AutomaticQuotaZero,
             Self::QuotaSuspensionAfterNow { .. } => PolicyErrorKind::QuotaSuspensionAfterNow,
+            Self::ExpirySuspensionAfterNow { .. } => PolicyErrorKind::ExpirySuspensionAfterNow,
             Self::Model(_) => PolicyErrorKind::Model,
         }
     }

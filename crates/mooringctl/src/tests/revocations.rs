@@ -22,6 +22,7 @@ use mooring_model::{
 use serde_json::Value;
 
 use super::apply::{bundle_and_header_of, ready, run, script_hello_and_blobs, stand_in_engines};
+use super::apply_job::added_unpaid;
 use super::deployed::deployed_with;
 use super::support::{Answered, COMMITTED, Expected, ExpectedRemote, Harness, NOW, Refusals};
 use super::user::{fixture, store};
@@ -71,7 +72,7 @@ fn revoking(generation: u64, applied: &[(&str, u64)]) -> Deployment {
 }
 
 /// The keychain items `harness` holds of `user` on `node`.
-fn user_items(harness: &Harness, user: &str, on: &str) -> BTreeSet<SecretRef> {
+pub(super) fn user_items(harness: &Harness, user: &str, on: &str) -> BTreeSet<SecretRef> {
     harness
         .secrets
         .refs()
@@ -88,7 +89,7 @@ fn user_items(harness: &Harness, user: &str, on: &str) -> BTreeSet<SecretRef> {
 
 /// Scripts `on`'s apply of `deployment`: its `Hello`, every blob present,
 /// and the bundle served already at `generation`.
-fn script_unchanged(
+pub(super) fn script_unchanged(
     harness: &Harness,
     engines: &std::path::Path,
     deployment: &Deployment,
@@ -432,6 +433,46 @@ fn the_job_revokes_a_user_three_months_after_its_expiry() {
     assert!(!log.contains("fxuser"), "{log}");
 }
 
+/// A user added unpaid (`user add --unpaid`) who never pays has been
+/// expired since the add, so a run revokes them three months after it, to
+/// the second, as any user three months past their expiry: the months
+/// count from the expiry (the operator's decision of 2026-11-16).
+#[test]
+fn a_user_added_unpaid_falls_due_three_months_after_the_add() {
+    // 2026-07-13 19:20:00 UTC, three calendar months before the run.
+    let added = at(NOW - 92 * 86_400);
+    let mut harness = job(fixture(|parts| {
+        for found in &mut parts.nodes {
+            if let NodeLifecycle::Applied { site, .. } = &found.lifecycle {
+                found.lifecycle = NodeLifecycle::Adopted { site: site.clone() };
+            }
+        }
+        added_unpaid(parts, THIRD, added);
+    }));
+    harness.expiry_revocation = ExpiryRevocation::since(Some(AgreementVersion::CURRENT));
+    harness.now.set(NOW - 1);
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(
+        status(&harness, THIRD),
+        UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: added,
+        }
+    );
+    harness.now.set(NOW);
+    let outcome = harness.run(&["apply", "--now"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert!(
+        outcome.stdout.starts_with(&format!(
+            "revoked {THIRD}: suspended at expiry since 2026-07-13 19:20:00 UTC, its service expired at 2026-07-13 19:20:00 UTC and was not renewed in three months\n"
+        )),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(status(&harness, THIRD), UserStatus::RevokePending);
+}
+
 /// The JSON outcome names the revocation with its expiry and suspension.
 #[test]
 fn the_json_outcome_names_a_revocation_at_expiry() {
@@ -654,35 +695,41 @@ fn a_clock_that_stepped_back_records_no_revocation() {
     );
 }
 
-/// A suspension for quota dated after the run's time (a clock that stepped
-/// back) refuses the policy step whole: no one is revoked at expiry.
+/// A suspension for quota or at expiry dated after the run's time (a
+/// clock that stepped back) refuses the policy step whole: no one is
+/// revoked at expiry.
 #[test]
 fn a_clock_that_stepped_back_revokes_no_one_at_expiry() {
-    let mut deployment = unrenewed(100).into_parts();
-    user(&mut deployment, THIRD).status = UserStatus::Suspended {
-        reason: SuspendReason::QuotaExceeded {
+    for reason in [
+        SuspendReason::QuotaExceeded {
             cycle_start: CalendarDate::parse("2026-10-01").unwrap(),
         },
-        since: at(NOW + 86_400),
-    };
-    let mut harness = job(Deployment::try_from(deployment).unwrap());
-    harness.expiry_revocation = ExpiryRevocation::since(Some(AgreementVersion::CURRENT));
-    let outcome = harness.run(&["apply", "--now"]);
-    assert_eq!(outcome.code, EXIT_LOCAL);
-    assert!(
-        outcome
-            .stdout
-            .starts_with("policy step not carried out: a suspension for quota is dated after now"),
-        "{}",
-        outcome.stdout
-    );
-    assert!(matches!(
-        status(&harness, SECOND),
-        UserStatus::Suspended {
-            reason: SuspendReason::Expired,
-            ..
-        }
-    ));
+        SuspendReason::Expired,
+    ] {
+        let mut deployment = unrenewed(100).into_parts();
+        user(&mut deployment, THIRD).status = UserStatus::Suspended {
+            reason,
+            since: at(NOW + 86_400),
+        };
+        let mut harness = job(Deployment::try_from(deployment).unwrap());
+        harness.expiry_revocation = ExpiryRevocation::since(Some(AgreementVersion::CURRENT));
+        let outcome = harness.run(&["apply", "--now"]);
+        assert_eq!(outcome.code, EXIT_LOCAL);
+        assert!(
+            outcome
+                .stdout
+                .starts_with("policy step not carried out: a suspension is dated after now"),
+            "{reason:?}: {}",
+            outcome.stdout
+        );
+        assert!(matches!(
+            status(&harness, SECOND),
+            UserStatus::Suspended {
+                reason: SuspendReason::Expired,
+                ..
+            }
+        ));
+    }
 }
 
 /// A revocation planned before the operator changed the user is not made:
