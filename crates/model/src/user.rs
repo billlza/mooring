@@ -377,6 +377,14 @@ impl User {
         self.status == UserStatus::Active && self.per_node.contains_key(node)
     }
 
+    /// Whether some node serves the user ([`Self::is_served_on`]): a user
+    /// suspended, being revoked or revoked, or holding no node, is in no
+    /// node's bundle.
+    #[must_use]
+    pub fn is_served_anywhere(&self) -> bool {
+        self.per_node.keys().any(|node| self.is_served_on(node))
+    }
+
     /// Whether the user accepted agreement revision `required` or a later
     /// one (decision F9, as the operator amended it on 2026-11-15): a
     /// revision accepted stays the user's when a later one ships, so a new
@@ -389,6 +397,40 @@ impl User {
         match self.agreement {
             Some(record) if record.version >= required => Ok(()),
             recorded => Err(RecordedAgreement(recorded.map(|record| record.version))),
+        }
+    }
+
+    /// Records that the user accepted the revision in `record` (`user
+    /// agree`, design §7). A user pending revocation or revoked is refused
+    /// (`RevocationAlreadyStarted`), and so is a revision older than the one
+    /// recorded (`AgreementRegressed`). The same revision keeps the record
+    /// as it is, so its day stays the day of the first acceptance.
+    ///
+    /// The bookkeeping record `AgreementRecorded` applies this rule, and so
+    /// does the configuration change that records an acceptance bringing
+    /// the user under the abuse guard ([`crate::AbuseGuardAgreement`]).
+    pub fn accept_agreement(&mut self, record: AgreementRecord) -> Result<(), ModelError> {
+        if matches!(
+            self.status,
+            UserStatus::RevokePending | UserStatus::Revoked { .. }
+        ) {
+            return Err(ModelError::RevocationAlreadyStarted {
+                user: self.id.clone(),
+            });
+        }
+        match self.agreement {
+            Some(recorded) if record.version < recorded.version => {
+                Err(ModelError::AgreementRegressed {
+                    user: self.id.clone(),
+                    recorded: recorded.version,
+                    offered: record.version,
+                })
+            }
+            Some(recorded) if record.version == recorded.version => Ok(()),
+            Some(_) | None => {
+                self.agreement = Some(record);
+                Ok(())
+            }
         }
     }
 

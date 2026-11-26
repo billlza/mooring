@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 use mooring_export::{ExportFormat, export_user};
 use mooring_model::{
-    AgreementRecord, AgreementVersion, CalendarDate, Deployment, SecretEntry, UnixTime, UserId,
+    AbuseGuardAgreement, AgreementRecord, AgreementVersion, CalendarDate, Deployment, SecretEntry,
+    SuspendReason, UnixTime, UserId, UserStatus,
 };
 use mooring_store::{InMemorySecretStore, SecretStore};
 
@@ -123,12 +124,16 @@ fn export_writes_clash_yaml_on_request() {
 /// refused, before any secret is read (the keychain here is empty), with
 /// the command that records it; after `user agree`, which keeps the
 /// generation and every node's confirmation, the same export writes the
-/// file with no node apply in between.
+/// file with no node apply in between. That holds where the acceptance
+/// leaves the abuse guard's coverage as it was, here under a closed gate;
+/// the shipped gate makes the export wait for an apply
+/// ([`an_acceptance_that_starts_the_abuse_guard_waits_for_an_apply`]).
 #[test]
 fn export_needs_the_agreement_and_user_agree_is_enough() {
     let deployment = fixture(|parts| parts.users[0].agreement = None);
     let user = first_user(&deployment);
     let mut harness = harness_with(deployment.clone());
+    harness.abuse_guard = AbuseGuardAgreement::since(None);
     let folder = harness.home.path().join("exports");
     fs::create_dir(&folder).unwrap();
     let out = folder.join("user.json");
@@ -149,6 +154,84 @@ fn export_needs_the_agreement_and_user_agree_is_enough() {
     assert_eq!(after.nodes(), deployment.nodes());
     fill(&mut harness.secrets);
     let written = harness.run(&args);
+    assert_eq!(written.code, 0, "{}", written.stderr);
+    assert_eq!(
+        fs::read(&out).unwrap(),
+        expected(&after, &user, ExportFormat::SingBoxJson)
+    );
+}
+
+/// Under the shipped gate, open from revision 2, `user agree` brings a user
+/// without an acceptance under the abuse guard, which changes every bundle
+/// that serves them (design §11.8): the generation is bumped, so the export
+/// is refused, and writes nothing, until the nodes the file names have
+/// applied it.
+#[test]
+fn an_acceptance_that_starts_the_abuse_guard_waits_for_an_apply() {
+    let deployment = fixture(|parts| parts.users[0].agreement = None);
+    let user = first_user(&deployment);
+    let (mut harness, folder) = exporting(deployment.clone());
+    assert_eq!(harness.abuse_guard, AbuseGuardAgreement::SHIPPED);
+    let out = folder.join("user.json");
+    assert_eq!(harness.run(&["user", "agree", user.as_str()]).code, 0);
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(
+        after.config_generation(),
+        deployment.config_generation().next().unwrap()
+    );
+    let refused = harness.run(&["user", "export", user.as_str(), "--out", arg(&out)]);
+    assert_eq!(refused.code, EXIT_LOCAL);
+    assert_eq!(refused.stdout, "");
+    let stale = format!(
+        " cannot be exported: it confirmed generation {}, the deployment is at {}\n",
+        deployment.config_generation(),
+        after.config_generation()
+    );
+    assert!(
+        refused.stderr.starts_with(
+            "mooringctl: no file was written: the export was refused\n  caused by: node "
+        ) && refused.stderr.ends_with(&stale),
+        "{}",
+        refused.stderr
+    );
+    assert!(!out.exists());
+}
+
+/// A user added before their first payment (`user add --unpaid`) is
+/// suspended at expiry and served nowhere, so their acceptance brings them
+/// under the abuse guard in no bundle: under the shipped gate it is the
+/// bookkeeping record, and their file is exported at once with no apply in
+/// between, as the unpaid flow has it (design §9.6, §11.8). The resume
+/// that serves them, a configuration change, covers them.
+#[test]
+fn an_unpaid_users_agreement_needs_no_apply_before_the_export() {
+    let now = UnixTime::from_secs(NOW);
+    let deployment = fixture(|parts| {
+        parts.users[0].agreement = None;
+        parts.users[0].status = UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: now,
+        };
+        parts.users[0].policy.expires_at = Some(now);
+    });
+    let user = first_user(&deployment);
+    let (mut harness, folder) = exporting(deployment.clone());
+    assert_eq!(harness.abuse_guard, AbuseGuardAgreement::SHIPPED);
+    let agreed = harness.run(&["user", "agree", user.as_str()]);
+    assert_eq!(agreed.code, 0, "{}", agreed.stderr);
+    assert_eq!(
+        agreed.stdout,
+        format!(
+            "recorded: user {user} accepted agreement revision {} on {} (UTC); no node apply is needed\n",
+            AgreementVersion::CURRENT,
+            CalendarDate::utc_of(now).unwrap()
+        )
+    );
+    let after = store(&harness).load().unwrap().deployment;
+    assert_eq!(after.config_generation(), deployment.config_generation());
+    assert_eq!(after.nodes(), deployment.nodes());
+    let out = folder.join("user.json");
+    let written = harness.run(&["user", "export", user.as_str(), "--out", arg(&out)]);
     assert_eq!(written.code, 0, "{}", written.stderr);
     assert_eq!(
         fs::read(&out).unwrap(),

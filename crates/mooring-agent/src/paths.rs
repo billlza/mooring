@@ -205,6 +205,12 @@ impl Paths {
         self.var_lib().join("watch")
     }
 
+    /// The abuse guard's state: its cuts and records (design §11.8),
+    /// `/var/lib/mooring/watch/abuse.json`.
+    pub(crate) fn abuse_state(&self) -> PathBuf {
+        self.watch_dir().join("abuse.json")
+    }
+
     /// The watch's view at its latest tick,
     /// `/var/lib/mooring/watch/status.json`.
     pub(crate) fn watch_status(&self) -> PathBuf {

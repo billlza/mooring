@@ -27,8 +27,8 @@ use mooring_store::{ROUTER_PIN_FILE, RouterPin, SecretStore, read_router_pin, wr
 
 use crate::backup::BackupCheck;
 use crate::cli::{
-    Command, ExitCommand, NodeCommand, OnOff, PortalCommand, RouterCommand, SimCommand,
-    TargetCommand, UserCommand,
+    AbuseCommand, Command, ExitCommand, NodeCommand, OnOff, PortalCommand, RouterCommand,
+    SimCommand, TargetCommand, UserCommand,
 };
 use crate::error::{CommandError, LocalError, Unconfirmed};
 use crate::paths;
@@ -84,6 +84,12 @@ pub(crate) struct Env<'a> {
     /// (`PortalAgreement::SHIPPED` in the binary, open since revision 2):
     /// while it does not, the portal's exports are refused.
     pub(crate) portal_agreement: mooring_model::PortalAgreement,
+    /// Whom this build's abuse guard covers, by the agreement revision they
+    /// accepted (`AbuseGuardAgreement::SHIPPED` in the binary, open since
+    /// revision 2): the bundles
+    /// `node apply` renders, and whether `user agree` changes the
+    /// configuration (design §11.8).
+    pub(crate) abuse_guard: mooring_model::AbuseGuardAgreement,
     /// How the payment pull reaches the portal (`/usr/bin/curl` in the
     /// binary).
     pub(crate) portal: &'a dyn crate::payments::PortalLink,
@@ -135,6 +141,25 @@ pub(crate) fn run(
             },
         ),
         Command::User(UserCommand::Alias { user }) => crate::user::alias(env, out, &user),
+        Command::User(UserCommand::Suspend { user, reason }) => {
+            crate::user::suspend(env, out, &user, reason)
+        }
+        Command::User(UserCommand::Resume { user }) => crate::user::resume(env, out, &user),
+        Command::Abuse(AbuseCommand::Records {
+            node,
+            interface,
+            json,
+        }) => crate::abuse::records(env, out, &node, &interface, json),
+        Command::Abuse(AbuseCommand::Cut {
+            node,
+            user,
+            interface,
+        }) => crate::abuse::cut(env, out, &node, &user, &interface),
+        Command::Abuse(AbuseCommand::Clear {
+            node,
+            user,
+            interface,
+        }) => crate::abuse::clear(env, out, &node, &user, &interface),
         Command::User(UserCommand::Agree { user }) => crate::user::agree(env, out, &user),
         Command::User(UserCommand::Forget { user, yes }) => {
             crate::user_forget::forget(env, out, &user, yes)

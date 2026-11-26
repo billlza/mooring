@@ -30,7 +30,7 @@ import Testing
         #expect(document.omitted == 0)
         #expect(document.incompleteDays.map(\.node) == [nil, NodeId("lon1")])
         #expect(document.incompleteDays.map(\.day) == [CalendarDate("2026-11-15"), CalendarDate("2026-11-15")])
-        try #require(document.entries.count == 85)
+        try #require(document.entries.count == 91)
         guard case .mac(let first) = document.entries[0] else {
             Issue.record("the first entry is not the Mac's")
             return
@@ -45,18 +45,18 @@ import Testing
             return
         }
         #expect(node == NodeId("lon1"))
-        #expect(line.readAt == UnixTime(seconds: 1_794_705_780))
+        #expect(line.readAt == UnixTime(seconds: 1_794_706_140))
         #expect(event.seq == 2)
         #expect(event.at == UnixTime(seconds: 1_794_703_380))
         #expect(event.kind == .conditionRaised(.wgReadFailed))
         #expect(document.entries[43].at == event.at)
-        guard case .node(_, let gap) = document.entries[83], case .node(_, let reset) = document.entries[84] else {
+        guard case .node(_, let gap) = document.entries[89], case .node(_, let reset) = document.entries[90] else {
             Issue.record("the last two entries are not a node's")
             return
         }
         #expect(gap.entry == .gap(from: 0, to: 2))
         #expect(reset.entry == .reset(end: 42))
-        #expect(document.entries[83].at == UnixTime(seconds: 1_794_705_780))
+        #expect(document.entries[89].at == UnixTime(seconds: 1_794_706_140))
         #expect(reset.at == reset.readAt)
         #expect(zip(document.entries, document.entries.dropFirst()).allSatisfy { $0.at <= $1.at })
     }
@@ -163,13 +163,14 @@ import Testing
         #expect(causes == AgentUnreachable.allCases)
         #expect(Set(lines) == Set(0..<3))
         #expect(Set(kinds) == Set(0..<11))
-        #expect(numbers == Array(2...41))
+        #expect(numbers == Array(2...47))
         #expect(
             raised == [
                 .wgReadFailed, .nftFailed, .statsQueryFailed, .targetDegraded, .targetReadFailed(errno: 13),
                 .exitFlowCapHit(count: 14), .stateWrite(errno: 28), .macSilent(since: UnixTime(seconds: 1_791_416_400)),
                 .diskLow(free: 950_000_000), .clockUnsynced, .rebootPending(since: UnixTime(seconds: 1_791_331_200)),
-                .accountingCanaryMissing(inbounds: [.reality, .hy2]),
+                .accountingCanaryMissing(inbounds: [.reality, .hy2]), .abuseCut(users: 1), .abuseSuspected(users: 2),
+                .abuseGuardUnavailable(cause: .readFailed),
             ])
         #expect(cleared == WatchErrorKind.allCases)
         #expect(recorded == GateReason.allCases)
@@ -216,7 +217,7 @@ import Testing
         let objects = try JSONPaths.expectEveryObjectRefusesAnUnknownKey(in: json) {
             _ = try EventsDocument.decode(line: $0)
         }
-        #expect(objects == 509)
+        #expect(objects == 557)
     }
 
     /// Every key of every object of the document is required, the `null`
@@ -226,7 +227,7 @@ import Testing
         let (removed, nulls) = try JSONPaths.expectEveryKeyIsRequired(in: json) {
             _ = try EventsDocument.decode(line: $0)
         }
-        #expect(removed == 733)
+        #expect(removed == 805)
         #expect(nulls == 1)
     }
 
@@ -283,7 +284,7 @@ import Testing
         #expect(two[0].entries == document.entries.filter { $0.at >= midnight }.reversed())
         #expect(two[1].start == UnixTime(seconds: Self.day + 3600 - 86_400).date)
         #expect(two[1].entries == document.entries.filter { $0.at < midnight }.reversed())
-        #expect(two[0].entries.first?.at == UnixTime(seconds: 1_794_705_780))
+        #expect(two[0].entries.first?.at == UnixTime(seconds: 1_794_706_140))
         guard case .node(_, let newest) = two[0].entries[0], case .node(_, let next) = two[0].entries[1] else {
             Issue.record("the newest entries are not a node's")
             return

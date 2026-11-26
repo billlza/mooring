@@ -10,19 +10,19 @@ use std::net::Ipv4Addr;
 use std::num::NonZeroU16;
 
 use mooring_agent_proto::{
-    AcceptLocal, AgentError, AgentErrorKind, AgentEvent, AgentEventKind, AppliedGeneration,
-    ApplyStep, Arch, BlobLen, BootstrapStep, BundleFiles, BundleHeader, CertName, ClearableHold,
-    EgressViolationHold, EngineHealth, EngineRun, EngineSet, EngineState, EngineUser, EventSeq,
-    EventsV1, GateReason, GateState, Generation, Halt, HealthCheck, HelloInfo, Holds, HostAccount,
-    HostFact, HostFacts, HostHealth, HostProfileVersion, HttpProbe, HttpStatus, HttpVersion,
-    IfName, Inbound, InboundSet, IoOp, KernelIdent, KernelRelease, LineRequest, MAX_BLOB_BYTES,
-    MacDrainHold, OpaqueUserId, OperatorHold, PortRange, Principal, PriorState, ReadError,
-    RedirectUrl, Reply, Request, RequestKind, Resolution, Response, ResponseKind, Role,
-    RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason, SshEd25519Key,
-    SshdDirective, StatsEmail, StatusV1, StderrTail, StoredMacReport, SystemdOp, TargetFacts,
-    TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic, TxnStage,
-    TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1, UsageV1,
-    ValidationTool, WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
+    AbuseGuardVersion, AcceptLocal, AgentError, AgentErrorKind, AgentEvent, AgentEventKind,
+    AppliedGeneration, ApplyStep, Arch, BlobLen, BootstrapStep, BundleFiles, BundleHeader,
+    CertName, ClearableHold, EgressViolationHold, EngineHealth, EngineRun, EngineSet, EngineState,
+    EngineUser, EventSeq, EventsV1, GateReason, GateState, Generation, Halt, HealthCheck,
+    HelloInfo, Holds, HostAccount, HostFact, HostFacts, HostHealth, HostProfileVersion, HttpProbe,
+    HttpStatus, HttpVersion, IfName, Inbound, InboundSet, IoOp, KernelIdent, KernelRelease,
+    LineRequest, MAX_BLOB_BYTES, MacDrainHold, OpaqueUserId, OperatorHold, PortRange, Principal,
+    PriorState, ReadError, RedirectUrl, Reply, Request, RequestKind, Resolution, Response,
+    ResponseKind, Role, RollbackCause, SeriesRange, SeriesSpan, Sha256Hex, ShutdownReason,
+    SshEd25519Key, SshdDirective, StatsEmail, StatusV1, StderrTail, StoredMacReport, SystemdOp,
+    TargetFacts, TargetHost, TargetTool, TlsGroup, TlsProbe, TlsSession, TlsVersion, Traffic,
+    TxnStage, TxnState, UnitName, UnixTime, UplinkTransfer, UsageBin, UsageMonth, UsageSeriesV1,
+    UsageV1, ValidationTool, WatchConditions, WatchConfig, WatchError, WatchErrorKind, WatchTarget,
     expect_end_of_input, read_blob, read_reply, read_request, write_put_blob, write_reply,
     write_request,
 };
@@ -761,10 +761,22 @@ fn watch_config() -> impl Strategy<Value = WatchConfig> {
         any::<u32>().prop_map(Ipv4Addr::from),
         btree_set(stats_email(), 0..4),
     )
-        .prop_map(|(keepalive, host, ipv4, emails)| WatchConfig {
-            keepalive_secs: NonZeroU16::new(keepalive).unwrap(),
-            target: WatchTarget { host, ipv4 },
-            emails,
+        .prop_map(|(keepalive, host, ipv4, emails)| {
+            // The guard covers the users among the identities served.
+            let guarded_users = emails
+                .iter()
+                .filter_map(|email| match &email.principal {
+                    Principal::User(user) => Some(user.clone()),
+                    Principal::Probe => None,
+                })
+                .collect();
+            WatchConfig {
+                keepalive_secs: NonZeroU16::new(keepalive).unwrap(),
+                target: WatchTarget { host, ipv4 },
+                emails,
+                abuse_guard: AbuseGuardVersion::V1,
+                guarded_users,
+            }
         })
 }
 

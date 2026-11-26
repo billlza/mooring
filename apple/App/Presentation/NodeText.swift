@@ -100,6 +100,13 @@ extension WatchError {
         case .rebootPending(let since): String(localized: "A reboot has been required since \(since.text)")
         case .accountingCanaryMissing(let inbounds):
             String(localized: "The probe's traffic is not being counted on \(inbounds.text)")
+        case .abuseCut(let users): String(localized: "Users cut off for abuse: \(Int(users))")
+        case .abuseSuspected(let users):
+            String(localized: "Users with abuse findings below the cut level: \(Int(users))")
+        case .abuseGuardUnavailable(.notInstalled):
+            String(localized: "The abuse guard is not installed; apply the current configuration")
+        case .abuseGuardUnavailable(.readFailed):
+            String(localized: "The abuse guard cannot read its counters; its limits and cuts stay in force")
         }
     }
 }

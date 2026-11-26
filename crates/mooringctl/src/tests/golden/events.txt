@@ -1,4 +1,4 @@
-events 2026-11-15 to 2026-11-15 UTC: 85 entries
+events 2026-11-15 to 2026-11-15 UTC: 91 entries
   2026-11-15 00:00:00 UTC  mac           the daemon started
   2026-11-15 00:01:00 UTC  mac           power: mains
   2026-11-15 00:02:00 UTC  mac           power: battery
@@ -54,35 +54,41 @@ events 2026-11-15 to 2026-11-15 UTC: 85 entries
   2026-11-15 00:52:00 UTC  lon1          raised: the clock is not synchronised by NTP
   2026-11-15 00:53:00 UTC  lon1          raised: a reboot has been required since 1791331200
   2026-11-15 00:54:00 UTC  lon1          raised: the probe's traffic on reality, hy2 is not being counted
-  2026-11-15 00:55:00 UTC  lon1          cleared: WgReadFailed
-  2026-11-15 00:56:00 UTC  lon1          cleared: NftFailed
-  2026-11-15 00:57:00 UTC  lon1          cleared: StatsQueryFailed
-  2026-11-15 00:58:00 UTC  lon1          cleared: TargetDegraded
-  2026-11-15 00:59:00 UTC  lon1          cleared: TargetReadFailed
-  2026-11-15 01:00:00 UTC  lon1          cleared: ExitFlowCapHit
-  2026-11-15 01:01:00 UTC  lon1          cleared: StateWrite
-  2026-11-15 01:02:00 UTC  lon1          cleared: MacSilent
-  2026-11-15 01:03:00 UTC  lon1          cleared: DiskLow
-  2026-11-15 01:04:00 UTC  lon1          cleared: ClockUnsynced
-  2026-11-15 01:05:00 UTC  lon1          cleared: RebootPending
-  2026-11-15 01:06:00 UTC  lon1          cleared: AccountingCanaryMissing
-  2026-11-15 01:07:00 UTC  lon1          the gate opened
-  2026-11-15 01:08:00 UTC  lon1          the gate closed
-  2026-11-15 01:09:00 UTC  lon1          hold recorded: the Mac's sleep drain
-  2026-11-15 01:10:00 UTC  lon1          hold recorded: an egress violation
-  2026-11-15 01:11:00 UTC  lon1          hold recorded: the operator's
-  2026-11-15 01:12:00 UTC  lon1          hold cleared: the Mac's sleep drain
-  2026-11-15 01:13:00 UTC  lon1          hold cleared: an egress violation
-  2026-11-15 01:14:00 UTC  lon1          hold cleared: the operator's
-  2026-11-15 01:15:00 UTC  lon1          halted: the egress was a node's address
-  2026-11-15 01:16:00 UTC  lon1          halted: by the operator
-  2026-11-15 01:17:00 UTC  lon1          halted: being retired
-  2026-11-15 01:18:00 UTC  lon1          resumed, running generation 7
-  2026-11-15 01:19:00 UTC  lon1          generation 8 committed
-  2026-11-15 01:20:00 UTC  lon1          mooring-xray restarted
-  2026-11-15 01:21:00 UTC  lon1          mooring-hy2 restarted
-  2026-11-15 01:22:00 UTC  lon1          the host booted
-  2026-11-15 01:23:00 UTC  lon1          events 0 to 1 were pruned before the Mac read them
-  2026-11-15 01:23:00 UTC  lon1          the journal was started anew (it ends before event 42); read again from its start
+  2026-11-15 00:55:00 UTC  lon1          raised: users cut off on this node for abuse: 1
+  2026-11-15 00:56:00 UTC  lon1          raised: users with abuse findings below their cut levels: 2
+  2026-11-15 00:57:00 UTC  lon1          raised: the abuse guard cannot measure: its sets could not be read
+  2026-11-15 00:58:00 UTC  lon1          cleared: WgReadFailed
+  2026-11-15 00:59:00 UTC  lon1          cleared: NftFailed
+  2026-11-15 01:00:00 UTC  lon1          cleared: StatsQueryFailed
+  2026-11-15 01:01:00 UTC  lon1          cleared: TargetDegraded
+  2026-11-15 01:02:00 UTC  lon1          cleared: TargetReadFailed
+  2026-11-15 01:03:00 UTC  lon1          cleared: ExitFlowCapHit
+  2026-11-15 01:04:00 UTC  lon1          cleared: StateWrite
+  2026-11-15 01:05:00 UTC  lon1          cleared: MacSilent
+  2026-11-15 01:06:00 UTC  lon1          cleared: DiskLow
+  2026-11-15 01:07:00 UTC  lon1          cleared: ClockUnsynced
+  2026-11-15 01:08:00 UTC  lon1          cleared: RebootPending
+  2026-11-15 01:09:00 UTC  lon1          cleared: AccountingCanaryMissing
+  2026-11-15 01:10:00 UTC  lon1          cleared: AbuseCut
+  2026-11-15 01:11:00 UTC  lon1          cleared: AbuseSuspected
+  2026-11-15 01:12:00 UTC  lon1          cleared: AbuseGuardUnavailable
+  2026-11-15 01:13:00 UTC  lon1          the gate opened
+  2026-11-15 01:14:00 UTC  lon1          the gate closed
+  2026-11-15 01:15:00 UTC  lon1          hold recorded: the Mac's sleep drain
+  2026-11-15 01:16:00 UTC  lon1          hold recorded: an egress violation
+  2026-11-15 01:17:00 UTC  lon1          hold recorded: the operator's
+  2026-11-15 01:18:00 UTC  lon1          hold cleared: the Mac's sleep drain
+  2026-11-15 01:19:00 UTC  lon1          hold cleared: an egress violation
+  2026-11-15 01:20:00 UTC  lon1          hold cleared: the operator's
+  2026-11-15 01:21:00 UTC  lon1          halted: the egress was a node's address
+  2026-11-15 01:22:00 UTC  lon1          halted: by the operator
+  2026-11-15 01:23:00 UTC  lon1          halted: being retired
+  2026-11-15 01:24:00 UTC  lon1          resumed, running generation 7
+  2026-11-15 01:25:00 UTC  lon1          generation 8 committed
+  2026-11-15 01:26:00 UTC  lon1          mooring-xray restarted
+  2026-11-15 01:27:00 UTC  lon1          mooring-hy2 restarted
+  2026-11-15 01:28:00 UTC  lon1          the host booted
+  2026-11-15 01:29:00 UTC  lon1          events 0 to 1 were pruned before the Mac read them
+  2026-11-15 01:29:00 UTC  lon1          the journal was started anew (it ends before event 42); read again from its start
 2026-11-15, the Mac's journal: the last line is incomplete (the daemon may be writing it, or stopped while writing it)
 2026-11-15, lon1's copy: the last line is incomplete (the daemon may be writing it, or stopped while writing it)

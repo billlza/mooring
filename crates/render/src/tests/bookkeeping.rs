@@ -13,11 +13,11 @@ use mooring_fixtures::{FIXTURE_NOW, Fixture};
 use mooring_model::node::{AppliedConfig, NodeLifecycle};
 use mooring_model::user::{QuotaAction, SuspendReason, UserQuota, UserStatus, WarnPercent};
 use mooring_model::{
-    AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Deployment, NodeId, Sha256Digest,
-    UserId,
+    AbuseGuardAgreement, AgreementRecord, AgreementVersion, Bookkeeping, CalendarDate, Deployment,
+    ModelError, NodeId, Sha256Digest, UserId,
 };
 
-use crate::tests::support::{edit, engines, node};
+use crate::tests::support::{GUARD_CLOSED, GUARD_OPEN, edit, engines, node};
 use crate::vps::bundle;
 use mooring_model::UnixTime;
 
@@ -30,14 +30,25 @@ struct Rendered {
     exports: BTreeMap<(UserId, ExportFormat), Vec<u8>>,
 }
 
+/// What `deployment` renders, every served user under the abuse guard.
 fn rendered(fixture: &Fixture, deployment: &Deployment) -> Rendered {
+    rendered_under(fixture, deployment, GUARD_OPEN)
+}
+
+/// What `deployment` renders with the abuse guard covering whom `guard`
+/// covers.
+fn rendered_under(
+    fixture: &Fixture,
+    deployment: &Deployment,
+    guard: AbuseGuardAgreement,
+) -> Rendered {
     let catalog = engines();
     let bundles = deployment
         .nodes()
         .values()
         .filter(|node| node.apply_inputs().is_ok())
         .map(|node| {
-            let bundle = bundle(deployment, &node.id, &fixture.secrets, &catalog).unwrap();
+            let bundle = bundle(deployment, &node.id, &fixture.secrets, &catalog, guard).unwrap();
             (node.id.clone(), bundle.digest())
         })
         .collect();
@@ -61,21 +72,38 @@ fn rendered(fixture: &Fixture, deployment: &Deployment) -> Rendered {
 /// agreement, a status, a stage) must not make the comparison vacuous
 /// unnoticed. (Retiring a node can make an export possible that was not: a
 /// user who held credentials on the retiring node.)
+///
+/// The bundles are compared with the abuse guard's gate both closed and
+/// open, since a record keeps the generation whichever gate the build
+/// ships; an agreement record, which names its gate, under that gate,
+/// which is the build's own.
 fn assert_neutral(fixture: &Fixture, before: &Deployment, entry: Bookkeeping) -> (usize, usize) {
     let after = before.clone().record(entry.clone()).unwrap();
     assert_eq!(after.config_generation(), before.config_generation());
     assert_ne!(&after, before, "{entry:?} recorded nothing");
-    let (old, new) = (rendered(fixture, before), rendered(fixture, &after));
-    assert_eq!(old.bundles, new.bundles, "{entry:?} changed a bundle");
-    assert!(!old.bundles.is_empty());
-    for (key, document) in &old.exports {
+    let gates = match &entry {
+        Bookkeeping::AgreementRecorded { guard, .. } => vec![*guard],
+        _ => vec![GUARD_CLOSED, GUARD_OPEN],
+    };
+    let mut counts = None;
+    for guard in gates {
+        let old = rendered_under(fixture, before, guard);
+        let new = rendered_under(fixture, &after, guard);
         assert_eq!(
-            new.exports.get(key),
-            Some(document),
-            "{entry:?} changed the export {key:?}"
+            old.bundles, new.bundles,
+            "{entry:?} changed a bundle under {guard:?}"
         );
+        assert!(!old.bundles.is_empty());
+        for (key, document) in &old.exports {
+            assert_eq!(
+                new.exports.get(key),
+                Some(document),
+                "{entry:?} changed the export {key:?}"
+            );
+        }
+        counts = Some((old.exports.len(), new.exports.len()));
     }
-    (old.exports.len(), new.exports.len())
+    counts.unwrap()
 }
 
 #[test]
@@ -192,8 +220,9 @@ fn cancelling_a_planned_node_changes_no_bundle_and_no_export() {
     assert_eq!(exports, (2, 6));
 }
 
-/// Recording an agreement changes no bundle and no export that could be
-/// made: it only lets the user's own export be made (decision F9).
+/// Recording an agreement that leaves the abuse guard's coverage as it was
+/// changes no bundle and no export that could be made: it only lets the
+/// user's own export be made (decision F9).
 #[test]
 fn recording_an_agreement_changes_no_bundle_and_no_export() {
     let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
@@ -212,9 +241,89 @@ fn recording_an_agreement_changes_no_bundle_and_no_export() {
                 version: AgreementVersion::CURRENT,
                 accepted_on: CalendarDate::parse("2026-10-18").unwrap(),
             },
+            guard: GUARD_CLOSED,
         },
     );
     assert_eq!(exports, (4, 6));
+}
+
+/// A user served nowhere, suspended at expiry as one added before their
+/// first payment is, is in no bundle, so their acceptance of the revision
+/// that states the abuse guard changes none, under the open gate too: the
+/// model records it as bookkeeping (design §11.8). Their export, refused
+/// before for want of an acceptance, can be made after.
+#[test]
+fn a_suspended_users_agreement_changes_no_bundle_under_the_open_gate() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let unpaid = edit(&fixture.deployment, |parts| {
+        parts.users[0].agreement = None;
+        parts.users[0].status = UserStatus::Suspended {
+            reason: SuspendReason::Expired,
+            since: FIXTURE_NOW,
+        };
+        parts.users[0].policy.expires_at = Some(FIXTURE_NOW);
+    });
+    let user = unpaid.users().keys().next().unwrap().clone();
+    let exports = assert_neutral(
+        &fixture,
+        &unpaid,
+        Bookkeeping::AgreementRecorded {
+            user,
+            record: AgreementRecord {
+                version: AgreementVersion::CURRENT,
+                accepted_on: CalendarDate::parse("2026-11-25").unwrap(),
+            },
+            guard: GUARD_OPEN,
+        },
+    );
+    assert_eq!(exports, (4, 6));
+}
+
+/// An acceptance that brings a served user under the abuse guard changes
+/// every bundle that serves the user (design §11.8), so it cannot keep the
+/// generation: the model refuses it as bookkeeping, and the same
+/// acceptance made as a configuration change renders other bundles.
+#[test]
+fn an_agreement_that_starts_the_abuse_guard_is_no_bookkeeping() {
+    let fixture = mooring_fixtures::two_nodes_three_users().unwrap();
+    let unrecorded = edit(&fixture.deployment, |parts| {
+        parts.users[0].agreement = None;
+    });
+    let user = unrecorded.users().keys().next().unwrap().clone();
+    let record = AgreementRecord {
+        version: AgreementVersion::CURRENT,
+        accepted_on: CalendarDate::parse("2026-11-15").unwrap(),
+    };
+    assert_eq!(
+        unrecorded.clone().record(Bookkeeping::AgreementRecorded {
+            user: user.clone(),
+            record,
+            guard: GUARD_OPEN,
+        }),
+        Err(ModelError::AgreementStartsGuard {
+            user,
+            revision: AgreementVersion::CURRENT,
+        })
+    );
+    let accepted = edit(&unrecorded, |parts| {
+        parts.users[0].accept_agreement(record).unwrap();
+    });
+    let (before, after) = (
+        rendered_under(&fixture, &unrecorded, GUARD_OPEN),
+        rendered_under(&fixture, &accepted, GUARD_OPEN),
+    );
+    assert_eq!(before.bundles.len(), 2);
+    for (node, digest) in &before.bundles {
+        assert_ne!(
+            &after.bundles[node], digest,
+            "{node} renders the user outside the guard"
+        );
+    }
+    // With the gate closed, the same acceptance renders nothing new.
+    assert_eq!(
+        rendered_under(&fixture, &unrecorded, GUARD_CLOSED).bundles,
+        rendered_under(&fixture, &accepted, GUARD_CLOSED).bundles
+    );
 }
 
 /// A user's own quota (`QuotaRecorded`, `user set-quota`) is a record on the

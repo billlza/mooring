@@ -261,8 +261,10 @@ fn a_counter_nft_cannot_read_ends_the_watch() {
 
 #[test]
 fn an_element_nft_will_not_change_ends_the_watch_with_the_gate_as_it_was() {
+    // With the abuse guard the gate opens in the command line that sets the
+    // cut set; nft refusing it changes neither (one transaction).
     let (world, fatal) = ticks_until_fatal(|tool, args| {
-        (tool == Tool::Nft && args.first() == Some(&"delete")).then(|| {
+        (tool == Tool::Nft && args.contains(&"delete")).then(|| {
             Ok(failed(
                 b"Error: Could not process rule: No such file or directory\n",
             ))
@@ -271,7 +273,7 @@ fn an_element_nft_will_not_change_ends_the_watch_with_the_gate_as_it_was() {
     assert_eq!(
         fatal,
         Fatal::Nft(
-            "nft delete element inet mooring exit_closed { \"wgexit\" } failed: Error: Could not process rule: No such file or directory"
+            "nft flush set inet mooring abuse_cut ; delete element inet mooring exit_closed { \"wgexit\" } failed: Error: Could not process rule: No such file or directory"
                 .to_owned()
         )
     );
@@ -279,6 +281,32 @@ fn an_element_nft_will_not_change_ends_the_watch_with_the_gate_as_it_was() {
         world.status().observed.gate,
         GateState::Closed,
         "the view of the tick before"
+    );
+    // A generation rendered before the guard opens the gate alone.
+    let world = World::new();
+    world.install_before_guard(1, TxnState::Committed);
+    let node = world.node_answering(1_000, |tool, args| {
+        (tool == Tool::Nft && args.first() == Some(&"delete")).then(|| {
+            Ok(failed(
+                b"Error: Could not process rule: No such file or directory\n",
+            ))
+        })
+    });
+    let mut watch = Watch::start(&world.paths).unwrap();
+    let fatal = (0..3)
+        .find_map(|_| {
+            world.traffic(&node, 1);
+            let result = watch.tick(&world.paths, &node);
+            node.sleep(Duration::from_secs(5));
+            result.err()
+        })
+        .unwrap();
+    assert_eq!(
+        fatal,
+        Fatal::Nft(
+            "nft delete element inet mooring exit_closed { \"wgexit\" } failed: Error: Could not process rule: No such file or directory"
+                .to_owned()
+        )
     );
 }
 
@@ -302,7 +330,15 @@ fn an_nft_failure_ends_the_watch_with_nft_failed_recorded() {
     let message = String::from_utf8(stderr).unwrap();
     assert!(message.contains("nft failed"), "{message}");
     assert!(message.contains("Operation not permitted"), "{message}");
-    assert_eq!(world.conditions(), vec![WatchErrorKind::NftFailed]);
+    // The guard's reading, every third tick, failed first: it cannot read
+    // its sets either, which it reports without touching the gate.
+    assert_eq!(
+        world.conditions(),
+        vec![
+            WatchErrorKind::NftFailed,
+            WatchErrorKind::AbuseGuardUnavailable
+        ]
+    );
     assert_eq!(
         world.events().last(),
         Some(&AgentEventKind::ConditionRaised {
@@ -320,10 +356,13 @@ fn an_nft_failure_ends_the_watch_with_nft_failed_recorded() {
     assert!(world.conditions().is_empty());
     let events = world.events();
     assert_eq!(
-        events[events.len() - 2..],
+        events[events.len() - 3..],
         [
             AgentEventKind::ConditionCleared {
                 condition: WatchErrorKind::NftFailed
+            },
+            AgentEventKind::ConditionCleared {
+                condition: WatchErrorKind::AbuseGuardUnavailable
             },
             AgentEventKind::GateClosed,
         ]

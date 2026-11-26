@@ -29,8 +29,10 @@ closed_enum! {
 /// instead: a target check's result the watch cannot read
 /// (`TargetReadFailed`, 2026-11-03) among them, since the watch still
 /// gates, counts and records its state, and only the target's verdict is
-/// unknown. The match names every kind, so a new condition cannot be added
-/// without deciding it here.
+/// unknown. The abuse guard's conditions (2026-11-11) leave it working too:
+/// a cut, a suspicion or a guard that cannot measure says nothing of the
+/// watch's own work. The match names every kind, so a new condition cannot
+/// be added without deciding it here.
 const fn stops_the_watch(kind: WatchErrorKind) -> bool {
     match kind {
         WatchErrorKind::WgReadFailed | WatchErrorKind::NftFailed | WatchErrorKind::StateWrite => {
@@ -44,7 +46,10 @@ const fn stops_the_watch(kind: WatchErrorKind) -> bool {
         | WatchErrorKind::DiskLow
         | WatchErrorKind::ClockUnsynced
         | WatchErrorKind::RebootPending
-        | WatchErrorKind::AccountingCanaryMissing => false,
+        | WatchErrorKind::AccountingCanaryMissing
+        | WatchErrorKind::AbuseCut
+        | WatchErrorKind::AbuseSuspected
+        | WatchErrorKind::AbuseGuardUnavailable => false,
     }
 }
 

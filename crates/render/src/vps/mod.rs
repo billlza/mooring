@@ -20,7 +20,7 @@ use mooring_model::counters::ConfigGeneration;
 use mooring_model::node::{Arch, Node, NodeAddress, NodeSite};
 use mooring_model::secret::SecretSnapshot;
 use mooring_model::target::TargetSpec;
-use mooring_model::{Deployment, NodeId, Sha256Digest};
+use mooring_model::{AbuseGuardAgreement, Deployment, NodeId, Sha256Digest};
 use sha2::{Digest as _, Sha256};
 
 pub use cloud_init::{CloudInitKeys, OpensshHostKey, UserData, cloud_init};
@@ -174,16 +174,19 @@ const fn arch_name(arch: Arch) -> &'static str {
 
 /// Renders node `node`'s bundle. The node must be adopted or applied and
 /// have a REALITY target; `secrets` must hold every secret it serves.
+/// `guard` says which users the abuse guard covers (design §11.8):
+/// `mooringctl` passes [`AbuseGuardAgreement::SHIPPED`].
 pub fn bundle(
     deployment: &Deployment,
     node: &NodeId,
     secrets: &SecretSnapshot,
     engines: &EngineCatalog,
+    guard: AbuseGuardAgreement,
 ) -> Result<VpsBundle, RenderError> {
     let node = deployment.node(node)?;
     let inputs = node.apply_inputs()?;
     let site = inputs.site.clone();
-    let files = files(deployment, node, &site, inputs.target, secrets)?;
+    let files = files(deployment, node, &site, inputs.target, secrets, guard)?;
     let engines = engines.for_arch(site.host_facts.arch).clone();
     let host_profile = HostProfile::CURRENT.version;
     let digest = bundle_digest(&files, host_profile, &engines, &site);
@@ -204,10 +207,12 @@ fn files(
     site: &NodeSite,
     target: &TargetSpec,
     secrets: &SecretSnapshot,
+    guard: AbuseGuardAgreement,
 ) -> Result<Files, RenderError> {
     let id = &node.id;
     let NodeAddress::Public(vps4) = site.address;
-    let served = served::served(deployment, node, secrets)?;
+    let served = served::served(deployment, node, secrets, guard)?;
+    let user_exits = served::user_exits(id, &served)?;
     let reach = NodeReach::of(deployment)?;
     let policy = deployment.policy();
     let xray = xray::config(&xray::XrayInput {
@@ -215,6 +220,7 @@ fn files(
         target,
         private_key: secrets.reality_private(id)?,
         served: &served,
+        user_exits: &user_exits,
         reach: &reach,
         policy,
     })?;
@@ -244,6 +250,7 @@ fn files(
     };
     let nft = nft::NftInput {
         vps4,
+        wg_index: node.wg_index,
         flow_cap: deployment.exit().flow_cap,
         target: target.ipv4(),
         camo_forward: policy.camo_forward,
@@ -263,7 +270,12 @@ fn files(
         hy2: RenderedFile::new(encode::json(&hy2)?),
         wg: RenderedFile::new(encode::text(|sink| wg::write(&wg, sink))),
         nftables: RenderedFile::new(encode::text(|sink| nft::write(&nft, sink))),
-        watch: RenderedFile::new(encode::json(&watch::config(node, target, &served)?)?),
+        watch: RenderedFile::new(encode::json(&watch::config(
+            node,
+            target,
+            &served,
+            &user_exits,
+        )?)?),
         viewer_keys: RenderedFile::new(viewers::file(deployment.viewers())?),
     })
 }

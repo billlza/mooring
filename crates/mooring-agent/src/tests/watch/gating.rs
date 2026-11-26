@@ -135,7 +135,7 @@ fn a_gate_closed_behind_the_watch_is_found_at_the_next_reread() {
     let reread = |node: &FakeNode| {
         node.calls()
             .iter()
-            .filter(|call| call.contains("list set"))
+            .filter(|call| call.contains("list set inet mooring exit_closed"))
             .count()
     };
     let before = reread(&node);

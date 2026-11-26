@@ -159,6 +159,9 @@ public enum WatchErrorKind: String, Decodable, Sendable, CaseIterable {
     case clockUnsynced = "ClockUnsynced"
     case rebootPending = "RebootPending"
     case accountingCanaryMissing = "AccountingCanaryMissing"
+    case abuseCut = "AbuseCut"
+    case abuseSuspected = "AbuseSuspected"
+    case abuseGuardUnavailable = "AbuseGuardUnavailable"
 }
 
 /// What happened on a node.

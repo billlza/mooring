@@ -23,10 +23,10 @@ use mooring_daemon_core::meter::CounterReading;
 use mooring_daemon_core::power::HelperEvent;
 use mooring_daemon_core::status::PowerSource;
 use mooring_macsys::{DefaultRoute, Interface, InterfaceAddrV4, Ipv4Service, MacsysError};
-use mooring_model::PortalAgreement;
 use mooring_model::iface::{BsdName, InterfaceIndex, MacAddr};
 use mooring_model::secret::{RouterAdminPassword, SecretEntry, SecretMaterial, SecretRef};
 use mooring_model::time::UnixTime;
+use mooring_model::{AbuseGuardAgreement, PortalAgreement};
 use mooring_store::{
     InMemorySecretStore, RouterPin, SecretOp, SecretStore, SecretStoreError, Store,
     write_router_pin,
@@ -989,6 +989,9 @@ pub(crate) struct Harness {
     /// The portal's gate on the agreement: the binary's, closed, unless a
     /// test opens it.
     pub(crate) portal_agreement: PortalAgreement,
+    /// The abuse guard's gate on the agreement: the binary's, closed,
+    /// unless a test opens it.
+    pub(crate) abuse_guard: AbuseGuardAgreement,
     /// The portal the payment pull reaches: its answers in order, and the
     /// requests made.
     pub(crate) portal: FakePortal,
@@ -1080,6 +1083,7 @@ impl Harness {
             probe_rtt: Cell::new(Duration::from_millis(40)),
             redirected: Cell::new(0),
             portal_agreement: PortalAgreement::SHIPPED,
+            abuse_guard: AbuseGuardAgreement::SHIPPED,
             portal: FakePortal::default(),
             now: Cell::new(NOW),
             clock_step: Cell::new(0),
@@ -1224,6 +1228,7 @@ impl Harness {
             probe: &probe,
             redirect_stderr: &redirect,
             portal_agreement: self.portal_agreement,
+            abuse_guard: self.abuse_guard,
             portal: &self.portal,
         };
         work(&mut env)

@@ -598,6 +598,11 @@ pub(super) fn watch_errors() -> Vec<WatchError> {
         WatchError::AccountingCanaryMissing {
             inbounds: InboundSet::of(Inbound::Reality).with(Inbound::Hy2),
         },
+        WatchError::AbuseCut { users: 1 },
+        WatchError::AbuseSuspected { users: 2 },
+        WatchError::AbuseGuardUnavailable {
+            cause: mooring_agent_proto::AbuseGuardFault::ReadFailed,
+        },
     ]
 }
 

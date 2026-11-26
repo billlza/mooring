@@ -13,8 +13,8 @@ use zeroize::Zeroizing;
 
 use crate::mac::{exit, prober};
 use crate::tests::support::{
-    HOST_PRIVATE, cloud_init_keys, edit, engines, fixtures, mac_exit, mac_prober, node, planned,
-    secrets_where, vps,
+    GUARD_OPEN, HOST_PRIVATE, cloud_init_keys, edit, engines, fixtures, mac_exit, mac_prober, node,
+    planned, secrets_where, vps,
 };
 use crate::vps::{bundle, cloud_init};
 
@@ -178,7 +178,7 @@ fn alert_channel_secrets_reach_no_rendered_file() {
     let alert = needles(&secrets, |secret_ref| added.contains(secret_ref));
     assert_eq!(alert.len(), added.len());
     for id in &ids {
-        let with_channels = bundle(&deployment, id, &secrets, &engines()).unwrap();
+        let with_channels = bundle(&deployment, id, &secrets, &engines(), GUARD_OPEN).unwrap();
         let without = vps(&fixture, id);
         let files: Vec<_> = with_channels.files().map(|(file, _)| file).collect();
         assert_eq!(

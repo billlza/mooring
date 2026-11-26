@@ -9,10 +9,11 @@ use std::num::NonZeroU16;
 
 use mooring_export::{ExportErrorKind, export_secret_refs};
 use mooring_model::deployment::Bookkeeping;
+use mooring_model::node::AppliedConfig;
 use mooring_model::user::SuspendReason;
 use mooring_model::{
-    Capability, ClientLine, Deployment, NodeId, NodeLifecycle, SecretRef, UnixTime, User, UserId,
-    UserPolicy, UserStatus,
+    AbuseGuardAgreement, Capability, ClientLine, Deployment, NodeId, NodeLifecycle, SecretRef,
+    UnixTime, User, UserId, UserPolicy, UserStatus,
 };
 use mooring_store::{InMemorySecretStore, SecretStore, Store, StoreError, record_with_secrets};
 
@@ -175,7 +176,7 @@ fn add_creates_an_active_user_with_credentials_on_every_node() {
     assert_eq!(
         outcome.stdout,
         format!(
-            "added user {}: CFM 0.5, credentials on ams1, lon1\nnext: `mooringctl user alias {}`, then `node apply` each of those nodes, then `user agree` and `user export`\n",
+            "added user {}: CFM 0.5, credentials on ams1, lon1\nnext: `mooringctl user alias {}`, then `user agree`, then `node apply` each of those nodes, then `user export`\n",
             user.id, user.id
         )
     );
@@ -187,6 +188,58 @@ fn add_creates_an_active_user_with_credentials_on_every_node() {
     }
     let refusal = export_secret_refs(&after, &user.id, UnixTime::from_secs(NOW)).unwrap_err();
     assert_eq!(refusal.kind(), ExportErrorKind::AgreementNotAccepted);
+}
+
+/// The next steps `user add` prints for an active user need one apply
+/// before the export. Under the shipped gate, open from revision 2, the
+/// user's `user agree` brings them under the abuse guard, a configuration
+/// change (design §11.8), so it comes before `node apply`, which then
+/// covers the add and the acceptance together: an acceptance taken after
+/// the apply would put every node behind again. Followed as printed, with
+/// every node confirming the generation for `node apply`, the export's
+/// checks pass.
+#[test]
+fn an_active_users_next_steps_need_one_apply_before_the_export() {
+    let before = fixture(|_| {});
+    let mut harness = adding(before.clone(), Some(LABEL));
+    assert_eq!(harness.abuse_guard, AbuseGuardAgreement::SHIPPED);
+    let outcome = harness.run(&["user", "add"]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let id = added(&before, &store(&harness).load().unwrap().deployment).id;
+    let (_, next) = outcome.stdout.split_once("next: ").unwrap();
+    let at = |step: &str| {
+        next.find(step)
+            .unwrap_or_else(|| panic!("no {step} in {next}"))
+    };
+    assert!(
+        at("`user agree`") < at("`node apply`") && at("`node apply`") < at("`user export`"),
+        "{next}"
+    );
+    let agreed = harness.run(&["user", "agree", id.as_str()]);
+    assert_eq!(agreed.code, 0, "{}", agreed.stderr);
+    let saved = store(&harness);
+    let generation = saved.load().unwrap().deployment.config_generation();
+    assert_eq!(
+        generation,
+        before.config_generation().next().unwrap().next().unwrap()
+    );
+    for node in saved.load().unwrap().deployment.nodes().values() {
+        let applied = *node.lifecycle.applied().unwrap();
+        saved
+            .record(
+                generation,
+                Bookkeeping::Applied {
+                    node: node.id.clone(),
+                    applied: AppliedConfig {
+                        config_generation: generation,
+                        ..applied
+                    },
+                },
+            )
+            .unwrap();
+    }
+    let after = saved.load().unwrap().deployment;
+    export_secret_refs(&after, &id, UnixTime::from_secs(NOW)).unwrap();
 }
 
 #[test]

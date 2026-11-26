@@ -60,8 +60,8 @@ impl Role {
     ///
     /// `Bootstrap` is accepted only from the bootstrap role. The reads a
     /// remote viewer needs (`Status`, `Usage`, `UsageSeries`, `Events`,
-    /// `MacReport`) and `GateSet` are accepted from the ops and viewer
-    /// roles. Everything else, `RevokeBootstrap` and `PutMacReport`
+    /// `MacReport`, `AbuseRecords`) and `GateSet` are accepted from the ops
+    /// and viewer roles. Everything else, `RevokeBootstrap` and `PutMacReport`
     /// included, only from the ops role. The match names every request, so
     /// a new request cannot be added without deciding its roles here.
     pub const fn permits(self, request: RequestKind) -> bool {
@@ -72,6 +72,7 @@ impl Role {
             | RequestKind::UsageSeries
             | RequestKind::Events
             | RequestKind::MacReport
+            | RequestKind::AbuseRecords
             | RequestKind::GateSet => matches!(self, Self::Ops | Self::Viewer),
             RequestKind::Hello
             | RequestKind::HaveBlobs
@@ -88,7 +89,9 @@ impl Role {
             | RequestKind::ClearHold
             | RequestKind::Shutdown
             | RequestKind::Resume
-            | RequestKind::PutMacReport => matches!(self, Self::Ops),
+            | RequestKind::PutMacReport
+            | RequestKind::AbuseCut
+            | RequestKind::AbuseClear => matches!(self, Self::Ops),
         }
     }
 

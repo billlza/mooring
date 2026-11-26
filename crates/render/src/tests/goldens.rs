@@ -7,6 +7,12 @@
 //! trailing whitespace), so the single newline is asserted separately. The
 //! one file that may be empty, `viewer_authorized_keys` with no viewer
 //! recorded, has an empty snapshot, and only it may.
+//!
+//! The nodes' files are rendered with the abuse guard's gate open at the
+//! current agreement revision, which every fixture user accepted
+//! ([`GUARD_OPEN`]): the guard as the shipped gate, open from revision 2,
+//! runs it, every served user under it (design §11.8). With the gate closed, only
+//! `xray.json` and `watch.json` differ (`tests::coverage`).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -18,8 +24,8 @@ use mooring_model::secret::SecretRef;
 use mooring_model::user::SuspendReason;
 
 use crate::tests::support::{
-    HOST_PRIVATE, cloud_init_keys, edit, engines, fixtures, mac_exit, mac_prober, node, planned,
-    vps,
+    GUARD_OPEN, HOST_PRIVATE, cloud_init_keys, edit, engines, fixtures, mac_exit, mac_prober, node,
+    planned, vps,
 };
 use crate::vps::{bundle, cloud_init};
 
@@ -204,7 +210,7 @@ fn suspended_users_render_the_goldens_of_a_deployment_without_them() {
             user.suspend(SuspendReason::Operator, FIXTURE_NOW).unwrap();
         }
     });
-    let rendered = bundle(&deployment, &lon1, &three.secrets, &engines()).unwrap();
+    let rendered = bundle(&deployment, &lon1, &three.secrets, &engines(), GUARD_OPEN).unwrap();
     let before = vps(&three, &lon1);
     for (file, bytes) in rendered.files() {
         Golden::managed("1-node-1-user", &lon1, file, bytes.expose_bytes()).assert();
