@@ -6,21 +6,23 @@
 //! the agreement keeps a user's records); and, with `--json`, one JSON line
 //! (version 2): `{"version":2,"at":<secs>,"ran":false}` for a firing outside
 //! the window that found nothing to resume, otherwise `ran: true` with
-//! `form`, `policy`, `removals` and `nodes`. The `form` is `full` for the
-//! whole job, and `expiry_resumes` for an hourly firing outside the window,
-//! whose `removals` is `null`, and whose `nodes` is `null` when it resumed
-//! no one and so applied no node. Version 1 had no `form`, and every run it
-//! reported was the whole job.
+//! `form`, `policy`, `removals`, `nodes` and `revocations` (2026-11-12: what
+//! the node applies settled and what still waits). The `form` is `full` for
+//! the whole job, and `expiry_resumes` for an hourly firing outside the
+//! window, whose `removals` is `null`, and whose `nodes` and `revocations`
+//! are `null` when it resumed no one and so applied no node. Version 1 had
+//! no `form`, and every run it reported was the whole job.
 
 use std::io::Write;
 
-use mooring_daemon_core::apply::{Kept, Lapse, Lapsed, Suspension};
+use mooring_daemon_core::apply::{Kept, Lapse, Lapsed, Suspension, Unrenewed};
 use mooring_model::user::SuspendReason;
 use mooring_model::{NodeId, UnixTime, UserId};
 use serde::Serialize;
 
 use crate::error::CommandError;
 use crate::payments::notes::stamp;
+use crate::revocation::{Commits, Pending};
 use crate::state::output;
 
 /// The version of the `--json` outcome.
@@ -72,6 +74,8 @@ pub(crate) enum Change {
     Suspend,
     /// A resume.
     Resume,
+    /// A revocation three months after expiry.
+    Revoke,
 }
 
 /// A change of the policy step that failed.
@@ -92,11 +96,23 @@ pub(crate) struct PolicyDone {
     pub(crate) suspended: Vec<Suspension>,
     /// The lapsed suspensions resumed.
     pub(crate) resumed: Vec<Lapsed>,
+    /// The users suspended at expiry and revoked, their service unrenewed
+    /// three months after it expired (the agreement's clause 6 from
+    /// revision 2).
+    pub(crate) revoked: Vec<Unrenewed>,
     /// The lapsed suspensions the cap on active users holds back.
     pub(crate) held_back: Vec<Lapsed>,
     /// The lapsed suspensions kept, since the user would be suspended
     /// again at once.
     pub(crate) kept: Vec<Kept>,
+    /// The users due for revocation at expiry whose revocation waits for
+    /// a payment pull that succeeded since it fell due: left suspended, and
+    /// revoked by a later run once one has.
+    pub(crate) revocation_awaiting_pull: Vec<Unrenewed>,
+    /// The users as long unrenewed whose accepted agreement does not
+    /// provide for revoking them: left suspended, for the operator to
+    /// decide.
+    pub(crate) revocation_not_covered: Vec<Unrenewed>,
     /// The changes that failed.
     pub(crate) failed: Vec<FailedChange>,
     /// The users with a quota that was not checked, since their usage this
@@ -151,6 +167,14 @@ impl PolicyOutcome {
         for lapsed in &done.resumed {
             lines.push(format!("resumed {}, {}", lapsed.user, suspended(lapsed)));
         }
+        for due in &done.revoked {
+            lines.push(format!(
+                "revoked {}: suspended at expiry since {}, its service expired at {} and was not renewed in three months",
+                due.user,
+                stamp(due.since),
+                stamp(due.expired_at)
+            ));
+        }
         for lapsed in &done.held_back {
             lines.push(format!(
                 "held back by the cap on active users: {}, {}; still suspended",
@@ -166,10 +190,29 @@ impl PolicyOutcome {
                 reason(kept.again)
             ));
         }
+        for due in &done.revocation_awaiting_pull {
+            lines.push(format!(
+                "not revoked yet: {}, suspended at expiry since {}, whose service expired at {} and was not renewed in three months; that fell due at {}, and the payment pull has not succeeded since, so a renewal paid by then may not be known yet: a later run revokes it once one has",
+                due.user,
+                stamp(due.since),
+                stamp(due.expired_at),
+                stamp(due.due)
+            ));
+        }
+        for due in &done.revocation_not_covered {
+            lines.push(format!(
+                "not revoked: {}, suspended at expiry since {}, whose service expired at {} and was not renewed in three months; the agreement it accepted does not provide for revoking it, so that is yours to decide (`mooringctl user revoke {}`)",
+                due.user,
+                stamp(due.since),
+                stamp(due.expired_at),
+                due.user
+            ));
+        }
         for failed in &done.failed {
             let change = match failed.change {
                 Change::Suspend => "suspending",
                 Change::Resume => "resuming",
+                Change::Revoke => "revoking",
             };
             lines.push(format!("{change} {} failed: {}", failed.user, failed.error));
         }
@@ -210,6 +253,24 @@ impl PolicyOutcome {
                     line.push_str(&format!(
                         "; quotas not checked for {} user(s)",
                         done.quotas_unchecked.len()
+                    ));
+                }
+                if !done.revoked.is_empty() {
+                    line.push_str(&format!(
+                        "; {} revoked three months after expiry",
+                        done.revoked.len()
+                    ));
+                }
+                if !done.revocation_awaiting_pull.is_empty() {
+                    line.push_str(&format!(
+                        "; {} due for revocation waiting for a payment pull",
+                        done.revocation_awaiting_pull.len()
+                    ));
+                }
+                if !done.revocation_not_covered.is_empty() {
+                    line.push_str(&format!(
+                        "; {} due for revocation that the agreement they accepted does not provide for",
+                        done.revocation_not_covered.len()
                     ));
                 }
                 line
@@ -349,6 +410,120 @@ impl NodeOutcome {
     }
 }
 
+/// The revocations the run's node applies settled (design §13.5), and the
+/// users still being revoked after them.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Revocations {
+    /// The state could not be read after the node applies, so none was
+    /// recorded.
+    Unread {
+        /// Why.
+        error: String,
+    },
+    /// None was recorded, as no removal is made, since the run takes its
+    /// clock for one that stepped back: a record dates the revocation, and
+    /// its removal 13 months later, by that clock.
+    Skipped {
+        /// The users being revoked, as the state was read, with what each
+        /// waits on.
+        pending: Vec<Pending>,
+    },
+    /// What was recorded and what still waits.
+    Done(Commits),
+}
+
+impl Revocations {
+    /// The report's lines: each revocation recorded and each failure, then
+    /// each user still pending, with what it waits on.
+    pub(crate) fn lines(&self) -> Vec<String> {
+        let commits = match self {
+            Self::Unread { error } => {
+                return vec![format!(
+                    "revocations not recorded: the state could not be read: {error}"
+                )];
+            }
+            Self::Skipped { pending } => {
+                let mut lines = vec![CLOCK_SKIPPED.to_owned()];
+                lines.extend(pending_lines(pending));
+                return lines;
+            }
+            Self::Done(commits) => commits,
+        };
+        let mut lines = commits.lines();
+        lines.extend(pending_lines(&commits.pending));
+        lines
+    }
+
+    /// The log's line, which names no user, when there is anything to say.
+    pub(crate) fn log_line(&self) -> Option<String> {
+        match self {
+            Self::Unread { .. } => {
+                Some("revocations not recorded: the state could not be read".to_owned())
+            }
+            Self::Skipped { pending } => Some(format!(
+                "revocations not recorded: the clock stepped back; {} user(s) still pending",
+                pending.len()
+            )),
+            Self::Done(commits) => {
+                let quiet = commits.committed.is_empty()
+                    && commits.failed.is_empty()
+                    && commits.pending.is_empty();
+                (!quiet).then(|| {
+                    format!(
+                        "revocations: {} committed, {} failed, {} user(s) still pending",
+                        commits.committed.len(),
+                        commits.failed.len(),
+                        commits.pending.len()
+                    )
+                })
+            }
+        }
+    }
+
+    fn failures(&self) -> usize {
+        match self {
+            Self::Unread { .. } => 1,
+            Self::Skipped { .. } => 0,
+            Self::Done(commits) => commits.failed.len(),
+        }
+    }
+
+    /// How many revocations were recorded, and how many users still wait.
+    fn counts(&self) -> (usize, usize) {
+        match self {
+            Self::Unread { .. } => (0, 0),
+            Self::Skipped { pending } => (0, pending.len()),
+            Self::Done(commits) => (commits.committed.len(), commits.pending.len()),
+        }
+    }
+}
+
+const CLOCK_SKIPPED: &str =
+    "revocations not recorded: the clock stepped back, and a record would date a revocation by it";
+
+/// A line for each user still being revoked, with what it waits on.
+fn pending_lines(pending: &[Pending]) -> impl Iterator<Item = String> + '_ {
+    pending.iter().map(|pending| {
+        format!(
+            "revocation pending: {} waits on {}",
+            pending.user,
+            pending.nodes_text()
+        )
+    })
+}
+
+/// The node applies a run made, and the records of the revocations made
+/// after them.
+#[derive(Debug)]
+pub(crate) struct Applies {
+    /// The applies of the nodes behind.
+    pub(crate) nodes: Vec<NodeOutcome>,
+    /// The revocations those applies, or earlier ones, settled, and what
+    /// still waits.
+    pub(crate) revocations: Revocations,
+}
+
 /// Which form of the job ran, and what it did after the policy step.
 #[derive(Debug)]
 pub(crate) enum Form {
@@ -356,16 +531,17 @@ pub(crate) enum Form {
     Full {
         /// The removals.
         removals: Removals,
-        /// The applies of the nodes behind.
-        nodes: Vec<NodeOutcome>,
+        /// The applies of the nodes behind, and the revocations recorded.
+        applies: Applies,
     },
     /// An hourly firing outside the window, which only resumes the
     /// suspensions at expiry that a payment has lifted.
     ExpiryResumes {
-        /// The applies of the nodes behind, made only once a user was
-        /// resumed: `None` when the firing resumed no one, so that a node
-        /// left behind otherwise waits for the night's run.
-        nodes: Option<Vec<NodeOutcome>>,
+        /// The applies of the nodes behind, and the revocations recorded
+        /// after them, made only once a user was resumed: `None` when the
+        /// firing resumed no one, so that a node left behind otherwise
+        /// waits for the night's run, and so does a revocation's record.
+        applies: Option<Applies>,
     },
 }
 
@@ -397,6 +573,7 @@ struct Ran<'a> {
     policy: &'a PolicyOutcome,
     removals: Option<&'a Removals>,
     nodes: Option<&'a [NodeOutcome]>,
+    revocations: Option<&'a Revocations>,
 }
 
 #[derive(Serialize)]
@@ -408,38 +585,44 @@ struct NotRan {
 
 impl Outcome {
     /// How many parts of the run failed: the policy step as a whole when it
-    /// was refused, each change, removal and node apply that failed.
+    /// was refused, each change, removal and node apply that failed, and
+    /// each revocation not recorded or whose keychain items were left (or
+    /// the revocations as a whole when the state could not be read). A user
+    /// still pending is no failure: the node that holds it back is reported.
     pub(crate) fn failures(&self) -> usize {
         let removals = match &self.form {
             Form::Full { removals, .. } => removals.failures(),
             Form::ExpiryResumes { .. } => 0,
         };
-        self.policy.failures()
-            + removals
-            + self
-                .nodes()
+        let applies = self.applies().map_or(0, |applies| {
+            applies
+                .nodes
                 .iter()
                 .filter(|node| matches!(node.result, NodeResult::Failed { .. }))
                 .count()
+                + applies.revocations.failures()
+        });
+        self.policy.failures() + removals + applies
     }
 
-    /// The node applies made, if any.
-    fn nodes(&self) -> &[NodeOutcome] {
+    /// The node applies made, and the revocations recorded after them, if
+    /// any.
+    fn applies(&self) -> Option<&Applies> {
         match &self.form {
-            Form::Full { nodes, .. } | Form::ExpiryResumes { nodes: Some(nodes) } => nodes,
-            Form::ExpiryResumes { nodes: None } => &[],
+            Form::Full { applies, .. } => Some(applies),
+            Form::ExpiryResumes { applies } => applies.as_ref(),
         }
     }
 
-    /// Writes the end of the report: each node's line and the summary, or
-    /// the whole outcome as one JSON line.
+    /// Writes the end of the report: each node's line, the revocations
+    /// recorded and still waiting, and the summary, or the whole outcome as
+    /// one JSON line.
     pub(crate) fn finish(&self, out: &mut dyn Write, json: bool) -> Result<(), CommandError> {
+        let applies = self.applies();
         if json {
-            let (form, removals, nodes) = match &self.form {
-                Form::Full { removals, nodes } => {
-                    (FormName::Full, Some(removals), Some(nodes.as_slice()))
-                }
-                Form::ExpiryResumes { nodes } => (FormName::ExpiryResumes, None, nodes.as_deref()),
+            let (form, removals) = match &self.form {
+                Form::Full { removals, .. } => (FormName::Full, Some(removals)),
+                Form::ExpiryResumes { .. } => (FormName::ExpiryResumes, None),
             };
             return json_line(
                 out,
@@ -450,42 +633,70 @@ impl Outcome {
                     form,
                     policy: &self.policy,
                     removals,
-                    nodes,
+                    nodes: applies.map(|applies| applies.nodes.as_slice()),
+                    revocations: applies.map(|applies| &applies.revocations),
                 },
             );
         }
-        let mut lines: Vec<String> = self.nodes().iter().map(NodeOutcome::log_line).collect();
+        let mut lines = Vec::new();
+        if let Some(applies) = applies {
+            lines.extend(applies.nodes.iter().map(NodeOutcome::log_line));
+            lines.extend(applies.revocations.lines());
+        }
         lines.push(self.summary());
         write_lines(out, &lines, &[])
     }
 
     fn summary(&self) -> String {
-        let (suspended, resumed, held_back, kept) = match &self.policy {
-            PolicyOutcome::Refused(_) => (0, 0, 0, 0),
+        let (suspended, resumed, held_back, kept, revoked) = match &self.policy {
+            PolicyOutcome::Refused(_) => (0, 0, 0, 0, 0),
             PolicyOutcome::CarriedOut(done) => (
                 done.suspended.len(),
                 done.resumed.len(),
                 done.held_back.len(),
                 done.kept.len(),
+                done.revoked.len(),
             ),
         };
         let failures = self.failures();
         let at = stamp(self.at);
+        // The revocations are said only when the run had to do with one, so
+        // that a run without one reads as it always did.
         match &self.form {
-            Form::Full { removals, nodes } => {
+            Form::Full { removals, applies } => {
                 let removed = match removals {
                     Removals::Skipped => 0,
                     Removals::Done(done) => done.removed.len(),
                 };
+                let (committed, pending) = applies.revocations.counts();
+                let revocations = if revoked + committed + pending == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        ", {revoked} revoked at expiry, {committed} revocation(s) committed, {pending} still pending"
+                    )
+                };
                 format!(
-                    "apply at {at}: {suspended} suspended, {resumed} resumed, {held_back} held back, {kept} kept suspended, {removed} removed, {}; {failures} failure(s)",
-                    applied(nodes)
+                    "apply at {at}: {suspended} suspended, {resumed} resumed, {held_back} held back, {kept} kept suspended, {removed} removed, {}{revocations}; {failures} failure(s)",
+                    applied(&applies.nodes)
                 )
             }
-            Form::ExpiryResumes { nodes } => {
-                let nodes = nodes.as_deref().map_or_else(
+            Form::ExpiryResumes { applies } => {
+                // An hourly firing revokes no one at expiry, so it says only
+                // what its applies settled.
+                let nodes = applies.as_ref().map_or_else(
                     || "no node applied, as no one was resumed".to_owned(),
-                    applied,
+                    |applies| {
+                        let (committed, pending) = applies.revocations.counts();
+                        let revocations = if committed + pending == 0 {
+                            String::new()
+                        } else {
+                            format!(
+                                ", {committed} revocation(s) committed, {pending} still pending"
+                            )
+                        };
+                        format!("{}{revocations}", applied(&applies.nodes))
+                    },
                 );
                 format!(
                     "apply at {at}, outside the window: {resumed} resumed at expiry, {held_back} held back, {kept} kept suspended, {nodes}; {failures} failure(s)"

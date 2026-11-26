@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use clap::Parser;
-use mooring_daemon_core::apply::{Lapse, Lapsed, Suspension, plan_policy};
+use mooring_daemon_core::apply::{Lapse, Lapsed, Suspension, UnrenewedPlan, plan_policy};
 use mooring_daemon_core::payments::Entitlements;
 use mooring_daemon_core::period::BillingCycle;
 use mooring_daemon_core::policy::paid_quota;
@@ -367,7 +367,8 @@ fn policy_step(harness: &Harness, served: u64) -> (Vec<Suspension>, Vec<Lapsed>)
     .unwrap();
     assert_eq!(plan.kept, []);
     assert_eq!(plan.held_back, []);
-    let done = carry_out(&store(harness), &plan, None);
+    // No user here is suspended at expiry, so no revocation is planned.
+    let done = carry_out(&store(harness), &plan, &UnrenewedPlan::default(), None);
     assert!(done.failed.is_empty(), "{:?}", done.failed);
     (done.suspended, done.resumed)
 }

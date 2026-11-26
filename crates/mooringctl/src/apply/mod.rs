@@ -16,8 +16,9 @@
 //! A run takes `run/apply.lock`, so two never overlap, and then, in this
 //! order, makes each change on its own, so that none blocks another (an
 //! hourly firing outside the window makes the first step as
-//! `plan_expiry_resumes` plans it, no removals, and the node applies only
-//! when it resumed a user):
+//! `plan_expiry_resumes` plans it, no removals, and the node applies, with
+//! the records of the revocations they settle, only when it resumed a
+//! user):
 //! 1. **The policy step** ([`policy::step`]): `daemon-core`'s
 //!    `plan_policy` at the run's `now`, from the state, what the users'
 //!    paid orders gave (the payment ledger) and the cycle's usage the
@@ -28,7 +29,12 @@
 //!    or is inconsistent, and an expiry or quota suspension dated after
 //!    `now` (a clock that stepped back). While usage is behind because the
 //!    daemon stopped or a node is unreachable, the rest of the step runs
-//!    with quotas unchecked.
+//!    with quotas unchecked. Last, in the whole job only, the users
+//!    suspended at expiry whose service was not renewed in three months
+//!    are revoked, one change each, if the agreement they accepted provides
+//!    for it (`Env::expiry_revocation`); the others are reported. An hourly
+//!    firing revokes no one: a revocation cannot be undone, so it waits for
+//!    the night's run, as the suspensions do.
 //! 2. **Removals** ([`policy::remove`]): each user revoked 13 months ago
 //!    (`RevokedUserRemoved`), then the kept ids whose records have expired
 //!    (`ForgottenExpired`); skipped when the clock stepped back. The daemon
@@ -38,6 +44,14 @@
 //!    confirmed generation is older than the deployment's, by id, through
 //!    the exit's egress as the daemon resolves it, with the engines in the
 //!    support directory; one that fails is reported, and the next one runs.
+//! 4. **Revocations** (`revocation::commit`): every revocation a node
+//!    applied at the deployment's generation settles, whether this run or
+//!    an earlier one applied it, each a bookkeeping record of its own,
+//!    after which the user's credentials on that node are deleted from the
+//!    keychain; then each user still pending, with what it waits on. A node
+//!    that cannot be reached keeps its users pending. Skipped when the clock
+//!    stepped back, as the removals are, since a record dates the
+//!    revocation by it; what waits is still reported.
 //!
 //! The report names users by id, on standard output; the log,
 //! `~/Library/Logs/Mooring/apply.log`, counts them and names none, since a
@@ -63,11 +77,13 @@ use mooring_macsys::MacsysError;
 use mooring_store::Store;
 
 use self::policy::Plan;
-use self::report::{Form, NodeOutcome, Outcome};
+use self::report::{Applies, Form, NodeOutcome, Outcome, Revocations};
 use crate::app::{Env, support_dir};
+use crate::daemon::chain;
 use crate::daemon::log::{APPLY_LOG, ROTATE_AT_BYTES, RedirectStderr, RotatingLog, log_dir};
 use crate::daemon::{prepare_run_dir, say_as};
 use crate::error::{CommandError, LocalError};
+use crate::revocation;
 use crate::state::load;
 
 /// The job's lock, in the daemon's run directory: one run at a time.
@@ -129,6 +145,10 @@ pub(crate) fn apply(
         ROTATE_AT_BYTES,
         redirect,
     )?;
+    let restored: Vec<String> = log.restored().iter().map(|mode| mode.line()).collect();
+    for line in restored {
+        say_as(&mut log, now, "apply", &line)?;
+    }
     let started = match plan {
         Plan::Full => format!("run ({})", when.flag()),
         Plan::ExpiryResumes => format!(
@@ -138,30 +158,49 @@ pub(crate) fn apply(
     };
     say_as(&mut log, now, "apply", &started)?;
     let deployment = load(&store)?.deployment;
-    let policy = policy::step(&store, &support, &deployment, now, plan);
+    let policy = policy::step(
+        &store,
+        &support,
+        &deployment,
+        now,
+        plan,
+        env.expiry_revocation,
+    );
     say_as(&mut log, (env.clock)()?, "apply", &policy.log_line())?;
+    let skip_records = policy.clock_stepped_back();
     let form = match plan {
         Plan::Full => {
-            let removals = policy::remove(&store, now, policy.clock_stepped_back());
+            let removals = policy::remove(&store, now, skip_records);
             say_as(&mut log, (env.clock)()?, "apply", &removals.log_line())?;
             if !json {
                 report::write_lines(out, &policy.lines(), &removals.lines())?;
             }
-            let nodes = apply_nodes(env, out, json, &store, &support, &mut log)?;
-            Form::Full { removals, nodes }
+            let applies =
+                apply_and_record(env, out, json, &store, &support, &mut log, skip_records)?;
+            Form::Full { removals, applies }
         }
         Plan::ExpiryResumes => {
             if !json {
                 report::write_lines(out, &policy.lines(), &[])?;
             }
             // A node's engines restart during the day only for a user just
-            // resumed: a node left behind otherwise waits for the night.
-            let nodes = if policy.resumed_any() {
-                Some(apply_nodes(env, out, json, &store, &support, &mut log)?)
+            // resumed: a node left behind otherwise waits for the night, and
+            // so does the record of a revocation no apply of this firing
+            // settled.
+            let applies = if policy.resumed_any() {
+                Some(apply_and_record(
+                    env,
+                    out,
+                    json,
+                    &store,
+                    &support,
+                    &mut log,
+                    skip_records,
+                )?)
             } else {
                 None
             };
-            Form::ExpiryResumes { nodes }
+            Form::ExpiryResumes { applies }
         }
     };
     let outcome = Outcome {
@@ -182,6 +221,56 @@ pub(crate) fn apply(
     } else {
         Err(LocalError::ApplyFailed { failures }.into())
     }
+}
+
+/// Applies every node behind ([`apply_nodes`]), then records the
+/// revocations those applies, or earlier ones, settled
+/// ([`record_revocations`]).
+fn apply_and_record(
+    env: &mut Env<'_>,
+    out: &mut dyn Write,
+    json: bool,
+    store: &Store,
+    support: &Path,
+    log: &mut RotatingLog,
+    skip_records: bool,
+) -> Result<Applies, CommandError> {
+    let nodes = apply_nodes(env, out, json, store, support, log)?;
+    let revocations = record_revocations(env, store, log, skip_records)?;
+    Ok(Applies { nodes, revocations })
+}
+
+/// Records every revocation the nodes settled (`revocation::commit`),
+/// logging the counts; with `skip_records`, since the run takes its clock
+/// for one that stepped back, records none and only reads who still waits,
+/// as no removal is made then: a record dates the revocation, and its
+/// removal 13 months later, by that clock.
+fn record_revocations(
+    env: &mut Env<'_>,
+    store: &Store,
+    log: &mut RotatingLog,
+    skip_records: bool,
+) -> Result<Revocations, CommandError> {
+    let at = (env.clock)()?;
+    let revocations = if skip_records {
+        match revocation::waiting(store) {
+            Ok(pending) => Revocations::Skipped { pending },
+            Err(error) => Revocations::Unread {
+                error: chain(&error),
+            },
+        }
+    } else {
+        match revocation::commit(store, env.secrets, at, None) {
+            Ok(commits) => Revocations::Done(commits),
+            Err(error) => Revocations::Unread {
+                error: chain(&error),
+            },
+        }
+    };
+    if let Some(line) = revocations.log_line() {
+        say_as(log, at, "apply", &line)?;
+    }
+    Ok(revocations)
 }
 
 /// Applies every node behind, logging each outcome; with `json` the

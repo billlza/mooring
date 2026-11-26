@@ -42,12 +42,16 @@
     breaks it and deletes their records 13 months later; and clause 6's
     revocation 3 months after an unrenewed expiry, since revision 1's
     service is free and its expiry pauses the service until the operator
-    resumes it (the nightly job of #47, a draft, revokes only a user who
-    accepted a revision that names it, and reports the others).
+    resumes it (the nightly apply job revokes only a user who accepted a
+    revision that names it, and reports the others: below).
   - It covers the user portal (docs/portal-contract.md), so it sets
     `PORTAL_AGREEMENT_SINCE` (crates/model/src/portal.rs) to revision 2;
     agreement_text.rs checks that the text names the portal (门户) exactly
     when that gate is open.
+  - Its clause 6 states the revocation 3 months after an unrenewed expiry,
+    so it sets `EXPIRY_REVOCATION_SINCE` (crates/model/src/revocation.rs)
+    to revision 2; agreement_text.rs checks that the text says
+    「服务到期 3 个月后仍未续费」 exactly when that gate is open.
   - The portal's commits cited here were made on its branch
     feature/cfm-subscription-links. On 2026-11-15 all of them were on its
     repository's published default branch with the same hashes, and in
@@ -384,9 +388,10 @@
     a smaller one would leave the user over quota and paused, and the
     service resumes at the job's next run, not at the payment. Revision 2
     was not published yet, so it stays revision 2.
-  - Clause 6's three months: a user whose service expired three months
-    before is revoked, by the operator until Mooring does it, and then
-    deleted as clause 4 says (delivery.md, section 10).
+  - Clause 6's three months: a user suspended at expiry whose service
+    expired three months before is revoked by the nightly apply job
+    (revoke.md, section 4), and then deleted as clause 4 says (delivery.md,
+    section 10).
   - The calls: on 2026-11-15 the operator asked for more apps than
     FaceTime for the calls with users, in their words:
     «多加几个软件，不一定非得Facebook，what's app telegram，wechat都可以，emm wechat可能不太靠谱»

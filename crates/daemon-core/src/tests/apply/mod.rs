@@ -8,6 +8,7 @@ mod expiry_resumes;
 mod mid_cycle;
 mod plan;
 mod removals;
+mod unrenewed;
 mod window;
 
 use std::collections::BTreeMap;

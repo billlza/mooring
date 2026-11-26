@@ -23,7 +23,7 @@ use super::user::{fixture, state_bytes};
 use crate::error::EXIT_LOCAL;
 
 /// The portal's grant of a month to `text`, pulled at `when`.
-fn pay(harness: &mut Harness, text: &str, when: u64) {
+pub(super) fn pay(harness: &mut Harness, text: &str, when: u64) {
     use super::payments::{connect, grant, page};
     use crate::payments::pull::{Gate, Puller};
 
@@ -154,6 +154,7 @@ fn an_hourly_resume_the_cap_holds_back_asks_no_node() {
             "policy": {"carried_out": {
                 "suspended": [],
                 "resumed": [],
+                "revoked": [],
                 "held_back": [{
                     "user": FIRST,
                     "reason": "expired",
@@ -161,12 +162,15 @@ fn an_hourly_resume_the_cap_holds_back_asks_no_node() {
                     "why": "no_longer_expired"
                 }],
                 "kept": [],
+                "revocation_awaiting_pull": [],
+                "revocation_not_covered": [],
                 "failed": [],
                 "quotas_unchecked": [],
                 "usage_behind": "ams1 may have counted traffic, but no usage ledger is given for it"
             }},
             "removals": null,
-            "nodes": null
+            "nodes": null,
+            "revocations": null
         })
     );
     assert_eq!(state_bytes(&harness), before);
